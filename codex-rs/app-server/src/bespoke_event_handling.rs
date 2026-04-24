@@ -180,7 +180,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::TurnComplete(turn_complete_event) => {
             // All per-thread requests are bound to a turn, so abort them.
             outgoing.abort_pending_server_requests().await;
-            respond_to_pending_interrupts(&thread_state, &outgoing).await;
+            respond_to_pending_interrupts(&thread_state, &outgoing, /*abort_reason*/ None).await;
             let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some();
             thread_watch_manager
                 .note_turn_completed(&conversation_id.to_string(), turn_failed)
@@ -1114,7 +1114,12 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::TurnAborted(turn_aborted_event) => {
             // All per-thread requests are bound to a turn, so abort them.
             outgoing.abort_pending_server_requests().await;
-            respond_to_pending_interrupts(&thread_state, &outgoing).await;
+            respond_to_pending_interrupts(
+                &thread_state,
+                &outgoing,
+                Some(turn_aborted_event.reason.clone()),
+            )
+            .await;
 
             thread_watch_manager
                 .note_turn_interrupted(&conversation_id.to_string())
@@ -1541,16 +1546,27 @@ fn thread_rollback_response_from_stored_thread(
 async fn respond_to_pending_interrupts(
     thread_state: &Arc<Mutex<ThreadState>>,
     outgoing: &ThreadScopedOutgoingMessageSender,
+    abort_reason: Option<codex_protocol::protocol::TurnAbortReason>,
 ) {
     let pending = {
         let mut state = thread_state.lock().await;
         std::mem::take(&mut state.pending_interrupts)
     };
 
-    for request_id in pending {
-        outgoing
-            .send_response(request_id, TurnInterruptResponse {})
-            .await;
+    for (rid, ver) in pending {
+        match ver {
+            ApiVersion::V1 => {
+                let Some(abort_reason) = abort_reason.clone() else {
+                    debug_assert!(false, "v1 interrupts only resolve from TurnAborted");
+                    continue;
+                };
+                let response = InterruptConversationResponse { abort_reason };
+                outgoing.send_response(rid, response).await;
+            }
+            ApiVersion::V2 => {
+                outgoing.send_response(rid, TurnInterruptResponse {}).await;
+            }
+        }
     }
 }
 
