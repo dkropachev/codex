@@ -523,6 +523,9 @@
             "telepathy": {
               "type": "boolean"
             },
+            "terminal_resize_reflow": {
+              "type": "boolean"
+            },
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
@@ -2093,6 +2096,20 @@
       },
       "type": "object"
     },
+    "TerminalResizeReflowToml": {
+      "additionalProperties": false,
+      "description": "Experimental terminal resize-reflow tuning knobs.",
+      "properties": {
+        "max_rows": {
+          "default": null,
+          "description": "Trim resize-reflow replay to the most recent rendered terminal rows when the transcript exceeds this cap. Omit to use Codex's terminal-specific default. Set to `0` to keep all rendered rows.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "ToolSuggestConfig": {
       "additionalProperties": false,
       "properties": {
@@ -2222,6 +2239,17 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "terminal_resize_reflow": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TerminalResizeReflowToml"
+            }
+          ],
+          "default": {
+            "max_rows": null
+          },
+          "description": "Experimental terminal resize-reflow tuning knobs."
         },
         "terminal_title": {
           "default": null,
@@ -2679,6 +2707,9 @@
           "type": "boolean"
         },
         "telepathy": {
+          "type": "boolean"
+        },
+        "terminal_resize_reflow": {
           "type": "boolean"
         },
         "tool_call_mcp_elicitation": {
