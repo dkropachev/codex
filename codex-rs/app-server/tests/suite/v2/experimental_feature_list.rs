@@ -126,7 +126,7 @@ async fn experimental_feature_list_marks_apps_and_plugins_disabled_by_workspace_
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_string(r#"{"beta_settings":{"enable_plugins":false}}"#),
+                .set_body_string(r#"{"beta_settings":{"plugins":false}}"#),
         )
         .mount(&server)
         .await;

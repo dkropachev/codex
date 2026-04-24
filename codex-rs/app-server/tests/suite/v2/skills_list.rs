@@ -380,7 +380,7 @@ async fn skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disable
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_string(r#"{"beta_settings":{"enable_plugins":false}}"#),
+                .set_body_string(r#"{"beta_settings":{"plugins":false}}"#),
         )
         .mount(&server)
         .await;
