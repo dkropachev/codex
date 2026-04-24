@@ -9,7 +9,10 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::NetworkSandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use landlock::ABI;
@@ -85,6 +88,31 @@ pub(crate) fn apply_permission_profile_to_current_thread(
     }
 
     Ok(())
+}
+
+pub(crate) fn apply_sandbox_policy_to_current_thread(
+    sandbox_policy: &SandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+    cwd: &Path,
+    apply_landlock_fs: bool,
+    allow_network_for_proxy: bool,
+    proxy_routed_network: bool,
+) -> Result<()> {
+    let file_system_sandbox_policy =
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd);
+    let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        SandboxEnforcement::from_legacy_sandbox_policy(sandbox_policy),
+        &file_system_sandbox_policy,
+        network_sandbox_policy,
+    );
+
+    apply_permission_profile_to_current_thread(
+        &permission_profile,
+        cwd,
+        apply_landlock_fs,
+        allow_network_for_proxy,
+        proxy_routed_network,
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
