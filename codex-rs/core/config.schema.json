@@ -451,6 +451,9 @@
             "goals": {
               "type": "boolean"
             },
+            "goals": {
+              "type": "boolean"
+            },
             "guardian_approval": {
               "type": "boolean"
             },
@@ -4018,6 +4021,9 @@
           "type": "boolean"
         },
         "fast_mode": {
+          "type": "boolean"
+        },
+        "goals": {
           "type": "boolean"
         },
         "goals": {
