@@ -358,6 +358,10 @@ pub struct ConfigToml {
     #[schemars(schema_with = "crate::schema::features_schema")]
     pub features: Option<FeaturesToml>,
 
+    /// Repository CI learning and validation settings.
+    #[serde(default)]
+    pub repo_ci: Option<RepoCiToml>,
+
     /// Suppress warnings about unstable (under development) features.
     pub suppress_unstable_features_warning: Option<bool>,
 
@@ -415,6 +419,69 @@ pub struct ConfigToml {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RepoCiToml {
+    /// Default settings used when no narrower scope matches.
+    #[serde(default)]
+    pub defaults: Option<RepoCiScopeToml>,
+
+    /// Per-directory settings keyed by absolute or user-relative path.
+    #[serde(default)]
+    pub directories: BTreeMap<String, RepoCiScopeToml>,
+
+    /// Per-GitHub-organization settings keyed by org name.
+    #[serde(default)]
+    pub github_orgs: BTreeMap<String, RepoCiScopeToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RepoCiScopeToml {
+    /// Whether repo CI should run automatically for this scope.
+    pub enabled: Option<bool>,
+
+    /// Where checks should run.
+    pub automation: Option<RepoCiAutomationToml>,
+
+    /// Local integration/e2e/ui tests above this budget are not selected for the fast runner.
+    pub local_test_time_budget_sec: Option<u64>,
+
+    /// Maximum number of local fix attempts before surfacing the failure.
+    pub max_local_fix_rounds: Option<u8>,
+
+    /// Maximum number of remote CI fix attempts before surfacing the failure.
+    pub max_remote_fix_rounds: Option<u8>,
+
+    /// Ordered model fallback chain for CI failure analysis and fixes.
+    #[serde(default)]
+    pub models: Option<Vec<RepoCiModelCandidateToml>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RepoCiAutomationToml {
+    Local,
+    Remote,
+    LocalAndRemote,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RepoCiModelCandidateToml {
+    /// Inherit the model selected for the current Codex turn.
+    pub inherit: Option<bool>,
+
+    /// Explicit model slug to use for CI failure analysis and fixes.
+    pub model: Option<String>,
+
+    /// Optional service tier, for example `fast` or `flex`.
+    pub speed_tier: Option<ServiceTier>,
+
+    /// Optional reasoning effort for models that support it.
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]

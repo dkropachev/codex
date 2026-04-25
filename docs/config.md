@@ -56,6 +56,37 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 When Codex knows which client started the turn, the legacy notify JSON payload also includes a top-level `client` field. The TUI reports `codex-tui`, and the app server reports the `clientInfo.name` value from `initialize`.
 
+## Repo CI
+
+Repo CI is an experimental feature flag and command surface for learning a
+repository's local and remote validation steps.
+
+```toml
+[features]
+repo_ci = true
+
+[repo_ci.defaults]
+enabled = true
+automation = "local-and-remote"
+local_test_time_budget_sec = 300
+max_local_fix_rounds = 3
+max_remote_fix_rounds = 2
+models = [
+  { inherit = true },
+  { model = "gpt-5.3-codex-spark", reasoning_effort = "high" },
+]
+```
+
+Use `codex repo-ci enable --cwd` to enable it for the current repository, and
+`codex repo-ci learn --cwd` to discover CI files, write the generated runner
+script under Codex home, prepare the local environment, and validate the fast
+local checks. The learner records the source files and SHA-256 hashes it used;
+`codex repo-ci status --cwd` reports when those files changed and the repository
+should be learned again.
+
+Remote checks use the GitHub CLI. `codex repo-ci watch-pr --cwd` runs through
+the existing `gh` authentication and fails if `gh auth status` is not usable.
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.

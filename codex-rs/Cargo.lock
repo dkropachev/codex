@@ -2119,6 +2119,7 @@ dependencies = [
  "codex-model-provider",
  "codex-models-manager",
  "codex-protocol",
+ "codex-repo-ci",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
  "codex-rollout-trace",
@@ -2143,6 +2144,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml 0.9.11+spec-1.1.0",
+ "toml_edit 0.24.0+spec-1.1.0",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -3128,6 +3130,18 @@ dependencies = [
  "libwebrtc",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "codex-repo-ci"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

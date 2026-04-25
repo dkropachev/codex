@@ -52,6 +52,7 @@ use crate::mcp_cmd::McpCli;
 use crate::responses_cmd::ResponsesCommand;
 use crate::responses_cmd::run_responses_command;
 
+use codex_config::CONFIG_TOML_FILE;
 use codex_core::build_models_manager;
 use codex_core::clear_memory_roots_contents;
 use codex_core::config::Config;
@@ -65,8 +66,12 @@ use codex_login::AuthManager;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::user_input::UserInput;
+use codex_repo_ci::AutomationMode;
+use codex_repo_ci::LearnOptions;
+use codex_repo_ci::RunMode;
 use codex_terminal_detection::TerminalName;
 
 /// Codex CLI
@@ -176,6 +181,10 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
+
+    /// Learn and run repository CI checks.
+    #[clap(name = "repo-ci")]
+    RepoCi(RepoCiCli),
 }
 
 #[derive(Debug, Parser)]
@@ -696,6 +705,142 @@ enum FeaturesSubcommand {
 struct FeatureSetArgs {
     /// Feature key to update (for example: unified_exec).
     feature: String,
+}
+
+#[derive(Debug, Parser)]
+#[command(bin_name = "codex repo-ci")]
+struct RepoCiCli {
+    #[command(subcommand)]
+    sub: RepoCiSubcommand,
+}
+
+#[derive(Debug, Parser)]
+enum RepoCiSubcommand {
+    /// Enable repo CI automation for a scope.
+    Enable(RepoCiEnableArgs),
+    /// Disable repo CI automation for a scope.
+    Disable(RepoCiScopeArgs),
+    /// Trust the current repository for repo CI automation.
+    Trust(RepoCiCwdArgs),
+    /// Prepare the learned local CI environment.
+    Prepare(RepoCiCwdArgs),
+    /// Learn repo CI, write the runner script, prepare, and validate it.
+    Learn(RepoCiLearnArgs),
+    /// Show learned repo CI state and whether learning inputs changed.
+    Status(RepoCiCwdArgs),
+    /// Run the learned local CI runner.
+    Run(RepoCiRunArgs),
+    /// Watch GitHub PR checks using existing `gh` authentication.
+    #[clap(name = "watch-pr")]
+    WatchPr(RepoCiCwdArgs),
+    /// Configure model fallback chain for CI failure analysis.
+    Models(RepoCiModelsCli),
+}
+
+#[derive(Debug, Args)]
+struct RepoCiScopeArgs {
+    #[arg(long = "global")]
+    global: bool,
+    #[arg(long)]
+    dir: Option<PathBuf>,
+    #[arg(long = "github-org")]
+    github_org: Option<String>,
+    #[arg(long)]
+    cwd: bool,
+}
+
+#[derive(Debug, Args)]
+struct RepoCiEnableArgs {
+    #[command(flatten)]
+    scope: RepoCiScopeArgs,
+    #[arg(long, value_enum, default_value_t = RepoCiAutomationArg::LocalAndRemote)]
+    automation: RepoCiAutomationArg,
+}
+
+#[derive(Debug, Args)]
+struct RepoCiLearnArgs {
+    #[command(flatten)]
+    cwd: RepoCiCwdArgs,
+    #[arg(long, value_enum, default_value_t = RepoCiAutomationArg::LocalAndRemote)]
+    automation: RepoCiAutomationArg,
+    #[arg(long = "local-test-time-budget-sec", default_value_t = 300)]
+    local_test_time_budget_sec: u64,
+}
+
+#[derive(Debug, Args)]
+struct RepoCiCwdArgs {
+    #[arg(long)]
+    cwd: bool,
+}
+
+#[derive(Debug, Args)]
+struct RepoCiRunArgs {
+    #[arg(value_enum)]
+    mode: RepoCiRunModeArg,
+    #[arg(long)]
+    cwd: bool,
+}
+
+#[derive(Debug, Parser)]
+struct RepoCiModelsCli {
+    #[command(subcommand)]
+    sub: RepoCiModelsSubcommand,
+}
+
+#[derive(Debug, Parser)]
+enum RepoCiModelsSubcommand {
+    /// Add a model candidate to the scoped CI fallback chain.
+    Add(RepoCiModelAddArgs),
+    /// Clear the scoped CI fallback chain.
+    Clear(RepoCiScopeArgs),
+    /// Show the scoped CI fallback chain as configured in config.toml.
+    Show(RepoCiScopeArgs),
+}
+
+#[derive(Debug, Args)]
+struct RepoCiModelAddArgs {
+    #[command(flatten)]
+    scope: RepoCiScopeArgs,
+    #[arg(long)]
+    inherit: bool,
+    #[arg(long)]
+    model: Option<String>,
+    #[arg(long = "speed-tier")]
+    speed_tier: Option<String>,
+    #[arg(long = "reasoning-effort")]
+    reasoning_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum RepoCiAutomationArg {
+    Local,
+    Remote,
+    LocalAndRemote,
+}
+
+impl From<RepoCiAutomationArg> for AutomationMode {
+    fn from(value: RepoCiAutomationArg) -> Self {
+        match value {
+            RepoCiAutomationArg::Local => Self::Local,
+            RepoCiAutomationArg::Remote => Self::Remote,
+            RepoCiAutomationArg::LocalAndRemote => Self::LocalAndRemote,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum RepoCiRunModeArg {
+    Fast,
+    Full,
+}
+
+impl From<RepoCiRunModeArg> for RunMode {
+    fn from(value: RepoCiRunModeArg) -> Self {
+        match value {
+            RepoCiRunModeArg::Fast => Self::Fast,
+            RepoCiRunModeArg::Full => Self::Full,
+        }
+    }
 }
 
 fn stage_str(stage: Stage) -> &'static str {
@@ -1220,6 +1365,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 disable_feature_in_config(&interactive, &feature).await?;
             }
         },
+        Some(Subcommand::RepoCi(RepoCiCli { sub })) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "repo-ci",
+            )?;
+            run_repo_ci_command(sub).await?;
+        }
     }
 
     Ok(())
@@ -1265,6 +1418,334 @@ async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyho
         .await?;
     println!("Disabled feature `{feature}` in config.toml.");
     Ok(())
+}
+
+async fn run_repo_ci_command(sub: RepoCiSubcommand) -> anyhow::Result<()> {
+    match sub {
+        RepoCiSubcommand::Enable(args) => repo_ci_enable(args).await,
+        RepoCiSubcommand::Disable(args) => repo_ci_disable(args).await,
+        RepoCiSubcommand::Trust(_args) => repo_ci_trust_cwd().await,
+        RepoCiSubcommand::Prepare(_args) => {
+            let codex_home = find_codex_home()?;
+            let cwd = std::env::current_dir()?;
+            let status = codex_repo_ci::prepare(&codex_home, &cwd)?;
+            if status.success() {
+                Ok(())
+            } else {
+                anyhow::bail!("repo CI prepare failed with {status}");
+            }
+        }
+        RepoCiSubcommand::Learn(args) => {
+            let codex_home = find_codex_home()?;
+            let cwd = std::env::current_dir()?;
+            let outcome = codex_repo_ci::learn(
+                &codex_home,
+                &cwd,
+                LearnOptions {
+                    automation: args.automation.into(),
+                    local_test_time_budget_sec: args.local_test_time_budget_sec,
+                },
+            )?;
+            println!("Learned repo CI for {}", outcome.paths.repo_root.display());
+            println!("Runner: {}", outcome.paths.runner_path.display());
+            println!("Manifest: {}", outcome.paths.manifest_path.display());
+            println!(
+                "Validation: {}",
+                repo_ci_validation_label(&outcome.manifest.validation)
+            );
+            if matches!(
+                outcome.manifest.validation,
+                codex_repo_ci::ValidationStatus::Passed { .. }
+            ) {
+                Ok(())
+            } else {
+                anyhow::bail!(
+                    "learned repo CI runner did not validate cleanly (exit code {:?})",
+                    outcome.validation_exit_code
+                );
+            }
+        }
+        RepoCiSubcommand::Status(_args) => {
+            let codex_home = find_codex_home()?;
+            let cwd = std::env::current_dir()?;
+            let status = codex_repo_ci::status(&codex_home, &cwd)?;
+            println!("Repository: {}", status.paths.repo_root.display());
+            if let Some(manifest) = status.manifest {
+                println!("Runner: {}", status.paths.runner_path.display());
+                println!("Automation: {}", manifest.automation.as_str());
+                println!(
+                    "Validation: {}",
+                    repo_ci_validation_label(&manifest.validation)
+                );
+                if status.stale_sources.is_empty() {
+                    println!("Learning sources: current");
+                } else {
+                    println!("Learning sources changed:");
+                    for source in status.stale_sources {
+                        println!("  {}", source.path.display());
+                    }
+                }
+            } else {
+                println!("Repo CI has not been learned.");
+            }
+            Ok(())
+        }
+        RepoCiSubcommand::Run(args) => {
+            let codex_home = find_codex_home()?;
+            let cwd = std::env::current_dir()?;
+            let status = codex_repo_ci::run(&codex_home, &cwd, args.mode.into())?;
+            if status.success() {
+                Ok(())
+            } else {
+                anyhow::bail!("repo CI run failed with {status}");
+            }
+        }
+        RepoCiSubcommand::WatchPr(_args) => {
+            let cwd = std::env::current_dir()?;
+            let status = codex_repo_ci::watch_pr(&cwd)?;
+            if status.success() {
+                Ok(())
+            } else {
+                anyhow::bail!("GitHub PR checks failed with {status}");
+            }
+        }
+        RepoCiSubcommand::Models(models) => repo_ci_models(models).await,
+    }
+}
+
+async fn repo_ci_enable(args: RepoCiEnableArgs) -> anyhow::Result<()> {
+    let codex_home = find_codex_home()?;
+    let segments = repo_ci_scope_segments(&args.scope)?;
+    let automation: AutomationMode = args.automation.into();
+    ConfigEditsBuilder::new(&codex_home)
+        .set_feature_enabled("repo_ci", /*enabled*/ true)
+        .set_path_value(
+            append_segment(&segments, "enabled"),
+            toml_edit::value(/*enabled*/ true),
+        )
+        .set_path_value(
+            append_segment(&segments, "automation"),
+            toml_edit::value(automation.as_str()),
+        )
+        .set_path_value(
+            append_segment(&segments, "local_test_time_budget_sec"),
+            toml_edit::value(300),
+        )
+        .set_path_value(
+            append_segment(&segments, "max_local_fix_rounds"),
+            toml_edit::value(3),
+        )
+        .set_path_value(
+            append_segment(&segments, "max_remote_fix_rounds"),
+            toml_edit::value(2),
+        )
+        .apply()
+        .await?;
+    println!(
+        "Enabled repo CI for {} with automation `{}`.",
+        repo_ci_scope_label(&args.scope),
+        automation.as_str()
+    );
+    Ok(())
+}
+
+async fn repo_ci_disable(args: RepoCiScopeArgs) -> anyhow::Result<()> {
+    let codex_home = find_codex_home()?;
+    let segments = repo_ci_scope_segments(&args)?;
+    ConfigEditsBuilder::new(&codex_home)
+        .set_path_value(
+            append_segment(&segments, "enabled"),
+            toml_edit::value(/*enabled*/ false),
+        )
+        .apply()
+        .await?;
+    println!("Disabled repo CI for {}.", repo_ci_scope_label(&args));
+    Ok(())
+}
+
+async fn repo_ci_trust_cwd() -> anyhow::Result<()> {
+    let codex_home = find_codex_home()?;
+    let cwd = std::env::current_dir()?;
+    let repo_root = codex_repo_ci::repo_root_for_cwd(&cwd)?;
+    ConfigEditsBuilder::new(&codex_home)
+        .set_project_trust_level(repo_root.clone(), TrustLevel::Trusted)
+        .apply()
+        .await?;
+    println!("Trusted {} for repo CI automation.", repo_root.display());
+    Ok(())
+}
+
+async fn repo_ci_models(models: RepoCiModelsCli) -> anyhow::Result<()> {
+    match models.sub {
+        RepoCiModelsSubcommand::Add(args) => repo_ci_models_add(args).await,
+        RepoCiModelsSubcommand::Clear(args) => {
+            let codex_home = find_codex_home()?;
+            let segments = append_segment(&repo_ci_scope_segments(&args)?, "models");
+            ConfigEditsBuilder::new(&codex_home)
+                .clear_path(segments)
+                .apply()
+                .await?;
+            println!(
+                "Cleared repo CI model chain for {}.",
+                repo_ci_scope_label(&args)
+            );
+            Ok(())
+        }
+        RepoCiModelsSubcommand::Show(args) => {
+            let codex_home = find_codex_home()?;
+            let segments = append_segment(&repo_ci_scope_segments(&args)?, "models");
+            let item = repo_ci_config_item(&codex_home, &segments)?;
+            if let Some(item) = item {
+                println!("{item}");
+            } else {
+                println!(
+                    "No repo CI model chain configured for {}.",
+                    repo_ci_scope_label(&args)
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
+async fn repo_ci_models_add(args: RepoCiModelAddArgs) -> anyhow::Result<()> {
+    if args.inherit == args.model.is_some() {
+        anyhow::bail!("set exactly one of `--inherit` or `--model <model>`");
+    }
+    let codex_home = find_codex_home()?;
+    let scope_segments = repo_ci_scope_segments(&args.scope)?;
+    let segments = append_segment(&scope_segments, "models");
+    let mut array = repo_ci_existing_model_array(&codex_home, &segments)?;
+    let mut table = toml_edit::InlineTable::new();
+    if args.inherit {
+        table.insert("inherit", toml_edit::Value::from(true));
+    }
+    if let Some(model) = args.model {
+        table.insert("model", toml_edit::Value::from(model));
+    }
+    if let Some(speed_tier) = args.speed_tier {
+        table.insert("speed_tier", toml_edit::Value::from(speed_tier));
+    }
+    if let Some(reasoning_effort) = args.reasoning_effort {
+        table.insert("reasoning_effort", toml_edit::Value::from(reasoning_effort));
+    }
+    array.push(table);
+    ConfigEditsBuilder::new(&codex_home)
+        .set_path_value(segments, toml_edit::Item::Value(array.into()))
+        .apply()
+        .await?;
+    println!(
+        "Added repo CI model candidate for {}.",
+        repo_ci_scope_label(&args.scope)
+    );
+    Ok(())
+}
+
+fn repo_ci_existing_model_array(
+    codex_home: &std::path::Path,
+    segments: &[String],
+) -> anyhow::Result<toml_edit::Array> {
+    let mut array = toml_edit::Array::new();
+    let Some(item) = repo_ci_config_item(codex_home, segments)? else {
+        return Ok(array);
+    };
+    if let Some(existing) = item.as_value().and_then(toml_edit::Value::as_array) {
+        for value in existing.iter() {
+            array.push(value.clone());
+        }
+    }
+    Ok(array)
+}
+
+fn repo_ci_config_item(
+    codex_home: &std::path::Path,
+    segments: &[String],
+) -> anyhow::Result<Option<toml_edit::Item>> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    if !config_path.exists() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(&config_path)?;
+    let doc = raw.parse::<toml_edit::DocumentMut>()?;
+    let mut item = doc.as_item();
+    for segment in segments {
+        let Some(next) = item.get(segment) else {
+            return Ok(None);
+        };
+        item = next;
+    }
+    Ok(Some(item.clone()))
+}
+
+fn repo_ci_scope_segments(scope: &RepoCiScopeArgs) -> anyhow::Result<Vec<String>> {
+    let specified = [
+        scope.global,
+        scope.dir.is_some(),
+        scope.github_org.is_some(),
+        scope.cwd,
+    ]
+    .into_iter()
+    .filter(|specified| *specified)
+    .count();
+    if specified > 1 {
+        anyhow::bail!("choose only one repo CI scope");
+    }
+    if let Some(dir) = &scope.dir {
+        return Ok(vec![
+            "repo_ci".to_string(),
+            "directories".to_string(),
+            dir.to_string_lossy().to_string(),
+        ]);
+    }
+    if let Some(org) = &scope.github_org {
+        return Ok(vec![
+            "repo_ci".to_string(),
+            "github_orgs".to_string(),
+            org.to_string(),
+        ]);
+    }
+    if scope.cwd {
+        let cwd = std::env::current_dir()?;
+        let repo_root = codex_repo_ci::repo_root_for_cwd(&cwd)?;
+        return Ok(vec![
+            "repo_ci".to_string(),
+            "directories".to_string(),
+            repo_root.to_string_lossy().to_string(),
+        ]);
+    }
+    Ok(vec!["repo_ci".to_string(), "defaults".to_string()])
+}
+
+fn repo_ci_scope_label(scope: &RepoCiScopeArgs) -> String {
+    if scope.global {
+        "global defaults".to_string()
+    } else if let Some(dir) = &scope.dir {
+        format!("directory {}", dir.display())
+    } else if let Some(org) = &scope.github_org {
+        format!("GitHub org {org}")
+    } else if scope.cwd {
+        "current repository".to_string()
+    } else {
+        "global defaults".to_string()
+    }
+}
+
+fn append_segment(segments: &[String], segment: &str) -> Vec<String> {
+    let mut next = segments.to_vec();
+    next.push(segment.to_string());
+    next
+}
+
+fn repo_ci_validation_label(validation: &codex_repo_ci::ValidationStatus) -> String {
+    match validation {
+        codex_repo_ci::ValidationStatus::NotRun => "not run".to_string(),
+        codex_repo_ci::ValidationStatus::Passed {
+            validated_at_unix_sec,
+        } => format!("passed at {validated_at_unix_sec}"),
+        codex_repo_ci::ValidationStatus::Failed { exit_code } => {
+            format!("failed with exit code {exit_code:?}")
+        }
+    }
 }
 
 fn maybe_print_under_development_feature_warning(
@@ -2461,6 +2942,55 @@ mod tests {
             panic!("expected features disable");
         };
         assert_eq!(feature, "shell_tool");
+    }
+
+    #[test]
+    fn repo_ci_enable_parses_scope_and_automation() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "repo-ci",
+            "enable",
+            "--cwd",
+            "--automation",
+            "local",
+        ])
+        .expect("parse should succeed");
+        let Some(Subcommand::RepoCi(RepoCiCli { sub })) = cli.subcommand else {
+            panic!("expected repo-ci subcommand");
+        };
+        let RepoCiSubcommand::Enable(args) = sub else {
+            panic!("expected repo-ci enable");
+        };
+        assert!(args.scope.cwd);
+        assert!(matches!(args.automation, RepoCiAutomationArg::Local));
+    }
+
+    #[test]
+    fn repo_ci_models_add_parses_fallback_candidate() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "repo-ci",
+            "models",
+            "add",
+            "--global",
+            "--model",
+            "gpt-5.3-codex-spark",
+            "--reasoning-effort",
+            "high",
+        ])
+        .expect("parse should succeed");
+        let Some(Subcommand::RepoCi(RepoCiCli { sub })) = cli.subcommand else {
+            panic!("expected repo-ci subcommand");
+        };
+        let RepoCiSubcommand::Models(RepoCiModelsCli {
+            sub: RepoCiModelsSubcommand::Add(args),
+        }) = sub
+        else {
+            panic!("expected repo-ci models add");
+        };
+        assert!(args.scope.global);
+        assert_eq!(args.model.as_deref(), Some("gpt-5.3-codex-spark"));
+        assert_eq!(args.reasoning_effort.as_deref(), Some("high"));
     }
 
     #[test]

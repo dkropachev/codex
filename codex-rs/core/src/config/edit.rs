@@ -1066,6 +1066,16 @@ impl ConfigEditsBuilder {
         self
     }
 
+    pub fn set_path_value(mut self, segments: Vec<String>, value: TomlItem) -> Self {
+        self.edits.push(ConfigEdit::SetPath { segments, value });
+        self
+    }
+
+    pub fn clear_path(mut self, segments: Vec<String>) -> Self {
+        self.edits.push(ConfigEdit::ClearPath { segments });
+        self
+    }
+
     /// Enable or disable a feature flag by key under the `[features]` table.
     ///
     /// Disabling a default-false feature clears the root-scoped key instead of
