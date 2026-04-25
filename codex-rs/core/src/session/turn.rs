@@ -38,6 +38,8 @@ use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::parse_turn_item;
 use crate::plugins::build_plugin_injections;
+use crate::repo_ci_automation;
+use crate::repo_ci_automation::RepoCiTurnState;
 use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
@@ -365,6 +367,7 @@ pub(crate) async fn run_turn(
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+    let mut repo_ci_state = RepoCiTurnState::new(&turn_context.cwd);
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
@@ -618,6 +621,20 @@ pub(crate) async fn run_turn(
                         )
                         .await;
                         return None;
+                    }
+                    if let Some(repo_ci_prompt) = repo_ci_automation::maybe_run_after_agent(
+                        &sess,
+                        &turn_context,
+                        &mut repo_ci_state,
+                    )
+                    .await
+                    {
+                        sess.record_conversation_items(
+                            &turn_context,
+                            std::slice::from_ref(&repo_ci_prompt),
+                        )
+                        .await;
+                        continue;
                     }
                     break;
                 }
@@ -1482,6 +1499,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         EventMsg::Error(_)
         | EventMsg::Warning(_)
         | EventMsg::GuardianWarning(_)
+        | EventMsg::RepoCiStatus(_)
         | EventMsg::RealtimeConversationStarted(_)
         | EventMsg::RealtimeConversationSdp(_)
         | EventMsg::RealtimeConversationRealtime(_)

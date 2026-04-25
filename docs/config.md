@@ -84,8 +84,28 @@ local checks. The learner records the source files and SHA-256 hashes it used;
 `codex repo-ci status --cwd` reports when those files changed and the repository
 should be learned again.
 
+When repo CI is enabled for a trusted repository, Codex compares the worktree at
+the start and end of each regular turn. If the turn changed files, Codex runs
+the learned fast local runner before completing the turn. Failing local checks
+are fed back into the same turn for repair until the configured local retry
+limit is reached. Progress is emitted as structured repo CI status events rather
+than generic warnings.
+
+When a failure occurs, Codex asks the configured repo CI model chain to classify
+the failure as `related`, `unrelated`, `whole_suite`, or `unknown`. Candidate
+models are tried in order; if a candidate fails because of context limits,
+availability, or another model-call error, Codex falls back to the next
+candidate. If no model result is available, Codex uses deterministic fallback
+classification and never ignores `unknown` or `whole_suite` failures.
+
 Remote checks use the GitHub CLI. `codex repo-ci watch-pr --cwd` runs through
 the existing `gh` authentication and fails if `gh auth status` is not usable.
+Automatic remote checks run after local checks pass when automation includes
+`remote`; Codex uses existing `gh` credentials, pushes the current branch when a
+PR is linked, watches GitHub checks, ignores clearly unrelated partial failures,
+and requests repair for related, unknown, or whole-suite failures until the
+configured remote retry limit is reached. Whole-suite failures are never treated
+as unrelated.
 
 ## JSON Schema
 

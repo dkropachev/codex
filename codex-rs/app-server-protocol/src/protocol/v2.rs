@@ -7654,6 +7654,19 @@ pub struct WarningNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct RepoCiStatusNotification {
+    pub thread_id: String,
+    pub phase: String,
+    pub state: String,
+    pub scope: String,
+    pub attempt: Option<u8>,
+    pub max_attempts: Option<u8>,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct GuardianWarningNotification {
     /// Thread target for the guardian warning.
     pub thread_id: String,

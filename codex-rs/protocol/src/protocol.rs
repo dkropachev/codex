@@ -1397,6 +1397,9 @@ pub enum EventMsg {
     /// Warning issued by the guardian automatic approval reviewer.
     GuardianWarning(WarningEvent),
 
+    /// Structured lifecycle update for automatic repository CI checks.
+    RepoCiStatus(RepoCiStatusEvent),
+
     /// Realtime conversation lifecycle start event.
     RealtimeConversationStarted(RealtimeConversationStartedEvent),
 
@@ -2048,6 +2051,48 @@ impl ErrorEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct WarningEvent {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum RepoCiPhase {
+    Learning,
+    Local,
+    Remote,
+    Triage,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum RepoCiState {
+    Started,
+    Passed,
+    Failed,
+    Skipped,
+    Ignored,
+    Retrying,
+    Exhausted,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum RepoCiScope {
+    Local,
+    Remote,
+    None,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RepoCiStatusEvent {
+    pub phase: RepoCiPhase,
+    pub state: RepoCiState,
+    pub scope: RepoCiScope,
+    pub attempt: Option<u8>,
+    pub max_attempts: Option<u8>,
     pub message: String,
 }
 

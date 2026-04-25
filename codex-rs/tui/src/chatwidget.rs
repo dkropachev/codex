@@ -7065,6 +7065,10 @@ impl ChatWidget {
                 self.on_app_server_model_verification(&notification.verifications)
             }
             ServerNotification::Warning(notification) => self.on_warning(notification.message),
+            ServerNotification::RepoCiStatus(notification) => {
+                self.bottom_pane.ensure_status_indicator();
+                self.set_status_header(notification.message)
+            }
             ServerNotification::GuardianWarning(notification) => {
                 self.on_warning(notification.message)
             }
@@ -7598,6 +7602,10 @@ impl ChatWidget {
             }
             EventMsg::Warning(WarningEvent { message })
             | EventMsg::GuardianWarning(WarningEvent { message }) => self.on_warning(message),
+            EventMsg::RepoCiStatus(event) => {
+                self.bottom_pane.ensure_status_indicator();
+                self.set_status_header(event.message);
+            }
             EventMsg::GuardianAssessment(ev) => self.on_guardian_assessment(ev),
             EventMsg::ModelReroute(_) => {}
             EventMsg::ModelVerification(event) => {
