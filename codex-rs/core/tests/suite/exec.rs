@@ -9,6 +9,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::Result;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::get_platform_sandbox;
 use core_test_support::PathExt;
@@ -49,9 +50,12 @@ where
         arg0: None,
     };
 
+    let policy = SandboxPolicy::new_read_only_policy();
+    let permission_profile = PermissionProfile::from_legacy_sandbox_policy(&policy);
+
     process_exec_tool_call(
         params,
-        &PermissionProfile::read_only(),
+        &permission_profile,
         &cwd,
         &None,
         /*use_legacy_landlock*/ false,

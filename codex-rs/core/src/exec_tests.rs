@@ -8,7 +8,6 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
-use tokio::time::timeout;
 
 fn make_exec_output(
     exit_code: i32,
@@ -536,9 +535,7 @@ fn windows_restricted_token_rejects_split_only_filesystem_policies() {
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
         codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Special {
-                value: codex_protocol::permissions::FileSystemSpecialPath::project_roots(
-                    /*subpath*/ None,
-                ),
+                value: codex_protocol::permissions::FileSystemSpecialPath::CurrentWorkingDirectory,
             },
             access: codex_protocol::permissions::FileSystemAccessMode::Write,
         },
@@ -633,9 +630,7 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Special {
-                value: codex_protocol::permissions::FileSystemSpecialPath::project_roots(
-                    /*subpath*/ None,
-                ),
+                value: codex_protocol::permissions::FileSystemSpecialPath::CurrentWorkingDirectory,
             },
             access: codex_protocol::permissions::FileSystemAccessMode::Write,
         },
@@ -725,9 +720,7 @@ fn windows_elevated_supports_split_write_read_carveouts() {
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Special {
-                value: codex_protocol::permissions::FileSystemSpecialPath::project_roots(
-                    /*subpath*/ None,
-                ),
+                value: codex_protocol::permissions::FileSystemSpecialPath::CurrentWorkingDirectory,
             },
             access: codex_protocol::permissions::FileSystemAccessMode::Write,
         },
@@ -781,9 +774,7 @@ fn windows_elevated_rejects_unreadable_split_carveouts() {
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Special {
-                value: codex_protocol::permissions::FileSystemSpecialPath::project_roots(
-                    /*subpath*/ None,
-                ),
+                value: codex_protocol::permissions::FileSystemSpecialPath::CurrentWorkingDirectory,
             },
             access: codex_protocol::permissions::FileSystemAccessMode::Write,
         },
@@ -830,9 +821,7 @@ fn windows_elevated_rejects_unreadable_globs() {
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Special {
-                value: codex_protocol::permissions::FileSystemSpecialPath::project_roots(
-                    /*subpath*/ None,
-                ),
+                value: codex_protocol::permissions::FileSystemSpecialPath::CurrentWorkingDirectory,
             },
             access: codex_protocol::permissions::FileSystemAccessMode::Write,
         },
@@ -881,9 +870,7 @@ fn windows_elevated_rejects_reopened_writable_descendants() {
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Special {
-                value: codex_protocol::permissions::FileSystemSpecialPath::project_roots(
-                    /*subpath*/ None,
-                ),
+                value: codex_protocol::permissions::FileSystemSpecialPath::CurrentWorkingDirectory,
             },
             access: codex_protocol::permissions::FileSystemAccessMode::Write,
         },
@@ -1034,23 +1021,22 @@ async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
         tokio::time::sleep(Duration::from_millis(1_000)).await;
         cancel_tx.cancel();
     });
-    let result = timeout(
-        Duration::from_secs(5),
-        process_exec_tool_call(
-            params,
-            &PermissionProfile::Disabled,
-            &cwd,
-            &None,
-            /*use_legacy_landlock*/ false,
-            /*stdout_stream*/ None,
-        ),
+    let permission_profile = PermissionProfile::Disabled;
+    let result = process_exec_tool_call(
+        params,
+        &permission_profile,
+        &cwd,
+        &None,
+        /*use_legacy_landlock*/ false,
+        /*stdout_stream*/ None,
     )
-    .await
-    .expect("cancellation should stop the process promptly");
-    let output = result.expect("cancellation should return a non-timeout exec result");
-    assert!(!output.timed_out);
-    assert_ne!(output.exit_code, 0);
-    assert_ne!(output.exit_code, EXEC_TIMEOUT_EXIT_CODE);
+    .await;
+    let output = match result {
+        Err(CodexErr::Sandbox(SandboxErr::Timeout { output })) => output,
+        other => panic!("expected timeout error, got {other:?}"),
+    };
+    assert!(output.timed_out);
+    assert_eq!(output.exit_code, EXEC_TIMEOUT_EXIT_CODE);
     Ok(())
 }
 

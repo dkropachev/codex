@@ -112,7 +112,9 @@ impl FileSystemSandboxContext {
     }
 }
 
-fn file_system_policy_has_cwd_dependent_entries(
+/// Returns whether a filesystem sandbox policy contains entries that require
+/// a concrete cwd to resolve correctly.
+pub fn file_system_policy_has_cwd_dependent_entries(
     file_system_policy: &FileSystemSandboxPolicy,
 ) -> bool {
     file_system_policy
@@ -121,7 +123,9 @@ fn file_system_policy_has_cwd_dependent_entries(
         .any(|entry| match &entry.path {
             FileSystemPath::GlobPattern { pattern } => !Path::new(pattern).is_absolute(),
             FileSystemPath::Special {
-                value: FileSystemSpecialPath::ProjectRoots { .. },
+                value:
+                    FileSystemSpecialPath::CurrentWorkingDirectory
+                    | FileSystemSpecialPath::ProjectRoots { .. },
             } => true,
             FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => false,
         })
