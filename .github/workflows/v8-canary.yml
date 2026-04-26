@@ -15,6 +15,7 @@ on:
   push:
     branches:
       - main
+      - "forked-rust-v*"
     paths:
       - ".github/scripts/rusty_v8_bazel.py"
       - ".github/workflows/rusty-v8-release.yml"
