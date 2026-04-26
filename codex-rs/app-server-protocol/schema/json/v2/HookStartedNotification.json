@@ -104,6 +104,13 @@
         "id": {
           "type": "string"
         },
+        "pluginId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "scope": {
           "$ref": "#/definitions/HookScope"
         },

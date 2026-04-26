@@ -63,6 +63,8 @@ use codex_app_server_protocol::ThreadRealtimeStartResponse;
 use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadRealtimeStopResponse;
+use codex_app_server_protocol::ThreadRepoCiSessionModeSetParams;
+use codex_app_server_protocol::ThreadRepoCiSessionModeSetResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
@@ -100,6 +102,7 @@ use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
+use codex_protocol::protocol::RepoCiSessionMode;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::SandboxPolicy;
@@ -273,6 +276,21 @@ impl AppServerSession {
                     true,
                 )
             }
+            Some(Account::ChatgptPool { id, members, .. }) => (
+                Some(id.clone()),
+                Some(TelemetryAuthMode::Chatgpt),
+                Some(StatusAccountDisplay::ChatGpt {
+                    email: Some(id),
+                    plan: members
+                        .iter()
+                        .find(|member| member.active)
+                        .and_then(|member| member.plan_type)
+                        .map(plan_type_display_name),
+                }),
+                None,
+                FeedbackAudience::External,
+                true,
+            ),
             Some(Account::AmazonBedrock {}) => {
                 (None, None, None, None, FeedbackAudience::External, false)
             }
@@ -766,6 +784,26 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/backgroundTerminals/clean failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_repo_ci_session_mode_set(
+        &mut self,
+        thread_id: ThreadId,
+        mode: Option<RepoCiSessionMode>,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadRepoCiSessionModeSetResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadRepoCiSessionModeSet {
+                request_id,
+                params: ThreadRepoCiSessionModeSetParams {
+                    thread_id: thread_id.to_string(),
+                    mode: mode.map(Into::into),
+                },
+            })
+            .await
+            .wrap_err("thread/repoCiSessionMode/set failed in TUI")?;
         Ok(())
     }
 

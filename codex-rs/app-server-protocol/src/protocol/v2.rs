@@ -89,6 +89,7 @@ use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
+use codex_protocol::protocol::RepoCiSessionMode as CoreRepoCiSessionMode;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
@@ -528,6 +529,8 @@ pub struct HookRunSummary {
     pub source_path: AbsolutePathBuf,
     #[serde(default = "default_hook_source")]
     pub source: HookSource,
+    #[serde(default)]
+    pub plugin_id: Option<String>,
     pub display_order: i64,
     pub status: HookRunStatus,
     pub status_message: Option<String>,
@@ -547,6 +550,7 @@ impl From<CoreHookRunSummary> for HookRunSummary {
             scope: value.scope.into(),
             source_path: value.source_path,
             source: value.source.into(),
+            plugin_id: value.plugin_id,
             display_order: value.display_order,
             status: value.status.into(),
             status_message: value.status_message,
@@ -2069,9 +2073,31 @@ pub enum Account {
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
     Chatgpt { email: String, plan_type: PlanType },
 
+    #[serde(rename = "chatgptPool", rename_all = "camelCase")]
+    #[ts(rename = "chatgptPool", rename_all = "camelCase")]
+    ChatgptPool {
+        id: String,
+        active_account_id: Option<String>,
+        members: Vec<AccountPoolMember>,
+    },
+
     #[serde(rename = "amazonBedrock", rename_all = "camelCase")]
     #[ts(rename = "amazonBedrock", rename_all = "camelCase")]
     AmazonBedrock {},
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountPoolMember {
+    pub id: String,
+    pub email: Option<String>,
+    pub plan_type: Option<PlanType>,
+    pub active: bool,
+    pub unavailable_reason: Option<String>,
+    pub regular_remaining: Option<u64>,
+    pub spark_remaining: Option<u64>,
+    pub last_error: Option<String>,
 }
 
 impl From<ProviderAccount> for Account {
@@ -2079,6 +2105,27 @@ impl From<ProviderAccount> for Account {
         match account {
             ProviderAccount::ApiKey => Self::ApiKey {},
             ProviderAccount::Chatgpt { email, plan_type } => Self::Chatgpt { email, plan_type },
+            ProviderAccount::ChatgptPool {
+                id,
+                active_account_id,
+                members,
+            } => Self::ChatgptPool {
+                id,
+                active_account_id,
+                members: members
+                    .into_iter()
+                    .map(|member| AccountPoolMember {
+                        id: member.id,
+                        email: member.email,
+                        plan_type: member.plan_type,
+                        active: member.active,
+                        unavailable_reason: member.unavailable_reason,
+                        regular_remaining: member.regular_remaining,
+                        spark_remaining: member.spark_remaining,
+                        last_error: member.last_error,
+                    })
+                    .collect(),
+            },
             ProviderAccount::AmazonBedrock => Self::AmazonBedrock {},
         }
     }
@@ -3823,6 +3870,30 @@ pub struct ThreadMemoryModeSetParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadMemoryModeSetResponse {}
 
+v2_enum_from_core! {
+    pub enum RepoCiSessionMode from CoreRepoCiSessionMode {
+        Off,
+        Local,
+        Remote,
+        LocalAndRemote,
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRepoCiSessionModeSetParams {
+    pub thread_id: String,
+    /// Null or omitted clears the session override and returns to repo/user config.
+    #[ts(optional = nullable)]
+    pub mode: Option<RepoCiSessionMode>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRepoCiSessionModeSetResponse {}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -4244,6 +4315,28 @@ pub struct PluginReadParams {
 #[ts(export_to = "v2/")]
 pub struct PluginReadResponse {
     pub plugin: PluginDetail,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginCommandRunParams {
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
+    pub plugin_id: String,
+    pub name: String,
+    pub arguments: Vec<String>,
+    #[ts(optional = nullable)]
+    pub cwd: Option<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginCommandRunResponse {
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -6537,6 +6630,16 @@ pub struct CommandExecOutputDeltaNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct PluginEventNotification {
+    pub thread_id: Option<String>,
+    pub plugin_id: String,
+    pub event: String,
+    pub payload: serde_json::Value,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct FileChangeOutputDeltaNotification {
     pub thread_id: String,
     pub turn_id: String,
@@ -7518,6 +7621,19 @@ pub struct WarningNotification {
     /// Optional thread target when the warning applies to a specific thread.
     pub thread_id: Option<String>,
     /// Concise warning message for the user.
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RepoCiStatusNotification {
+    pub thread_id: String,
+    pub phase: String,
+    pub state: String,
+    pub scope: String,
+    pub attempt: Option<u8>,
+    pub max_attempts: Option<u8>,
     pub message: String,
 }
 

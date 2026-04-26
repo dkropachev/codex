@@ -234,6 +234,56 @@ async fn live_app_server_guardian_warning_notification_renders_message() {
 }
 
 #[tokio::test]
+async fn live_app_server_repo_ci_status_updates_status_header() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::RepoCiStatus(RepoCiStatusNotification {
+            thread_id: "thread-1".to_string(),
+            phase: "local".to_string(),
+            state: "started".to_string(),
+            scope: "local".to_string(),
+            attempt: None,
+            max_attempts: None,
+            message: "Repo CI local checks started.".to_string(),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Repo CI local checks started.");
+}
+
+#[tokio::test]
+async fn live_app_server_repo_ci_plugin_event_updates_status_header() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::PluginEvent(PluginEventNotification {
+            thread_id: Some("thread-1".to_string()),
+            plugin_id: "repo-ci@openai-bundled".to_string(),
+            event: "status".to_string(),
+            payload: serde_json::json!({
+                "phase": "local",
+                "state": "started",
+                "scope": "local",
+                "message": "Repo CI local checks started from plugin."
+            }),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Repo CI local checks started from plugin.");
+}
+
+#[tokio::test]
 async fn live_app_server_config_warning_prefixes_summary() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

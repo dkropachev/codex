@@ -294,6 +294,10 @@ client_request_definitions! {
         params: v2::ThreadMemoryModeSetParams,
         response: v2::ThreadMemoryModeSetResponse,
     },
+    ThreadRepoCiSessionModeSet => "thread/repoCiSessionMode/set" {
+        params: v2::ThreadRepoCiSessionModeSetParams,
+        response: v2::ThreadRepoCiSessionModeSetResponse,
+    },
     #[experimental("memory/reset")]
     MemoryReset => "memory/reset" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
@@ -368,6 +372,10 @@ client_request_definitions! {
     PluginRead => "plugin/read" {
         params: v2::PluginReadParams,
         response: v2::PluginReadResponse,
+    },
+    PluginCommandRun => "plugin/command/run" {
+        params: v2::PluginCommandRunParams,
+        response: v2::PluginCommandRunResponse,
     },
     AppsList => "app/list" {
         params: v2::AppsListParams,
@@ -1045,6 +1053,7 @@ server_notification_definitions! {
     PlanDelta => "item/plan/delta" (v2::PlanDeltaNotification),
     /// Stream base64-encoded stdout/stderr chunks for a running `command/exec` session.
     CommandExecOutputDelta => "command/exec/outputDelta" (v2::CommandExecOutputDeltaNotification),
+    PluginEvent => "plugin/event" (v2::PluginEventNotification),
     CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
     TerminalInteraction => "item/commandExecution/terminalInteraction" (v2::TerminalInteractionNotification),
     FileChangeOutputDelta => "item/fileChange/outputDelta" (v2::FileChangeOutputDeltaNotification),
@@ -1067,6 +1076,7 @@ server_notification_definitions! {
     ModelVerification => "model/verification" (v2::ModelVerificationNotification),
     Warning => "warning" (v2::WarningNotification),
     GuardianWarning => "guardianWarning" (v2::GuardianWarningNotification),
+    RepoCiStatus => "repoCi/status" (v2::RepoCiStatusNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
     FuzzyFileSearchSessionUpdated => "fuzzyFileSearch/sessionUpdated" (FuzzyFileSearchSessionUpdatedNotification),

@@ -1859,6 +1859,13 @@
         "id": {
           "type": "string"
         },
+        "pluginId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "scope": {
           "$ref": "#/definitions/HookScope"
         },
@@ -2415,6 +2422,29 @@
       ],
       "type": "string"
     },
+    "PluginEventNotification": {
+      "properties": {
+        "event": {
+          "type": "string"
+        },
+        "payload": true,
+        "pluginId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "payload",
+        "pluginId"
+      ],
+      "type": "object"
+    },
     "RateLimitReachedType": {
       "enum": [
         "rate_limit_reached",
@@ -2614,6 +2644,49 @@
         "itemId",
         "threadId",
         "turnId"
+      ],
+      "type": "object"
+    },
+    "RepoCiStatusNotification": {
+      "properties": {
+        "attempt": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maxAttempts": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "phase": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "phase",
+        "scope",
+        "state",
+        "threadId"
       ],
       "type": "object"
     },
@@ -5013,6 +5086,26 @@
       "properties": {
         "method": {
           "enum": [
+            "plugin/event"
+          ],
+          "title": "Plugin/eventNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginEventNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Plugin/eventNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
             "item/commandExecution/outputDelta"
           ],
           "title": "Item/commandExecution/outputDeltaNotificationMethod",
@@ -5428,6 +5521,26 @@
         "params"
       ],
       "title": "GuardianWarningNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "repoCi/status"
+          ],
+          "title": "RepoCi/statusNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/RepoCiStatusNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "RepoCi/statusNotification",
       "type": "object"
     },
     {

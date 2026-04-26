@@ -428,6 +428,8 @@ fn server_notification_thread_target(
             Some(notification.thread_id.as_str())
         }
         ServerNotification::Warning(notification) => notification.thread_id.as_deref(),
+        ServerNotification::PluginEvent(notification) => notification.thread_id.as_deref(),
+        ServerNotification::RepoCiStatus(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::GuardianWarning(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::SkillsChanged(_)
         | ServerNotification::McpServerStatusUpdated(_)

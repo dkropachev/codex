@@ -384,6 +384,30 @@
             },
             "method": {
               "enum": [
+                "thread/repoCiSessionMode/set"
+              ],
+              "title": "Thread/repoCiSessionMode/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRepoCiSessionModeSetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/repoCiSessionMode/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/unarchive"
               ],
               "title": "Thread/unarchiveRequestMethod",
@@ -760,6 +784,30 @@
             "params"
           ],
           "title": "Plugin/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "plugin/command/run"
+              ],
+              "title": "Plugin/command/runRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginCommandRunParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/command/runRequest",
           "type": "object"
         },
         {
@@ -4092,6 +4140,26 @@
           "properties": {
             "method": {
               "enum": [
+                "plugin/event"
+              ],
+              "title": "Plugin/eventNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginEventNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Plugin/eventNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "item/commandExecution/outputDelta"
               ],
               "title": "Item/commandExecution/outputDeltaNotificationMethod",
@@ -4507,6 +4575,26 @@
             "params"
           ],
           "title": "GuardianWarningNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "repoCi/status"
+              ],
+              "title": "RepoCi/statusNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/RepoCiStatusNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "RepoCi/statusNotification",
           "type": "object"
         },
         {
@@ -5224,6 +5312,39 @@
           },
           {
             "properties": {
+              "activeAccountId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "members": {
+                "items": {
+                  "$ref": "#/definitions/v2/AccountPoolMember"
+                },
+                "type": "array"
+              },
+              "type": {
+                "enum": [
+                  "chatgptPool"
+                ],
+                "title": "ChatgptPoolAccountType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "members",
+              "type"
+            ],
+            "title": "ChatgptPoolAccount",
+            "type": "object"
+          },
+          {
+            "properties": {
               "type": {
                 "enum": [
                   "amazonBedrock"
@@ -5263,6 +5384,65 @@
           "success"
         ],
         "title": "AccountLoginCompletedNotification",
+        "type": "object"
+      },
+      "AccountPoolMember": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "planType": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PlanType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "regularRemaining": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sparkRemaining": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "unavailableReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "active",
+          "id"
+        ],
         "type": "object"
       },
       "AccountRateLimitsUpdatedNotification": {
@@ -9641,6 +9821,13 @@
           "id": {
             "type": "string"
           },
+          "pluginId": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "scope": {
             "$ref": "#/definitions/v2/HookScope"
           },
@@ -11472,6 +11659,66 @@
         ],
         "type": "string"
       },
+      "PluginCommandRunParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "arguments": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "pluginId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "arguments",
+          "name",
+          "pluginId"
+        ],
+        "title": "PluginCommandRunParams",
+        "type": "object"
+      },
+      "PluginCommandRunResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "exitCode": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "stderr": {
+            "type": "string"
+          },
+          "stdout": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stderr",
+          "stdout"
+        ],
+        "title": "PluginCommandRunResponse",
+        "type": "object"
+      },
       "PluginDetail": {
         "properties": {
           "apps": {
@@ -11522,6 +11769,31 @@
           "skills",
           "summary"
         ],
+        "type": "object"
+      },
+      "PluginEventNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "event": {
+            "type": "string"
+          },
+          "payload": true,
+          "pluginId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "event",
+          "payload",
+          "pluginId"
+        ],
+        "title": "PluginEventNotification",
         "type": "object"
       },
       "PluginInstallParams": {
@@ -12556,6 +12828,60 @@
           "remote_control_client_enrollment"
         ],
         "type": "string"
+      },
+      "RepoCiSessionMode": {
+        "enum": [
+          "off",
+          "local",
+          "remote",
+          "localAndRemote"
+        ],
+        "type": "string"
+      },
+      "RepoCiStatusNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "attempt": {
+            "format": "uint8",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxAttempts": {
+            "format": "uint8",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "phase",
+          "scope",
+          "state",
+          "threadId"
+        ],
+        "title": "RepoCiStatusNotification",
+        "type": "object"
       },
       "RequestId": {
         "anyOf": [
@@ -15907,6 +16233,35 @@
           "threadId"
         ],
         "title": "ThreadRealtimeTranscriptDoneNotification",
+        "type": "object"
+      },
+      "ThreadRepoCiSessionModeSetParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/RepoCiSessionMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null or omitted clears the session override and returns to repo/user config."
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadRepoCiSessionModeSetParams",
+        "type": "object"
+      },
+      "ThreadRepoCiSessionModeSetResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadRepoCiSessionModeSetResponse",
         "type": "object"
       },
       "ThreadResumeParams": {

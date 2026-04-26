@@ -2,6 +2,7 @@
 
 export type { Account } from "./Account";
 export type { AccountLoginCompletedNotification } from "./AccountLoginCompletedNotification";
+export type { AccountPoolMember } from "./AccountPoolMember";
 export type { AccountRateLimitsUpdatedNotification } from "./AccountRateLimitsUpdatedNotification";
 export type { AccountUpdatedNotification } from "./AccountUpdatedNotification";
 export type { AddCreditsNudgeCreditType } from "./AddCreditsNudgeCreditType";
@@ -256,7 +257,10 @@ export type { PermissionsRequestApprovalParams } from "./PermissionsRequestAppro
 export type { PermissionsRequestApprovalResponse } from "./PermissionsRequestApprovalResponse";
 export type { PlanDeltaNotification } from "./PlanDeltaNotification";
 export type { PluginAuthPolicy } from "./PluginAuthPolicy";
+export type { PluginCommandRunParams } from "./PluginCommandRunParams";
+export type { PluginCommandRunResponse } from "./PluginCommandRunResponse";
 export type { PluginDetail } from "./PluginDetail";
+export type { PluginEventNotification } from "./PluginEventNotification";
 export type { PluginInstallParams } from "./PluginInstallParams";
 export type { PluginInstallPolicy } from "./PluginInstallPolicy";
 export type { PluginInstallResponse } from "./PluginInstallResponse";
@@ -283,6 +287,8 @@ export type { ReasoningSummaryTextDeltaNotification } from "./ReasoningSummaryTe
 export type { ReasoningTextDeltaNotification } from "./ReasoningTextDeltaNotification";
 export type { RemoteControlClientConnectionAudience } from "./RemoteControlClientConnectionAudience";
 export type { RemoteControlClientEnrollmentAudience } from "./RemoteControlClientEnrollmentAudience";
+export type { RepoCiSessionMode } from "./RepoCiSessionMode";
+export type { RepoCiStatusNotification } from "./RepoCiStatusNotification";
 export type { RequestPermissionProfile } from "./RequestPermissionProfile";
 export type { ResidencyRequirement } from "./ResidencyRequirement";
 export type { ReviewDelivery } from "./ReviewDelivery";
@@ -350,6 +356,8 @@ export type { ThreadRealtimeStartTransport } from "./ThreadRealtimeStartTranspor
 export type { ThreadRealtimeStartedNotification } from "./ThreadRealtimeStartedNotification";
 export type { ThreadRealtimeTranscriptDeltaNotification } from "./ThreadRealtimeTranscriptDeltaNotification";
 export type { ThreadRealtimeTranscriptDoneNotification } from "./ThreadRealtimeTranscriptDoneNotification";
+export type { ThreadRepoCiSessionModeSetParams } from "./ThreadRepoCiSessionModeSetParams";
+export type { ThreadRepoCiSessionModeSetResponse } from "./ThreadRepoCiSessionModeSetResponse";
 export type { ThreadResumeParams } from "./ThreadResumeParams";
 export type { ThreadResumeResponse } from "./ThreadResumeResponse";
 export type { ThreadRollbackParams } from "./ThreadRollbackParams";

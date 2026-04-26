@@ -106,6 +106,8 @@ use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::PermissionProfile as ApiPermissionProfile;
+use codex_app_server_protocol::PluginCommandRunParams;
+use codex_app_server_protocol::PluginCommandRunResponse;
 use codex_app_server_protocol::PluginDetail;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
@@ -179,6 +181,8 @@ use codex_app_server_protocol::ThreadRealtimeStartResponse;
 use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadRealtimeStopResponse;
+use codex_app_server_protocol::ThreadRepoCiSessionModeSetParams;
+use codex_app_server_protocol::ThreadRepoCiSessionModeSetResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
@@ -928,6 +932,10 @@ impl CodexMessageProcessor {
                 self.thread_memory_mode_set(to_connection_request_id(request_id), params)
                     .await;
             }
+            ClientRequest::ThreadRepoCiSessionModeSet { request_id, params } => {
+                self.thread_repo_ci_session_mode_set(to_connection_request_id(request_id), params)
+                    .await;
+            }
             ClientRequest::MemoryReset { request_id, params } => {
                 self.memory_reset(to_connection_request_id(request_id), params)
                     .await;
@@ -1000,6 +1008,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::PluginRead { request_id, params } => {
                 self.plugin_read(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::PluginCommandRun { request_id, params } => {
+                self.plugin_command_run(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::AppsList { request_id, params } => {
@@ -1878,6 +1890,9 @@ impl CodexMessageProcessor {
     }
 
     async fn get_account_rate_limits(&self, request_id: ConnectionRequestId) {
+        self.auth_manager
+            .refresh_account_pool_usage(/*pool_id*/ None)
+            .await;
         match self.fetch_account_rate_limits().await {
             Ok((rate_limits, rate_limits_by_limit_id)) => {
                 let response = GetAccountRateLimitsResponse {
@@ -3769,6 +3784,46 @@ impl CodexMessageProcessor {
                 self.send_internal_error(
                     request_id,
                     format!("failed to clean background terminals: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn thread_repo_ci_session_mode_set(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadRepoCiSessionModeSetParams,
+    ) {
+        let ThreadRepoCiSessionModeSetParams { thread_id, mode } = params;
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self
+            .submit_core_op(
+                &request_id,
+                thread.as_ref(),
+                Op::SetRepoCiSessionMode {
+                    mode: mode.map(codex_app_server_protocol::RepoCiSessionMode::to_core),
+                },
+            )
+            .await
+        {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadRepoCiSessionModeSetResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to set repo CI session mode: {err}"),
                 )
                 .await;
             }

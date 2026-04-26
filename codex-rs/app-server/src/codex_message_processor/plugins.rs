@@ -346,6 +346,103 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    pub(super) async fn plugin_command_run(
+        &self,
+        request_id: ConnectionRequestId,
+        params: PluginCommandRunParams,
+    ) {
+        let config = match self.load_latest_config(params.cwd.clone()).await {
+            Ok(config) => config,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let cwd = params
+            .cwd
+            .as_ref()
+            .map_or_else(|| config.cwd.clone(), |cwd| config.cwd.join(cwd));
+        let plugin_outcome = self
+            .thread_manager
+            .plugins_manager()
+            .plugins_for_config(&config)
+            .await;
+        let commands = plugin_outcome.effective_commands();
+        let Some(command) = codex_core_plugins::command::find_plugin_command(
+            &commands,
+            Some(&params.plugin_id),
+            codex_core_plugins::command::PluginCommandSurface::AppServer,
+            &params.name,
+        ) else {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "plugin command not found for plugin {}: {}",
+                    params.plugin_id, params.name
+                ),
+            )
+            .await;
+            return;
+        };
+
+        let default_config = plugin_outcome
+            .plugins()
+            .iter()
+            .find(|plugin| plugin.is_active() && plugin.config_name == params.plugin_id)
+            .and_then(|plugin| plugin.default_config.as_deref())
+            .and_then(|config| serde_json::from_str(config).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        let runtime = match crate::plugin_runtime::PluginRuntimeServer::start(
+            params.plugin_id.clone(),
+            params.thread_id.clone(),
+            default_config,
+            Arc::clone(&self.outgoing),
+        )
+        .await
+        {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to start plugin runtime: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+        let options = codex_core_plugins::command::PluginCommandRunOptions {
+            runtime_socket: Some(runtime.socket_path()),
+        };
+        match codex_core_plugins::command::run_plugin_command_with_options(
+            command,
+            &params.arguments,
+            &cwd,
+            &options,
+        )
+        .await
+        {
+            Ok(output) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        PluginCommandRunResponse {
+                            exit_code: output.exit_code,
+                            stdout: output.stdout,
+                            stderr: output.stderr,
+                        },
+                    )
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to run plugin command: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
     pub(super) async fn plugin_install(
         &self,
         request_id: ConnectionRequestId,

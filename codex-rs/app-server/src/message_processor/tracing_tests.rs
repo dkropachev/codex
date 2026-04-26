@@ -51,7 +51,6 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tracing_subscriber::layer::SubscriberExt;
@@ -87,21 +86,18 @@ impl RemoteTrace {
     }
 }
 
-fn init_test_tracing() -> &'static TestTracing {
-    static TEST_TRACING: OnceLock<TestTracing> = OnceLock::new();
-    TEST_TRACING.get_or_init(|| {
-        let exporter = InMemorySpanExporter::default();
-        let provider = SdkTracerProvider::builder()
-            .with_simple_exporter(exporter.clone())
-            .build();
-        let tracer = provider.tracer("codex-app-server-message-processor-tests");
-        global::set_text_map_propagator(TraceContextPropagator::new());
-        let subscriber =
-            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("global tracing subscriber should only be installed once");
-        TestTracing { exporter, provider }
-    })
+fn build_test_tracing() -> (
+    Arc<TestTracing>,
+    impl tracing::Subscriber + Send + Sync + 'static,
+) {
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let tracer = provider.tracer("codex-app-server-message-processor-tests");
+    let subscriber =
+        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+    (Arc::new(TestTracing { exporter, provider }), subscriber)
 }
 
 fn request_from_client_request(request: ClientRequest) -> JSONRPCRequest {
@@ -115,20 +111,19 @@ struct TracingHarness {
     processor: Arc<MessageProcessor>,
     outgoing_rx: mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
     session: Arc<ConnectionSessionState>,
-    tracing: &'static TestTracing,
+    tracing: Arc<TestTracing>,
 }
 
 impl TracingHarness {
-    async fn new() -> Result<Self> {
-        Self::new_with_origin(ConnectionOrigin::WebSocket).await
+    async fn new(tracing: Arc<TestTracing>) -> Result<Self> {
+        Self::new_with_origin(ConnectionOrigin::WebSocket, tracing).await
     }
 
-    async fn new_with_origin(origin: ConnectionOrigin) -> Result<Self> {
+    async fn new_with_origin(origin: ConnectionOrigin, tracing: Arc<TestTracing>) -> Result<Self> {
         let server = create_mock_responses_server_repeating_assistant("Done").await;
         let codex_home = TempDir::new()?;
         let config = Arc::new(build_test_config(codex_home.path(), &server.uri()).await?);
         let (processor, outgoing_rx) = build_test_processor(config);
-        let tracing = init_test_tracing();
         tracing.exporter.reset();
         tracing::callsite::rebuild_interest_cache();
         let mut harness = Self {
@@ -292,9 +287,10 @@ fn build_test_processor(
     (processor, outgoing_rx)
 }
 
-fn run_current_thread_test_with_stack<F>(name: &str, future: F) -> Result<()>
+fn run_current_thread_test_with_stack<F, Fut>(name: &str, test: F) -> Result<()>
 where
-    F: Future<Output = Result<()>> + Send + 'static,
+    F: FnOnce(Arc<TestTracing>) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
 {
     const TEST_STACK_SIZE_BYTES: usize = 4 * 1024 * 1024;
 
@@ -302,10 +298,14 @@ where
         .name(name.to_string())
         .stack_size(TEST_STACK_SIZE_BYTES)
         .spawn(move || -> Result<()> {
+            global::set_text_map_propagator(TraceContextPropagator::new());
+            let (tracing, subscriber) = build_test_tracing();
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            runtime.block_on(Box::pin(future))
+            tracing::subscriber::with_default(subscriber, || {
+                runtime.block_on(Box::pin(test(tracing)))
+            })
         })?;
 
     match handle.join() {
@@ -576,28 +576,13 @@ where
     );
 }
 
-async fn wait_for_new_exported_spans<F>(
-    tracing: &TestTracing,
-    baseline_len: usize,
-    predicate: F,
-) -> Vec<SpanData>
-where
-    F: Fn(&[SpanData]) -> bool,
-{
-    let spans = wait_for_exported_spans(tracing, |spans| {
-        spans.len() > baseline_len && predicate(&spans[baseline_len..])
-    })
-    .await;
-    spans.into_iter().skip(baseline_len).collect()
-}
-
 #[test]
 #[serial(app_server_tracing)]
 fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Result<()> {
     run_current_thread_test_with_stack(
         "thread_start_jsonrpc_span_exports_server_span_and_parents_children",
-        async {
-            let mut harness = TracingHarness::new().await?;
+        |tracing| async move {
+            let mut harness = TracingHarness::new(tracing).await?;
 
             let RemoteTrace {
                 trace_id: remote_trace_id,
@@ -609,7 +594,7 @@ fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Resul
             let _: ThreadStartResponse = harness
                 .start_thread(/*request_id*/ 20_002, /*trace*/ None)
                 .await;
-            let untraced_spans = wait_for_exported_spans(harness.tracing, |spans| {
+            let untraced_spans = wait_for_exported_spans(&harness.tracing, |spans| {
                 spans.iter().any(|span| {
                     span.span_kind == SpanKind::Server
                         && span_attr(span, "rpc.method") == Some("thread/start")
@@ -643,11 +628,11 @@ fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Resul
                 /*min_depth*/ 1,
             );
 
-            let baseline_len = untraced_spans.len();
+            harness.reset_tracing();
             let _: ThreadStartResponse = harness
                 .start_thread(/*request_id*/ 20_003, Some(remote_trace))
                 .await;
-            let spans = wait_for_new_exported_spans(harness.tracing, baseline_len, |spans| {
+            let spans = wait_for_exported_spans(&harness.tracing, |spans| {
                 spans.iter().any(|span| {
                     span.span_kind == SpanKind::Server
                         && span_attr(span, "rpc.method") == Some("thread/start")
@@ -683,118 +668,129 @@ fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Resul
     )
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[test]
 #[serial(app_server_tracing)]
-async fn remote_control_origin_rejects_device_key_requests() -> Result<()> {
-    let mut harness = TracingHarness::new_with_origin(ConnectionOrigin::RemoteControl).await?;
+fn remote_control_origin_rejects_device_key_requests() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "remote_control_origin_rejects_device_key_requests",
+        |tracing| async move {
+            let mut harness =
+                TracingHarness::new_with_origin(ConnectionOrigin::RemoteControl, tracing).await?;
 
-    let error = harness
-        .request_error(
-            ClientRequest::DeviceKeySign {
-                request_id: RequestId::Integer(20_004),
-                params: DeviceKeySignParams {
-                    key_id: "dk_123".to_string(),
-                    payload: DeviceKeySignPayload::RemoteControlClientConnection {
-                        nonce: "nonce-123".to_string(),
-                        audience:
-                            RemoteControlClientConnectionAudience::RemoteControlClientWebsocket,
-                        session_id: "wssess_123".to_string(),
-                        target_origin: "https://chatgpt.com".to_string(),
-                        target_path: "/api/codex/remote/control/client".to_string(),
-                        account_user_id: "acct_123".to_string(),
-                        client_id: "cli_123".to_string(),
-                        token_expires_at: 4_102_444_800,
-                        token_sha256_base64url: "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU"
-                            .to_string(),
-                        scopes: vec!["remote_control_controller_websocket".to_string()],
+            let error = harness
+                .request_error(
+                    ClientRequest::DeviceKeySign {
+                        request_id: RequestId::Integer(20_004),
+                        params: DeviceKeySignParams {
+                            key_id: "dk_123".to_string(),
+                            payload: DeviceKeySignPayload::RemoteControlClientConnection {
+                                nonce: "nonce-123".to_string(),
+                                audience: RemoteControlClientConnectionAudience::RemoteControlClientWebsocket,
+                                session_id: "wssess_123".to_string(),
+                                target_origin: "https://chatgpt.com".to_string(),
+                                target_path: "/api/codex/remote/control/client".to_string(),
+                                account_user_id: "acct_123".to_string(),
+                                client_id: "cli_123".to_string(),
+                                token_expires_at: 4_102_444_800,
+                                token_sha256_base64url:
+                                    "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU".to_string(),
+                                scopes: vec!["remote_control_controller_websocket".to_string()],
+                            },
+                        },
                     },
-                },
-            },
-            /*trace*/ None,
-        )
-        .await;
+                    /*trace*/ None,
+                )
+                .await;
 
-    assert_eq!(error.code, crate::error_code::INVALID_REQUEST_ERROR_CODE);
-    assert_eq!(
-        error.message,
-        "device/key/sign is not available over remote transports"
-    );
+            assert_eq!(error.code, crate::error_code::INVALID_REQUEST_ERROR_CODE);
+            assert_eq!(
+                error.message,
+                "device/key/sign is not available over remote transports"
+            );
 
-    harness.shutdown().await;
-    Ok(())
+            harness.shutdown().await;
+            Ok(())
+        },
+    )
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[test]
 #[serial(app_server_tracing)]
-async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
-    let mut harness = TracingHarness::new().await?;
-    let thread_start_response = harness.start_thread(/*request_id*/ 2, /*trace*/ None).await;
-    let thread_id = thread_start_response.thread.id.clone();
+fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "turn_start_jsonrpc_span_parents_core_turn_spans",
+        |tracing| async move {
+            let mut harness = TracingHarness::new(tracing).await?;
+            let thread_start_response =
+                harness.start_thread(/*request_id*/ 2, /*trace*/ None).await;
+            let thread_id = thread_start_response.thread.id.clone();
 
-    harness.reset_tracing();
+            harness.reset_tracing();
 
-    let RemoteTrace {
-        trace_id: remote_trace_id,
-        parent_span_id: remote_parent_span_id,
-        context: remote_trace,
-    } = RemoteTrace::new("00000000000000000000000000000077", "0000000000000088");
-    let turn_start_response: TurnStartResponse = harness
-        .request(
-            ClientRequest::TurnStart {
-                request_id: RequestId::Integer(3),
-                params: TurnStartParams {
-                    environments: None,
-                    thread_id,
-                    input: vec![UserInput::Text {
-                        text: "hello".to_string(),
-                        text_elements: Vec::new(),
-                    }],
-                    responsesapi_client_metadata: None,
-                    cwd: None,
-                    approval_policy: None,
-                    sandbox_policy: None,
-                    permission_profile: None,
-                    approvals_reviewer: None,
-                    model: None,
-                    service_tier: None,
-                    effort: None,
-                    summary: None,
-                    personality: None,
-                    output_schema: None,
-                    collaboration_mode: None,
-                },
-            },
-            Some(remote_trace),
-        )
-        .await;
-    let spans = wait_for_exported_spans(harness.tracing, |spans| {
-        spans.iter().any(|span| {
-            span.span_kind == SpanKind::Server
-                && span_attr(span, "rpc.method") == Some("turn/start")
-                && span.span_context.trace_id() == remote_trace_id
-        }) && spans.iter().any(|span| {
-            span_attr(span, "codex.op") == Some("user_input")
-                && span.span_context.trace_id() == remote_trace_id
-        })
-    })
-    .await;
+            let RemoteTrace {
+                trace_id: remote_trace_id,
+                parent_span_id: remote_parent_span_id,
+                context: remote_trace,
+            } = RemoteTrace::new("00000000000000000000000000000077", "0000000000000088");
+            let turn_start_response: TurnStartResponse = harness
+                .request(
+                    ClientRequest::TurnStart {
+                        request_id: RequestId::Integer(3),
+                        params: TurnStartParams {
+                            environments: None,
+                            thread_id,
+                            input: vec![UserInput::Text {
+                                text: "hello".to_string(),
+                                text_elements: Vec::new(),
+                            }],
+                            responsesapi_client_metadata: None,
+                            cwd: None,
+                            approval_policy: None,
+                            sandbox_policy: None,
+                            permission_profile: None,
+                            approvals_reviewer: None,
+                            model: None,
+                            service_tier: None,
+                            effort: None,
+                            summary: None,
+                            personality: None,
+                            output_schema: None,
+                            collaboration_mode: None,
+                        },
+                    },
+                    Some(remote_trace),
+                )
+                .await;
+            let spans = wait_for_exported_spans(&harness.tracing, |spans| {
+                spans.iter().any(|span| {
+                    span.span_kind == SpanKind::Server
+                        && span_attr(span, "rpc.method") == Some("turn/start")
+                        && span.span_context.trace_id() == remote_trace_id
+                }) && spans.iter().any(|span| {
+                    span_attr(span, "codex.op") == Some("user_input")
+                        && span.span_context.trace_id() == remote_trace_id
+                })
+            })
+            .await;
 
-    let server_request_span =
-        find_rpc_span_with_trace(&spans, SpanKind::Server, "turn/start", remote_trace_id);
-    let core_turn_span =
-        find_span_with_trace(&spans, remote_trace_id, "codex.op=user_input", |span| {
-            span_attr(span, "codex.op") == Some("user_input")
-        });
+            let server_request_span =
+                find_rpc_span_with_trace(&spans, SpanKind::Server, "turn/start", remote_trace_id);
+            let core_turn_span =
+                find_span_with_trace(&spans, remote_trace_id, "codex.op=user_input", |span| {
+                    span_attr(span, "codex.op") == Some("user_input")
+                });
 
-    assert_eq!(server_request_span.parent_span_id, remote_parent_span_id);
-    assert!(server_request_span.parent_span_is_remote);
-    assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
-    assert_eq!(
-        span_attr(server_request_span, "turn.id"),
-        Some(turn_start_response.turn.id.as_str())
-    );
-    assert_span_descends_from(&spans, core_turn_span, server_request_span);
-    harness.shutdown().await;
+            assert_eq!(server_request_span.parent_span_id, remote_parent_span_id);
+            assert!(server_request_span.parent_span_is_remote);
+            assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
+            assert_eq!(
+                span_attr(server_request_span, "turn.id"),
+                Some(turn_start_response.turn.id.as_str())
+            );
+            assert_span_descends_from(&spans, core_turn_span, server_request_span);
+            harness.shutdown().await;
 
-    Ok(())
+            Ok(())
+        },
+    )
 }

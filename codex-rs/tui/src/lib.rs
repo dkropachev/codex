@@ -841,6 +841,7 @@ pub async fn run_main(
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
         show_raw_agent_reasoning: cli.oss.then_some(true),
+        repo_ci_session_mode: cli.repo_ci.map(Into::into),
         additional_writable_roots: additional_dirs,
         ..Default::default()
     };
@@ -1668,7 +1669,9 @@ async fn get_login_status(
     let account = app_server.read_account().await?;
     Ok(match account.account {
         Some(AppServerAccount::ApiKey {}) => LoginStatus::AuthMode(AppServerAuthMode::ApiKey),
-        Some(AppServerAccount::Chatgpt { .. }) => LoginStatus::AuthMode(AppServerAuthMode::Chatgpt),
+        Some(AppServerAccount::Chatgpt { .. } | AppServerAccount::ChatgptPool { .. }) => {
+            LoginStatus::AuthMode(AppServerAuthMode::Chatgpt)
+        }
         Some(AppServerAccount::AmazonBedrock {}) => LoginStatus::NotAuthenticated,
         None => LoginStatus::NotAuthenticated,
     })
