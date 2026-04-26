@@ -12,6 +12,7 @@ use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
+use codex_protocol::account::ProviderAccountPoolMember;
 use codex_protocol::openai_models::ModelsResponse;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
@@ -146,26 +147,53 @@ impl ModelProvider for ConfiguredModelProvider {
 
     fn account_state(&self) -> ProviderAccountResult {
         let account = if self.info.requires_openai_auth {
-            self.auth_manager
-                .as_ref()
-                .and_then(|auth_manager| auth_manager.auth_cached())
-                .map(|auth| match &auth {
-                    CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
-                    CodexAuth::Chatgpt(_)
-                    | CodexAuth::ChatgptAuthTokens(_)
-                    | CodexAuth::AgentIdentity(_) => {
-                        let email = auth.get_account_email();
-                        let plan_type = auth.account_plan_type();
+            match self.auth_manager.as_ref() {
+                Some(auth_manager) => {
+                    if let Some(pool) = auth_manager.account_pool_status() {
+                        Some(ProviderAccount::ChatgptPool {
+                            id: pool.pool_id,
+                            active_account_id: pool.active_account_id,
+                            members: pool
+                                .members
+                                .into_iter()
+                                .map(|member| ProviderAccountPoolMember {
+                                    id: member.account_id,
+                                    email: member.email,
+                                    plan_type: member.plan_type,
+                                    active: member.active,
+                                    unavailable_reason: member.unavailable_reason,
+                                    regular_remaining: member.regular_remaining,
+                                    spark_remaining: member.spark_remaining,
+                                    last_error: member.last_error,
+                                })
+                                .collect(),
+                        })
+                    } else {
+                        auth_manager
+                            .auth_cached()
+                            .map(|auth| match &auth {
+                                CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
+                                CodexAuth::Chatgpt(_)
+                                | CodexAuth::ChatgptAuthTokens(_)
+                                | CodexAuth::AgentIdentity(_) => {
+                                    let email = auth.get_account_email();
+                                    let plan_type = auth.account_plan_type();
 
-                        match (email, plan_type) {
-                            (Some(email), Some(plan_type)) => {
-                                Ok(ProviderAccount::Chatgpt { email, plan_type })
-                            }
-                            _ => Err(ProviderAccountError::MissingChatgptAccountDetails),
-                        }
+                                    match (email, plan_type) {
+                                        (Some(email), Some(plan_type)) => {
+                                            Ok(ProviderAccount::Chatgpt { email, plan_type })
+                                        }
+                                        _ => {
+                                            Err(ProviderAccountError::MissingChatgptAccountDetails)
+                                        }
+                                    }
+                                }
+                            })
+                            .transpose()?
                     }
-                })
-                .transpose()?
+                }
+                None => None,
+            }
         } else {
             None
         };

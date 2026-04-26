@@ -66,6 +66,65 @@ Codex stores the SQLite-backed state DB under `sqlite_home` (config key) or the
 `CODEX_SQLITE_HOME` environment variable. When unset, WorkspaceWrite sandbox
 sessions default to a temp directory; other modes default to `CODEX_HOME`.
 
+## ChatGPT account pools
+
+`[account_pool]` lets Codex route ChatGPT requests across named accounts stored
+under `~/.codex/accounts/<account-id>`. Set `default_pool` to the pool Codex
+should use. Each pool defines the OpenAI `provider`, an ordered `accounts` list,
+and a `policy`:
+
+- `drain` uses the first available account until it is unavailable or exhausted,
+  then moves to the next account.
+- `load_balance` prefers the account with the most fresh remaining usage.
+
+```toml
+[account_pool]
+enabled = true
+default_pool = "codex-pro"
+
+[account_pool.pools.codex-pro]
+provider = "openai"
+accounts = ["work-pro", "personal-pro"]
+policy = "drain"
+```
+
+## Model policy
+
+`[model_policy]` routes internal Codex model calls by source and prompt size.
+Rules are checked in order. Prompt size bounds use UTF-8 bytes, not tokens.
+
+```toml
+[model_policy]
+enabled = true
+
+[[model_policy.rules]]
+source = ["subagent", "module.repo_ci"]
+max_prompt_bytes = 20000
+model = "gpt-5.3-codex-spark"
+reasoning_effort = "inherit"
+account_pool = "spark"
+
+[[model_policy.rules]]
+source = "subagent.review"
+min_prompt_bytes = 20001
+model = "gpt-5.4"
+reasoning_effort = "medium"
+account = "work-pro"
+```
+
+Supported source selectors include `subagent`, `agent`,
+`subagent.review`, `subagent.thread_spawn`, `subagent.memory_consolidation`,
+and `module.repo_ci`. Use `source = "*"` to match every internal source, or use
+`source = [...]` / `sources = [...]` to match any of several sources. A route may set `model`,
+`model_provider`, `reasoning_effort`, `account_pool`, or `account`.
+`reasoning_effort = "inherit"` keeps the reasoning level from the parent or
+default config. `account_pool` references an existing
+`[account_pool.pools.<name>]`; `account` routes to one account id under
+`~/.codex/accounts/<account-id>`. Account routes apply when the policy starts a
+new internal session, such as spawned agents and memory consolidation agents. If
+a policy route cannot be applied, Codex leaves the original model configuration
+unchanged and continues with the default model selection.
+
 ## Custom CA Certificates
 
 Codex can trust a custom root CA bundle for outbound HTTPS and secure websocket

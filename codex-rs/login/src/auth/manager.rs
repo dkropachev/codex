@@ -43,6 +43,11 @@ use codex_protocol::auth::RefreshTokenFailedReason;
 use serde_json::Value;
 use thiserror::Error;
 
+pub use super::account_pool::AccountPoolBucket;
+pub use super::account_pool::AccountPoolManager;
+pub use super::account_pool::AccountPoolMemberStatus;
+pub use super::account_pool::AccountPoolStatus;
+
 /// Authentication mechanism used by the current user.
 #[derive(Debug, Clone)]
 pub enum CodexAuth {
@@ -1232,6 +1237,8 @@ pub struct AuthManager {
     chatgpt_base_url: Option<String>,
     refresh_lock: Semaphore,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
+    account_pool: Option<Arc<AccountPoolManager>>,
+    next_account_pool_bucket: RwLock<Option<AccountPoolBucket>>,
 }
 
 /// Configuration view required to construct a shared [`AuthManager`].
@@ -1252,6 +1259,11 @@ pub trait AuthManagerConfig {
 
     /// Returns the ChatGPT backend base URL used for first-party backend authorization.
     fn chatgpt_base_url(&self) -> String;
+
+    /// Returns optional logical account pool configuration.
+    fn account_pool(&self) -> Option<codex_config::config_toml::AccountPoolToml> {
+        None
+    }
 }
 
 impl Debug for AuthManager {
@@ -1270,6 +1282,7 @@ impl Debug for AuthManager {
             )
             .field("chatgpt_base_url", &self.chatgpt_base_url)
             .field("has_external_auth", &self.has_external_auth())
+            .field("has_account_pool", &self.account_pool.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -1304,6 +1317,8 @@ impl AuthManager {
             chatgpt_base_url,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
+            account_pool: None,
+            next_account_pool_bucket: RwLock::new(None),
         }
     }
 
@@ -1323,6 +1338,8 @@ impl AuthManager {
             chatgpt_base_url: None,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
+            account_pool: None,
+            next_account_pool_bucket: RwLock::new(None),
         })
     }
 
@@ -1341,6 +1358,8 @@ impl AuthManager {
             chatgpt_base_url: None,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
+            account_pool: None,
+            next_account_pool_bucket: RwLock::new(None),
         })
     }
 
@@ -1359,11 +1378,20 @@ impl AuthManager {
             external_auth: RwLock::new(Some(
                 Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
             )),
+            account_pool: None,
+            next_account_pool_bucket: RwLock::new(None),
         })
     }
 
     /// Current cached auth (clone) without attempting a refresh.
     pub fn auth_cached(&self) -> Option<CodexAuth> {
+        if let Some(account_pool) = self.account_pool.as_ref() {
+            return account_pool.auth_cached();
+        }
+        self.auth_cached_unpooled()
+    }
+
+    pub(crate) fn auth_cached_unpooled(&self) -> Option<CodexAuth> {
         self.inner.read().ok().and_then(|c| c.auth.clone())
     }
 
@@ -1384,15 +1412,25 @@ impl AuthManager {
         if let Some(auth) = self.resolve_external_api_key_auth().await {
             return Some(auth);
         }
+        if let Some(account_pool) = self.account_pool.as_ref() {
+            if let Some(bucket) = self.take_next_account_pool_bucket() {
+                return account_pool.auth_for_bucket(bucket).await;
+            }
+            return account_pool.auth().await;
+        }
 
-        let auth = self.auth_cached()?;
+        self.auth_unpooled_cached().await
+    }
+
+    pub(crate) async fn auth_unpooled_cached(&self) -> Option<CodexAuth> {
+        let auth = self.auth_cached_unpooled()?;
         if Self::is_stale_for_proactive_refresh(&auth)
             && let Err(err) = self.refresh_token().await
         {
             tracing::error!("Failed to refresh token: {}", err);
             return Some(auth);
         }
-        let auth = self.auth_cached()?;
+        let auth = self.auth_cached_unpooled()?;
         if let Err(err) = auth.initialize_runtime(self.chatgpt_base_url.clone()).await {
             tracing::error!("Failed to initialize auth runtime: {err}");
             return None;
@@ -1546,6 +1584,55 @@ impl AuthManager {
         self.external_auth().is_some()
     }
 
+    pub fn account_pool_status(&self) -> Option<AccountPoolStatus> {
+        self.account_pool.as_ref().and_then(|pool| pool.status())
+    }
+
+    pub fn active_account_pool_member_id(&self) -> Option<String> {
+        self.account_pool
+            .as_ref()
+            .and_then(|pool| pool.active_account_id())
+    }
+
+    pub fn mark_active_account_pool_member_exhausted(
+        &self,
+        bucket: AccountPoolBucket,
+        error: String,
+    ) -> bool {
+        let has_available_member = self.account_pool.as_ref().is_some_and(|pool| {
+            let has_available_member = pool.mark_active_exhausted(bucket, error.clone());
+            if bucket == AccountPoolBucket::Spark {
+                // A Spark limit response can arrive after the regular auth path selected this
+                // member, so mark the regular bucket too to avoid immediately selecting it again.
+                pool.mark_active_exhausted(AccountPoolBucket::Regular, error);
+            }
+            has_available_member
+        });
+        if has_available_member {
+            self.set_next_account_pool_bucket(bucket);
+        }
+        has_available_member
+    }
+
+    pub async fn refresh_account_pool_usage(&self, pool_id: Option<&str>) {
+        if let Some(pool) = self.account_pool.as_ref() {
+            pool.refresh_usage(pool_id).await;
+        }
+    }
+
+    fn set_next_account_pool_bucket(&self, bucket: AccountPoolBucket) {
+        if let Ok(mut guard) = self.next_account_pool_bucket.write() {
+            *guard = Some(bucket);
+        }
+    }
+
+    fn take_next_account_pool_bucket(&self) -> Option<AccountPoolBucket> {
+        self.next_account_pool_bucket
+            .write()
+            .ok()
+            .and_then(|mut guard| guard.take())
+    }
+
     pub fn is_external_chatgpt_auth_active(&self) -> bool {
         self.auth_cached()
             .as_ref()
@@ -1576,14 +1663,28 @@ impl AuthManager {
         config: &impl AuthManagerConfig,
         enable_codex_api_key_env: bool,
     ) -> Arc<Self> {
-        let auth_manager = Self::shared(
-            config.codex_home(),
+        let codex_home = config.codex_home();
+        let auth_credentials_store_mode = config.cli_auth_credentials_store_mode();
+        let chatgpt_base_url = Some(config.chatgpt_base_url());
+        let mut auth_manager = Self::new(
+            codex_home.clone(),
             enable_codex_api_key_env,
-            config.cli_auth_credentials_store_mode(),
-            Some(config.chatgpt_base_url()),
+            auth_credentials_store_mode,
+            chatgpt_base_url.clone(),
         );
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id());
-        auth_manager
+        auth_manager.account_pool = config
+            .account_pool()
+            .and_then(|account_pool| {
+                AccountPoolManager::from_config(
+                    &codex_home,
+                    account_pool,
+                    auth_credentials_store_mode,
+                    chatgpt_base_url,
+                )
+            })
+            .map(Arc::new);
+        Arc::new(auth_manager)
     }
 
     pub fn unauthorized_recovery(self: &Arc<Self>) -> UnauthorizedRecovery {

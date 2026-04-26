@@ -11,6 +11,8 @@ use crate::memories::prompts::build_consolidation_prompt;
 use crate::memories::storage::rebuild_raw_memories_file_from_memories;
 use crate::memories::storage::rollout_summary_file_stem;
 use crate::memories::storage::sync_rollout_summaries_from_memories;
+use crate::model_policy::ModelPolicySource;
+use crate::model_policy::apply_model_policy;
 use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
 use codex_config::Constrained;
@@ -73,7 +75,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     };
 
     // 2. Get the config for the agent
-    let Some(agent_config) = agent::get_config(config.clone()) else {
+    let Some(mut agent_config) = agent::get_config(config.clone()) else {
         // If we can't get the config, we can't consolidate.
         tracing::error!("failed to get agent config");
         job::failed(session, db, &claim, "failed_sandbox_policy").await;
@@ -137,6 +139,13 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
 
     // 5. Spawn the agent
     let prompt = agent::get_prompt(config, &selection, &removed_extension_resources);
+    if let Err(err) = apply_model_policy(
+        &mut agent_config,
+        ModelPolicySource::SubAgent(SubAgentSource::MemoryConsolidation),
+        prompt.len(),
+    ) {
+        tracing::warn!("failed to apply memory consolidation model policy: {err}");
+    }
     let source = SessionSource::SubAgent(SubAgentSource::MemoryConsolidation);
     let agent_control = session.services.agent_control.detached_registry();
     let thread_id = match agent_control

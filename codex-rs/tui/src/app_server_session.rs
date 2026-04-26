@@ -280,6 +280,30 @@ impl AppServerSession {
                     true,
                 )
             }
+            Some(Account::ChatgptPool { members, .. }) => {
+                let active_member = members.iter().find(|member| member.active);
+                let email = active_member.and_then(|member| member.email.clone());
+                let plan_type = active_member.and_then(|member| member.plan_type);
+                let feedback_audience = if email
+                    .as_deref()
+                    .is_some_and(|email| email.ends_with("@openai.com"))
+                {
+                    FeedbackAudience::OpenAiEmployee
+                } else {
+                    FeedbackAudience::External
+                };
+                (
+                    email.clone(),
+                    Some(TelemetryAuthMode::Chatgpt),
+                    Some(StatusAccountDisplay::ChatGpt {
+                        email,
+                        plan: plan_type.map(plan_type_display_name),
+                    }),
+                    plan_type,
+                    feedback_audience,
+                    true,
+                )
+            }
             Some(Account::AmazonBedrock {}) => {
                 (None, None, None, None, FeedbackAudience::External, false)
             }
