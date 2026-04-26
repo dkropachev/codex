@@ -1,3 +1,4 @@
+pub mod command;
 pub mod installed_marketplaces;
 pub mod loader;
 pub mod manifest;
