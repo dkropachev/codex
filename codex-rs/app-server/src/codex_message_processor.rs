@@ -189,6 +189,8 @@ use codex_app_server_protocol::ThreadRealtimeStartResponse;
 use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadRealtimeStopResponse;
+use codex_app_server_protocol::ThreadRepoCiSessionConfigSetParams;
+use codex_app_server_protocol::ThreadRepoCiSessionConfigSetResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
@@ -987,6 +989,13 @@ impl CodexMessageProcessor {
             ClientRequest::ThreadMemoryModeSet { request_id, params } => {
                 self.thread_memory_mode_set(to_connection_request_id(request_id), params)
                     .await;
+            }
+            ClientRequest::ThreadRepoCiSessionConfigSet { request_id, params } => {
+                self.thread_repo_ci_session_config_set(
+                    to_connection_request_id(request_id),
+                    params,
+                )
+                .await;
             }
             ClientRequest::MemoryReset { request_id, params } => {
                 self.memory_reset(to_connection_request_id(request_id), params)
@@ -3836,6 +3845,58 @@ impl CodexMessageProcessor {
                 self.send_internal_error(
                     request_id,
                     format!("failed to clean background terminals: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn thread_repo_ci_session_config_set(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadRepoCiSessionConfigSetParams,
+    ) {
+        let ThreadRepoCiSessionConfigSetParams {
+            thread_id,
+            mode,
+            issue_types,
+            review_rounds,
+        } = params;
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self
+            .submit_core_op(
+                &request_id,
+                thread.as_ref(),
+                Op::SetRepoCiSessionConfig {
+                    mode: mode.map(codex_app_server_protocol::RepoCiSessionMode::to_core),
+                    issue_types: issue_types.map(|values| {
+                        values
+                            .into_iter()
+                            .map(codex_app_server_protocol::RepoCiIssueType::to_core)
+                            .collect()
+                    }),
+                    review_rounds,
+                },
+            )
+            .await
+        {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadRepoCiSessionConfigSetResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to set repo CI session config: {err}"),
                 )
                 .await;
             }

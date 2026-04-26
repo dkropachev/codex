@@ -56,6 +56,76 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 When Codex knows which client started the turn, the legacy notify JSON payload also includes a top-level `client` field. The TUI reports `codex-tui`, and the app server reports the `clientInfo.name` value from `initialize`.
 
+## Repo CI
+
+Repo CI is an experimental feature flag and command surface for learning a
+repository's local and remote validation steps.
+
+```toml
+[features]
+repo_ci = true
+
+[repo_ci.defaults]
+enabled = true
+automation = "local-and-remote"
+local_test_time_budget_sec = 300
+max_local_fix_rounds = 3
+max_remote_fix_rounds = 2
+review_issue_types = ["correctness", "reliability", "maintainability"]
+max_review_fix_rounds = 2
+
+[repo_ci.github_repos."openai/codex"]
+review_issue_types = ["correctness", "security", "compatibility", "ux-config-cli"]
+```
+
+Use `codex repo-ci enable --cwd` to enable it for the current repository, and
+`codex repo-ci learn --cwd` to discover CI files, write the generated runner
+script under Codex home, prepare the local environment, and validate the fast
+local checks. The learner uses AI to inspect the repository, generate candidate
+local CI commands, run them, and iteratively repair the plan until the fast
+runner validates or the bounded retry budget is exhausted. The learner records
+the source files and SHA-256 hashes it used;
+`codex repo-ci status --cwd` reports when those files changed and the repository
+should be learned again.
+
+For one interactive session, override the configured behavior with
+`codex --repo-ci off|local|remote|local-and-remote` at startup or
+`/repo-ci inherit|off|local|remote|local-and-remote` inside the TUI. `inherit`
+clears the session override and returns to the configured repo/user scopes.
+You can also override targeted review scope with
+`codex --repo-ci-issue-types correctness,reliability` or
+`/repo-ci issues inherit|none|comma-list`, and override the review round limit
+with `codex --repo-ci-review-rounds N` or `/repo-ci rounds inherit|N`.
+
+When repo CI is enabled for a trusted repository, Codex compares the worktree at
+the start and end of each regular turn. If the turn changed files, Codex first
+runs a targeted review phase for the configured `review_issue_types`, groups any
+findings by owned file/module, applies bounded worker fixes, and then runs the
+learned fast local runner before completing the turn. Set
+`review_issue_types = []` to skip the targeted review phase entirely. Scope
+resolution prefers session overrides, then `directories`, `github_repos`,
+`github_orgs`, and finally `defaults`. If no scope config sets issue types,
+Codex falls back to repo-ci's inferred defaults for the repository, or to
+`correctness`, `reliability`, and `maintainability` when inference is
+unavailable. Failing local checks are fed back into the same turn for repair
+until the configured local retry limit is reached. Progress is emitted as
+structured repo CI status events rather than generic warnings.
+
+When a failure occurs, Codex asks the model configured for the repo-ci phase in
+`model_policy` to classify the failure as `related`, `unrelated`,
+`whole_suite`, or `unknown`. If no model result is available, Codex uses
+deterministic fallback classification and never ignores `unknown` or
+`whole_suite` failures.
+
+Remote checks use the GitHub CLI. `codex repo-ci watch-pr --cwd` runs through
+the existing `gh` authentication and fails if `gh auth status` is not usable.
+Automatic remote checks run after local checks pass when automation includes
+`remote`; Codex uses existing `gh` credentials, pushes the current branch when a
+PR is linked, watches GitHub checks, ignores clearly unrelated partial failures,
+and requests repair for related, unknown, or whole-suite failures until the
+configured remote retry limit is reached. Whole-suite failures are never treated
+as unrelated.
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.
@@ -98,25 +168,34 @@ Rules are checked in order. Prompt size bounds use UTF-8 bytes, not tokens.
 enabled = true
 
 [[model_policy.rules]]
-source = ["subagent", "module.repo_ci"]
+source = ["subagent", "module.repo_ci.triage"]
 max_prompt_bytes = 20000
 model = "gpt-5.3-codex-spark"
+service_tier = "flex"
 reasoning_effort = "inherit"
 account_pool = "spark"
 
 [[model_policy.rules]]
-source = "subagent.review"
+source = "module.repo_ci.review"
 min_prompt_bytes = 20001
 model = "gpt-5.4"
 reasoning_effort = "medium"
 account = "work-pro"
+
+[[model_policy.rules]]
+source = "module.repo_ci.fix"
+model = "gpt-5.4"
+reasoning_effort = "high"
 ```
 
 Supported source selectors include `subagent`, `agent`,
 `subagent.review`, `subagent.thread_spawn`, `subagent.memory_consolidation`,
-and `module.repo_ci`. Use `source = "*"` to match every internal source, or use
-`source = [...]` / `sources = [...]` to match any of several sources. A route may set `model`,
-`model_provider`, `reasoning_effort`, `account_pool`, or `account`.
+`module.repo_ci.triage`, `module.repo_ci.review`, and `module.repo_ci.fix`.
+`module.repo_ci` also works as a coarse fallback selector for repo-ci phases.
+Use `source = "*"` to match every internal source, or use `source = [...]` /
+`sources = [...]` to match any of several sources. A route may set `model`,
+`model_provider`, `service_tier`, `reasoning_effort`, `account_pool`, or
+`account`.
 `reasoning_effort = "inherit"` keeps the reasoning level from the parent or
 default config. `account_pool` references an existing
 `[account_pool.pools.<name>]`; `account` routes to one account id under

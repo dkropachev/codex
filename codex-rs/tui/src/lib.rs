@@ -834,6 +834,9 @@ pub async fn run_main(
     };
 
     let additional_dirs = cli.add_dir.clone();
+    let repo_ci_issue_types =
+        crate::cli::RepoCiIssueTypeCliArg::normalize_list(cli.repo_ci_issue_types.clone())
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
 
     let overrides = ConfigOverrides {
         model,
@@ -850,6 +853,9 @@ pub async fn run_main(
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
         show_raw_agent_reasoning: cli.oss.then_some(true),
+        repo_ci_session_mode: cli.repo_ci.map(Into::into),
+        repo_ci_issue_types,
+        repo_ci_review_rounds: cli.repo_ci_review_rounds,
         additional_writable_roots: additional_dirs,
         ..Default::default()
     };

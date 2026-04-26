@@ -73,6 +73,7 @@ use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
+use codex_app_server_protocol::RepoCiStatusNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
@@ -156,6 +157,35 @@ use tracing::error;
 use tracing::warn;
 
 type JsonValue = serde_json::Value;
+
+fn repo_ci_phase_name(phase: codex_protocol::protocol::RepoCiPhase) -> &'static str {
+    match phase {
+        codex_protocol::protocol::RepoCiPhase::Learning => "learning",
+        codex_protocol::protocol::RepoCiPhase::Local => "local",
+        codex_protocol::protocol::RepoCiPhase::Remote => "remote",
+        codex_protocol::protocol::RepoCiPhase::Triage => "triage",
+    }
+}
+
+fn repo_ci_state_name(state: codex_protocol::protocol::RepoCiState) -> &'static str {
+    match state {
+        codex_protocol::protocol::RepoCiState::Started => "started",
+        codex_protocol::protocol::RepoCiState::Passed => "passed",
+        codex_protocol::protocol::RepoCiState::Failed => "failed",
+        codex_protocol::protocol::RepoCiState::Skipped => "skipped",
+        codex_protocol::protocol::RepoCiState::Ignored => "ignored",
+        codex_protocol::protocol::RepoCiState::Retrying => "retrying",
+        codex_protocol::protocol::RepoCiState::Exhausted => "exhausted",
+    }
+}
+
+fn repo_ci_scope_name(scope: codex_protocol::protocol::RepoCiScope) -> &'static str {
+    match scope {
+        codex_protocol::protocol::RepoCiScope::Local => "local",
+        codex_protocol::protocol::RepoCiScope::Remote => "remote",
+        codex_protocol::protocol::RepoCiScope::None => "none",
+    }
+}
 
 enum CommandExecutionApprovalPresentation {
     Network(V2NetworkApprovalContext),
@@ -303,6 +333,26 @@ pub(crate) async fn apply_bespoke_event_handling(
                 }
                 outgoing
                     .send_server_notification(ServerNotification::GuardianWarning(notification))
+                    .await;
+            }
+        }
+        EventMsg::RepoCiStatus(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = RepoCiStatusNotification {
+                    thread_id: conversation_id.to_string(),
+                    phase: repo_ci_phase_name(event.phase).to_string(),
+                    state: repo_ci_state_name(event.state).to_string(),
+                    scope: repo_ci_scope_name(event.scope).to_string(),
+                    attempt: event.attempt,
+                    max_attempts: event.max_attempts,
+                    message: event.message,
+                };
+                if let Some(analytics_events_client) = analytics_events_client.as_ref() {
+                    analytics_events_client
+                        .track_notification(ServerNotification::RepoCiStatus(notification.clone()));
+                }
+                outgoing
+                    .send_server_notification(ServerNotification::RepoCiStatus(notification))
                     .await;
             }
         }

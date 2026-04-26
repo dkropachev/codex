@@ -77,6 +77,7 @@ use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
 use codex_app_server_protocol::ThreadRealtimeListVoicesParams;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
+use codex_app_server_protocol::ThreadRepoCiSessionConfigSetParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSetNameParams;
@@ -665,6 +666,16 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/memoryMode/set", params).await
+    }
+
+    /// Send a `thread/repoCiSessionConfig/set` JSON-RPC request (v2).
+    pub async fn send_thread_repo_ci_session_config_set_request(
+        &mut self,
+        params: ThreadRepoCiSessionConfigSetParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/repoCiSessionConfig/set", params)
+            .await
     }
 
     /// Send a `turn/start` JSON-RPC request (v2).

@@ -70,6 +70,8 @@ use codex_app_server_protocol::ThreadRealtimeStartResponse;
 use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadRealtimeStopResponse;
+use codex_app_server_protocol::ThreadRepoCiSessionConfigSetParams;
+use codex_app_server_protocol::ThreadRepoCiSessionConfigSetResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
@@ -107,6 +109,7 @@ use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
+use codex_protocol::protocol::RepoCiSessionMode;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::SandboxPolicy;
@@ -851,6 +854,31 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/backgroundTerminals/clean failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_repo_ci_session_config_set(
+        &mut self,
+        thread_id: ThreadId,
+        mode: Option<RepoCiSessionMode>,
+        issue_types: Option<Vec<codex_protocol::protocol::RepoCiIssueType>>,
+        review_rounds: Option<u8>,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadRepoCiSessionConfigSetResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadRepoCiSessionConfigSet {
+                request_id,
+                params: ThreadRepoCiSessionConfigSetParams {
+                    thread_id: thread_id.to_string(),
+                    mode: mode.map(Into::into),
+                    issue_types: issue_types
+                        .map(|values| values.into_iter().map(Into::into).collect()),
+                    review_rounds,
+                },
+            })
+            .await
+            .wrap_err("thread/repoCiSessionConfig/set failed in TUI")?;
         Ok(())
     }
 

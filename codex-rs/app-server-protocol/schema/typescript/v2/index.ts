@@ -283,6 +283,9 @@ export type { ReasoningSummaryTextDeltaNotification } from "./ReasoningSummaryTe
 export type { ReasoningTextDeltaNotification } from "./ReasoningTextDeltaNotification";
 export type { RemoteControlClientConnectionAudience } from "./RemoteControlClientConnectionAudience";
 export type { RemoteControlClientEnrollmentAudience } from "./RemoteControlClientEnrollmentAudience";
+export type { RepoCiIssueType } from "./RepoCiIssueType";
+export type { RepoCiSessionMode } from "./RepoCiSessionMode";
+export type { RepoCiStatusNotification } from "./RepoCiStatusNotification";
 export type { RequestPermissionProfile } from "./RequestPermissionProfile";
 export type { ResidencyRequirement } from "./ResidencyRequirement";
 export type { ReviewDelivery } from "./ReviewDelivery";
@@ -354,6 +357,8 @@ export type { ThreadRealtimeStartTransport } from "./ThreadRealtimeStartTranspor
 export type { ThreadRealtimeStartedNotification } from "./ThreadRealtimeStartedNotification";
 export type { ThreadRealtimeTranscriptDeltaNotification } from "./ThreadRealtimeTranscriptDeltaNotification";
 export type { ThreadRealtimeTranscriptDoneNotification } from "./ThreadRealtimeTranscriptDoneNotification";
+export type { ThreadRepoCiSessionConfigSetParams } from "./ThreadRepoCiSessionConfigSetParams";
+export type { ThreadRepoCiSessionConfigSetResponse } from "./ThreadRepoCiSessionConfigSetResponse";
 export type { ThreadResumeParams } from "./ThreadResumeParams";
 export type { ThreadResumeResponse } from "./ThreadResumeResponse";
 export type { ThreadRollbackParams } from "./ThreadRollbackParams";

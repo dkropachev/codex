@@ -4880,6 +4880,65 @@ async fn interrupt_without_active_turn_is_treated_as_handled() {
 }
 
 #[tokio::test]
+async fn repo_ci_session_mode_is_submitted_to_app_server() {
+    let mut app = make_test_app().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let started = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await
+        .expect("thread/start should succeed");
+    let thread_id = started.session.thread_id;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await
+        .expect("primary thread should be registered");
+    let op = AppCommand::set_repo_ci_session_config(
+        Some(codex_protocol::protocol::RepoCiSessionMode::Remote),
+        /*issue_types*/ None,
+        /*review_rounds*/ None,
+    );
+
+    let handled = app
+        .try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op)
+        .await
+        .expect("repo CI session mode submission should not fail");
+
+    assert_eq!(handled, true);
+}
+
+#[tokio::test]
+async fn repo_ci_session_config_is_submitted_to_app_server() {
+    let mut app = make_test_app().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let started = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await
+        .expect("thread/start should succeed");
+    let thread_id = started.session.thread_id;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await
+        .expect("primary thread should be registered");
+    let op = AppCommand::set_repo_ci_session_config(
+        None,
+        Some(vec![
+            codex_protocol::protocol::RepoCiIssueType::Correctness,
+            codex_protocol::protocol::RepoCiIssueType::Maintainability,
+        ]),
+        Some(4),
+    );
+
+    let handled = app
+        .try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op)
+        .await
+        .expect("repo CI session config submission should not fail");
+
+    assert_eq!(handled, true);
+}
+
+#[tokio::test]
 async fn clear_only_ui_reset_preserves_chat_session_state() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
