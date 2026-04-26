@@ -12,6 +12,7 @@ use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
+use codex_protocol::account::ProviderAccountPoolMember;
 use codex_protocol::openai_models::ModelsResponse;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
@@ -146,6 +147,33 @@ impl ModelProvider for ConfiguredModelProvider {
 
     fn account_state(&self) -> ProviderAccountResult {
         let account = if self.info.requires_openai_auth {
+            if let Some(status) = self
+                .auth_manager
+                .as_ref()
+                .and_then(|auth_manager| auth_manager.account_pool_status())
+            {
+                return Ok(ProviderAccountState {
+                    account: Some(ProviderAccount::ChatgptPool {
+                        id: status.pool_id,
+                        active_account_id: status.active_account_id,
+                        members: status
+                            .members
+                            .into_iter()
+                            .map(|member| ProviderAccountPoolMember {
+                                id: member.account_id,
+                                email: member.email,
+                                plan_type: member.plan_type,
+                                active: member.active,
+                                unavailable_reason: member.unavailable_reason,
+                                regular_remaining: member.regular_remaining,
+                                spark_remaining: member.spark_remaining,
+                                last_error: member.last_error,
+                            })
+                            .collect(),
+                    }),
+                    requires_openai_auth: self.info.requires_openai_auth,
+                });
+            }
             self.auth_manager
                 .as_ref()
                 .and_then(|auth_manager| auth_manager.auth_cached())

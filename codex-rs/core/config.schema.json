@@ -6,6 +6,56 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AccountPoolDefinitionToml": {
+      "additionalProperties": false,
+      "properties": {
+        "accounts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "policy": {
+          "$ref": "#/definitions/AccountPoolPolicyToml"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accounts",
+        "policy",
+        "provider"
+      ],
+      "type": "object"
+    },
+    "AccountPoolPolicyToml": {
+      "enum": [
+        "drain",
+        "load_balance"
+      ],
+      "type": "string"
+    },
+    "AccountPoolToml": {
+      "additionalProperties": false,
+      "properties": {
+        "default_pool": {
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "pools": {
+          "additionalProperties": {
+            "$ref": "#/definitions/AccountPoolDefinitionToml"
+          },
+          "default": {},
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "AgentRoleToml": {
       "additionalProperties": false,
       "properties": {
@@ -472,6 +522,9 @@
               "type": "boolean"
             },
             "remote_plugin": {
+              "type": "boolean"
+            },
+            "repo_ci": {
               "type": "boolean"
             },
             "request_permissions": {
@@ -1945,6 +1998,119 @@
         }
       ]
     },
+    "RepoCiAutomationToml": {
+      "enum": [
+        "local",
+        "remote",
+        "local-and-remote"
+      ],
+      "type": "string"
+    },
+    "RepoCiModelCandidateToml": {
+      "additionalProperties": false,
+      "properties": {
+        "inherit": {
+          "description": "Inherit the model selected for the current Codex turn.",
+          "type": "boolean"
+        },
+        "model": {
+          "description": "Explicit model slug to use for CI failure analysis and fixes.",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Optional reasoning effort for models that support it."
+        },
+        "speed_tier": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            }
+          ],
+          "description": "Optional service tier, for example `fast` or `flex`."
+        }
+      },
+      "type": "object"
+    },
+    "RepoCiScopeToml": {
+      "additionalProperties": false,
+      "properties": {
+        "automation": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RepoCiAutomationToml"
+            }
+          ],
+          "description": "Where checks should run."
+        },
+        "enabled": {
+          "description": "Whether repo CI should run automatically for this scope.",
+          "type": "boolean"
+        },
+        "local_test_time_budget_sec": {
+          "description": "Local integration/e2e/ui tests above this budget are not selected for the fast runner.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_local_fix_rounds": {
+          "description": "Maximum number of local fix attempts before surfacing the failure.",
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_remote_fix_rounds": {
+          "description": "Maximum number of remote CI fix attempts before surfacing the failure.",
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "models": {
+          "default": null,
+          "description": "Ordered model fallback chain for CI failure analysis and fixes.",
+          "items": {
+            "$ref": "#/definitions/RepoCiModelCandidateToml"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "RepoCiToml": {
+      "additionalProperties": false,
+      "properties": {
+        "defaults": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RepoCiScopeToml"
+            }
+          ],
+          "default": null,
+          "description": "Default settings used when no narrower scope matches."
+        },
+        "directories": {
+          "additionalProperties": {
+            "$ref": "#/definitions/RepoCiScopeToml"
+          },
+          "default": {},
+          "description": "Per-directory settings keyed by absolute or user-relative path.",
+          "type": "object"
+        },
+        "github_orgs": {
+          "additionalProperties": {
+            "$ref": "#/definitions/RepoCiScopeToml"
+          },
+          "default": {},
+          "description": "Per-GitHub-organization settings keyed by org name.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -2351,6 +2517,15 @@
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
   "properties": {
+    "account_pool": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AccountPoolToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional logical pools of bounded Codex subscription accounts."
+    },
     "agents": {
       "allOf": [
         {
@@ -2630,6 +2805,9 @@
           "type": "boolean"
         },
         "remote_plugin": {
+          "type": "boolean"
+        },
+        "repo_ci": {
           "type": "boolean"
         },
         "request_permissions": {
@@ -3034,6 +3212,15 @@
       ],
       "default": null,
       "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
+    },
+    "repo_ci": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RepoCiToml"
+        }
+      ],
+      "default": null,
+      "description": "Repository CI learning and validation settings."
     },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",

@@ -31,8 +31,28 @@ pub enum PlanType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderAccount {
     ApiKey,
-    Chatgpt { email: String, plan_type: PlanType },
+    Chatgpt {
+        email: String,
+        plan_type: PlanType,
+    },
+    ChatgptPool {
+        id: String,
+        active_account_id: Option<String>,
+        members: Vec<ProviderAccountPoolMember>,
+    },
     AmazonBedrock,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderAccountPoolMember {
+    pub id: String,
+    pub email: Option<String>,
+    pub plan_type: Option<PlanType>,
+    pub active: bool,
+    pub unavailable_reason: Option<String>,
+    pub regular_remaining: Option<u64>,
+    pub spark_remaining: Option<u64>,
+    pub last_error: Option<String>,
 }
 
 impl PlanType {

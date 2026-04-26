@@ -23,10 +23,12 @@ use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_config::ThreadConfigLoader;
+use codex_config::config_toml::AccountPoolToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
+use codex_config::config_toml::RepoCiToml;
 use codex_config::config_toml::validate_model_providers;
 use codex_config::profile_toml::ConfigProfile;
 use codex_config::types::ApprovalsReviewer;
@@ -85,6 +87,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::RepoCiSessionMode;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
@@ -418,6 +421,9 @@ pub struct Config {
     /// Combined provider map (defaults plus user-defined providers).
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
+    /// Optional logical pools of bounded Codex subscription accounts.
+    pub account_pool: Option<AccountPoolToml>,
+
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: usize,
 
@@ -576,6 +582,12 @@ pub struct Config {
     /// Settings for ghost snapshots (used for undo).
     pub ghost_snapshot: GhostSnapshotConfig,
 
+    /// Repository CI learning and validation settings.
+    pub repo_ci: Option<RepoCiToml>,
+
+    /// Session-only repo CI behavior override.
+    pub repo_ci_session_mode: Option<RepoCiSessionMode>,
+
     /// Settings specific to the task-path-based multi-agent tool surface.
     pub multi_agent_v2: MultiAgentV2Config,
 
@@ -655,6 +667,10 @@ impl AuthManagerConfig for Config {
 
     fn chatgpt_base_url(&self) -> String {
         self.chatgpt_base_url.clone()
+    }
+
+    fn account_pool(&self) -> Option<AccountPoolToml> {
+        self.account_pool.clone()
     }
 }
 
@@ -1402,6 +1418,7 @@ pub struct ConfigOverrides {
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub ephemeral: Option<bool>,
+    pub repo_ci_session_mode: Option<RepoCiSessionMode>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -1622,6 +1639,7 @@ impl Config {
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             ephemeral,
+            repo_ci_session_mode,
             additional_writable_roots,
         } = overrides;
 
@@ -2346,6 +2364,7 @@ impl Config {
             mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
             mcp_oauth_callback_url: cfg.mcp_oauth_callback_url.clone(),
             model_providers,
+            account_pool: cfg.account_pool,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(AGENTS_MD_MAX_BYTES),
             project_doc_fallback_filenames: cfg
                 .project_doc_fallback_filenames
@@ -2434,6 +2453,8 @@ impl Config {
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,
+            repo_ci: cfg.repo_ci,
+            repo_ci_session_mode,
             multi_agent_v2,
             features,
             suppress_unstable_features_warning: cfg

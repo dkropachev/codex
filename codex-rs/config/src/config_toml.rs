@@ -200,6 +200,10 @@ pub struct ConfigToml {
     #[serde(default, deserialize_with = "deserialize_model_providers")]
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
+    /// Optional logical pools of bounded Codex subscription accounts.
+    #[serde(default, deserialize_with = "deserialize_account_pool")]
+    pub account_pool: Option<AccountPoolToml>,
+
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: Option<usize>,
 
@@ -354,6 +358,10 @@ pub struct ConfigToml {
     #[schemars(schema_with = "crate::schema::features_schema")]
     pub features: Option<FeaturesToml>,
 
+    /// Repository CI learning and validation settings.
+    #[serde(default)]
+    pub repo_ci: Option<RepoCiToml>,
+
     /// Suppress warnings about unstable (under development) features.
     pub suppress_unstable_features_warning: Option<bool>,
 
@@ -413,10 +421,100 @@ pub struct ConfigToml {
     pub oss_provider: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RepoCiToml {
+    /// Default settings used when no narrower scope matches.
+    #[serde(default)]
+    pub defaults: Option<RepoCiScopeToml>,
+
+    /// Per-directory settings keyed by absolute or user-relative path.
+    #[serde(default)]
+    pub directories: BTreeMap<String, RepoCiScopeToml>,
+
+    /// Per-GitHub-organization settings keyed by org name.
+    #[serde(default)]
+    pub github_orgs: BTreeMap<String, RepoCiScopeToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RepoCiScopeToml {
+    /// Whether repo CI should run automatically for this scope.
+    pub enabled: Option<bool>,
+
+    /// Where checks should run.
+    pub automation: Option<RepoCiAutomationToml>,
+
+    /// Local integration/e2e/ui tests above this budget are not selected for the fast runner.
+    pub local_test_time_budget_sec: Option<u64>,
+
+    /// Maximum number of local fix attempts before surfacing the failure.
+    pub max_local_fix_rounds: Option<u8>,
+
+    /// Maximum number of remote CI fix attempts before surfacing the failure.
+    pub max_remote_fix_rounds: Option<u8>,
+
+    /// Ordered model fallback chain for CI failure analysis and fixes.
+    #[serde(default)]
+    pub models: Option<Vec<RepoCiModelCandidateToml>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RepoCiAutomationToml {
+    Local,
+    Remote,
+    LocalAndRemote,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RepoCiModelCandidateToml {
+    /// Inherit the model selected for the current Codex turn.
+    pub inherit: Option<bool>,
+
+    /// Explicit model slug to use for CI failure analysis and fixes.
+    pub model: Option<String>,
+
+    /// Optional service tier, for example `fast` or `flex`.
+    pub speed_tier: Option<ServiceTier>,
+
+    /// Optional reasoning effort for models that support it.
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 pub struct AutoReviewToml {
     /// Additional policy instructions inserted into the guardian prompt.
     pub policy: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AccountPoolToml {
+    #[serde(default)]
+    pub enabled: bool,
+
+    pub default_pool: Option<String>,
+
+    #[serde(default)]
+    pub pools: BTreeMap<String, AccountPoolDefinitionToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AccountPoolDefinitionToml {
+    pub provider: String,
+    pub policy: AccountPoolPolicyToml,
+    pub accounts: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountPoolPolicyToml {
+    Drain,
+    LoadBalance,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -854,6 +952,57 @@ where
     Ok(model_providers)
 }
 
+pub fn validate_account_pool(account_pool: &AccountPoolToml) -> Result<(), String> {
+    if !account_pool.enabled {
+        return Ok(());
+    }
+
+    if account_pool.pools.is_empty() {
+        return Err("account_pool: enabled account pool must define at least one pool".to_string());
+    }
+
+    if let Some(default_pool) = account_pool.default_pool.as_deref()
+        && !account_pool.pools.contains_key(default_pool)
+    {
+        return Err(format!(
+            "account_pool.default_pool `{default_pool}` does not reference a configured pool"
+        ));
+    }
+
+    for (pool_id, pool) in &account_pool.pools {
+        if pool.provider != OPENAI_PROVIDER_ID {
+            return Err(format!(
+                "account_pool.pools.{pool_id}: provider must be `{OPENAI_PROVIDER_ID}`"
+            ));
+        }
+        if pool.accounts.is_empty() {
+            return Err(format!(
+                "account_pool.pools.{pool_id}: accounts must contain at least one account id"
+            ));
+        }
+        for account_id in &pool.accounts {
+            if account_id.trim().is_empty() {
+                return Err(format!(
+                    "account_pool.pools.{pool_id}: account ids must not be empty"
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn deserialize_account_pool<'de, D>(deserializer: D) -> Result<Option<AccountPoolToml>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let account_pool = Option::<AccountPoolToml>::deserialize(deserializer)?;
+    if let Some(account_pool) = account_pool.as_ref() {
+        validate_account_pool(account_pool).map_err(serde::de::Error::custom)?;
+    }
+    Ok(account_pool)
+}
+
 pub fn validate_oss_provider(provider: &str) -> std::io::Result<()> {
     match provider {
         LMSTUDIO_OSS_PROVIDER_ID | OLLAMA_OSS_PROVIDER_ID => Ok(()),
@@ -867,5 +1016,75 @@ pub fn validate_oss_provider(provider: &str) -> std::io::Result<()> {
                 "Invalid OSS provider '{provider}'. Must be one of: {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID}"
             ),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn parses_account_pool_config() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            [account_pool]
+            enabled = true
+            default_pool = "codex-pro"
+
+            [account_pool.pools.codex-pro]
+            provider = "openai"
+            policy = "load_balance"
+            accounts = ["work-pro", "personal-pro"]
+            "#,
+        )
+        .expect("config should parse");
+
+        let account_pool = config.account_pool.expect("account pool");
+        assert_eq!(account_pool.enabled, true);
+        assert_eq!(account_pool.default_pool.as_deref(), Some("codex-pro"));
+        assert_eq!(
+            account_pool.pools.get("codex-pro").expect("pool").policy,
+            AccountPoolPolicyToml::LoadBalance
+        );
+    }
+
+    #[test]
+    fn rejects_account_pool_default_that_does_not_exist() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+            [account_pool]
+            enabled = true
+            default_pool = "missing"
+
+            [account_pool.pools.codex-pro]
+            provider = "openai"
+            policy = "drain"
+            accounts = ["work-pro"]
+            "#,
+        )
+        .expect_err("missing default pool should be rejected");
+
+        assert!(err.to_string().contains("account_pool.default_pool"));
+    }
+
+    #[test]
+    fn rejects_non_openai_account_pool_provider() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+            [account_pool]
+            enabled = true
+            default_pool = "codex-pro"
+
+            [account_pool.pools.codex-pro]
+            provider = "openrouter"
+            policy = "drain"
+            accounts = ["work-pro"]
+            "#,
+        )
+        .expect_err("non-openai provider should be rejected");
+
+        assert!(err.to_string().contains("provider must be `openai`"));
     }
 }
