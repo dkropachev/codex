@@ -189,6 +189,8 @@ use codex_app_server_protocol::ThreadRealtimeStartResponse;
 use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadRealtimeStopResponse;
+use codex_app_server_protocol::ThreadRepoCiSessionModeSetParams;
+use codex_app_server_protocol::ThreadRepoCiSessionModeSetResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
@@ -986,6 +988,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadMemoryModeSet { request_id, params } => {
                 self.thread_memory_mode_set(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadRepoCiSessionModeSet { request_id, params } => {
+                self.thread_repo_ci_session_mode_set(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::MemoryReset { request_id, params } => {
@@ -3829,6 +3835,46 @@ impl CodexMessageProcessor {
                 self.send_internal_error(
                     request_id,
                     format!("failed to clean background terminals: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn thread_repo_ci_session_mode_set(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadRepoCiSessionModeSetParams,
+    ) {
+        let ThreadRepoCiSessionModeSetParams { thread_id, mode } = params;
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self
+            .submit_core_op(
+                &request_id,
+                thread.as_ref(),
+                Op::SetRepoCiSessionMode {
+                    mode: mode.map(codex_app_server_protocol::RepoCiSessionMode::to_core),
+                },
+            )
+            .await
+        {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadRepoCiSessionModeSetResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to set repo CI session mode: {err}"),
                 )
                 .await;
             }

@@ -740,6 +740,14 @@ pub enum Op {
     /// enable/disable state) without restarting the thread.
     ReloadUserConfig,
 
+    /// Override repository CI automation for this session.
+    ///
+    /// `None` clears the session override and returns to repo/user config.
+    SetRepoCiSessionMode {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<RepoCiSessionMode>,
+    },
+
     /// Request the list of skills for the provided `cwd` values or the session default.
     ListSkills {
         /// Working directories to scope repo skills discovery.
@@ -901,6 +909,7 @@ impl Op {
             Self::ListMcpTools => "list_mcp_tools",
             Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
             Self::ReloadUserConfig => "reload_user_config",
+            Self::SetRepoCiSessionMode { .. } => "set_repo_ci_session_mode",
             Self::ListSkills { .. } => "list_skills",
             Self::Compact => "compact",
             Self::DropMemories => "drop_memories",
@@ -2094,6 +2103,15 @@ pub struct RepoCiStatusEvent {
     pub attempt: Option<u8>,
     pub max_attempts: Option<u8>,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RepoCiSessionMode {
+    Off,
+    Local,
+    Remote,
+    LocalAndRemote,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

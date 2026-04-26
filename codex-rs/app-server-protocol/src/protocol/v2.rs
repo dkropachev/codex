@@ -88,6 +88,7 @@ use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
+use codex_protocol::protocol::RepoCiSessionMode as CoreRepoCiSessionMode;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
@@ -3936,6 +3937,30 @@ pub struct ThreadMemoryModeSetParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadMemoryModeSetResponse {}
+
+v2_enum_from_core! {
+    pub enum RepoCiSessionMode from CoreRepoCiSessionMode {
+        Off,
+        Local,
+        Remote,
+        LocalAndRemote,
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRepoCiSessionModeSetParams {
+    pub thread_id: String,
+    /// Null or omitted clears the session override and returns to repo/user config.
+    #[ts(optional = nullable)]
+    pub mode: Option<RepoCiSessionMode>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRepoCiSessionModeSetResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

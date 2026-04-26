@@ -1172,6 +1172,28 @@ async fn usage_error_slash_command_is_available_from_local_recall() {
 }
 
 #[tokio::test]
+async fn repo_ci_slash_command_sets_session_mode() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/repo-ci remote");
+
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::SetRepoCiSessionMode {
+            mode: Some(codex_protocol::protocol::RepoCiSessionMode::Remote),
+        })
+    );
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::InsertHistoryCell(_))),
+        "expected repo-ci status history event; events: {events:?}"
+    );
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/repo-ci remote");
+}
+
+#[tokio::test]
 async fn unrecognized_slash_command_is_not_added_to_local_recall() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

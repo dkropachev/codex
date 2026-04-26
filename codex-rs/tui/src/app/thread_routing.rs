@@ -673,6 +673,12 @@ impl App {
                 app_server.reload_user_config().await?;
                 Ok(true)
             }
+            AppCommandView::SetRepoCiSessionMode { mode } => {
+                app_server
+                    .thread_repo_ci_session_mode_set(thread_id, *mode)
+                    .await?;
+                Ok(true)
+            }
             AppCommandView::OverrideTurnContext { .. } => Ok(true),
             AppCommandView::Other(Op::ApproveGuardianDeniedAction { event }) => {
                 app_server

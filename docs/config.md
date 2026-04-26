@@ -84,6 +84,11 @@ local checks. The learner records the source files and SHA-256 hashes it used;
 `codex repo-ci status --cwd` reports when those files changed and the repository
 should be learned again.
 
+For one interactive session, override the configured behavior with
+`codex --repo-ci off|local|remote|local-and-remote` at startup or
+`/repo-ci inherit|off|local|remote|local-and-remote` inside the TUI. `inherit`
+clears the session override and returns to the configured repo/user scopes.
+
 When repo CI is enabled for a trusted repository, Codex compares the worktree at
 the start and end of each regular turn. If the turn changed files, Codex runs
 the learned fast local runner before completing the turn. Failing local checks

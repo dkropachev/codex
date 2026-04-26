@@ -1,6 +1,7 @@
 use clap::Args;
 use clap::FromArgMatches;
 use clap::Parser;
+use clap::ValueEnum;
 use codex_utils_cli::ApprovalModeCliArg;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::SharedCliOptions;
@@ -61,6 +62,10 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// Override repo CI automation for this session.
+    #[arg(long = "repo-ci", value_enum)]
+    pub repo_ci: Option<RepoCiCliMode>,
+
     /// Disable alternate screen mode
     ///
     /// Runs the TUI in inline mode, preserving terminal scrollback history. This is useful
@@ -71,6 +76,25 @@ pub struct Cli {
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum RepoCiCliMode {
+    Off,
+    Local,
+    Remote,
+    LocalAndRemote,
+}
+
+impl From<RepoCiCliMode> for codex_protocol::protocol::RepoCiSessionMode {
+    fn from(value: RepoCiCliMode) -> Self {
+        match value {
+            RepoCiCliMode::Off => Self::Off,
+            RepoCiCliMode::Local => Self::Local,
+            RepoCiCliMode::Remote => Self::Remote,
+            RepoCiCliMode::LocalAndRemote => Self::LocalAndRemote,
+        }
+    }
 }
 
 impl std::ops::Deref for Cli {

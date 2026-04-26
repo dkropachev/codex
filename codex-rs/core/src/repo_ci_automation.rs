@@ -15,6 +15,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RepoCiPhase;
 use codex_protocol::protocol::RepoCiScope;
+use codex_protocol::protocol::RepoCiSessionMode;
 use codex_protocol::protocol::RepoCiState;
 use codex_protocol::protocol::RepoCiStatusEvent;
 use codex_rollout_trace::InferenceTraceContext;
@@ -134,6 +135,27 @@ impl EffectiveRepoCiConfig {
             max_local_fix_rounds: scope.max_local_fix_rounds.unwrap_or(3),
             max_remote_fix_rounds: scope.max_remote_fix_rounds.unwrap_or(2),
             models: scope.models.clone().unwrap_or_default(),
+        })
+    }
+
+    fn from_session_mode(mode: RepoCiSessionMode, base: Option<&RepoCiScopeToml>) -> Option<Self> {
+        if mode == RepoCiSessionMode::Off {
+            return None;
+        }
+        Some(Self {
+            automation: session_mode_to_automation(mode),
+            local_test_time_budget_sec: base
+                .and_then(|scope| scope.local_test_time_budget_sec)
+                .unwrap_or(300),
+            max_local_fix_rounds: base
+                .and_then(|scope| scope.max_local_fix_rounds)
+                .unwrap_or(3),
+            max_remote_fix_rounds: base
+                .and_then(|scope| scope.max_remote_fix_rounds)
+                .unwrap_or(2),
+            models: base
+                .and_then(|scope| scope.models.clone())
+                .unwrap_or_default(),
         })
     }
 
@@ -490,23 +512,43 @@ fn effective_config(turn_context: &TurnContext) -> Option<EffectiveRepoCiConfig>
     {
         return None;
     }
-    let repo_ci = turn_context.config.repo_ci.as_ref()?;
     let cwd = &turn_context.cwd;
-    if let Some(scope) = most_specific_directory_scope(cwd, &repo_ci.directories)
-        && let Some(config) = EffectiveRepoCiConfig::from_scope(scope)
-    {
-        return Some(config);
+    let scoped_config = turn_context
+        .config
+        .repo_ci
+        .as_ref()
+        .and_then(|repo_ci| scoped_repo_ci_config(cwd, repo_ci));
+    if let Some(mode) = turn_context.repo_ci_session_mode {
+        return EffectiveRepoCiConfig::from_session_mode(mode, scoped_config);
+    }
+    if let Some(mode) = turn_context.config.repo_ci_session_mode {
+        return EffectiveRepoCiConfig::from_session_mode(mode, scoped_config);
+    }
+    scoped_config.and_then(EffectiveRepoCiConfig::from_scope)
+}
+
+fn scoped_repo_ci_config<'a>(
+    cwd: &Path,
+    repo_ci: &'a codex_config::config_toml::RepoCiToml,
+) -> Option<&'a RepoCiScopeToml> {
+    if let Some(scope) = most_specific_directory_scope(cwd, &repo_ci.directories) {
+        return Some(scope);
     }
     if let Some(org) = github_org(cwd)
         && let Some(scope) = repo_ci.github_orgs.get(&org)
-        && let Some(config) = EffectiveRepoCiConfig::from_scope(scope)
     {
-        return Some(config);
+        return Some(scope);
     }
-    repo_ci
-        .defaults
-        .as_ref()
-        .and_then(EffectiveRepoCiConfig::from_scope)
+    repo_ci.defaults.as_ref()
+}
+
+fn session_mode_to_automation(mode: RepoCiSessionMode) -> RepoCiAutomationToml {
+    match mode {
+        RepoCiSessionMode::Off => RepoCiAutomationToml::LocalAndRemote,
+        RepoCiSessionMode::Local => RepoCiAutomationToml::Local,
+        RepoCiSessionMode::Remote => RepoCiAutomationToml::Remote,
+        RepoCiSessionMode::LocalAndRemote => RepoCiAutomationToml::LocalAndRemote,
+    }
 }
 
 fn most_specific_directory_scope<'a>(
@@ -1225,6 +1267,37 @@ mod tests {
             most_specific_directory_scope(Path::new("/tmp/repo/nested/src"), &repo_ci.directories)
                 .expect("scope");
         assert_eq!(scope.automation, Some(RepoCiAutomationToml::Remote));
+    }
+
+    #[test]
+    fn session_mode_overrides_disabled_scope() {
+        let scope = RepoCiScopeToml {
+            enabled: Some(false),
+            automation: Some(RepoCiAutomationToml::Remote),
+            max_local_fix_rounds: Some(7),
+            ..Default::default()
+        };
+
+        let config =
+            EffectiveRepoCiConfig::from_session_mode(RepoCiSessionMode::Local, Some(&scope))
+                .expect("session override enables repo ci");
+
+        assert_eq!(config.automation, RepoCiAutomationToml::Local);
+        assert_eq!(config.max_local_fix_rounds, 7);
+    }
+
+    #[test]
+    fn off_session_mode_disables_repo_ci() {
+        let scope = RepoCiScopeToml {
+            enabled: Some(true),
+            automation: Some(RepoCiAutomationToml::LocalAndRemote),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            EffectiveRepoCiConfig::from_session_mode(RepoCiSessionMode::Off, Some(&scope)),
+            None
+        );
     }
 
     #[test]

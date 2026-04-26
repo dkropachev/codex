@@ -87,6 +87,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::RepoCiSessionMode;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
@@ -589,6 +590,9 @@ pub struct Config {
 
     /// Repository CI learning and validation settings.
     pub repo_ci: Option<RepoCiToml>,
+
+    /// Session-only repo CI behavior override.
+    pub repo_ci_session_mode: Option<RepoCiSessionMode>,
 
     /// Settings specific to the task-path-based multi-agent tool surface.
     pub multi_agent_v2: MultiAgentV2Config,
@@ -1429,6 +1433,7 @@ pub struct ConfigOverrides {
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub ephemeral: Option<bool>,
+    pub repo_ci_session_mode: Option<RepoCiSessionMode>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -1647,6 +1652,7 @@ impl Config {
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             ephemeral,
+            repo_ci_session_mode,
             additional_writable_roots,
         } = overrides;
 
@@ -2454,6 +2460,7 @@ impl Config {
             background_terminal_max_timeout,
             ghost_snapshot,
             repo_ci: cfg.repo_ci,
+            repo_ci_session_mode,
             multi_agent_v2,
             features,
             suppress_unstable_features_warning: cfg

@@ -9,6 +9,7 @@ use super::*;
 use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands;
+use codex_protocol::protocol::RepoCiSessionMode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -31,6 +32,7 @@ const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
 const GOAL_USAGE: &str = "Usage: /goal <objective>";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
+const REPO_CI_USAGE: &str = "Usage: /repo-ci <inherit|off|local|remote|local-and-remote>";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -300,6 +302,12 @@ impl ChatWidget {
             }
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
+            }
+            SlashCommand::RepoCi => {
+                self.add_info_message(
+                    REPO_CI_USAGE.to_string(),
+                    Some("This only changes the current session.".to_string()),
+                );
             }
             SlashCommand::Memories => {
                 self.open_memories_popup();
@@ -712,6 +720,24 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot { path: args });
             }
+            SlashCommand::RepoCi if !trimmed.is_empty() => {
+                let mode = match parse_repo_ci_session_mode(trimmed) {
+                    Ok(mode) => mode,
+                    Err(message) => {
+                        self.add_error_message(message);
+                        self.add_info_message(REPO_CI_USAGE.to_string(), /*hint*/ None);
+                        return;
+                    }
+                };
+                self.submit_op(AppCommand::set_repo_ci_session_mode(mode));
+                self.add_info_message(
+                    repo_ci_session_mode_message(mode),
+                    Some(
+                        "This override lasts until the session ends or you run /repo-ci inherit."
+                            .to_string(),
+                    ),
+                );
+            }
             _ => self.dispatch_command(cmd),
         }
         if source == SlashCommandDispatchSource::Live && cmd != SlashCommand::Goal {
@@ -864,6 +890,7 @@ impl ChatWidget {
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
+            | SlashCommand::RepoCi
             | SlashCommand::Memories
             | SlashCommand::Quit
             | SlashCommand::Exit
@@ -921,5 +948,29 @@ impl ChatWidget {
         self.add_error_message(SIDE_REVIEW_UNAVAILABLE_MESSAGE.to_string());
         self.bottom_pane.drain_pending_submission_state();
         false
+    }
+}
+
+fn parse_repo_ci_session_mode(raw: &str) -> Result<Option<RepoCiSessionMode>, String> {
+    let normalized = raw.to_ascii_lowercase();
+    match normalized.as_str() {
+        "inherit" | "default" | "config" => Ok(None),
+        "off" | "disable" | "disabled" => Ok(Some(RepoCiSessionMode::Off)),
+        "local" => Ok(Some(RepoCiSessionMode::Local)),
+        "remote" => Ok(Some(RepoCiSessionMode::Remote)),
+        "local-and-remote" | "both" => Ok(Some(RepoCiSessionMode::LocalAndRemote)),
+        other => Err(format!("Unknown repo CI mode `{other}`.")),
+    }
+}
+
+fn repo_ci_session_mode_message(mode: Option<RepoCiSessionMode>) -> String {
+    match mode {
+        None => "Repo CI now inherits repo/user config for this session.".to_string(),
+        Some(RepoCiSessionMode::Off) => "Repo CI is off for this session.".to_string(),
+        Some(RepoCiSessionMode::Local) => "Repo CI is local-only for this session.".to_string(),
+        Some(RepoCiSessionMode::Remote) => "Repo CI is remote-only for this session.".to_string(),
+        Some(RepoCiSessionMode::LocalAndRemote) => {
+            "Repo CI runs local and remote checks for this session.".to_string()
+        }
     }
 }

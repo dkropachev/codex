@@ -309,6 +309,10 @@ client_request_definitions! {
         params: v2::ThreadMemoryModeSetParams,
         response: v2::ThreadMemoryModeSetResponse,
     },
+    ThreadRepoCiSessionModeSet => "thread/repoCiSessionMode/set" {
+        params: v2::ThreadRepoCiSessionModeSetParams,
+        response: v2::ThreadRepoCiSessionModeSetResponse,
+    },
     #[experimental("memory/reset")]
     MemoryReset => "memory/reset" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,

@@ -2108,6 +2108,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         shared,
         approval_policy,
         web_search,
+        repo_ci,
         prompt,
         config_overrides,
         ..
@@ -2120,6 +2121,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     }
     if web_search {
         interactive.web_search = true;
+    }
+    if repo_ci.is_some() {
+        interactive.repo_ci = repo_ci;
     }
     if let Some(prompt) = prompt {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.

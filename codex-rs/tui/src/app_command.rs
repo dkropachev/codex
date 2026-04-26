@@ -15,6 +15,7 @@ use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RepoCiSessionMode;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::SandboxPolicy;
@@ -92,6 +93,9 @@ pub(crate) enum AppCommandView<'a> {
         response: &'a RequestPermissionsResponse,
     },
     ReloadUserConfig,
+    SetRepoCiSessionMode {
+        mode: &'a Option<RepoCiSessionMode>,
+    },
     ListSkills {
         cwds: &'a [PathBuf],
         force_reload: bool,
@@ -246,6 +250,10 @@ impl AppCommand {
         Self(Op::ReloadUserConfig)
     }
 
+    pub(crate) fn set_repo_ci_session_mode(mode: Option<RepoCiSessionMode>) -> Self {
+        Self(Op::SetRepoCiSessionMode { mode })
+    }
+
     pub(crate) fn list_skills(cwds: Vec<PathBuf>, force_reload: bool) -> Self {
         Self(Op::ListSkills { cwds, force_reload })
     }
@@ -355,6 +363,7 @@ impl AppCommand {
                 decision,
             },
             Op::PatchApproval { id, decision } => AppCommandView::PatchApproval { id, decision },
+            Op::SetRepoCiSessionMode { mode } => AppCommandView::SetRepoCiSessionMode { mode },
             Op::ResolveElicitation {
                 server_name,
                 request_id,

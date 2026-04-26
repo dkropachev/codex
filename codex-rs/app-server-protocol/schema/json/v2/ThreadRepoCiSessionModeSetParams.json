@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "RepoCiSessionMode": {
+      "enum": [
+        "off",
+        "local",
+        "remote",
+        "localAndRemote"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "mode": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/RepoCiSessionMode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Null or omitted clears the session override and returns to repo/user config."
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "threadId"
+  ],
+  "title": "ThreadRepoCiSessionModeSetParams",
+  "type": "object"
+}
