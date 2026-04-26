@@ -31,8 +31,12 @@ pub(crate) async fn run_command(
     let started = Instant::now();
 
     let mut command = build_command(shell, handler);
+    if let Some(plugin_state_dir) = handler.plugin_state_dir.as_ref() {
+        let _ = std::fs::create_dir_all(plugin_state_dir.as_path());
+    }
     command
         .current_dir(cwd)
+        .envs(plugin_env(handler))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -98,6 +102,29 @@ pub(crate) async fn run_command(
             error: Some(format!("hook timed out after {}s", handler.timeout_sec)),
         },
     }
+}
+
+fn plugin_env(handler: &ConfiguredHandler) -> Vec<(&'static str, String)> {
+    let Some(plugin_id) = handler.plugin_id.as_ref() else {
+        return Vec::new();
+    };
+    let mut env = vec![("CODEX_PLUGIN_ID", plugin_id.clone())];
+    if let Some(plugin_root) = handler.plugin_root.as_ref() {
+        env.push((
+            "CODEX_PLUGIN_ROOT",
+            plugin_root.as_path().display().to_string(),
+        ));
+    }
+    if let Some(plugin_state_dir) = handler.plugin_state_dir.as_ref() {
+        env.push((
+            "CODEX_PLUGIN_STATE_DIR",
+            plugin_state_dir.as_path().display().to_string(),
+        ));
+    }
+    if let Some(plugin_runtime_socket) = handler.plugin_runtime_socket.as_ref() {
+        env.push(("CODEX_PLUGIN_RUNTIME_SOCKET", plugin_runtime_socket.clone()));
+    }
+    env
 }
 
 fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {

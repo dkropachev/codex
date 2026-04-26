@@ -105,6 +105,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
         Some(&config_layer_stack),
+        &[],
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -188,6 +189,7 @@ fn requirements_managed_hooks_warn_when_managed_dir_is_missing() {
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
         Some(&config_layer_stack),
+        &[],
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -295,6 +297,7 @@ fn discovers_hooks_from_json_and_toml_in_the_same_layer() {
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
         Some(&config_layer_stack),
+        &[],
         CommandShell {
             program: String::new(),
             args: Vec::new(),

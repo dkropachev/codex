@@ -3,6 +3,7 @@ use tokio::process::Command;
 
 use crate::engine::ClaudeHooksEngine;
 use crate::engine::CommandShell;
+use crate::engine::PluginHookSource;
 use crate::events::permission_request::PermissionRequestOutcome;
 use crate::events::permission_request::PermissionRequestRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
@@ -25,6 +26,7 @@ pub struct HooksConfig {
     pub legacy_notify_argv: Option<Vec<String>>,
     pub feature_enabled: bool,
     pub config_layer_stack: Option<ConfigLayerStack>,
+    pub plugin_hook_sources: Vec<PluginHookSource>,
     pub shell_program: Option<String>,
     pub shell_args: Vec<String>,
 }
@@ -53,6 +55,7 @@ impl Hooks {
         let engine = ClaudeHooksEngine::new(
             config.feature_enabled,
             config.config_layer_stack.as_ref(),
+            &config.plugin_hook_sources,
             CommandShell {
                 program: config.shell_program.unwrap_or_default(),
                 args: config.shell_args,
@@ -176,4 +179,93 @@ pub fn command_from_argv(argv: &[String]) -> Option<Command> {
     let mut command = Command::new(program);
     command.args(args);
     Some(command)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use codex_protocol::ThreadId;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::events::user_prompt_submit::UserPromptSubmitRequest;
+
+    #[tokio::test]
+    async fn plugin_hooks_receive_plugin_environment_and_metadata() {
+        let temp = tempdir().expect("tempdir");
+        let plugin_root = temp.path().join("plugin");
+        let state_dir = temp.path().join("state");
+        let hooks_path = plugin_root.join("hooks.json");
+        fs::create_dir_all(&plugin_root).expect("create plugin root");
+        fs::write(
+            &hooks_path,
+            r#"{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "printf '%s\n%s\n%s\n%s\n' \"$CODEX_PLUGIN_ID\" \"$CODEX_PLUGIN_ROOT\" \"$CODEX_PLUGIN_STATE_DIR\" \"$CODEX_PLUGIN_RUNTIME_SOCKET\" > \"$CODEX_PLUGIN_STATE_DIR/env.txt\""
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+        )
+        .expect("write hooks");
+
+        let hooks = Hooks::new(HooksConfig {
+            feature_enabled: true,
+            plugin_hook_sources: vec![PluginHookSource {
+                plugin_id: "sample@test".to_string(),
+                plugin_root: plugin_root.abs(),
+                state_dir: state_dir.abs(),
+                runtime_socket: Some("runtime.sock".to_string()),
+                path: hooks_path.abs(),
+            }],
+            ..HooksConfig::default()
+        });
+
+        let preview = hooks.preview_user_prompt_submit(&UserPromptSubmitRequest {
+            session_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            cwd: AbsolutePathBuf::try_from(temp.path().to_path_buf()).expect("absolute cwd"),
+            transcript_path: None,
+            model: "model".to_string(),
+            permission_mode: "default".to_string(),
+            prompt: "hello".to_string(),
+        });
+        assert_eq!(preview[0].plugin_id, Some("sample@test".to_string()));
+
+        let outcome = hooks
+            .run_user_prompt_submit(UserPromptSubmitRequest {
+                session_id: ThreadId::new(),
+                turn_id: "turn-1".to_string(),
+                cwd: AbsolutePathBuf::try_from(temp.path().to_path_buf()).expect("absolute cwd"),
+                transcript_path: None,
+                model: "model".to_string(),
+                permission_mode: "default".to_string(),
+                prompt: "hello".to_string(),
+            })
+            .await;
+
+        assert_eq!(
+            outcome.hook_events[0].run.plugin_id,
+            Some("sample@test".to_string())
+        );
+        assert_eq!(
+            fs::read_to_string(state_dir.join("env.txt")).expect("read env file"),
+            format!(
+                "sample@test\n{}\n{}\nruntime.sock\n",
+                plugin_root.display(),
+                state_dir.display()
+            )
+        );
+    }
 }

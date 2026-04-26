@@ -86,6 +86,7 @@ pub(crate) struct SessionConfiguration {
     pub(super) persist_extended_history: bool,
     pub(super) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(super) user_shell_override: Option<shell::Shell>,
+    pub(super) repo_ci_session_mode: Option<RepoCiSessionMode>,
 }
 
 impl SessionConfiguration {
@@ -212,6 +213,9 @@ impl SessionConfiguration {
         if let Some(app_server_client_version) = updates.app_server_client_version.clone() {
             next_configuration.app_server_client_version = Some(app_server_client_version);
         }
+        if let Some(repo_ci_session_mode) = updates.repo_ci_session_mode {
+            next_configuration.repo_ci_session_mode = repo_ci_session_mode;
+        }
         Ok(next_configuration)
     }
 }
@@ -235,6 +239,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
+    pub(crate) repo_ci_session_mode: Option<Option<RepoCiSessionMode>>,
 }
 
 pub(crate) struct AppServerClientMetadata {
@@ -689,10 +694,23 @@ impl Session {
                 default_shell.derive_exec_args("", /*use_login_shell*/ false);
             let hook_shell_program = hook_shell_argv.remove(0);
             let _ = hook_shell_argv.pop();
+            let plugin_outcome = plugins_manager.plugins_for_config(&config).await;
+            let plugin_hook_sources = plugin_outcome
+                .effective_hook_configs()
+                .into_iter()
+                .map(|hook_config| codex_hooks::PluginHookSource {
+                    plugin_id: hook_config.plugin_id,
+                    plugin_root: hook_config.plugin_root,
+                    state_dir: hook_config.state_dir,
+                    runtime_socket: None,
+                    path: hook_config.path,
+                })
+                .collect();
             let hooks = Hooks::new(HooksConfig {
                 legacy_notify_argv: config.notify.clone(),
                 feature_enabled: config.features.enabled(Feature::CodexHooks),
                 config_layer_stack: Some(config.config_layer_stack.clone()),
+                plugin_hook_sources,
                 shell_program: Some(hook_shell_program),
                 shell_args: hook_shell_argv,
             });

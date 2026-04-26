@@ -9,6 +9,8 @@ use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+pub use discovery::PluginHookSource;
+
 use crate::events::permission_request::PermissionRequestOutcome;
 use crate::events::permission_request::PermissionRequestRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
@@ -38,6 +40,10 @@ pub(crate) struct ConfiguredHandler {
     pub status_message: Option<String>,
     pub source_path: AbsolutePathBuf,
     pub source: HookSource,
+    pub plugin_id: Option<String>,
+    pub plugin_root: Option<AbsolutePathBuf>,
+    pub plugin_state_dir: Option<AbsolutePathBuf>,
+    pub plugin_runtime_socket: Option<String>,
     pub display_order: i64,
 }
 
@@ -74,6 +80,7 @@ impl ClaudeHooksEngine {
     pub(crate) fn new(
         enabled: bool,
         config_layer_stack: Option<&ConfigLayerStack>,
+        plugin_hook_sources: &[PluginHookSource],
         shell: CommandShell,
     ) -> Self {
         if !enabled {
@@ -85,7 +92,7 @@ impl ClaudeHooksEngine {
         }
 
         let _ = schema_loader::generated_hook_schemas();
-        let discovered = discovery::discover_handlers(config_layer_stack);
+        let discovered = discovery::discover_handlers(config_layer_stack, plugin_hook_sources);
         Self {
             handlers: discovered.handlers,
             warnings: discovered.warnings,

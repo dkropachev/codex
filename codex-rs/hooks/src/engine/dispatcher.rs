@@ -70,6 +70,7 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
         scope: scope_for_event(handler.event_name),
         source_path: handler.source_path.clone(),
         source: handler.source,
+        plugin_id: handler.plugin_id.clone(),
         display_order: handler.display_order,
         status: HookRunStatus::Running,
         status_message: handler.status_message.clone(),
@@ -116,6 +117,7 @@ pub(crate) fn completed_summary(
         scope: scope_for_event(handler.event_name),
         source_path: handler.source_path.clone(),
         source: handler.source,
+        plugin_id: handler.plugin_id.clone(),
         display_order: handler.display_order,
         status,
         status_message: handler.status_message.clone(),
@@ -163,6 +165,10 @@ mod tests {
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: HookSource::User,
+            plugin_id: None,
+            plugin_root: None,
+            plugin_state_dir: None,
+            plugin_runtime_socket: None,
             display_order,
         }
     }

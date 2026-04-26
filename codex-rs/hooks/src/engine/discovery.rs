@@ -30,75 +30,101 @@ struct HookHandlerSource<'a> {
     path: &'a AbsolutePathBuf,
     is_managed: bool,
     source: HookSource,
+    plugin_id: Option<&'a str>,
+    plugin_root: Option<&'a AbsolutePathBuf>,
+    plugin_state_dir: Option<&'a AbsolutePathBuf>,
+    plugin_runtime_socket: Option<&'a str>,
 }
 
-pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -> DiscoveryResult {
-    let Some(config_layer_stack) = config_layer_stack else {
-        return DiscoveryResult {
-            handlers: Vec::new(),
-            warnings: Vec::new(),
-        };
-    };
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginHookSource {
+    pub plugin_id: String,
+    pub plugin_root: AbsolutePathBuf,
+    pub state_dir: AbsolutePathBuf,
+    pub runtime_socket: Option<String>,
+    pub path: AbsolutePathBuf,
+}
 
+pub(crate) fn discover_handlers(
+    config_layer_stack: Option<&ConfigLayerStack>,
+    plugin_hook_sources: &[PluginHookSource],
+) -> DiscoveryResult {
     let mut handlers = Vec::new();
     let mut warnings = Vec::new();
     let mut display_order = 0_i64;
 
-    append_managed_requirement_handlers(
+    if let Some(config_layer_stack) = config_layer_stack {
+        append_managed_requirement_handlers(
+            &mut handlers,
+            &mut warnings,
+            &mut display_order,
+            config_layer_stack,
+        );
+
+        for layer in config_layer_stack.get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ false,
+        ) {
+            let hook_source = hook_source_for_config_layer_source(&layer.name);
+            let json_hooks = load_hooks_json(layer.config_folder().as_deref(), &mut warnings);
+            let toml_hooks = load_toml_hooks_from_layer(layer, &mut warnings);
+
+            if let (Some((json_source_path, json_events)), Some((toml_source_path, toml_events))) =
+                (&json_hooks, &toml_hooks)
+                && !json_events.is_empty()
+                && !toml_events.is_empty()
+            {
+                warnings.push(format!(
+                    "loading hooks from both {} and {}; prefer a single representation for this layer",
+                    json_source_path.display(),
+                    toml_source_path.display()
+                ));
+            }
+
+            if let Some((source_path, hook_events)) = json_hooks {
+                append_hook_events(
+                    &mut handlers,
+                    &mut warnings,
+                    &mut display_order,
+                    HookHandlerSource {
+                        path: &source_path,
+                        is_managed: false,
+                        source: hook_source,
+                        plugin_id: None,
+                        plugin_root: None,
+                        plugin_state_dir: None,
+                        plugin_runtime_socket: None,
+                    },
+                    hook_events,
+                );
+            }
+
+            if let Some((source_path, hook_events)) = toml_hooks {
+                append_hook_events(
+                    &mut handlers,
+                    &mut warnings,
+                    &mut display_order,
+                    HookHandlerSource {
+                        path: &source_path,
+                        is_managed: false,
+                        source: hook_source,
+                        plugin_id: None,
+                        plugin_root: None,
+                        plugin_state_dir: None,
+                        plugin_runtime_socket: None,
+                    },
+                    hook_events,
+                );
+            }
+        }
+    }
+
+    append_plugin_hook_handlers(
         &mut handlers,
         &mut warnings,
         &mut display_order,
-        config_layer_stack,
+        plugin_hook_sources,
     );
-
-    for layer in config_layer_stack.get_layers(
-        ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        /*include_disabled*/ false,
-    ) {
-        let hook_source = hook_source_for_config_layer_source(&layer.name);
-        let json_hooks = load_hooks_json(layer.config_folder().as_deref(), &mut warnings);
-        let toml_hooks = load_toml_hooks_from_layer(layer, &mut warnings);
-
-        if let (Some((json_source_path, json_events)), Some((toml_source_path, toml_events))) =
-            (&json_hooks, &toml_hooks)
-            && !json_events.is_empty()
-            && !toml_events.is_empty()
-        {
-            warnings.push(format!(
-                "loading hooks from both {} and {}; prefer a single representation for this layer",
-                json_source_path.display(),
-                toml_source_path.display()
-            ));
-        }
-
-        if let Some((source_path, hook_events)) = json_hooks {
-            append_hook_events(
-                &mut handlers,
-                &mut warnings,
-                &mut display_order,
-                HookHandlerSource {
-                    path: &source_path,
-                    is_managed: false,
-                    source: hook_source,
-                },
-                hook_events,
-            );
-        }
-
-        if let Some((source_path, hook_events)) = toml_hooks {
-            append_hook_events(
-                &mut handlers,
-                &mut warnings,
-                &mut display_order,
-                HookHandlerSource {
-                    path: &source_path,
-                    is_managed: false,
-                    source: hook_source,
-                },
-                hook_events,
-            );
-        }
-    }
 
     DiscoveryResult { handlers, warnings }
 }
@@ -125,9 +151,41 @@ fn append_managed_requirement_handlers(
             path: &source_path,
             is_managed: true,
             source: hook_source_for_requirement_source(managed_hooks.source.as_ref()),
+            plugin_id: None,
+            plugin_root: None,
+            plugin_state_dir: None,
+            plugin_runtime_socket: None,
         },
         managed_hooks.get().hooks.clone(),
     );
+}
+
+fn append_plugin_hook_handlers(
+    handlers: &mut Vec<ConfiguredHandler>,
+    warnings: &mut Vec<String>,
+    display_order: &mut i64,
+    plugin_hook_sources: &[PluginHookSource],
+) {
+    for plugin_hook_source in plugin_hook_sources {
+        let Some(hook_events) = load_hooks_file(&plugin_hook_source.path, warnings) else {
+            continue;
+        };
+        append_hook_events(
+            handlers,
+            warnings,
+            display_order,
+            HookHandlerSource {
+                path: &plugin_hook_source.path,
+                is_managed: false,
+                source: HookSource::Unknown,
+                plugin_id: Some(&plugin_hook_source.plugin_id),
+                plugin_root: Some(&plugin_hook_source.plugin_root),
+                plugin_state_dir: Some(&plugin_hook_source.state_dir),
+                plugin_runtime_socket: plugin_hook_source.runtime_socket.as_deref(),
+            },
+            hook_events,
+        );
+    }
 }
 
 fn managed_hooks_source_path(
@@ -184,6 +242,23 @@ fn load_hooks_json(
         return None;
     }
 
+    let source_path = AbsolutePathBuf::from_absolute_path(&source_path)
+        .inspect_err(|err| {
+            warnings.push(format!(
+                "failed to normalize hooks config path {}: {err}",
+                source_path.display()
+            ));
+        })
+        .ok()?;
+    let parsed = load_hooks_file(&source_path, warnings)?;
+
+    (!parsed.is_empty()).then_some((source_path, parsed))
+}
+
+fn load_hooks_file(
+    source_path: &AbsolutePathBuf,
+    warnings: &mut Vec<String>,
+) -> Option<HookEventsToml> {
     let contents = match fs::read_to_string(source_path.as_path()) {
         Ok(contents) => contents,
         Err(err) => {
@@ -205,17 +280,7 @@ fn load_hooks_json(
             return None;
         }
     };
-
-    let source_path = AbsolutePathBuf::from_absolute_path(&source_path)
-        .inspect_err(|err| {
-            warnings.push(format!(
-                "failed to normalize hooks config path {}: {err}",
-                source_path.display()
-            ));
-        })
-        .ok()?;
-
-    (!parsed.hooks.is_empty()).then_some((source_path, parsed.hooks))
+    Some(parsed.hooks)
 }
 
 fn load_toml_hooks_from_layer(
@@ -357,6 +422,10 @@ fn append_group_handlers(
                     status_message,
                     source_path: source.path.clone(),
                     source: source.source,
+                    plugin_id: source.plugin_id.map(str::to_string),
+                    plugin_root: source.plugin_root.cloned(),
+                    plugin_state_dir: source.plugin_state_dir.cloned(),
+                    plugin_runtime_socket: source.plugin_runtime_socket.map(str::to_string),
                     display_order: *display_order,
                 });
                 *display_order += 1;
@@ -431,6 +500,10 @@ mod tests {
             path,
             is_managed: false,
             source: hook_source(),
+            plugin_id: None,
+            plugin_root: None,
+            plugin_state_dir: None,
+            plugin_runtime_socket: None,
         }
     }
 
@@ -474,6 +547,10 @@ mod tests {
                 status_message: None,
                 source_path: source_path.clone(),
                 source: hook_source(),
+                plugin_id: None,
+                plugin_root: None,
+                plugin_state_dir: None,
+                plugin_runtime_socket: None,
                 display_order: 0,
             }]
         );
@@ -507,6 +584,10 @@ mod tests {
                 status_message: None,
                 source_path: source_path.clone(),
                 source: hook_source(),
+                plugin_id: None,
+                plugin_root: None,
+                plugin_state_dir: None,
+                plugin_runtime_socket: None,
                 display_order: 0,
             }]
         );
