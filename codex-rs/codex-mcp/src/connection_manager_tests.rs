@@ -1,35 +1,12 @@
 use super::*;
-use crate::codex_apps::CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION;
-use crate::codex_apps::CodexAppsToolsCacheContext;
-use crate::codex_apps::load_startup_cached_codex_apps_tools_snapshot;
-use crate::codex_apps::read_cached_codex_apps_tools;
-use crate::codex_apps::write_cached_codex_apps_tools;
-use crate::declared_openai_file_input_param_names;
-use crate::elicitation::ElicitationRequestManager;
-use crate::elicitation::elicitation_is_rejected_by_policy;
-use crate::rmcp_client::AsyncManagedClient;
-use crate::rmcp_client::ManagedClient;
-use crate::rmcp_client::StartupOutcomeError;
-use crate::rmcp_client::elicitation_capability_for_server;
-use crate::tools::ToolFilter;
-use crate::tools::ToolInfo;
-use crate::tools::filter_tools;
-use crate::tools::qualify_tools;
-use crate::tools::tool_with_model_visible_input_schema;
-use codex_config::Constrained;
 use codex_protocol::ToolName;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::McpAuthStatus;
-use futures::FutureExt;
 use pretty_assertions::assert_eq;
-use rmcp::model::CreateElicitationRequestParams;
-use rmcp::model::ElicitationAction;
-use rmcp::model::ElicitationCapability;
 use rmcp::model::JsonObject;
 use rmcp::model::Meta;
 use rmcp::model::NumberOrString;
-use rmcp::model::Tool;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -40,7 +17,7 @@ fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
         server_name: server_name.to_string(),
         callable_name: tool_name.to_string(),
         callable_namespace: tool_namespace,
-        namespace_description: None,
+        server_instructions: None,
         tool: Tool {
             name: tool_name.to_string().into(),
             title: None,
@@ -55,6 +32,7 @@ fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),
+        connector_description: None,
     }
 }
 
@@ -203,11 +181,8 @@ fn elicitation_granular_policy_respects_never_and_config() {
 
 #[tokio::test]
 async fn disabled_permissions_auto_accept_elicitation_with_empty_form_schema() {
-    let manager = ElicitationRequestManager::new(
-        AskForApproval::Never,
-        PermissionProfile::Disabled,
-        /*reviewer*/ None,
-    );
+    let manager =
+        ElicitationRequestManager::new(AskForApproval::Never, PermissionProfile::Disabled);
     let (tx_event, _rx_event) = async_channel::bounded(1);
     let sender = manager.make_sender("server".to_string(), tx_event);
 
@@ -236,11 +211,8 @@ async fn disabled_permissions_auto_accept_elicitation_with_empty_form_schema() {
 
 #[tokio::test]
 async fn disabled_permissions_do_not_auto_accept_elicitation_with_requested_fields() {
-    let manager = ElicitationRequestManager::new(
-        AskForApproval::Never,
-        PermissionProfile::Disabled,
-        /*reviewer*/ None,
-    );
+    let manager =
+        ElicitationRequestManager::new(AskForApproval::Never, PermissionProfile::Disabled);
     let (tx_event, _rx_event) = async_channel::bounded(1);
     let sender = manager.make_sender("server".to_string(), tx_event);
 
@@ -666,7 +638,6 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
             startup_snapshot: Some(startup_tools),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
-            cancel_token: CancellationToken::new(),
         },
     );
 
@@ -695,7 +666,6 @@ async fn resolve_tool_info_accepts_canonical_namespaced_tool_names() {
             startup_snapshot: Some(startup_tools),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
-            cancel_token: CancellationToken::new(),
         },
     );
 
@@ -732,7 +702,6 @@ async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot(
             startup_snapshot: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
-            cancel_token: CancellationToken::new(),
         },
     );
 
@@ -757,7 +726,6 @@ async fn list_all_tools_does_not_block_when_startup_snapshot_cache_hit_is_empty(
             startup_snapshot: Some(Vec::new()),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
-            cancel_token: CancellationToken::new(),
         },
     );
 
@@ -792,7 +760,6 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
             startup_snapshot: Some(startup_tools),
             startup_complete,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
-            cancel_token: CancellationToken::new(),
         },
     );
 
@@ -805,14 +772,18 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
 }
 
 #[test]
-fn elicitation_capability_uses_2025_06_18_shape_for_all_servers() {
+fn elicitation_capability_enabled_for_custom_servers() {
     for server_name in [CODEX_APPS_MCP_SERVER_NAME, "custom_mcp"] {
         let capability = elicitation_capability_for_server(server_name);
-        assert_eq!(capability, Some(ElicitationCapability::default()));
-        assert_eq!(
-            serde_json::to_value(capability).expect("serialize elicitation capability"),
-            serde_json::json!({})
-        );
+        assert!(matches!(
+            capability,
+            Some(ElicitationCapability {
+                form: Some(FormElicitationCapability {
+                    schema_validation: None
+                }),
+                url: None,
+            })
+        ));
     }
 }
 
