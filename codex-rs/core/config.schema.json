@@ -6,6 +6,56 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AccountPoolDefinitionToml": {
+      "additionalProperties": false,
+      "properties": {
+        "accounts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "policy": {
+          "$ref": "#/definitions/AccountPoolPolicyToml"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accounts",
+        "policy",
+        "provider"
+      ],
+      "type": "object"
+    },
+    "AccountPoolPolicyToml": {
+      "enum": [
+        "drain",
+        "load_balance"
+      ],
+      "type": "string"
+    },
+    "AccountPoolToml": {
+      "additionalProperties": false,
+      "properties": {
+        "default_pool": {
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "pools": {
+          "additionalProperties": {
+            "$ref": "#/definitions/AccountPoolDefinitionToml"
+          },
+          "default": {},
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "AgentRoleToml": {
       "additionalProperties": false,
       "properties": {
@@ -1131,6 +1181,115 @@
         "format": "uint32",
         "minimum": 0.0,
         "type": "integer"
+      },
+      "type": "object"
+    },
+    "ModelPolicyReasoningEffortToml": {
+      "oneOf": [
+        {
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Preserve the reasoning effort already selected by the parent/default config.",
+          "enum": [
+            "inherit"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ModelPolicyRouteToml": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "type": "string"
+        },
+        "account_pool": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "model_provider": {
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "$ref": "#/definitions/ModelPolicyReasoningEffortToml"
+        }
+      },
+      "type": "object"
+    },
+    "ModelPolicyRuleToml": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "type": "string"
+        },
+        "account_pool": {
+          "type": "string"
+        },
+        "max_prompt_bytes": {
+          "description": "Inclusive upper prompt-size bound, in UTF-8 bytes.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "min_prompt_bytes": {
+          "description": "Inclusive lower prompt-size bound, in UTF-8 bytes.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "model_provider": {
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "$ref": "#/definitions/ModelPolicyReasoningEffortToml"
+        },
+        "source": {
+          "default": null,
+          "description": "Source selector, for example `subagent`, `subagent.review`, `module.memory_consolidation`, or `*`. Accepts one selector or a list.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ModelPolicyToml": {
+      "additionalProperties": false,
+      "properties": {
+        "default_route": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelPolicyRouteToml"
+            }
+          ],
+          "default": null
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "rules": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ModelPolicyRuleToml"
+          },
+          "type": "array"
+        }
       },
       "type": "object"
     },
@@ -2351,6 +2510,15 @@
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
   "properties": {
+    "account_pool": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AccountPoolToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional logical pools of bounded Codex subscription accounts."
+    },
     "agents": {
       "allOf": [
         {
@@ -2896,6 +3064,15 @@
         }
       ],
       "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by Codex will likely degrade model performance."
+    },
+    "model_policy": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ModelPolicyToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional routing policy for internal model calls."
     },
     "model_provider": {
       "description": "Provider to use from the model_providers map.",

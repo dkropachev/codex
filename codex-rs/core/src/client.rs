@@ -67,6 +67,7 @@ use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
 use codex_login::UnauthorizedRecovery;
 use codex_login::default_client::build_reqwest_client;
+use codex_otel::AccountRouteTelemetry;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
 
@@ -171,6 +172,7 @@ struct CurrentClientSetup {
     auth: Option<CodexAuth>,
     api_provider: ApiProvider,
     api_auth: SharedAuthProvider,
+    account_route: AccountRouteTelemetry,
 }
 
 #[derive(Clone, Copy)]
@@ -429,6 +431,7 @@ impl ModelClient {
                 PendingUnauthorizedRetry::default(),
             ),
             RequestRouteTelemetry::for_endpoint(RESPONSES_COMPACT_ENDPOINT),
+            client_setup.account_route.clone(),
             self.state.auth_env_telemetry.clone(),
         );
         let client =
@@ -535,6 +538,7 @@ impl ModelClient {
                 PendingUnauthorizedRetry::default(),
             ),
             RequestRouteTelemetry::for_endpoint(MEMORIES_SUMMARIZE_ENDPOINT),
+            client_setup.account_route.clone(),
             self.state.auth_env_telemetry.clone(),
         );
         let client =
@@ -626,12 +630,14 @@ impl ModelClient {
         session_telemetry: &SessionTelemetry,
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
+        account_route: AccountRouteTelemetry,
         auth_env_telemetry: AuthEnvTelemetry,
     ) -> Arc<dyn RequestTelemetry> {
         let telemetry = Arc::new(ApiTelemetry::new(
             session_telemetry.clone(),
             auth_context,
             request_route_telemetry,
+            account_route,
             auth_env_telemetry,
         ));
         let request_telemetry: Arc<dyn RequestTelemetry> = telemetry;
@@ -679,11 +685,37 @@ impl ModelClient {
         let auth = self.state.provider.auth().await;
         let api_provider = self.state.provider.api_provider().await?;
         let api_auth = self.state.provider.api_auth().await?;
+        let account_route = self.account_route_telemetry(auth.as_ref());
         Ok(CurrentClientSetup {
             auth,
             api_provider,
             api_auth,
+            account_route,
         })
+    }
+
+    fn account_route_telemetry(&self, auth: Option<&CodexAuth>) -> AccountRouteTelemetry {
+        let auth_account_id = auth.and_then(CodexAuth::get_account_id);
+        let Some(auth_manager) = self.state.provider.auth_manager() else {
+            return AccountRouteTelemetry {
+                account_id: auth_account_id,
+                account_pool_id: None,
+                account_pool_member_id: None,
+            };
+        };
+        let Some(pool) = auth_manager.account_pool_status() else {
+            return AccountRouteTelemetry {
+                account_id: auth_account_id,
+                account_pool_id: None,
+                account_pool_member_id: None,
+            };
+        };
+        let member_id = pool.active_account_id;
+        AccountRouteTelemetry {
+            account_id: member_id.clone().or(auth_account_id),
+            account_pool_id: Some(pool.pool_id),
+            account_pool_member_id: member_id,
+        }
     }
 
     /// Opens a websocket connection using the same header and telemetry wiring as normal turns.
@@ -700,12 +732,14 @@ impl ModelClient {
         turn_metadata_header: Option<&str>,
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
+        account_route: AccountRouteTelemetry,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
         let headers = self.build_websocket_headers(turn_state.as_ref(), turn_metadata_header);
         let websocket_telemetry = ModelClientSession::build_websocket_telemetry(
             session_telemetry,
             auth_context,
             request_route_telemetry,
+            account_route.clone(),
             self.state.auth_env_telemetry.clone(),
         );
         let websocket_connect_timeout = self.state.provider.info().websocket_connect_timeout();
@@ -742,6 +776,7 @@ impl ModelClient {
             auth_context.recovery_phase,
             request_route_telemetry.endpoint,
             /*connection_reused*/ false,
+            &account_route,
             response_debug.request_id.as_deref(),
             response_debug.cf_ray.as_deref(),
             response_debug.auth_error.as_deref(),
@@ -1043,6 +1078,7 @@ impl ModelClientSession {
                 /*turn_metadata_header*/ None,
                 auth_context,
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
+                client_setup.account_route,
             )
             .await?;
         self.websocket_session.connection = Some(connection);
@@ -1075,6 +1111,7 @@ impl ModelClientSession {
             options,
             auth_context,
             request_route_telemetry,
+            account_route,
         } = params;
         let needs_new = match self.websocket_session.connection.as_ref() {
             Some(conn) => conn.is_closed().await,
@@ -1098,6 +1135,7 @@ impl ModelClientSession {
                     turn_metadata_header,
                     auth_context,
                     request_route_telemetry,
+                    account_route,
                 )
                 .await
             {
@@ -1197,6 +1235,7 @@ impl ModelClientSession {
                 session_telemetry,
                 request_auth_context,
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
+                client_setup.account_route.clone(),
                 self.client.state.auth_env_telemetry.clone(),
             );
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
@@ -1326,6 +1365,7 @@ impl ModelClientSession {
                     request_route_telemetry: RequestRouteTelemetry::for_endpoint(
                         RESPONSES_ENDPOINT,
                     ),
+                    account_route: client_setup.account_route,
                 })
                 .await
             {
@@ -1390,12 +1430,14 @@ impl ModelClientSession {
         session_telemetry: &SessionTelemetry,
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
+        account_route: AccountRouteTelemetry,
         auth_env_telemetry: AuthEnvTelemetry,
     ) -> (Arc<dyn RequestTelemetry>, Arc<dyn SseTelemetry>) {
         let telemetry = Arc::new(ApiTelemetry::new(
             session_telemetry.clone(),
             auth_context,
             request_route_telemetry,
+            account_route,
             auth_env_telemetry,
         ));
         let request_telemetry: Arc<dyn RequestTelemetry> = telemetry.clone();
@@ -1408,12 +1450,14 @@ impl ModelClientSession {
         session_telemetry: &SessionTelemetry,
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
+        account_route: AccountRouteTelemetry,
         auth_env_telemetry: AuthEnvTelemetry,
     ) -> Arc<dyn WebsocketTelemetry> {
         let telemetry = Arc::new(ApiTelemetry::new(
             session_telemetry.clone(),
             auth_context,
             request_route_telemetry,
+            account_route,
             auth_env_telemetry,
         ));
         let websocket_telemetry: Arc<dyn WebsocketTelemetry> = telemetry;
@@ -1778,6 +1822,7 @@ struct WebsocketConnectParams<'a> {
     options: &'a ApiResponsesOptions,
     auth_context: AuthRequestTelemetryContext,
     request_route_telemetry: RequestRouteTelemetry,
+    account_route: AccountRouteTelemetry,
 }
 
 async fn handle_unauthorized(
@@ -1907,6 +1952,7 @@ struct ApiTelemetry {
     session_telemetry: SessionTelemetry,
     auth_context: AuthRequestTelemetryContext,
     request_route_telemetry: RequestRouteTelemetry,
+    account_route: AccountRouteTelemetry,
     auth_env_telemetry: AuthEnvTelemetry,
 }
 
@@ -1915,12 +1961,14 @@ impl ApiTelemetry {
         session_telemetry: SessionTelemetry,
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
+        account_route: AccountRouteTelemetry,
         auth_env_telemetry: AuthEnvTelemetry,
     ) -> Self {
         Self {
             session_telemetry,
             auth_context,
             request_route_telemetry,
+            account_route,
             auth_env_telemetry,
         }
     }
@@ -1950,6 +1998,7 @@ impl RequestTelemetry for ApiTelemetry {
             self.auth_context.recovery_mode,
             self.auth_context.recovery_phase,
             self.request_route_telemetry.endpoint,
+            &self.account_route,
             debug.request_id.as_deref(),
             debug.cf_ray.as_deref(),
             debug.auth_error.as_deref(),
@@ -2008,6 +2057,7 @@ impl WebsocketTelemetry for ApiTelemetry {
             duration,
             error_message.as_deref(),
             connection_reused,
+            &self.account_route,
         );
         emit_feedback_request_tags_with_auth_env(
             &FeedbackRequestTags {

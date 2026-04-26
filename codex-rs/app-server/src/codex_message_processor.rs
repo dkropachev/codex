@@ -1878,6 +1878,9 @@ impl CodexMessageProcessor {
     }
 
     async fn get_account_rate_limits(&self, request_id: ConnectionRequestId) {
+        self.auth_manager
+            .refresh_account_pool_usage(/*pool_id*/ None)
+            .await;
         match self.fetch_account_rate_limits().await {
             Ok((rate_limits, rate_limits_by_limit_id)) => {
                 let response = GetAccountRateLimitsResponse {

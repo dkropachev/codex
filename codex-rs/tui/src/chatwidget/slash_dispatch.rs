@@ -319,7 +319,7 @@ impl ChatWidget {
             SlashCommand::Skills => {
                 self.open_skills_menu();
             }
-            SlashCommand::Status => {
+            SlashCommand::Status | SlashCommand::Limits => {
                 if self.should_prefetch_rate_limits() {
                     let request_id = self.next_status_refresh_request_id;
                     self.next_status_refresh_request_id =
@@ -719,6 +719,7 @@ impl ChatWidget {
         match cmd {
             SlashCommand::Fast
             | SlashCommand::Status
+            | SlashCommand::Limits
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop

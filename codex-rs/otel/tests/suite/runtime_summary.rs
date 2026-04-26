@@ -58,6 +58,7 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         /*recovery_mode*/ None,
         /*recovery_phase*/ None,
         "/responses",
+        &codex_otel::AccountRouteTelemetry::default(),
         /*request_id*/ None,
         /*cf_ray*/ None,
         /*auth_error*/ None,
@@ -67,6 +68,7 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         Duration::from_millis(400),
         /*error*/ None,
         /*connection_reused*/ false,
+        &codex_otel::AccountRouteTelemetry::default(),
     );
     let sse_response: std::result::Result<
         Option<std::result::Result<StreamEvent, eventsource_stream::EventStreamError<&str>>>,

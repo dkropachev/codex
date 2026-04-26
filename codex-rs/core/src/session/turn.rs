@@ -71,6 +71,7 @@ use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
 use codex_hooks::HookResult;
+use codex_login::AccountPoolBucket;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -1082,18 +1083,46 @@ async fn run_sampling_request(
             Ok(output) => {
                 return Ok(output);
             }
-            Err(CodexErr::ContextWindowExceeded) => {
+            Err(SamplingRequestFailure {
+                err: CodexErr::ContextWindowExceeded,
+                ..
+            }) => {
                 sess.set_total_tokens_full(&turn_context).await;
                 return Err(CodexErr::ContextWindowExceeded);
             }
-            Err(CodexErr::UsageLimitReached(e)) => {
+            Err(SamplingRequestFailure {
+                err: CodexErr::UsageLimitReached(e),
+                visible_output_started,
+            }) => {
                 let rate_limits = e.rate_limits.clone();
                 if let Some(rate_limits) = rate_limits {
                     sess.update_rate_limits(&turn_context, *rate_limits).await;
                 }
+                if !visible_output_started {
+                    let err = CodexErr::UsageLimitReached(e);
+                    if mark_active_pool_member_exhausted_for_usage_limit(&sess, &err) {
+                        retries = 0;
+                        continue;
+                    }
+                    return Err(err);
+                }
                 return Err(CodexErr::UsageLimitReached(e));
             }
-            Err(err) => err,
+            Err(SamplingRequestFailure {
+                err: CodexErr::UsageNotIncluded,
+                visible_output_started,
+            }) => {
+                if !visible_output_started {
+                    let err = CodexErr::UsageNotIncluded;
+                    if mark_active_pool_member_exhausted_for_usage_limit(&sess, &err) {
+                        retries = 0;
+                        continue;
+                    }
+                    return Err(err);
+                }
+                return Err(CodexErr::UsageNotIncluded);
+            }
+            Err(SamplingRequestFailure { err, .. }) => err,
         };
 
         if !err.is_retryable() {
@@ -1295,10 +1324,52 @@ pub(crate) async fn built_tools(
     )))
 }
 
+fn mark_active_pool_member_exhausted_for_usage_limit(sess: &Session, err: &CodexErr) -> bool {
+    let bucket = match err {
+        CodexErr::UsageLimitReached(error) => error
+            .rate_limits
+            .as_ref()
+            .and_then(|snapshot| snapshot.limit_id.as_deref())
+            .map(|limit_id| {
+                if limit_id == "codex" {
+                    AccountPoolBucket::Regular
+                } else {
+                    AccountPoolBucket::Spark
+                }
+            })
+            .unwrap_or(AccountPoolBucket::Regular),
+        CodexErr::UsageNotIncluded => AccountPoolBucket::Regular,
+        _ => return false,
+    };
+    sess.services
+        .auth_manager
+        .mark_active_account_pool_member_exhausted(bucket, err.to_string())
+}
+
+fn response_item_starts_visible_output(item: &ResponseItem) -> bool {
+    matches!(
+        item,
+        ResponseItem::Message { .. }
+            | ResponseItem::Reasoning { .. }
+            | ResponseItem::LocalShellCall { .. }
+            | ResponseItem::FunctionCall { .. }
+            | ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::CustomToolCall { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::ImageGenerationCall { .. }
+    )
+}
+
 #[derive(Debug)]
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
+}
+
+#[derive(Debug)]
+struct SamplingRequestFailure {
+    err: CodexErr,
+    visible_output_started: bool,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
@@ -1866,7 +1937,7 @@ async fn try_run_sampling_request(
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
     cancellation_token: CancellationToken,
-) -> CodexResult<SamplingRequestResult> {
+) -> Result<SamplingRequestResult, SamplingRequestFailure> {
     feedback_tags!(
         model = turn_context.model_info.slug.clone(),
         approval_policy = turn_context.approval_policy.value(),
@@ -1880,7 +1951,7 @@ async fn try_run_sampling_request(
         turn_context.model_info.slug.as_str(),
         turn_context.provider.info().name.as_str(),
     );
-    let mut stream = client_session
+    let stream_result = client_session
         .stream(
             prompt,
             &turn_context.model_info,
@@ -1893,7 +1964,23 @@ async fn try_run_sampling_request(
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
-        .await??;
+        .await;
+    let mut stream = match stream_result {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(err)) => {
+            return Err(SamplingRequestFailure {
+                err,
+                visible_output_started: false,
+            });
+        }
+        Err(codex_async_utils::CancelErr::Cancelled) => {
+            return Err(SamplingRequestFailure {
+                err: CodexErr::TurnAborted,
+                visible_output_started: false,
+            });
+        }
+    };
+    let mut visible_output_started = false;
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
@@ -1946,6 +2033,9 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
+                if response_item_starts_visible_output(&item) {
+                    visible_output_started = true;
+                }
                 if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
                     && let Some(event) = consumer.flush_on_complete()
                 {
@@ -2029,6 +2119,9 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::OutputItemAdded(item) => {
+                if response_item_starts_visible_output(&item) {
+                    visible_output_started = true;
+                }
                 if let ResponseItem::CustomToolCall { call_id, name, .. } = &item {
                     let tool_name = ToolName::plain(name.as_str());
                     active_tool_argument_diff_consumer = tool_runtime
@@ -2254,10 +2347,18 @@ async fn try_run_sampling_request(
     )
     .await;
 
-    drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+    drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone())
+        .await
+        .map_err(|err| SamplingRequestFailure {
+            err,
+            visible_output_started,
+        })?;
 
     if cancellation_token.is_cancelled() {
-        return Err(CodexErr::TurnAborted);
+        return Err(SamplingRequestFailure {
+            err: CodexErr::TurnAborted,
+            visible_output_started,
+        });
     }
 
     if should_emit_turn_diff {
@@ -2271,7 +2372,10 @@ async fn try_run_sampling_request(
         }
     }
 
-    outcome
+    outcome.map_err(|err| SamplingRequestFailure {
+        err,
+        visible_output_started,
+    })
 }
 
 pub(crate) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {

@@ -200,6 +200,14 @@ pub struct ConfigToml {
     #[serde(default, deserialize_with = "deserialize_model_providers")]
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
+    /// Optional logical pools of bounded Codex subscription accounts.
+    #[serde(default, deserialize_with = "deserialize_account_pool")]
+    pub account_pool: Option<AccountPoolToml>,
+
+    /// Optional routing policy for internal model calls.
+    #[serde(default, deserialize_with = "deserialize_model_policy")]
+    pub model_policy: Option<ModelPolicyToml>,
+
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: Option<usize>,
 
@@ -417,6 +425,105 @@ pub struct ConfigToml {
 pub struct AutoReviewToml {
     /// Additional policy instructions inserted into the guardian prompt.
     pub policy: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AccountPoolToml {
+    #[serde(default)]
+    pub enabled: bool,
+
+    pub default_pool: Option<String>,
+
+    #[serde(default)]
+    pub pools: BTreeMap<String, AccountPoolDefinitionToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AccountPoolDefinitionToml {
+    pub provider: String,
+    pub policy: AccountPoolPolicyToml,
+    pub accounts: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountPoolPolicyToml {
+    Drain,
+    LoadBalance,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelPolicyToml {
+    #[serde(default)]
+    pub enabled: bool,
+
+    #[serde(default)]
+    pub rules: Vec<ModelPolicyRuleToml>,
+
+    #[serde(default)]
+    pub default_route: Option<ModelPolicyRouteToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelPolicyRuleToml {
+    /// Source selector, for example `subagent`, `subagent.review`,
+    /// `module.memory_consolidation`, or `*`. Accepts one selector or a list.
+    #[serde(
+        default,
+        alias = "sources",
+        deserialize_with = "deserialize_model_policy_sources"
+    )]
+    pub source: Option<Vec<String>>,
+
+    /// Inclusive lower prompt-size bound, in UTF-8 bytes.
+    pub min_prompt_bytes: Option<usize>,
+
+    /// Inclusive upper prompt-size bound, in UTF-8 bytes.
+    pub max_prompt_bytes: Option<usize>,
+
+    #[serde(flatten)]
+    pub route: ModelPolicyRouteToml,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelPolicyRouteToml {
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub reasoning_effort: Option<ModelPolicyReasoningEffortToml>,
+    pub account_pool: Option<String>,
+    pub account: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelPolicyReasoningEffortToml {
+    /// Preserve the reasoning effort already selected by the parent/default config.
+    Inherit,
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    XHigh,
+}
+
+impl ModelPolicyReasoningEffortToml {
+    pub fn as_reasoning_effort(self) -> Option<ReasoningEffort> {
+        match self {
+            ModelPolicyReasoningEffortToml::Inherit => None,
+            ModelPolicyReasoningEffortToml::None => Some(ReasoningEffort::None),
+            ModelPolicyReasoningEffortToml::Minimal => Some(ReasoningEffort::Minimal),
+            ModelPolicyReasoningEffortToml::Low => Some(ReasoningEffort::Low),
+            ModelPolicyReasoningEffortToml::Medium => Some(ReasoningEffort::Medium),
+            ModelPolicyReasoningEffortToml::High => Some(ReasoningEffort::High),
+            ModelPolicyReasoningEffortToml::XHigh => Some(ReasoningEffort::XHigh),
+        }
+    }
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -854,6 +961,175 @@ where
     Ok(model_providers)
 }
 
+pub fn validate_account_pool(account_pool: &AccountPoolToml) -> Result<(), String> {
+    if !account_pool.enabled {
+        return Ok(());
+    }
+
+    if account_pool.pools.is_empty() {
+        return Err("account_pool: enabled account pool must define at least one pool".to_string());
+    }
+
+    if let Some(default_pool) = account_pool.default_pool.as_deref()
+        && !account_pool.pools.contains_key(default_pool)
+    {
+        return Err(format!(
+            "account_pool.default_pool `{default_pool}` does not reference a configured pool"
+        ));
+    }
+
+    for (pool_id, pool) in &account_pool.pools {
+        if pool.provider != OPENAI_PROVIDER_ID {
+            return Err(format!(
+                "account_pool.pools.{pool_id}: provider must be `{OPENAI_PROVIDER_ID}`"
+            ));
+        }
+        if pool.accounts.is_empty() {
+            return Err(format!(
+                "account_pool.pools.{pool_id}: accounts must contain at least one account id"
+            ));
+        }
+        for account_id in &pool.accounts {
+            if account_id.trim().is_empty() {
+                return Err(format!(
+                    "account_pool.pools.{pool_id}: account ids must not be empty"
+                ));
+            }
+            if !is_safe_account_id(account_id) {
+                return Err(format!(
+                    "account_pool.pools.{pool_id}: account id `{account_id}` must not contain path separators or parent directory components"
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn is_safe_account_id(account_id: &str) -> bool {
+    account_id != "."
+        && account_id != ".."
+        && !account_id.contains('/')
+        && !account_id.contains('\\')
+}
+
+fn deserialize_account_pool<'de, D>(deserializer: D) -> Result<Option<AccountPoolToml>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let account_pool = Option::<AccountPoolToml>::deserialize(deserializer)?;
+    if let Some(account_pool) = account_pool.as_ref() {
+        validate_account_pool(account_pool).map_err(serde::de::Error::custom)?;
+    }
+    Ok(account_pool)
+}
+
+pub fn validate_model_policy(model_policy: &ModelPolicyToml) -> Result<(), String> {
+    if !model_policy.enabled {
+        return Ok(());
+    }
+
+    if model_policy.rules.is_empty() && model_policy.default_route.is_none() {
+        return Err(
+            "model_policy: enabled model policy must define rules or default_route".to_string(),
+        );
+    }
+    if let Some(route) = &model_policy.default_route {
+        validate_model_policy_route("model_policy.default_route", route)?;
+    }
+    for (index, rule) in model_policy.rules.iter().enumerate() {
+        let label = format!("model_policy.rules[{index}]");
+        if let Some(sources) = &rule.source
+            && sources.is_empty()
+        {
+            return Err(format!("{label}: source must not be an empty list"));
+        }
+        if let Some(sources) = &rule.source
+            && sources.iter().any(|source| source.trim().is_empty())
+        {
+            return Err(format!("{label}: source entries must not be empty"));
+        }
+        if let (Some(min), Some(max)) = (rule.min_prompt_bytes, rule.max_prompt_bytes)
+            && min > max
+        {
+            return Err(format!(
+                "{label}: min_prompt_bytes must be <= max_prompt_bytes"
+            ));
+        }
+        if rule.source.is_none()
+            && rule.min_prompt_bytes.is_none()
+            && rule.max_prompt_bytes.is_none()
+        {
+            return Err(format!(
+                "{label}: rule must specify source or a prompt-size bound"
+            ));
+        }
+        validate_model_policy_route(&label, &rule.route)?;
+    }
+
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum OneOrManyStrings {
+    One(String),
+    Many(Vec<String>),
+}
+
+fn deserialize_model_policy_sources<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let source = Option::<OneOrManyStrings>::deserialize(deserializer)?;
+    Ok(source.map(|source| match source {
+        OneOrManyStrings::One(source) => vec![source],
+        OneOrManyStrings::Many(sources) => sources,
+    }))
+}
+
+fn validate_model_policy_route(label: &str, route: &ModelPolicyRouteToml) -> Result<(), String> {
+    if route.model.is_none()
+        && route.model_provider.is_none()
+        && route.reasoning_effort.is_none()
+        && route.account_pool.is_none()
+        && route.account.is_none()
+    {
+        return Err(format!("{label}: route must set at least one target field"));
+    }
+    if route.account_pool.is_some() && route.account.is_some() {
+        return Err(format!(
+            "{label}: account_pool and account are mutually exclusive"
+        ));
+    }
+    if let Some(account) = &route.account
+        && (account.trim().is_empty() || !is_safe_account_id(account))
+    {
+        return Err(format!(
+            "{label}: account must not be empty or contain path separators or parent directory components"
+        ));
+    }
+    if let Some(account_pool) = &route.account_pool
+        && account_pool.trim().is_empty()
+    {
+        return Err(format!("{label}: account_pool must not be empty"));
+    }
+    Ok(())
+}
+
+fn deserialize_model_policy<'de, D>(deserializer: D) -> Result<Option<ModelPolicyToml>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let model_policy = Option::<ModelPolicyToml>::deserialize(deserializer)?;
+    if let Some(model_policy) = model_policy.as_ref() {
+        validate_model_policy(model_policy).map_err(serde::de::Error::custom)?;
+    }
+    Ok(model_policy)
+}
+
 pub fn validate_oss_provider(provider: &str) -> std::io::Result<()> {
     match provider {
         LMSTUDIO_OSS_PROVIDER_ID | OLLAMA_OSS_PROVIDER_ID => Ok(()),
@@ -867,5 +1143,164 @@ pub fn validate_oss_provider(provider: &str) -> std::io::Result<()> {
                 "Invalid OSS provider '{provider}'. Must be one of: {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID}"
             ),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn parses_account_pool_config() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            [account_pool]
+            enabled = true
+            default_pool = "codex-pro"
+
+            [account_pool.pools.codex-pro]
+            provider = "openai"
+            policy = "load_balance"
+            accounts = ["work-pro", "personal-pro"]
+            "#,
+        )
+        .expect("config should parse");
+
+        let account_pool = config.account_pool.expect("account pool");
+        assert_eq!(account_pool.enabled, true);
+        assert_eq!(account_pool.default_pool.as_deref(), Some("codex-pro"));
+        assert_eq!(
+            account_pool.pools.get("codex-pro").expect("pool").policy,
+            AccountPoolPolicyToml::LoadBalance
+        );
+    }
+
+    #[test]
+    fn parses_model_policy_config() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            [model_policy]
+            enabled = true
+
+            [[model_policy.rules]]
+            source = ["subagent", "module.repo_ci"]
+            max_prompt_bytes = 20000
+            model = "gpt-5.3-codex-spark"
+            reasoning_effort = "inherit"
+            account = "spark-account"
+
+            [model_policy.default_route]
+            account_pool = "codex-pro"
+            "#,
+        )
+        .expect("config should parse");
+
+        let model_policy = config.model_policy.expect("model policy");
+        assert_eq!(model_policy.enabled, true);
+        assert_eq!(model_policy.rules.len(), 1);
+        let rule = model_policy.rules.first().expect("rule");
+        assert_eq!(
+            rule.source.as_deref(),
+            Some(["subagent".to_string(), "module.repo_ci".to_string()].as_slice())
+        );
+        assert_eq!(rule.max_prompt_bytes, Some(20000));
+        assert_eq!(rule.route.model.as_deref(), Some("gpt-5.3-codex-spark"));
+        assert_eq!(
+            rule.route.reasoning_effort,
+            Some(ModelPolicyReasoningEffortToml::Inherit)
+        );
+        assert_eq!(rule.route.account.as_deref(), Some("spark-account"));
+        assert_eq!(
+            model_policy
+                .default_route
+                .as_ref()
+                .and_then(|route| route.account_pool.as_deref()),
+            Some("codex-pro")
+        );
+    }
+
+    #[test]
+    fn rejects_model_policy_with_ambiguous_account_target() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+            [model_policy]
+            enabled = true
+
+            [[model_policy.rules]]
+            source = "subagent"
+            model = "gpt-5.3-codex-spark"
+            account_pool = "codex-pro"
+            account = "work-pro"
+            "#,
+        )
+        .expect_err("ambiguous account target should be rejected");
+
+        assert!(err.to_string().contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn rejects_account_pool_default_that_does_not_exist() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+            [account_pool]
+            enabled = true
+            default_pool = "missing"
+
+            [account_pool.pools.codex-pro]
+            provider = "openai"
+            policy = "drain"
+            accounts = ["work-pro"]
+            "#,
+        )
+        .expect_err("missing default pool should be rejected");
+
+        assert!(err.to_string().contains("account_pool.default_pool"));
+    }
+
+    #[test]
+    fn rejects_non_openai_account_pool_provider() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+            [account_pool]
+            enabled = true
+            default_pool = "codex-pro"
+
+            [account_pool.pools.codex-pro]
+            provider = "openrouter"
+            policy = "drain"
+            accounts = ["work-pro"]
+            "#,
+        )
+        .expect_err("non-openai provider should be rejected");
+
+        assert!(err.to_string().contains("provider must be `openai`"));
+    }
+
+    #[test]
+    fn rejects_unsafe_account_pool_account_ids() {
+        for account_id in ["", " ", ".", "..", "../work", "team/work", "team\\work"] {
+            let toml_account_id = account_id.replace('\\', "\\\\");
+            let config = format!(
+                r#"
+                [account_pool]
+                enabled = true
+
+                [account_pool.pools.codex-pro]
+                provider = "openai"
+                policy = "drain"
+                accounts = ["{toml_account_id}"]
+                "#
+            );
+            let err = toml::from_str::<ConfigToml>(&config)
+                .expect_err("unsafe account id should be rejected");
+            let message = err.to_string();
+            assert!(
+                message.contains("account ids must not be empty")
+                    || message.contains("path separators"),
+                "{message}"
+            );
+        }
     }
 }

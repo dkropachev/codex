@@ -5224,6 +5224,39 @@
           },
           {
             "properties": {
+              "activeAccountId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "members": {
+                "items": {
+                  "$ref": "#/definitions/v2/AccountPoolMember"
+                },
+                "type": "array"
+              },
+              "type": {
+                "enum": [
+                  "chatgptPool"
+                ],
+                "title": "ChatgptPoolAccountType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "members",
+              "type"
+            ],
+            "title": "ChatgptPoolAccount",
+            "type": "object"
+          },
+          {
+            "properties": {
               "type": {
                 "enum": [
                   "amazonBedrock"
@@ -5263,6 +5296,65 @@
           "success"
         ],
         "title": "AccountLoginCompletedNotification",
+        "type": "object"
+      },
+      "AccountPoolMember": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "planType": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PlanType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "regularRemaining": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sparkRemaining": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "unavailableReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "active",
+          "id"
+        ],
         "type": "object"
       },
       "AccountRateLimitsUpdatedNotification": {

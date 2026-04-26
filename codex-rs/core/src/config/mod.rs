@@ -24,6 +24,7 @@ use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigToml;
+use codex_config::config_toml::ModelPolicyToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
@@ -418,6 +419,12 @@ pub struct Config {
     /// Combined provider map (defaults plus user-defined providers).
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
+    /// Optional logical pools of bounded Codex subscription accounts.
+    pub account_pool: Option<codex_config::config_toml::AccountPoolToml>,
+
+    /// Optional routing policy for internal model calls.
+    pub model_policy: Option<ModelPolicyToml>,
+
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: usize,
 
@@ -655,6 +662,10 @@ impl AuthManagerConfig for Config {
 
     fn chatgpt_base_url(&self) -> String {
         self.chatgpt_base_url.clone()
+    }
+
+    fn account_pool(&self) -> Option<codex_config::config_toml::AccountPoolToml> {
+        self.account_pool.clone()
     }
 }
 
@@ -2346,6 +2357,8 @@ impl Config {
             mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
             mcp_oauth_callback_url: cfg.mcp_oauth_callback_url.clone(),
             model_providers,
+            account_pool: cfg.account_pool,
+            model_policy: cfg.model_policy,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(AGENTS_MD_MAX_BYTES),
             project_doc_fallback_filenames: cfg
                 .project_doc_fallback_filenames
