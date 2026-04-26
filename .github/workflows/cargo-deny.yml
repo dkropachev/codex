@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - "forked-rust-v*"
 
 # Cargo's libgit2 transport has been flaky when fetching git dependencies with
 # nested submodules. Prefer the system git CLI across every Cargo invocation.

@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - main
+      - "forked-rust-v*"
       - "**full-ci**"
   workflow_dispatch:
 
@@ -16,6 +17,7 @@ env:
 jobs:
   # --- CI that doesn't need specific targets ---------------------------------
   general:
+    if: ${{ github.repository == 'openai/codex' }}
     name: Format / etc
     runs-on: ubuntu-24.04
     defaults:
@@ -37,6 +39,7 @@ jobs:
         run: just bench-smoke
 
   cargo_shear:
+    if: ${{ github.repository == 'openai/codex' }}
     name: cargo shear
     runs-on: ubuntu-24.04
     defaults:
@@ -54,6 +57,7 @@ jobs:
         run: cargo shear --deny-warnings
 
   argument_comment_lint_package:
+    if: ${{ github.repository == 'openai/codex' }}
     name: Argument comment lint package
     runs-on: ubuntu-24.04
     env:
@@ -95,6 +99,7 @@ jobs:
           RUST_MIN_STACK: "8388608" # 8 MiB
 
   argument_comment_lint_prebuilt:
+    if: ${{ github.repository == 'openai/codex' }}
     name: Argument comment lint - ${{ matrix.name }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
@@ -154,6 +159,7 @@ jobs:
 
   # --- CI to validate on different os/targets --------------------------------
   lint_build:
+    if: ${{ github.repository == 'openai/codex' }}
     name: Lint/Build — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.profile == 'release' && ' (release)' || '' }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
@@ -544,7 +550,7 @@ jobs:
         tests_windows_x64,
         tests_windows_arm64,
       ]
-    if: always()
+    if: ${{ github.repository == 'openai/codex' && always() }}
     runs-on: ubuntu-24.04
     steps:
       - name: Summarize

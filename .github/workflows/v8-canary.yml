@@ -21,6 +21,7 @@ on:
   push:
     branches:
       - main
+      - "forked-rust-v*"
     paths:
       - ".bazelrc"
       - ".github/actions/setup-bazel-ci/**"
