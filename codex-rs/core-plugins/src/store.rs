@@ -13,6 +13,7 @@ use std::path::PathBuf;
 
 pub const DEFAULT_PLUGIN_VERSION: &str = "local";
 pub const PLUGINS_CACHE_DIR: &str = "plugins/cache";
+pub const PLUGINS_STATE_DIR: &str = "plugin-state";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInstallResult {
@@ -51,6 +52,27 @@ impl PluginStore {
 
     pub fn plugin_root(&self, plugin_id: &PluginId, plugin_version: &str) -> AbsolutePathBuf {
         self.plugin_base_root(plugin_id).join(plugin_version)
+    }
+
+    pub fn plugin_state_dir(&self, plugin_id: &PluginId) -> AbsolutePathBuf {
+        self.codex_home()
+            .join(PLUGINS_STATE_DIR)
+            .join(&plugin_id.marketplace_name)
+            .join(&plugin_id.plugin_name)
+    }
+
+    fn codex_home(&self) -> AbsolutePathBuf {
+        if let Some(codex_home) = self
+            .root
+            .as_path()
+            .parent()
+            .and_then(Path::parent)
+            .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
+        {
+            codex_home
+        } else {
+            self.root.clone()
+        }
     }
 
     pub fn active_plugin_version(&self, plugin_id: &PluginId) -> Option<String> {

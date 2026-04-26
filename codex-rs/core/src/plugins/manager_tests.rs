@@ -21,6 +21,9 @@ use codex_core_plugins::loader::refresh_non_curated_plugin_cache_force_reinstall
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
 use codex_login::CodexAuth;
+use codex_plugin::PluginCommand;
+use codex_plugin::PluginCommandProgram;
+use codex_plugin::PluginCommandSurface;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use pretty_assertions::assert_eq;
@@ -219,6 +222,10 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
                 },
             )]),
             apps: vec![AppConnectorId("connector_example".to_string())],
+            hook_configs: Vec::new(),
+            commands: Vec::new(),
+            config_schema: None,
+            default_config: None,
             error: None,
         }]
     );
@@ -463,7 +470,11 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
   "name": "sample",
   "skills": "./custom-skills/",
   "mcpServers": "./config/custom.mcp.json",
-  "apps": "./config/custom.app.json"
+  "apps": "./config/custom.app.json",
+  "hooks": "./config/hooks.json",
+  "commands": "./config/commands.json",
+  "configSchema": "./config/schema.json",
+  "defaultConfig": "./config/default.json"
 }"#,
     );
     write_file(
@@ -516,6 +527,33 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
   }
 }"#,
     );
+    write_file(
+        &plugin_root.join("config/hooks.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo stop"}]}]}}"#,
+    );
+    write_file(
+        &plugin_root.join("config/commands.json"),
+        r#"{
+  "commands": [
+    {
+      "name": "sample",
+      "description": "Run sample command",
+      "program": "./bin/sample",
+      "args": ["status"],
+      "surfaces": ["cli", "slash"],
+      "usage": "sample status"
+    }
+  ]
+}"#,
+    );
+    write_file(
+        &plugin_root.join("config/schema.json"),
+        r#"{"type":"object"}"#,
+    );
+    write_file(
+        &plugin_root.join("config/default.json"),
+        r#"{"enabled":false}"#,
+    );
 
     let outcome = load_plugins_from_config(
         &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
@@ -560,6 +598,33 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
     assert_eq!(
         outcome.plugins()[0].apps,
         vec![AppConnectorId("connector_custom".to_string())]
+    );
+    assert_eq!(outcome.plugins()[0].hook_configs.len(), 1);
+    assert_eq!(
+        outcome.plugins()[0].hook_configs[0].path,
+        plugin_root.join("config/hooks.json").abs()
+    );
+    assert_eq!(
+        outcome.plugins()[0].commands,
+        vec![PluginCommand {
+            plugin_id: "sample@test".to_string(),
+            plugin_root: plugin_root.abs(),
+            state_dir: codex_home.path().join("plugin-state/test/sample").abs(),
+            name: "sample".to_string(),
+            description: "Run sample command".to_string(),
+            program: PluginCommandProgram::Path(plugin_root.join("bin/sample").abs()),
+            args: vec!["status".to_string()],
+            surfaces: vec![PluginCommandSurface::Cli, PluginCommandSurface::Slash],
+            usage: Some("sample status".to_string()),
+        }]
+    );
+    assert_eq!(
+        outcome.plugins()[0].config_schema,
+        Some(r#"{"type":"object"}"#.to_string())
+    );
+    assert_eq!(
+        outcome.plugins()[0].default_config,
+        Some(r#"{"enabled":false}"#.to_string())
     );
 }
 
@@ -719,6 +784,10 @@ async fn load_plugins_preserves_disabled_plugins_without_effective_contributions
             has_enabled_skills: false,
             mcp_servers: HashMap::new(),
             apps: Vec::new(),
+            hook_configs: Vec::new(),
+            commands: Vec::new(),
+            config_schema: None,
+            default_config: None,
             error: None,
         }]
     );
@@ -836,6 +905,10 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         has_enabled_skills: false,
         mcp_servers: HashMap::new(),
         apps: Vec::new(),
+        hook_configs: Vec::new(),
+        commands: Vec::new(),
+        config_schema: None,
+        default_config: None,
         error: None,
     };
     let summary = |config_name: &str, display_name: &str| PluginCapabilitySummary {
@@ -869,6 +942,10 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         },
         LoadedPlugin {
             apps: vec![connector("connector_broken")],
+            hook_configs: Vec::new(),
+            commands: Vec::new(),
+            config_schema: None,
+            default_config: None,
             error: Some("failed to load".to_string()),
             ..plugin("broken@test", "broken-plugin", "broken-plugin")
         },

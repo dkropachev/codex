@@ -26,6 +26,14 @@ struct RawPluginManifest {
     #[serde(default)]
     apps: Option<String>,
     #[serde(default)]
+    hooks: Option<String>,
+    #[serde(default)]
+    commands: Option<String>,
+    #[serde(default)]
+    config_schema: Option<String>,
+    #[serde(default)]
+    default_config: Option<String>,
+    #[serde(default)]
     interface: Option<RawPluginManifestInterface>,
 }
 
@@ -43,6 +51,10 @@ pub struct PluginManifestPaths {
     pub skills: Option<AbsolutePathBuf>,
     pub mcp_servers: Option<AbsolutePathBuf>,
     pub apps: Option<AbsolutePathBuf>,
+    pub hooks: Option<AbsolutePathBuf>,
+    pub commands: Option<AbsolutePathBuf>,
+    pub config_schema: Option<AbsolutePathBuf>,
+    pub default_config: Option<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -126,6 +138,10 @@ pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
                 skills,
                 mcp_servers,
                 apps,
+                hooks,
+                commands,
+                config_schema,
+                default_config,
                 interface,
             } = manifest;
             let name = plugin_root
@@ -219,6 +235,18 @@ pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
                         mcp_servers.as_deref(),
                     ),
                     apps: resolve_manifest_path(plugin_root, "apps", apps.as_deref()),
+                    hooks: resolve_manifest_path(plugin_root, "hooks", hooks.as_deref()),
+                    commands: resolve_manifest_path(plugin_root, "commands", commands.as_deref()),
+                    config_schema: resolve_manifest_path(
+                        plugin_root,
+                        "configSchema",
+                        config_schema.as_deref(),
+                    ),
+                    default_config: resolve_manifest_path(
+                        plugin_root,
+                        "defaultConfig",
+                        default_config.as_deref(),
+                    ),
                 },
                 interface,
             })

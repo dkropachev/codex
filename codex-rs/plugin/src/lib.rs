@@ -8,6 +8,10 @@ mod plugin_id;
 
 pub use load_outcome::EffectiveSkillRoots;
 pub use load_outcome::LoadedPlugin;
+pub use load_outcome::PluginCommand;
+pub use load_outcome::PluginCommandProgram;
+pub use load_outcome::PluginCommandSurface;
+pub use load_outcome::PluginHookConfig;
 pub use load_outcome::PluginLoadOutcome;
 pub use load_outcome::prompt_safe_plugin_description;
 pub use plugin_id::PluginId;

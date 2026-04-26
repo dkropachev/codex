@@ -44,6 +44,7 @@ use codex_core_plugins::remote::RemotePluginServiceConfig;
 use codex_core_plugins::remote_legacy::RemotePluginFetchError;
 use codex_core_plugins::remote_legacy::RemotePluginMutationError;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
+use codex_core_plugins::startup_sync::has_local_curated_plugins_snapshot;
 use codex_core_plugins::startup_sync::read_curated_plugins_sha;
 use codex_core_plugins::startup_sync::sync_openai_plugins_repo;
 use codex_core_plugins::store::PluginInstallResult as StorePluginInstallResult;
@@ -1189,20 +1190,22 @@ impl PluginsManager {
                 auth_manager.clone(),
             );
 
-            let config = config.clone();
-            let manager = Arc::clone(self);
-            tokio::spawn(async move {
-                let auth = auth_manager.auth().await;
-                if let Err(err) = manager
-                    .featured_plugin_ids_for_config(&config, auth.as_ref())
-                    .await
-                {
-                    warn!(
-                        error = %err,
-                        "failed to warm featured plugin ids cache"
-                    );
-                }
-            });
+            if has_local_curated_plugins_snapshot(&self.codex_home) {
+                let config = config.clone();
+                let manager = Arc::clone(self);
+                tokio::spawn(async move {
+                    let auth = auth_manager.auth().await;
+                    if let Err(err) = manager
+                        .featured_plugin_ids_for_config(&config, auth.as_ref())
+                        .await
+                    {
+                        warn!(
+                            error = %err,
+                            "failed to warm featured plugin ids cache"
+                        );
+                    }
+                });
+            }
         }
     }
 

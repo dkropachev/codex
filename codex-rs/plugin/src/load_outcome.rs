@@ -8,6 +8,60 @@ use crate::PluginCapabilitySummary;
 
 const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginHookConfig {
+    pub plugin_id: String,
+    pub plugin_root: AbsolutePathBuf,
+    pub state_dir: AbsolutePathBuf,
+    pub path: AbsolutePathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginCommand {
+    pub plugin_id: String,
+    pub plugin_root: AbsolutePathBuf,
+    pub state_dir: AbsolutePathBuf,
+    pub name: String,
+    pub description: String,
+    pub program: PluginCommandProgram,
+    pub args: Vec<String>,
+    pub surfaces: Vec<PluginCommandSurface>,
+    pub usage: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginCommandProgram {
+    Path(AbsolutePathBuf),
+    PathSearch(String),
+}
+
+impl PluginCommandProgram {
+    pub fn as_program_str(&self) -> String {
+        match self {
+            Self::Path(path) => path.as_path().display().to_string(),
+            Self::PathSearch(program) => program.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PluginCommandSurface {
+    Cli,
+    Slash,
+    AppServer,
+}
+
+impl PluginCommandSurface {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "cli" => Some(Self::Cli),
+            "slash" => Some(Self::Slash),
+            "app-server" => Some(Self::AppServer),
+            _ => None,
+        }
+    }
+}
+
 /// A plugin that was loaded from disk, including merged MCP server definitions.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedPlugin<M> {
@@ -21,6 +75,10 @@ pub struct LoadedPlugin<M> {
     pub has_enabled_skills: bool,
     pub mcp_servers: HashMap<String, M>,
     pub apps: Vec<AppConnectorId>,
+    pub hook_configs: Vec<PluginHookConfig>,
+    pub commands: Vec<PluginCommand>,
+    pub config_schema: Option<String>,
+    pub default_config: Option<String>,
     pub error: Option<String>,
 }
 
@@ -138,6 +196,22 @@ impl<M: Clone> PluginLoadOutcome<M> {
         }
 
         apps
+    }
+
+    pub fn effective_hook_configs(&self) -> Vec<PluginHookConfig> {
+        self.plugins
+            .iter()
+            .filter(|plugin| plugin.is_active())
+            .flat_map(|plugin| plugin.hook_configs.iter().cloned())
+            .collect()
+    }
+
+    pub fn effective_commands(&self) -> Vec<PluginCommand> {
+        self.plugins
+            .iter()
+            .filter(|plugin| plugin.is_active())
+            .flat_map(|plugin| plugin.commands.iter().cloned())
+            .collect()
     }
 
     pub fn capability_summaries(&self) -> &[PluginCapabilitySummary] {

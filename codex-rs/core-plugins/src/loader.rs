@@ -19,6 +19,10 @@ use codex_exec_server::LOCAL_FS;
 use codex_plugin::AppConnectorId;
 use codex_plugin::LoadedPlugin;
 use codex_plugin::PluginCapabilitySummary;
+use codex_plugin::PluginCommand;
+use codex_plugin::PluginCommandProgram;
+use codex_plugin::PluginCommandSurface;
+use codex_plugin::PluginHookConfig;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::PluginLoadOutcome;
@@ -32,6 +36,7 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
+use std::path::Component;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -455,14 +460,14 @@ async fn load_plugin(
     restriction_product: Option<Product>,
     skill_config_rules: &SkillConfigRules,
 ) -> LoadedPlugin<McpServerConfig> {
-    let plugin_id = PluginId::parse(&config_name);
-    let active_plugin_root = plugin_id
+    let parsed_plugin_id = PluginId::parse(&config_name);
+    let active_plugin_root = parsed_plugin_id
         .as_ref()
         .ok()
         .and_then(|plugin_id| store.active_plugin_root(plugin_id));
     let root = active_plugin_root
         .clone()
-        .unwrap_or_else(|| match &plugin_id {
+        .unwrap_or_else(|| match &parsed_plugin_id {
             Ok(plugin_id) => store.plugin_base_root(plugin_id),
             Err(_) => store.root().clone(),
         });
@@ -477,6 +482,10 @@ async fn load_plugin(
         has_enabled_skills: false,
         mcp_servers: HashMap::new(),
         apps: Vec::new(),
+        hook_configs: Vec::new(),
+        commands: Vec::new(),
+        config_schema: None,
+        default_config: None,
         error: None,
     };
 
@@ -484,14 +493,14 @@ async fn load_plugin(
         return loaded_plugin;
     }
 
-    let plugin_root = match plugin_id {
-        Ok(_) => match active_plugin_root {
-            Some(plugin_root) => plugin_root,
-            None => {
+    let (plugin_id, plugin_root) = match parsed_plugin_id {
+        Ok(plugin_id) => {
+            let Some(plugin_root) = active_plugin_root else {
                 loaded_plugin.error = Some("plugin is not installed".to_string());
                 return loaded_plugin;
-            }
-        },
+            };
+            (plugin_id, plugin_root)
+        }
         Err(err) => {
             loaded_plugin.error = Some(err.to_string());
             return loaded_plugin;
@@ -545,7 +554,197 @@ async fn load_plugin(
     }
     loaded_plugin.mcp_servers = mcp_servers;
     loaded_plugin.apps = load_plugin_apps(plugin_root.as_path()).await;
+    let plugin_state_dir = store.plugin_state_dir(&plugin_id);
+    loaded_plugin.hook_configs = load_plugin_hook_configs(
+        &loaded_plugin.config_name,
+        &plugin_root,
+        &plugin_state_dir,
+        manifest_paths,
+    );
+    loaded_plugin.commands = load_plugin_commands(
+        &loaded_plugin.config_name,
+        &plugin_root,
+        &plugin_state_dir,
+        manifest_paths,
+    );
+    loaded_plugin.config_schema = read_optional_plugin_file(manifest_paths.config_schema.as_ref());
+    loaded_plugin.default_config =
+        read_optional_plugin_file(manifest_paths.default_config.as_ref());
     loaded_plugin
+}
+
+fn load_plugin_hook_configs(
+    plugin_id: &str,
+    plugin_root: &AbsolutePathBuf,
+    plugin_state_dir: &AbsolutePathBuf,
+    manifest_paths: &PluginManifestPaths,
+) -> Vec<PluginHookConfig> {
+    let Some(path) = &manifest_paths.hooks else {
+        return Vec::new();
+    };
+    vec![PluginHookConfig {
+        plugin_id: plugin_id.to_string(),
+        plugin_root: plugin_root.clone(),
+        state_dir: plugin_state_dir.clone(),
+        path: path.clone(),
+    }]
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginCommandsFile {
+    #[serde(default)]
+    commands: Vec<RawPluginCommand>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawPluginCommand {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    program: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    surfaces: Vec<String>,
+    #[serde(default)]
+    usage: Option<String>,
+}
+
+fn load_plugin_commands(
+    plugin_id: &str,
+    plugin_root: &AbsolutePathBuf,
+    plugin_state_dir: &AbsolutePathBuf,
+    manifest_paths: &PluginManifestPaths,
+) -> Vec<PluginCommand> {
+    let Some(path) = &manifest_paths.commands else {
+        return Vec::new();
+    };
+    let contents = match fs::read_to_string(path.as_path()) {
+        Ok(contents) => contents,
+        Err(err) => {
+            warn!(path = %path.display(), "failed to read plugin commands: {err}");
+            return Vec::new();
+        }
+    };
+    let parsed: PluginCommandsFile = match serde_json::from_str(&contents) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            warn!(path = %path.display(), "failed to parse plugin commands: {err}");
+            return Vec::new();
+        }
+    };
+
+    parsed
+        .commands
+        .into_iter()
+        .filter_map(|command| {
+            let name = command.name.trim();
+            if name.is_empty() {
+                warn!(path = %path.display(), "skipping plugin command with missing name");
+                return None;
+            }
+            let program = resolve_plugin_command_program(
+                plugin_root.as_path(),
+                path.as_path(),
+                name,
+                command.program.trim(),
+            )?;
+            let surfaces = resolve_plugin_command_surfaces(path.as_path(), name, &command.surfaces);
+            if surfaces.is_empty() {
+                warn!(path = %path.display(), command = name, "skipping plugin command with no supported surfaces");
+                return None;
+            }
+            Some(PluginCommand {
+                plugin_id: plugin_id.to_string(),
+                plugin_root: plugin_root.clone(),
+                state_dir: plugin_state_dir.clone(),
+                name: name.to_string(),
+                description: command.description,
+                program,
+                args: command.args,
+                surfaces,
+                usage: command.usage,
+            })
+        })
+        .collect()
+}
+
+fn resolve_plugin_command_surfaces(
+    path: &Path,
+    command_name: &str,
+    surfaces: &[String],
+) -> Vec<PluginCommandSurface> {
+    let mut resolved = Vec::new();
+    for surface in surfaces {
+        match PluginCommandSurface::parse(surface.trim()) {
+            Some(surface) => resolved.push(surface),
+            None => warn!(
+                path = %path.display(),
+                command = command_name,
+                surface,
+                "ignoring unknown plugin command surface"
+            ),
+        }
+    }
+    resolved.sort_unstable_by_key(|surface| match surface {
+        PluginCommandSurface::Cli => 0,
+        PluginCommandSurface::Slash => 1,
+        PluginCommandSurface::AppServer => 2,
+    });
+    resolved.dedup();
+    resolved
+}
+
+fn resolve_plugin_command_program(
+    plugin_root: &Path,
+    path: &Path,
+    command_name: &str,
+    program: &str,
+) -> Option<PluginCommandProgram> {
+    if program.is_empty() {
+        warn!(path = %path.display(), command = command_name, "skipping plugin command with missing program");
+        return None;
+    }
+    if let Some(relative_path) = program.strip_prefix("./") {
+        if relative_path.is_empty() {
+            warn!(path = %path.display(), command = command_name, "skipping plugin command with invalid `./` program");
+            return None;
+        }
+        let mut normalized = std::path::PathBuf::new();
+        for component in Path::new(relative_path).components() {
+            match component {
+                Component::Normal(component) => normalized.push(component),
+                Component::ParentDir => {
+                    warn!(path = %path.display(), command = command_name, "skipping plugin command with `..` in program");
+                    return None;
+                }
+                _ => {
+                    warn!(path = %path.display(), command = command_name, "skipping plugin command whose program escapes plugin root");
+                    return None;
+                }
+            }
+        }
+        return AbsolutePathBuf::try_from(plugin_root.join(normalized))
+            .map(PluginCommandProgram::Path)
+            .inspect_err(|err| warn!(path = %path.display(), command = command_name, "skipping plugin command with invalid program path: {err}"))
+            .ok();
+    }
+    if Path::new(program).is_absolute() || program.contains('/') || program.contains('\\') {
+        warn!(path = %path.display(), command = command_name, "skipping plugin command with unsupported program path");
+        return None;
+    }
+    Some(PluginCommandProgram::PathSearch(program.to_string()))
+}
+
+fn read_optional_plugin_file(path: Option<&AbsolutePathBuf>) -> Option<String> {
+    let path = path?;
+    fs::read_to_string(path.as_path())
+        .inspect_err(|err| warn!(path = %path.display(), "failed to read plugin file: {err}"))
+        .ok()
 }
 
 #[derive(Debug, Clone)]
