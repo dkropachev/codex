@@ -2318,6 +2318,30 @@
       ],
       "type": "string"
     },
+    "RepoCiIssueType": {
+      "enum": [
+        "correctness",
+        "reliability",
+        "performance",
+        "scalability",
+        "security",
+        "maintainability",
+        "testability",
+        "observability",
+        "compatibility",
+        "uxConfigCli"
+      ],
+      "type": "string"
+    },
+    "RepoCiSessionMode": {
+      "enum": [
+        "off",
+        "local",
+        "remote",
+        "localAndRemote"
+      ],
+      "type": "string"
+    },
     "RequestId": {
       "anyOf": [
         {
@@ -3752,6 +3776,47 @@
         }
       ]
     },
+    "ThreadRepoCiSessionConfigSetParams": {
+      "properties": {
+        "issueTypes": {
+          "description": "Null clears the session override and returns to repo/user config.",
+          "items": {
+            "$ref": "#/definitions/RepoCiIssueType"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RepoCiSessionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Null clears the session override and returns to repo/user config."
+        },
+        "reviewRounds": {
+          "description": "Null clears the session override and returns to repo/user config.",
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadResumeParams": {
       "description": "There are three ways to resume a thread: 1. By thread_id: load the thread from disk by thread_id and resume it. 2. By history: instantiate the thread from memory and resume it. 3. By path: load the thread from disk by path and resume it.\n\nThe precedence is: history > path > thread_id. If using history or path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
       "properties": {
@@ -4671,6 +4736,30 @@
         "params"
       ],
       "title": "Thread/metadata/updateRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/repoCiSessionConfig/set"
+          ],
+          "title": "Thread/repoCiSessionConfig/setRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRepoCiSessionConfigSetParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/repoCiSessionConfig/setRequest",
       "type": "object"
     },
     {

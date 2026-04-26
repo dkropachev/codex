@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "RepoCiIssueType": {
+      "enum": [
+        "correctness",
+        "reliability",
+        "performance",
+        "scalability",
+        "security",
+        "maintainability",
+        "testability",
+        "observability",
+        "compatibility",
+        "uxConfigCli"
+      ],
+      "type": "string"
+    },
+    "RepoCiSessionMode": {
+      "enum": [
+        "off",
+        "local",
+        "remote",
+        "localAndRemote"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "issueTypes": {
+      "description": "Null clears the session override and returns to repo/user config.",
+      "items": {
+        "$ref": "#/definitions/RepoCiIssueType"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "mode": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/RepoCiSessionMode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Null clears the session override and returns to repo/user config."
+    },
+    "reviewRounds": {
+      "description": "Null clears the session override and returns to repo/user config.",
+      "format": "uint8",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "threadId"
+  ],
+  "title": "ThreadRepoCiSessionConfigSetParams",
+  "type": "object"
+}

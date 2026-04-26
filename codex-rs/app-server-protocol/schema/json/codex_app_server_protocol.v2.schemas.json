@@ -1182,6 +1182,30 @@
             },
             "method": {
               "enum": [
+                "thread/repoCiSessionConfig/set"
+              ],
+              "title": "Thread/repoCiSessionConfig/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadRepoCiSessionConfigSetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/repoCiSessionConfig/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/unarchive"
               ],
               "title": "Thread/unarchiveRequestMethod",
@@ -9363,6 +9387,75 @@
       ],
       "type": "string"
     },
+    "RepoCiIssueType": {
+      "enum": [
+        "correctness",
+        "reliability",
+        "performance",
+        "scalability",
+        "security",
+        "maintainability",
+        "testability",
+        "observability",
+        "compatibility",
+        "uxConfigCli"
+      ],
+      "type": "string"
+    },
+    "RepoCiSessionMode": {
+      "enum": [
+        "off",
+        "local",
+        "remote",
+        "localAndRemote"
+      ],
+      "type": "string"
+    },
+    "RepoCiStatusNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "attempt": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maxAttempts": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "phase": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "phase",
+        "scope",
+        "state",
+        "threadId"
+      ],
+      "title": "RepoCiStatusNotification",
+      "type": "object"
+    },
     "RequestId": {
       "anyOf": [
         {
@@ -11304,6 +11397,26 @@
             "params"
           ],
           "title": "GuardianWarningNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "repoCi/status"
+              ],
+              "title": "RepoCi/statusNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/RepoCiStatusNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "RepoCi/statusNotification",
           "type": "object"
         },
         {
@@ -13885,6 +13998,54 @@
         "threadId"
       ],
       "title": "ThreadRealtimeTranscriptDoneNotification",
+      "type": "object"
+    },
+    "ThreadRepoCiSessionConfigSetParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "issueTypes": {
+          "description": "Null clears the session override and returns to repo/user config.",
+          "items": {
+            "$ref": "#/definitions/RepoCiIssueType"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RepoCiSessionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Null clears the session override and returns to repo/user config."
+        },
+        "reviewRounds": {
+          "description": "Null clears the session override and returns to repo/user config.",
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadRepoCiSessionConfigSetParams",
+      "type": "object"
+    },
+    "ThreadRepoCiSessionConfigSetResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadRepoCiSessionConfigSetResponse",
       "type": "object"
     },
     "ThreadResumeParams": {

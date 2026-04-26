@@ -171,6 +171,9 @@ pub(super) async fn user_input_or_turn_inner(
                     personality,
                     app_server_client_name: None,
                     app_server_client_version: None,
+                    repo_ci_session_mode: None,
+                    repo_ci_issue_types: None,
+                    repo_ci_review_rounds: None,
                 },
                 None,
             )
@@ -221,6 +224,9 @@ pub(super) async fn user_input_or_turn_inner(
                     personality,
                     app_server_client_name: None,
                     app_server_client_version: None,
+                    repo_ci_session_mode: None,
+                    repo_ci_issue_types: None,
+                    repo_ci_review_rounds: None,
                 },
                 responsesapi_client_metadata,
             )
@@ -1165,6 +1171,24 @@ pub(super) async fn submission_loop(
                 }
                 Op::ReloadUserConfig => {
                     reload_user_config(&sess).await;
+                    false
+                }
+                Op::SetRepoCiSessionConfig {
+                    mode,
+                    issue_types,
+                    review_rounds,
+                } => {
+                    override_turn_context(
+                        &sess,
+                        sub.id.clone(),
+                        SessionSettingsUpdate {
+                            repo_ci_session_mode: Some(mode),
+                            repo_ci_issue_types: Some(issue_types),
+                            repo_ci_review_rounds: Some(review_rounds),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
                     false
                 }
                 Op::ListSkills { cwds, force_reload } => {

@@ -294,6 +294,10 @@ client_request_definitions! {
         params: v2::ThreadMemoryModeSetParams,
         response: v2::ThreadMemoryModeSetResponse,
     },
+    ThreadRepoCiSessionConfigSet => "thread/repoCiSessionConfig/set" {
+        params: v2::ThreadRepoCiSessionConfigSetParams,
+        response: v2::ThreadRepoCiSessionConfigSetResponse,
+    },
     #[experimental("memory/reset")]
     MemoryReset => "memory/reset" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
@@ -1067,6 +1071,7 @@ server_notification_definitions! {
     ModelVerification => "model/verification" (v2::ModelVerificationNotification),
     Warning => "warning" (v2::WarningNotification),
     GuardianWarning => "guardianWarning" (v2::GuardianWarningNotification),
+    RepoCiStatus => "repoCi/status" (v2::RepoCiStatusNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
     FuzzyFileSearchSessionUpdated => "fuzzyFileSearch/sessionUpdated" (FuzzyFileSearchSessionUpdatedNotification),
@@ -1838,6 +1843,36 @@ mod tests {
                 "id": 8,
                 "params": {
                     "threadId": "thr_123"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_repo_ci_session_config_set() -> Result<()> {
+        let request = ClientRequest::ThreadRepoCiSessionConfigSet {
+            request_id: RequestId::Integer(9),
+            params: v2::ThreadRepoCiSessionConfigSetParams {
+                thread_id: "thr_123".to_string(),
+                mode: Some(v2::RepoCiSessionMode::Remote),
+                issue_types: Some(vec![
+                    v2::RepoCiIssueType::Correctness,
+                    v2::RepoCiIssueType::Security,
+                ]),
+                review_rounds: Some(3),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/repoCiSessionConfig/set",
+                "id": 9,
+                "params": {
+                    "threadId": "thr_123",
+                    "mode": "remote",
+                    "issueTypes": ["correctness", "security"],
+                    "reviewRounds": 3
                 }
             }),
             serde_json::to_value(&request)?,

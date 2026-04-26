@@ -15,6 +15,8 @@ use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RepoCiIssueType;
+use codex_protocol::protocol::RepoCiSessionMode;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::SandboxPolicy;
@@ -92,6 +94,11 @@ pub(crate) enum AppCommandView<'a> {
         response: &'a RequestPermissionsResponse,
     },
     ReloadUserConfig,
+    SetRepoCiSessionConfig {
+        mode: &'a Option<RepoCiSessionMode>,
+        issue_types: &'a Option<Vec<RepoCiIssueType>>,
+        review_rounds: &'a Option<u8>,
+    },
     ListSkills {
         cwds: &'a [PathBuf],
         force_reload: bool,
@@ -246,6 +253,18 @@ impl AppCommand {
         Self(Op::ReloadUserConfig)
     }
 
+    pub(crate) fn set_repo_ci_session_config(
+        mode: Option<RepoCiSessionMode>,
+        issue_types: Option<Vec<RepoCiIssueType>>,
+        review_rounds: Option<u8>,
+    ) -> Self {
+        Self(Op::SetRepoCiSessionConfig {
+            mode,
+            issue_types,
+            review_rounds,
+        })
+    }
+
     pub(crate) fn list_skills(cwds: Vec<PathBuf>, force_reload: bool) -> Self {
         Self(Op::ListSkills { cwds, force_reload })
     }
@@ -355,6 +374,15 @@ impl AppCommand {
                 decision,
             },
             Op::PatchApproval { id, decision } => AppCommandView::PatchApproval { id, decision },
+            Op::SetRepoCiSessionConfig {
+                mode,
+                issue_types,
+                review_rounds,
+            } => AppCommandView::SetRepoCiSessionConfig {
+                mode,
+                issue_types,
+                review_rounds,
+            },
             Op::ResolveElicitation {
                 server_name,
                 request_id,

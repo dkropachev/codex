@@ -340,6 +340,7 @@ use codex_protocol::protocol::NetworkApprovalContext;
 use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RepoCiSessionMode;
 use codex_protocol::protocol::RequestUserInputEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
@@ -651,6 +652,9 @@ impl Codex {
             persist_extended_history,
             inherited_shell_snapshot,
             user_shell_override,
+            repo_ci_session_mode: config.repo_ci_session_mode,
+            repo_ci_issue_types: config.repo_ci_issue_types.clone(),
+            repo_ci_review_rounds: config.repo_ci_review_rounds,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.

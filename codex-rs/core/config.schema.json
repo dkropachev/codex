@@ -524,6 +524,9 @@
             "remote_plugin": {
               "type": "boolean"
             },
+            "repo_ci": {
+              "type": "boolean"
+            },
             "request_permissions": {
               "type": "boolean"
             },
@@ -1223,6 +1226,9 @@
         },
         "reasoning_effort": {
           "$ref": "#/definitions/ModelPolicyReasoningEffortToml"
+        },
+        "service_tier": {
+          "$ref": "#/definitions/ServiceTier"
         }
       },
       "type": "object"
@@ -1256,6 +1262,9 @@
         },
         "reasoning_effort": {
           "$ref": "#/definitions/ModelPolicyReasoningEffortToml"
+        },
+        "service_tier": {
+          "$ref": "#/definitions/ServiceTier"
         },
         "source": {
           "default": null,
@@ -2104,6 +2113,118 @@
         }
       ]
     },
+    "RepoCiAutomationToml": {
+      "enum": [
+        "local",
+        "remote",
+        "local-and-remote"
+      ],
+      "type": "string"
+    },
+    "RepoCiIssueType": {
+      "enum": [
+        "correctness",
+        "reliability",
+        "performance",
+        "scalability",
+        "security",
+        "maintainability",
+        "testability",
+        "observability",
+        "compatibility",
+        "ux-config-cli"
+      ],
+      "type": "string"
+    },
+    "RepoCiScopeToml": {
+      "additionalProperties": false,
+      "properties": {
+        "automation": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RepoCiAutomationToml"
+            }
+          ],
+          "description": "Where checks should run."
+        },
+        "enabled": {
+          "description": "Whether repo CI should run automatically for this scope.",
+          "type": "boolean"
+        },
+        "local_test_time_budget_sec": {
+          "description": "Local integration/e2e/ui tests above this budget are not selected for the fast runner.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_local_fix_rounds": {
+          "description": "Maximum number of local fix attempts before surfacing the failure.",
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_remote_fix_rounds": {
+          "description": "Maximum number of remote CI fix attempts before surfacing the failure.",
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_review_fix_rounds": {
+          "description": "Maximum number of repo CI targeted review/fix rounds before surfacing the result.",
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "review_issue_types": {
+          "default": null,
+          "description": "Targeted review issue categories for repo CI preflight review.",
+          "items": {
+            "$ref": "#/definitions/RepoCiIssueType"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "RepoCiToml": {
+      "additionalProperties": false,
+      "properties": {
+        "defaults": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RepoCiScopeToml"
+            }
+          ],
+          "default": null,
+          "description": "Default settings used when no narrower scope matches."
+        },
+        "directories": {
+          "additionalProperties": {
+            "$ref": "#/definitions/RepoCiScopeToml"
+          },
+          "default": {},
+          "description": "Per-directory settings keyed by absolute or user-relative path.",
+          "type": "object"
+        },
+        "github_orgs": {
+          "additionalProperties": {
+            "$ref": "#/definitions/RepoCiScopeToml"
+          },
+          "default": {},
+          "description": "Per-GitHub-organization settings keyed by org name.",
+          "type": "object"
+        },
+        "github_repos": {
+          "additionalProperties": {
+            "$ref": "#/definitions/RepoCiScopeToml"
+          },
+          "default": {},
+          "description": "Per-GitHub-repository settings keyed by `owner/name`.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -2800,6 +2921,9 @@
         "remote_plugin": {
           "type": "boolean"
         },
+        "repo_ci": {
+          "type": "boolean"
+        },
         "request_permissions": {
           "type": "boolean"
         },
@@ -3211,6 +3335,15 @@
       ],
       "default": null,
       "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
+    },
+    "repo_ci": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RepoCiToml"
+        }
+      ],
+      "default": null,
+      "description": "Repository CI learning and validation settings."
     },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",

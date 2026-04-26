@@ -89,6 +89,8 @@ use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
+use codex_protocol::protocol::RepoCiIssueType as CoreRepoCiIssueType;
+use codex_protocol::protocol::RepoCiSessionMode as CoreRepoCiSessionMode;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
@@ -3866,6 +3868,51 @@ pub struct ThreadMemoryModeSetParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadMemoryModeSetResponse {}
 
+v2_enum_from_core! {
+    pub enum RepoCiSessionMode from CoreRepoCiSessionMode {
+        Off,
+        Local,
+        Remote,
+        LocalAndRemote,
+    }
+}
+
+v2_enum_from_core! {
+    pub enum RepoCiIssueType from CoreRepoCiIssueType {
+        Correctness,
+        Reliability,
+        Performance,
+        Scalability,
+        Security,
+        Maintainability,
+        Testability,
+        Observability,
+        Compatibility,
+        UxConfigCli,
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRepoCiSessionConfigSetParams {
+    pub thread_id: String,
+    /// Null clears the session override and returns to repo/user config.
+    #[ts(optional = nullable)]
+    pub mode: Option<RepoCiSessionMode>,
+    /// Null clears the session override and returns to repo/user config.
+    #[ts(optional = nullable)]
+    pub issue_types: Option<Vec<RepoCiIssueType>>,
+    /// Null clears the session override and returns to repo/user config.
+    #[ts(optional = nullable)]
+    pub review_rounds: Option<u8>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRepoCiSessionConfigSetResponse {}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -7561,6 +7608,19 @@ pub struct WarningNotification {
     /// Optional thread target when the warning applies to a specific thread.
     pub thread_id: Option<String>,
     /// Concise warning message for the user.
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RepoCiStatusNotification {
+    pub thread_id: String,
+    pub phase: String,
+    pub state: String,
+    pub scope: String,
+    pub attempt: Option<u8>,
+    pub max_attempts: Option<u8>,
     pub message: String,
 }
 

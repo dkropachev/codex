@@ -28,6 +28,7 @@ use codex_config::config_toml::ModelPolicyToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
+use codex_config::config_toml::RepoCiToml;
 use codex_config::config_toml::validate_model_providers;
 use codex_config::profile_toml::ConfigProfile;
 use codex_config::types::ApprovalsReviewer;
@@ -86,6 +87,8 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::RepoCiIssueType;
+use codex_protocol::protocol::RepoCiSessionMode;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
@@ -582,6 +585,14 @@ pub struct Config {
 
     /// Settings for ghost snapshots (used for undo).
     pub ghost_snapshot: GhostSnapshotConfig,
+
+    /// Repository CI learning and validation settings.
+    pub repo_ci: Option<RepoCiToml>,
+
+    /// Session-only repo CI behavior override.
+    pub repo_ci_session_mode: Option<RepoCiSessionMode>,
+    pub repo_ci_issue_types: Option<Vec<RepoCiIssueType>>,
+    pub repo_ci_review_rounds: Option<u8>,
 
     /// Settings specific to the task-path-based multi-agent tool surface.
     pub multi_agent_v2: MultiAgentV2Config,
@@ -1413,6 +1424,9 @@ pub struct ConfigOverrides {
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub ephemeral: Option<bool>,
+    pub repo_ci_session_mode: Option<RepoCiSessionMode>,
+    pub repo_ci_issue_types: Option<Vec<RepoCiIssueType>>,
+    pub repo_ci_review_rounds: Option<u8>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -1633,6 +1647,9 @@ impl Config {
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             ephemeral,
+            repo_ci_session_mode,
+            repo_ci_issue_types,
+            repo_ci_review_rounds,
             additional_writable_roots,
         } = overrides;
 
@@ -2447,6 +2464,10 @@ impl Config {
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,
+            repo_ci: cfg.repo_ci,
+            repo_ci_session_mode,
+            repo_ci_issue_types,
+            repo_ci_review_rounds,
             multi_agent_v2,
             features,
             suppress_unstable_features_warning: cfg

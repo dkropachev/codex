@@ -50,6 +50,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReadOnlyAccess;
+use codex_protocol::protocol::RepoCiIssueType;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path::normalize_for_path_comparison;
@@ -362,6 +363,10 @@ pub struct ConfigToml {
     #[schemars(schema_with = "crate::schema::features_schema")]
     pub features: Option<FeaturesToml>,
 
+    /// Repository CI learning and validation settings.
+    #[serde(default)]
+    pub repo_ci: Option<RepoCiToml>,
+
     /// Suppress warnings about unstable (under development) features.
     pub suppress_unstable_features_warning: Option<bool>,
 
@@ -419,6 +424,61 @@ pub struct ConfigToml {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RepoCiToml {
+    /// Default settings used when no narrower scope matches.
+    #[serde(default)]
+    pub defaults: Option<RepoCiScopeToml>,
+
+    /// Per-directory settings keyed by absolute or user-relative path.
+    #[serde(default)]
+    pub directories: BTreeMap<String, RepoCiScopeToml>,
+
+    /// Per-GitHub-repository settings keyed by `owner/name`.
+    #[serde(default)]
+    pub github_repos: BTreeMap<String, RepoCiScopeToml>,
+
+    /// Per-GitHub-organization settings keyed by org name.
+    #[serde(default)]
+    pub github_orgs: BTreeMap<String, RepoCiScopeToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct RepoCiScopeToml {
+    /// Whether repo CI should run automatically for this scope.
+    pub enabled: Option<bool>,
+
+    /// Where checks should run.
+    pub automation: Option<RepoCiAutomationToml>,
+
+    /// Local integration/e2e/ui tests above this budget are not selected for the fast runner.
+    pub local_test_time_budget_sec: Option<u64>,
+
+    /// Maximum number of local fix attempts before surfacing the failure.
+    pub max_local_fix_rounds: Option<u8>,
+
+    /// Maximum number of remote CI fix attempts before surfacing the failure.
+    pub max_remote_fix_rounds: Option<u8>,
+
+    /// Targeted review issue categories for repo CI preflight review.
+    #[serde(default)]
+    pub review_issue_types: Option<Vec<RepoCiIssueType>>,
+
+    /// Maximum number of repo CI targeted review/fix rounds before surfacing the result.
+    pub max_review_fix_rounds: Option<u8>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RepoCiAutomationToml {
+    Local,
+    Remote,
+    LocalAndRemote,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -494,6 +554,7 @@ pub struct ModelPolicyRuleToml {
 pub struct ModelPolicyRouteToml {
     pub model: Option<String>,
     pub model_provider: Option<String>,
+    pub service_tier: Option<ServiceTier>,
     pub reasoning_effort: Option<ModelPolicyReasoningEffortToml>,
     pub account_pool: Option<String>,
     pub account: Option<String>,
@@ -1093,6 +1154,7 @@ where
 fn validate_model_policy_route(label: &str, route: &ModelPolicyRouteToml) -> Result<(), String> {
     if route.model.is_none()
         && route.model_provider.is_none()
+        && route.service_tier.is_none()
         && route.reasoning_effort.is_none()
         && route.account_pool.is_none()
         && route.account.is_none()
@@ -1188,6 +1250,7 @@ mod tests {
             source = ["subagent", "module.repo_ci"]
             max_prompt_bytes = 20000
             model = "gpt-5.3-codex-spark"
+            service_tier = "flex"
             reasoning_effort = "inherit"
             account = "spark-account"
 
@@ -1207,6 +1270,7 @@ mod tests {
         );
         assert_eq!(rule.max_prompt_bytes, Some(20000));
         assert_eq!(rule.route.model.as_deref(), Some("gpt-5.3-codex-spark"));
+        assert_eq!(rule.route.service_tier, Some(ServiceTier::Flex));
         assert_eq!(
             rule.route.reasoning_effort,
             Some(ModelPolicyReasoningEffortToml::Inherit)
@@ -1238,6 +1302,20 @@ mod tests {
         .expect_err("ambiguous account target should be rejected");
 
         assert!(err.to_string().contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn rejects_repo_ci_models_config() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+            [repo_ci.defaults]
+            enabled = true
+            models = [{ inherit = true }]
+            "#,
+        )
+        .expect_err("repo_ci.models should be rejected");
+
+        assert!(err.to_string().contains("unknown field `models`"));
     }
 
     #[test]
@@ -1302,5 +1380,27 @@ mod tests {
                 "{message}"
             );
         }
+    }
+
+    #[test]
+    fn parses_repo_ci_github_repo_scope_and_empty_issue_types() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            [repo_ci.github_repos."openai/codex"]
+            enabled = true
+            review_issue_types = []
+            max_review_fix_rounds = 4
+            "#,
+        )
+        .expect("config should parse");
+
+        let repo_ci = config.repo_ci.expect("repo_ci");
+        let scope = repo_ci
+            .github_repos
+            .get("openai/codex")
+            .expect("github repo scope");
+        assert_eq!(scope.enabled, Some(true));
+        assert_eq!(scope.review_issue_types, Some(Vec::new()));
+        assert_eq!(scope.max_review_fix_rounds, Some(4));
     }
 }

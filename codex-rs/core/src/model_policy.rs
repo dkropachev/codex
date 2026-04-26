@@ -43,7 +43,15 @@ impl ModelPolicySource {
                 candidates
             }
             ModelPolicySource::Module(module) => {
-                vec![format!("module.{module}"), (*module).to_string()]
+                let mut candidates = Vec::new();
+                let mut segments = module.split('.').collect::<Vec<_>>();
+                while !segments.is_empty() {
+                    let joined = segments.join(".");
+                    candidates.push(format!("module.{joined}"));
+                    candidates.push(joined);
+                    segments.pop();
+                }
+                candidates
             }
         }
     }
@@ -107,6 +115,9 @@ fn apply_route(config: &mut Config, route: &ModelPolicyRouteToml) -> Result<(), 
     if let Some(model) = &route.model {
         config.model = Some(model.clone());
     }
+    if let Some(service_tier) = route.service_tier {
+        config.service_tier = Some(service_tier);
+    }
     if let Some(reasoning_effort) = route
         .reasoning_effort
         .and_then(codex_config::config_toml::ModelPolicyReasoningEffortToml::as_reasoning_effort)
@@ -160,6 +171,7 @@ fn set_single_account(config: &mut Config, account: &str) {
 mod tests {
     use codex_config::config_toml::ModelPolicyRuleToml;
     use codex_config::config_toml::ModelPolicyToml;
+    use codex_protocol::config_types::ServiceTier;
     use codex_protocol::openai_models::ReasoningEffort;
 
     use super::*;
@@ -230,6 +242,84 @@ mod tests {
         .expect("policy should not fail");
 
         assert_eq!(config.model.as_deref(), Some("parent-model"));
+    }
+
+    #[tokio::test]
+    async fn applies_service_tier_route() {
+        let mut config = config::test_config().await;
+        config.model_policy = Some(ModelPolicyToml {
+            enabled: true,
+            rules: vec![ModelPolicyRuleToml {
+                source: Some(vec!["module.repo_ci.triage".to_string()]),
+                route: ModelPolicyRouteToml {
+                    service_tier: Some(ServiceTier::Flex),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            default_route: None,
+        });
+
+        apply_model_policy(&mut config, ModelPolicySource::Module("repo_ci.triage"), 1)
+            .expect("policy should apply");
+
+        assert_eq!(config.service_tier, Some(ServiceTier::Flex));
+    }
+
+    #[tokio::test]
+    async fn module_source_prefers_phase_specific_rule() {
+        let mut config = config::test_config().await;
+        config.model = Some("parent-model".to_string());
+        config.model_policy = Some(ModelPolicyToml {
+            enabled: true,
+            rules: vec![
+                ModelPolicyRuleToml {
+                    source: Some(vec!["module.repo_ci.triage".to_string()]),
+                    route: ModelPolicyRouteToml {
+                        model: Some("triage-model".to_string()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ModelPolicyRuleToml {
+                    source: Some(vec!["module.repo_ci".to_string()]),
+                    route: ModelPolicyRouteToml {
+                        model: Some("coarse-model".to_string()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ],
+            default_route: None,
+        });
+
+        apply_model_policy(&mut config, ModelPolicySource::Module("repo_ci.triage"), 1)
+            .expect("policy should apply");
+
+        assert_eq!(config.model.as_deref(), Some("triage-model"));
+    }
+
+    #[tokio::test]
+    async fn module_source_falls_back_to_coarse_rule() {
+        let mut config = config::test_config().await;
+        config.model = Some("parent-model".to_string());
+        config.model_policy = Some(ModelPolicyToml {
+            enabled: true,
+            rules: vec![ModelPolicyRuleToml {
+                source: Some(vec!["module.repo_ci".to_string()]),
+                route: ModelPolicyRouteToml {
+                    model: Some("coarse-model".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            default_route: None,
+        });
+
+        apply_model_policy(&mut config, ModelPolicySource::Module("repo_ci.triage"), 1)
+            .expect("policy should apply");
+
+        assert_eq!(config.model.as_deref(), Some("coarse-model"));
     }
 
     #[tokio::test]

@@ -8,6 +8,8 @@
 use super::*;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands;
+use codex_protocol::protocol::RepoCiIssueType;
+use codex_protocol::protocol::RepoCiSessionMode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -28,6 +30,7 @@ const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
 const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
     "'/side' is unavailable while code review is running.";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
+const REPO_CI_USAGE: &str = "Usage: /repo-ci <inherit|off|local|remote|local-and-remote> | /repo-ci issues <inherit|none|comma-list> | /repo-ci rounds <inherit|N>";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -280,6 +283,12 @@ impl ChatWidget {
             }
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
+            }
+            SlashCommand::RepoCi => {
+                self.add_info_message(
+                    REPO_CI_USAGE.to_string(),
+                    Some("This only changes the current session.".to_string()),
+                );
             }
             SlashCommand::Memories => {
                 self.open_memories_popup();
@@ -611,6 +620,72 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot { path: args });
             }
+            SlashCommand::RepoCi if !trimmed.is_empty() => {
+                if let Some(raw_issue_types) = trimmed.strip_prefix("issues ") {
+                    let issue_types = match parse_repo_ci_issue_types(raw_issue_types) {
+                        Ok(issue_types) => issue_types,
+                        Err(message) => {
+                            self.add_error_message(message);
+                            self.add_info_message(REPO_CI_USAGE.to_string(), /*hint*/ None);
+                            return;
+                        }
+                    };
+                    self.submit_op(AppCommand::set_repo_ci_session_config(
+                        /*mode*/ None,
+                        issue_types.clone(),
+                        /*review_rounds*/ None,
+                    ));
+                    self.add_info_message(
+                        repo_ci_issue_types_message(issue_types.as_deref()),
+                        Some(
+                            "This override lasts until the session ends or you run /repo-ci issues inherit."
+                                .to_string(),
+                        ),
+                    );
+                    return;
+                }
+                if let Some(raw_rounds) = trimmed.strip_prefix("rounds ") {
+                    let review_rounds = match parse_repo_ci_review_rounds(raw_rounds) {
+                        Ok(review_rounds) => review_rounds,
+                        Err(message) => {
+                            self.add_error_message(message);
+                            self.add_info_message(REPO_CI_USAGE.to_string(), /*hint*/ None);
+                            return;
+                        }
+                    };
+                    self.submit_op(AppCommand::set_repo_ci_session_config(
+                        /*mode*/ None,
+                        /*issue_types*/ None,
+                        review_rounds,
+                    ));
+                    self.add_info_message(
+                        repo_ci_review_rounds_message(review_rounds),
+                        Some(
+                            "This override lasts until the session ends or you run /repo-ci rounds inherit."
+                                .to_string(),
+                        ),
+                    );
+                    return;
+                }
+                let mode = match parse_repo_ci_session_mode(trimmed) {
+                    Ok(mode) => mode,
+                    Err(message) => {
+                        self.add_error_message(message);
+                        self.add_info_message(REPO_CI_USAGE.to_string(), /*hint*/ None);
+                        return;
+                    }
+                };
+                self.submit_op(AppCommand::set_repo_ci_session_config(
+                    mode, /*issue_types*/ None, /*review_rounds*/ None,
+                ));
+                self.add_info_message(
+                    repo_ci_session_mode_message(mode),
+                    Some(
+                        "This override lasts until the session ends or you run /repo-ci inherit."
+                            .to_string(),
+                    ),
+                );
+            }
             _ => self.dispatch_command(cmd),
         }
         if source == SlashCommandDispatchSource::Live {
@@ -755,6 +830,7 @@ impl ChatWidget {
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
+            | SlashCommand::RepoCi
             | SlashCommand::Memories
             | SlashCommand::Quit
             | SlashCommand::Exit
@@ -812,5 +888,108 @@ impl ChatWidget {
         self.add_error_message(SIDE_REVIEW_UNAVAILABLE_MESSAGE.to_string());
         self.bottom_pane.drain_pending_submission_state();
         false
+    }
+}
+
+fn parse_repo_ci_session_mode(raw: &str) -> Result<Option<RepoCiSessionMode>, String> {
+    let normalized = raw.to_ascii_lowercase();
+    match normalized.as_str() {
+        "inherit" | "default" | "config" => Ok(None),
+        "off" | "disable" | "disabled" => Ok(Some(RepoCiSessionMode::Off)),
+        "local" => Ok(Some(RepoCiSessionMode::Local)),
+        "remote" => Ok(Some(RepoCiSessionMode::Remote)),
+        "local-and-remote" | "both" => Ok(Some(RepoCiSessionMode::LocalAndRemote)),
+        other => Err(format!("Unknown repo CI mode `{other}`.")),
+    }
+}
+
+fn repo_ci_session_mode_message(mode: Option<RepoCiSessionMode>) -> String {
+    match mode {
+        None => "Repo CI now inherits repo/user config for this session.".to_string(),
+        Some(RepoCiSessionMode::Off) => "Repo CI is off for this session.".to_string(),
+        Some(RepoCiSessionMode::Local) => "Repo CI is local-only for this session.".to_string(),
+        Some(RepoCiSessionMode::Remote) => "Repo CI is remote-only for this session.".to_string(),
+        Some(RepoCiSessionMode::LocalAndRemote) => {
+            "Repo CI runs local and remote checks for this session.".to_string()
+        }
+    }
+}
+
+fn parse_repo_ci_issue_types(raw: &str) -> Result<Option<Vec<RepoCiIssueType>>, String> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    if matches!(normalized.as_str(), "inherit" | "default" | "config") {
+        return Ok(None);
+    }
+    if normalized == "none" {
+        return Ok(Some(Vec::new()));
+    }
+    normalized
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| match value {
+            "correctness" => Ok(RepoCiIssueType::Correctness),
+            "reliability" => Ok(RepoCiIssueType::Reliability),
+            "performance" => Ok(RepoCiIssueType::Performance),
+            "scalability" => Ok(RepoCiIssueType::Scalability),
+            "security" => Ok(RepoCiIssueType::Security),
+            "maintainability" => Ok(RepoCiIssueType::Maintainability),
+            "testability" => Ok(RepoCiIssueType::Testability),
+            "observability" => Ok(RepoCiIssueType::Observability),
+            "compatibility" => Ok(RepoCiIssueType::Compatibility),
+            "ux-config-cli" => Ok(RepoCiIssueType::UxConfigCli),
+            other => Err(format!("Unknown repo CI issue type `{other}`.")),
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+fn parse_repo_ci_review_rounds(raw: &str) -> Result<Option<u8>, String> {
+    let trimmed = raw.trim();
+    if matches!(trimmed, "inherit" | "default" | "config") {
+        return Ok(None);
+    }
+    trimmed
+        .parse::<u8>()
+        .map(Some)
+        .map_err(|_| format!("Invalid repo CI review round count `{trimmed}`."))
+}
+
+fn repo_ci_issue_types_message(issue_types: Option<&[RepoCiIssueType]>) -> String {
+    match issue_types {
+        None => "Repo CI issue types now inherit repo/user config for this session.".to_string(),
+        Some([]) => "Repo CI targeted review is disabled for this session.".to_string(),
+        Some(values) => format!(
+            "Repo CI targeted review now scopes this session to {}.",
+            values
+                .iter()
+                .map(|issue_type| repo_ci_issue_type_slug(*issue_type))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+fn repo_ci_review_rounds_message(review_rounds: Option<u8>) -> String {
+    match review_rounds {
+        None => "Repo CI review rounds now inherit repo/user config for this session.".to_string(),
+        Some(review_rounds) => {
+            format!("Repo CI targeted review now uses {review_rounds} round(s) for this session.")
+        }
+    }
+}
+
+fn repo_ci_issue_type_slug(issue_type: RepoCiIssueType) -> &'static str {
+    match issue_type {
+        RepoCiIssueType::Correctness => "correctness",
+        RepoCiIssueType::Reliability => "reliability",
+        RepoCiIssueType::Performance => "performance",
+        RepoCiIssueType::Scalability => "scalability",
+        RepoCiIssueType::Security => "security",
+        RepoCiIssueType::Maintainability => "maintainability",
+        RepoCiIssueType::Testability => "testability",
+        RepoCiIssueType::Observability => "observability",
+        RepoCiIssueType::Compatibility => "compatibility",
+        RepoCiIssueType::UxConfigCli => "ux-config-cli",
     }
 }
