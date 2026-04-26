@@ -2256,6 +2256,7 @@ async fn set_rate_limits_retains_previous_credits() {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        repo_ci_session_mode: None,
     };
 
     let mut state = SessionState::new(session_configuration);
@@ -2360,6 +2361,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        repo_ci_session_mode: None,
     };
 
     let mut state = SessionState::new(session_configuration);
@@ -2809,6 +2811,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        repo_ci_session_mode: None,
     }
 }
 
@@ -3135,6 +3138,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        repo_ci_session_mode: None,
     };
 
     let (tx_event, _rx_event) = async_channel::unbounded();
@@ -3241,6 +3245,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        repo_ci_session_mode: None,
     };
     let per_turn_config =
         Session::build_per_turn_config(&session_configuration, session_configuration.cwd.clone());
@@ -3461,6 +3466,7 @@ async fn make_session_with_config_and_rx(
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        repo_ci_session_mode: None,
     };
 
     let (tx_event, rx_event) = async_channel::unbounded();
@@ -4604,6 +4610,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        repo_ci_session_mode: None,
     };
     let per_turn_config =
         Session::build_per_turn_config(&session_configuration, session_configuration.cwd.clone());

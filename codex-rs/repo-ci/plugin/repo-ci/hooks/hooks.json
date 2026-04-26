@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-repo-ci hook-user-prompt-submit",
+            "timeout": 30,
+            "statusMessage": "Preparing Repo CI"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-repo-ci hook-stop",
+            "timeout": 600,
+            "statusMessage": "Checking Repo CI"
+          }
+        ]
+      }
+    ]
+  }
+}

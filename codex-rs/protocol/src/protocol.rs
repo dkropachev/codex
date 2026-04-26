@@ -740,6 +740,14 @@ pub enum Op {
     /// enable/disable state) without restarting the thread.
     ReloadUserConfig,
 
+    /// Override repository CI automation for this session.
+    ///
+    /// `None` clears the session override and returns to repo/user config.
+    SetRepoCiSessionMode {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<RepoCiSessionMode>,
+    },
+
     /// Request the list of skills for the provided `cwd` values or the session default.
     ListSkills {
         /// Working directories to scope repo skills discovery.
@@ -901,6 +909,7 @@ impl Op {
             Self::ListMcpTools => "list_mcp_tools",
             Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
             Self::ReloadUserConfig => "reload_user_config",
+            Self::SetRepoCiSessionMode { .. } => "set_repo_ci_session_mode",
             Self::ListSkills { .. } => "list_skills",
             Self::Compact => "compact",
             Self::DropMemories => "drop_memories",
@@ -1531,6 +1540,9 @@ pub enum EventMsg {
     /// Warning issued by the guardian automatic approval reviewer.
     GuardianWarning(WarningEvent),
 
+    /// Structured lifecycle update for automatic repository CI checks.
+    RepoCiStatus(RepoCiStatusEvent),
+
     /// Realtime conversation lifecycle start event.
     RealtimeConversationStarted(RealtimeConversationStartedEvent),
 
@@ -1820,6 +1832,9 @@ pub struct HookRunSummary {
     pub source_path: AbsolutePathBuf,
     #[serde(default)]
     pub source: HookSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "string | null")]
+    pub plugin_id: Option<String>,
     pub display_order: i64,
     pub status: HookRunStatus,
     pub status_message: Option<String>,
@@ -2180,6 +2195,57 @@ impl ErrorEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct WarningEvent {
     pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum RepoCiPhase {
+    Learning,
+    Local,
+    Remote,
+    Triage,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum RepoCiState {
+    Started,
+    Passed,
+    Failed,
+    Skipped,
+    Ignored,
+    Retrying,
+    Exhausted,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum RepoCiScope {
+    Local,
+    Remote,
+    None,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RepoCiStatusEvent {
+    pub phase: RepoCiPhase,
+    pub state: RepoCiState,
+    pub scope: RepoCiScope,
+    pub attempt: Option<u8>,
+    pub max_attempts: Option<u8>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RepoCiSessionMode {
+    Off,
+    Local,
+    Remote,
+    LocalAndRemote,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

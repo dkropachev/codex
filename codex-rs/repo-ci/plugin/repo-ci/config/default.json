@@ -1,0 +1,7 @@
+{
+  "enabled": false,
+  "automation": "local-and-remote",
+  "retryLimit": 2,
+  "localTestTimeBudgetSec": 900,
+  "models": []
+}

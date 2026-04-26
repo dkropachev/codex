@@ -11,7 +11,9 @@ use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
 use codex_cli::WindowsCommand;
 use codex_cli::read_api_key_from_stdin;
+use codex_cli::run_list_accounts;
 use codex_cli::run_login_status;
+use codex_cli::run_login_with_account_refresh;
 use codex_cli::run_login_with_api_key;
 use codex_cli::run_login_with_chatgpt;
 use codex_cli::run_login_with_device_code;
@@ -115,6 +117,9 @@ enum Subcommand {
 
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
+
+    /// Manage configured accounts and account pools.
+    Account(AccountCommand),
 
     /// Manage external MCP servers for Codex.
     Mcp(McpCli),
@@ -379,6 +384,10 @@ struct LoginCommand {
     #[arg(long = "device-auth")]
     use_device_code: bool,
 
+    /// Store ChatGPT credentials under a named account.
+    #[arg(long = "account", value_name = "ID")]
+    account: Option<String>,
+
     /// EXPERIMENTAL: Use custom OAuth issuer base URL (advanced)
     /// Override the OAuth issuer base URL (advanced)
     #[arg(long = "experimental_issuer", value_name = "URL", hide = true)]
@@ -402,6 +411,47 @@ enum LoginSubcommand {
 struct LogoutCommand {
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
+
+    /// Remove credentials for a named account.
+    #[arg(long = "account", value_name = "ID", conflicts_with = "all")]
+    account: Option<String>,
+
+    /// Remove default credentials and all named-account credentials.
+    #[arg(long = "all")]
+    all: bool,
+}
+
+#[derive(Debug, Parser)]
+struct AccountCommand {
+    #[clap(skip)]
+    config_overrides: CliConfigOverrides,
+
+    #[command(subcommand)]
+    subcommand: AccountSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum AccountSubcommand {
+    /// List default, named, and configured logical pool accounts.
+    List(AccountListCommand),
+
+    /// Refresh ChatGPT tokens and usage snapshots for an account or pool.
+    Refresh(AccountRefreshCommand),
+}
+
+#[derive(Debug, Parser)]
+struct AccountListCommand {
+    #[arg(long = "json")]
+    json: bool,
+}
+
+#[derive(Debug, Parser)]
+struct AccountRefreshCommand {
+    #[arg(value_name = "ID", conflicts_with = "pool")]
+    id: Option<String>,
+
+    #[arg(long = "pool", value_name = "POOL_ID")]
+    pool: Option<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -716,6 +766,10 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
+    if try_run_plugin_cli_command_from_process_args().await? {
+        return Ok(());
+    }
+
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
@@ -950,6 +1004,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     if login_cli.use_device_code {
                         run_login_with_device_code(
                             login_cli.config_overrides,
+                            login_cli.account,
                             login_cli.issuer_base_url,
                             login_cli.client_id,
                         )
@@ -960,10 +1015,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                         );
                         std::process::exit(1);
                     } else if login_cli.with_api_key {
+                        if login_cli.account.is_some() {
+                            eprintln!("--account cannot be used with --with-api-key");
+                            std::process::exit(1);
+                        }
                         let api_key = read_api_key_from_stdin();
                         run_login_with_api_key(login_cli.config_overrides, api_key).await;
                     } else {
-                        run_login_with_chatgpt(login_cli.config_overrides).await;
+                        run_login_with_chatgpt(login_cli.config_overrides, login_cli.account).await;
                     }
                 }
             }
@@ -978,7 +1037,36 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 &mut logout_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            run_logout(logout_cli.config_overrides).await;
+            run_logout(
+                logout_cli.config_overrides,
+                logout_cli.account,
+                logout_cli.all,
+            )
+            .await;
+        }
+        Some(Subcommand::Account(mut account_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "account",
+            )?;
+            prepend_config_flags(
+                &mut account_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            match account_cli.subcommand {
+                AccountSubcommand::List(command) => {
+                    run_list_accounts(account_cli.config_overrides, command.json).await;
+                }
+                AccountSubcommand::Refresh(command) => {
+                    run_login_with_account_refresh(
+                        account_cli.config_overrides,
+                        command.id,
+                        command.pool,
+                    )
+                    .await;
+                }
+            }
         }
         Some(Subcommand::Completion(completion_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -1223,6 +1311,85 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+async fn try_run_plugin_cli_command_from_process_args() -> anyhow::Result<bool> {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    let Some((name, invocation_args, root_config_overrides)) =
+        plugin_command_candidate_from_raw_args(&args)
+    else {
+        return Ok(false);
+    };
+    try_run_plugin_cli_command(&name, &invocation_args, &root_config_overrides).await
+}
+
+fn plugin_command_candidate_from_raw_args(
+    raw_args: &[String],
+) -> Option<(String, Vec<String>, CliConfigOverrides)> {
+    let mut root_config_overrides = CliConfigOverrides::default();
+    let mut index = 0;
+    while index < raw_args.len() {
+        let arg = &raw_args[index];
+        if arg == "-c" || arg == "--config" {
+            if let Some(value) = raw_args.get(index + 1) {
+                root_config_overrides.raw_overrides.push(value.clone());
+            }
+            index += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("-c=") {
+            root_config_overrides.raw_overrides.push(value.to_string());
+            index += 1;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--config=") {
+            root_config_overrides.raw_overrides.push(value.to_string());
+            index += 1;
+            continue;
+        }
+        if arg.starts_with('-') {
+            index += 1;
+            continue;
+        }
+        return Some((
+            arg.clone(),
+            raw_args[index + 1..].to_vec(),
+            root_config_overrides,
+        ));
+    }
+    None
+}
+
+async fn try_run_plugin_cli_command(
+    name: &str,
+    args: &[String],
+    root_config_overrides: &CliConfigOverrides,
+) -> anyhow::Result<bool> {
+    let cli_overrides = root_config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let config = Config::load_with_cli_overrides(cli_overrides).await?;
+    let plugins_manager = codex_core::plugins::PluginsManager::new(config.codex_home.to_path_buf());
+    let commands = plugins_manager
+        .plugins_for_config(&config)
+        .await
+        .effective_commands();
+    let Some(command) = codex_core_plugins::command::find_plugin_command(
+        &commands,
+        None,
+        codex_core_plugins::command::PluginCommandSurface::Cli,
+        name,
+    ) else {
+        return Ok(false);
+    };
+    let output =
+        codex_core_plugins::command::run_plugin_command(command, args, &config.cwd).await?;
+    print!("{}", output.stdout);
+    eprint!("{}", output.stderr);
+    if output.exit_code != Some(0) {
+        std::process::exit(output.exit_code.unwrap_or(1));
+    }
+    Ok(true)
 }
 
 async fn run_exec_server_command(
@@ -1627,6 +1794,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         shared,
         approval_policy,
         web_search,
+        repo_ci,
         prompt,
         config_overrides,
         ..
@@ -1639,6 +1807,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     }
     if web_search {
         interactive.web_search = true;
+    }
+    if repo_ci.is_some() {
+        interactive.repo_ci = repo_ci;
     }
     if let Some(prompt) = prompt {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
@@ -1720,6 +1891,83 @@ mod tests {
         };
 
         finalize_fork_interactive(interactive, root_overrides, session_id, last, all, fork_cli)
+    }
+
+    #[test]
+    fn login_accepts_named_device_auth_account() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "login", "--account", "work", "--device-auth"])
+                .expect("parse should succeed");
+
+        let Some(Subcommand::Login(login)) = cli.subcommand else {
+            panic!("expected login subcommand");
+        };
+
+        assert_eq!(login.account.as_deref(), Some("work"));
+        assert!(login.use_device_code);
+    }
+
+    #[test]
+    fn logout_account_conflicts_with_all_accounts() {
+        let err = MultitoolCli::try_parse_from(["codex", "logout", "--account", "work", "--all"])
+            .expect_err("conflicting account logout flags should be rejected");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn account_list_json_parses() {
+        let cli = MultitoolCli::try_parse_from(["codex", "account", "list", "--json"])
+            .expect("parse should succeed");
+
+        let Some(Subcommand::Account(AccountCommand {
+            subcommand: AccountSubcommand::List(list),
+            ..
+        })) = cli.subcommand
+        else {
+            panic!("expected account list subcommand");
+        };
+
+        assert!(list.json);
+    }
+
+    #[test]
+    fn account_refresh_accepts_account_or_pool_but_not_both() {
+        let account_cli = MultitoolCli::try_parse_from(["codex", "account", "refresh", "work"])
+            .expect("parse should succeed");
+        let Some(Subcommand::Account(AccountCommand {
+            subcommand: AccountSubcommand::Refresh(account_refresh),
+            ..
+        })) = account_cli.subcommand
+        else {
+            panic!("expected account refresh subcommand");
+        };
+        assert_eq!(account_refresh.id.as_deref(), Some("work"));
+        assert_eq!(account_refresh.pool, None);
+
+        let pool_cli =
+            MultitoolCli::try_parse_from(["codex", "account", "refresh", "--pool", "codex-pro"])
+                .expect("parse should succeed");
+        let Some(Subcommand::Account(AccountCommand {
+            subcommand: AccountSubcommand::Refresh(pool_refresh),
+            ..
+        })) = pool_cli.subcommand
+        else {
+            panic!("expected account refresh subcommand");
+        };
+        assert_eq!(pool_refresh.id, None);
+        assert_eq!(pool_refresh.pool.as_deref(), Some("codex-pro"));
+
+        let err = MultitoolCli::try_parse_from([
+            "codex",
+            "account",
+            "refresh",
+            "work",
+            "--pool",
+            "codex-pro",
+        ])
+        .expect_err("conflicting account refresh target flags should be rejected");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -2461,6 +2709,41 @@ mod tests {
             panic!("expected features disable");
         };
         assert_eq!(feature, "shell_tool");
+    }
+
+    #[test]
+    fn plugin_command_candidate_preserves_arguments() {
+        let candidate = plugin_command_candidate_from_raw_args(&[
+            "-c".to_string(),
+            "features.plugins=true".to_string(),
+            "repo-ci".to_string(),
+            "enable".to_string(),
+            "--cwd".to_string(),
+            "--automation".to_string(),
+            "local".to_string(),
+        ])
+        .expect("candidate");
+        assert_eq!(candidate.0, "repo-ci");
+        assert_eq!(
+            candidate.1,
+            vec![
+                "enable".to_string(),
+                "--cwd".to_string(),
+                "--automation".to_string(),
+                "local".to_string()
+            ]
+        );
+        assert_eq!(
+            candidate.2.raw_overrides,
+            vec!["features.plugins=true".to_string()]
+        );
+    }
+
+    #[test]
+    fn positional_prompt_still_parses_as_interactive_prompt() {
+        let cli = MultitoolCli::try_parse_from(["codex", "hello"]).expect("parse should succeed");
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.prompt.as_deref(), Some("hello"));
     }
 
     #[test]

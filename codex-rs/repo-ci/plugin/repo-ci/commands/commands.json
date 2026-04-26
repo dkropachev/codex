@@ -1,0 +1,12 @@
+{
+  "commands": [
+    {
+      "name": "repo-ci",
+      "description": "Manage and run repository CI automation.",
+      "program": "codex-repo-ci",
+      "args": [],
+      "surfaces": ["cli", "slash", "app-server"],
+      "usage": "repo-ci <enable|disable|trust|learn|prepare|status|run|watch-pr|models|mode>"
+    }
+  ]
+}

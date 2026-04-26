@@ -48,6 +48,26 @@ Use `$` in the composer to insert a ChatGPT connector; the popover lists accessi
 apps. The `/apps` command lists available and installed apps. Connected apps appear first
 and are labeled as connected; others are marked as can be installed.
 
+## Account Pools
+
+`account_pool` can group multiple bounded Codex subscription accounts into one
+logical account. Pool members are loaded from named credential directories under
+`~/.codex/accounts/<id>/auth.json`; API-key credentials are not valid pool
+members.
+
+```toml
+[account_pool]
+enabled = true
+default_pool = "codex-pro"
+
+[account_pool.pools.codex-pro]
+provider = "openai"
+policy = "load_balance"
+accounts = ["work-pro", "personal-pro"]
+```
+
+Supported policies are `drain` and `load_balance`.
+
 ## Notify
 
 Codex can run a notification hook when the agent finishes a turn. See the configuration reference for the latest notification settings:
@@ -55,6 +75,62 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 - https://developers.openai.com/codex/config-reference
 
 When Codex knows which client started the turn, the legacy notify JSON payload also includes a top-level `client` field. The TUI reports `codex-tui`, and the app server reports the `clientInfo.name` value from `initialize`.
+
+## Repo CI
+
+Repo CI is an experimental feature flag and command surface for learning a
+repository's local and remote validation steps.
+
+```toml
+[features]
+repo_ci = true
+
+[repo_ci.defaults]
+enabled = true
+automation = "local-and-remote"
+local_test_time_budget_sec = 300
+max_local_fix_rounds = 3
+max_remote_fix_rounds = 2
+models = [
+  { inherit = true },
+  { model = "gpt-5.3-codex-spark", reasoning_effort = "high" },
+]
+```
+
+Use `codex repo-ci enable --cwd` to enable it for the current repository, and
+`codex repo-ci learn --cwd` to discover CI files, write the generated runner
+script under Codex home, prepare the local environment, and validate the fast
+local checks. The learner records the source files and SHA-256 hashes it used;
+`codex repo-ci status --cwd` reports when those files changed and the repository
+should be learned again.
+
+For one interactive session, override the configured behavior with
+`codex --repo-ci off|local|remote|local-and-remote` at startup or
+`/repo-ci inherit|off|local|remote|local-and-remote` inside the TUI. `inherit`
+clears the session override and returns to the configured repo/user scopes.
+
+When repo CI is enabled for a trusted repository, Codex compares the worktree at
+the start and end of each regular turn. If the turn changed files, Codex runs
+the learned fast local runner before completing the turn. Failing local checks
+are fed back into the same turn for repair until the configured local retry
+limit is reached. Progress is emitted as structured repo CI status events rather
+than generic warnings.
+
+When a failure occurs, Codex asks the configured repo CI model chain to classify
+the failure as `related`, `unrelated`, `whole_suite`, or `unknown`. Candidate
+models are tried in order; if a candidate fails because of context limits,
+availability, or another model-call error, Codex falls back to the next
+candidate. If no model result is available, Codex uses deterministic fallback
+classification and never ignores `unknown` or `whole_suite` failures.
+
+Remote checks use the GitHub CLI. `codex repo-ci watch-pr --cwd` runs through
+the existing `gh` authentication and fails if `gh auth status` is not usable.
+Automatic remote checks run after local checks pass when automation includes
+`remote`; Codex uses existing `gh` credentials, pushes the current branch when a
+PR is linked, watches GitHub checks, ignores clearly unrelated partial failures,
+and requests repair for related, unknown, or whole-suite failures until the
+configured remote retry limit is reached. Whole-suite failures are never treated
+as unrelated.
 
 ## JSON Schema
 

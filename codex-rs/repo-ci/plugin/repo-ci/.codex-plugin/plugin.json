@@ -1,0 +1,20 @@
+{
+  "name": "repo-ci",
+  "version": "0.1.0",
+  "description": "Repository CI automation for Codex.",
+  "hooks": "./hooks/hooks.json",
+  "commands": "./commands/commands.json",
+  "configSchema": "./config/schema.json",
+  "defaultConfig": "./config/default.json",
+  "interface": {
+    "displayName": "Repo CI",
+    "shortDescription": "Run and repair repository checks from Codex.",
+    "longDescription": "Learns local repository checks, watches pull request checks, and can feed failures back into Codex for repair.",
+    "developerName": "OpenAI",
+    "category": "Developer Tools",
+    "capabilities": [
+      "repository checks",
+      "pull request checks"
+    ]
+  }
+}

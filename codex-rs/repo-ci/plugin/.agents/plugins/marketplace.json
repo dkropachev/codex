@@ -1,0 +1,20 @@
+{
+  "name": "openai-bundled",
+  "interface": {
+    "displayName": "OpenAI Bundled"
+  },
+  "plugins": [
+    {
+      "name": "repo-ci",
+      "source": {
+        "source": "local",
+        "path": "./repo-ci"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT",
+        "authentication": "ON_USE"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

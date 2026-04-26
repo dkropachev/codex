@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "automation": {
+      "type": "string",
+      "enum": ["local", "remote", "local-and-remote"],
+      "default": "local-and-remote"
+    },
+    "retryLimit": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 2
+    },
+    "localTestTimeBudgetSec": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 900
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "reasoningEffort": {
+            "type": "string"
+          }
+        },
+        "required": ["model"]
+      },
+      "default": []
+    }
+  }
+}
