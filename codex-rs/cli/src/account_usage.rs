@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
+use tokio::task::JoinSet;
 
 use codex_backend_client::Client as BackendClient;
 use codex_config::config_toml::AccountPoolDefinitionToml;
@@ -20,7 +22,7 @@ enum AccountUsageSource {
     PoolMember { pool_id: String },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct AccountUsageTarget {
     id: String,
     source: AccountUsageSource,
@@ -37,11 +39,23 @@ pub(crate) async fn run_account_limits(
         return Ok(());
     }
 
-    for (index, target) in targets.iter().enumerate() {
+    let mut reports = vec![String::new(); targets.len()];
+    let mut tasks = JoinSet::new();
+    for (index, target) in targets.into_iter().enumerate() {
+        let config = config.clone();
+        tasks.spawn(async move { (index, render_account_usage(&config, &target).await) });
+    }
+
+    while let Some(result) = tasks.join_next().await {
+        let (index, report) = result.map_err(|err| anyhow::anyhow!(err))?;
+        reports[index] = report;
+    }
+
+    for (index, report) in reports.iter().enumerate() {
         if index > 0 {
             println!();
         }
-        print_account_usage(&config, target).await;
+        print!("{report}");
     }
 
     Ok(())
@@ -135,8 +149,9 @@ fn account_codex_home(codex_home: &Path, account_id: &str) -> PathBuf {
     codex_home.join("accounts").join(account_id)
 }
 
-async fn print_account_usage(config: &Config, target: &AccountUsageTarget) {
-    print_account_header(target);
+async fn render_account_usage(config: &Config, target: &AccountUsageTarget) -> String {
+    let mut output = String::new();
+    write_account_header(&mut output, target);
     let manager = AuthManager::new(
         target.codex_home.clone(),
         /*enable_codex_api_key_env*/ false,
@@ -144,59 +159,71 @@ async fn print_account_usage(config: &Config, target: &AccountUsageTarget) {
         Some(config.chatgpt_base_url.clone()),
     );
     let Some(auth) = manager.auth().await else {
-        println!("  credentials: empty");
-        println!("  limits: unavailable");
-        return;
+        output.push_str("  credentials: empty\n");
+        output.push_str("  limits: unavailable\n");
+        return output;
     };
 
-    print_auth_summary(&auth);
+    write_auth_summary(&mut output, &auth);
     if !auth.uses_codex_backend() {
-        println!("  limits: unavailable: chatgpt authentication required");
-        return;
+        output.push_str("  limits: unavailable: chatgpt authentication required\n");
+        return output;
     }
 
     let usage = match BackendClient::from_auth(config.chatgpt_base_url.clone(), &auth) {
         Ok(client) => client.get_rate_limits_many().await,
         Err(err) => {
-            println!("  limits: error: failed to construct backend client: {err}");
-            return;
+            let _ = writeln!(
+                output,
+                "  limits: error: failed to construct backend client: {err}"
+            );
+            return output;
         }
     };
     match usage {
         Ok(snapshots) if snapshots.is_empty() => {
-            println!("  limits: unavailable");
+            output.push_str("  limits: unavailable\n");
         }
         Ok(snapshots) => {
             for snapshot in snapshots {
-                print_usage_limit(&snapshot);
+                write_usage_limit(&mut output, &snapshot);
             }
         }
         Err(err) => {
-            println!("  limits: error: {err}");
+            let _ = writeln!(output, "  limits: error: {err}");
         }
     }
+
+    output
 }
 
-fn print_account_header(target: &AccountUsageTarget) {
+fn write_account_header(output: &mut String, target: &AccountUsageTarget) {
     match &target.source {
-        AccountUsageSource::Default => println!("{} (default)", target.id),
-        AccountUsageSource::Named => println!("{}", target.id),
+        AccountUsageSource::Default => {
+            let _ = writeln!(output, "{} (default)", target.id);
+        }
+        AccountUsageSource::Named => {
+            let _ = writeln!(output, "{}", target.id);
+        }
         AccountUsageSource::PoolMember { pool_id } => {
-            println!("{} (pool: {pool_id})", target.id);
+            let _ = writeln!(output, "{} (pool: {pool_id})", target.id);
         }
     }
 }
 
-fn print_auth_summary(auth: &CodexAuth) {
-    println!(
+fn write_auth_summary(output: &mut String, auth: &CodexAuth) {
+    let _ = writeln!(
+        output,
         "  email: {}",
         auth.get_account_email().unwrap_or("-".to_string())
     );
-    println!(
+    let _ = writeln!(
+        output,
         "  account_id: {}",
         auth.get_account_id().unwrap_or("-".to_string())
     );
-    println!(
+    let _ = writeln!(
+        output,
         "  plan: {}",
         auth.account_plan_type()
             .map(plan_type_name)
@@ -222,18 +249,19 @@ fn plan_type_name(plan_type: PlanType) -> String {
     .to_string()
 }
 
-fn print_usage_limit(snapshot: &RateLimitSnapshot) {
+fn write_usage_limit(output: &mut String, snapshot: &RateLimitSnapshot) {
     let name = snapshot
         .limit_name
         .as_deref()
         .or(snapshot.limit_id.as_deref())
         .unwrap_or("Codex");
-    println!("  {name}: available");
+    let _ = writeln!(output, "  {name}: available");
     for (fallback, window) in [("5h", &snapshot.primary), ("weekly", &snapshot.secondary)] {
         let Some(window) = window else {
             continue;
         };
-        println!(
+        let _ = writeln!(
+            output,
             "    {}: {:.0}% used; refreshes {}",
             window_display_name(window, fallback),
             window.used_percent,
