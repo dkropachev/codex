@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+expression: rendered
+---
+• Usage: /repo-ci setup | /repo-ci learn | /repo-ci <inherit|off|local|remote|local-and-remote> | /repo-ci issues <inherit|none|comma-list> | /repo-ci rounds <inherit|N> Use /repo-ci setup to enable repo CI for this repo and learn it, or use the other forms to change only the current session.

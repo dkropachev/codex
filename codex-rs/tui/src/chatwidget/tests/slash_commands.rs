@@ -744,6 +744,52 @@ async fn repo_ci_slash_command_sets_session_mode() {
 }
 
 #[tokio::test]
+async fn repo_ci_slash_command_without_args_shows_usage_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/repo-ci");
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one info message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert_chatwidget_snapshot!("repo_ci_usage_info_message", rendered);
+    assert!(rendered.contains("/repo-ci setup"));
+    assert!(rendered.contains("/repo-ci learn"));
+}
+
+#[tokio::test]
+async fn repo_ci_setup_slash_command_runs_enable_and_learn() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/repo-ci setup");
+
+    match op_rx.try_recv() {
+        Ok(Op::RunUserShellCommand { command }) => {
+            assert!(command.contains("repo-ci enable --cwd"));
+            assert!(command.contains("repo-ci learn --cwd"));
+        }
+        other => panic!("expected RunUserShellCommand op, got {other:?}"),
+    }
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/repo-ci setup");
+}
+
+#[tokio::test]
+async fn repo_ci_learn_slash_command_runs_learning() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/repo-ci learn");
+
+    match op_rx.try_recv() {
+        Ok(Op::RunUserShellCommand { command }) => {
+            assert!(command.contains("repo-ci learn --cwd"));
+            assert!(!command.contains("repo-ci enable --cwd"));
+        }
+        other => panic!("expected RunUserShellCommand op, got {other:?}"),
+    }
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/repo-ci learn");
+}
+
+#[tokio::test]
 async fn repo_ci_issues_slash_command_sets_session_config() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
 

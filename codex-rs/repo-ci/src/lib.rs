@@ -123,11 +123,26 @@ pub struct LearnOptions {
     pub local_test_time_budget_sec: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LearnedPlan {
+    pub prepare_steps: Vec<RepoCiStep>,
+    pub fast_steps: Vec<RepoCiStep>,
+    pub full_steps: Vec<RepoCiStep>,
+}
+
 #[derive(Debug, Clone)]
 pub struct LearnOutcome {
     pub paths: RepoCiPaths,
     pub manifest: RepoCiManifest,
     pub validation_exit_code: Option<i32>,
+    pub validation_phase: ValidationPhase,
+    pub validation_run: CapturedRun,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidationPhase {
+    Prepare,
+    Fast,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,9 +221,27 @@ pub fn paths_for_repo(codex_home: &Path, cwd: &Path) -> Result<RepoCiPaths> {
 
 pub fn learn(codex_home: &Path, cwd: &Path, options: LearnOptions) -> Result<LearnOutcome> {
     let paths = paths_for_repo(codex_home, cwd)?;
-    fs::create_dir_all(&paths.state_dir)?;
-    let learning_sources = collect_sources(&paths.repo_root)?;
     let (prepare_steps, fast_steps, full_steps) = infer_steps(&paths.repo_root)?;
+    learn_with_plan(
+        codex_home,
+        cwd,
+        options,
+        LearnedPlan {
+            prepare_steps,
+            fast_steps,
+            full_steps,
+        },
+    )
+}
+
+pub fn learn_with_plan(
+    codex_home: &Path,
+    cwd: &Path,
+    options: LearnOptions,
+    plan: LearnedPlan,
+) -> Result<LearnOutcome> {
+    let paths = paths_for_repo(codex_home, cwd)?;
+    fs::create_dir_all(&paths.state_dir)?;
     let mut manifest = RepoCiManifest {
         version: MANIFEST_VERSION,
         repo_key: repo_key(&paths.repo_root),
@@ -216,24 +249,24 @@ pub fn learn(codex_home: &Path, cwd: &Path, options: LearnOptions) -> Result<Lea
         automation: options.automation,
         local_test_time_budget_sec: options.local_test_time_budget_sec,
         learned_at_unix_sec: unix_now(),
-        learning_sources,
+        learning_sources: collect_sources(&paths.repo_root)?,
         inferred_issue_types: infer_issue_types(&paths.repo_root),
-        prepare_steps,
-        fast_steps,
-        full_steps,
+        prepare_steps: plan.prepare_steps,
+        fast_steps: plan.fast_steps,
+        full_steps: plan.full_steps,
         validation: ValidationStatus::NotRun,
     };
     write_runner(&paths.runner_path, &manifest)?;
     write_manifest(&paths.manifest_path, &manifest)?;
 
-    let prepare_status = run_runner(&paths, "prepare")?;
-    let validation_status = if prepare_status.success() {
-        run_runner(&paths, "fast")?
+    let prepare_run = capture_runner(&paths, "prepare")?;
+    let (validation_phase, validation_run) = if prepare_run.status.success {
+        (ValidationPhase::Fast, capture_runner(&paths, "fast")?)
     } else {
-        prepare_status
+        (ValidationPhase::Prepare, prepare_run)
     };
-    let validation_exit_code = validation_status.code();
-    manifest.validation = if validation_status.success() {
+    let validation_exit_code = validation_run.status.code;
+    manifest.validation = if validation_run.status.success {
         ValidationStatus::Passed {
             validated_at_unix_sec: unix_now(),
         }
@@ -248,6 +281,8 @@ pub fn learn(codex_home: &Path, cwd: &Path, options: LearnOptions) -> Result<Lea
         paths,
         manifest,
         validation_exit_code,
+        validation_phase,
+        validation_run,
     })
 }
 
@@ -756,6 +791,96 @@ mod tests {
             ]
         );
         assert_eq!(full, fast);
+    }
+
+    #[test]
+    fn learns_with_generated_plan_and_captures_validation() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).expect("create repo");
+
+        let outcome = learn_with_plan(
+            &codex_home,
+            &repo,
+            LearnOptions {
+                automation: AutomationMode::Local,
+                local_test_time_budget_sec: 300,
+            },
+            LearnedPlan {
+                prepare_steps: vec![],
+                fast_steps: vec![step("ok", "true", StepPhase::Test)],
+                full_steps: vec![step("ok", "true", StepPhase::Test)],
+            },
+        )
+        .expect("learn with plan");
+
+        assert_eq!(outcome.validation_phase, ValidationPhase::Fast);
+        assert_eq!(outcome.validation_exit_code, Some(0));
+        assert!(matches!(
+            outcome.manifest.validation,
+            ValidationStatus::Passed { .. }
+        ));
+        assert_eq!(
+            outcome.validation_run.steps,
+            vec![
+                CapturedStep {
+                    id: "ok".to_string(),
+                    event: CapturedStepEvent::Started,
+                    exit_code: None,
+                },
+                CapturedStep {
+                    id: "ok".to_string(),
+                    event: CapturedStepEvent::Finished,
+                    exit_code: Some(0),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn learn_with_generated_plan_reports_prepare_failures() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).expect("create repo");
+
+        let outcome = learn_with_plan(
+            &codex_home,
+            &repo,
+            LearnOptions {
+                automation: AutomationMode::Local,
+                local_test_time_budget_sec: 300,
+            },
+            LearnedPlan {
+                prepare_steps: vec![step("nope", "false", StepPhase::Prepare)],
+                fast_steps: vec![step("ok", "true", StepPhase::Test)],
+                full_steps: vec![step("ok", "true", StepPhase::Test)],
+            },
+        )
+        .expect("learn with plan");
+
+        assert_eq!(outcome.validation_phase, ValidationPhase::Prepare);
+        assert_eq!(outcome.validation_exit_code, Some(1));
+        assert_eq!(
+            outcome.manifest.validation,
+            ValidationStatus::Failed { exit_code: Some(1) }
+        );
+        assert_eq!(
+            outcome.validation_run.steps,
+            vec![
+                CapturedStep {
+                    id: "nope".to_string(),
+                    event: CapturedStepEvent::Started,
+                    exit_code: None,
+                },
+                CapturedStep {
+                    id: "nope".to_string(),
+                    event: CapturedStepEvent::Finished,
+                    exit_code: Some(1),
+                },
+            ]
+        );
     }
 
     #[test]

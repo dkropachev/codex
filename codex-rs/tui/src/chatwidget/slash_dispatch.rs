@@ -30,7 +30,7 @@ const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
 const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
     "'/side' is unavailable while code review is running.";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
-const REPO_CI_USAGE: &str = "Usage: /repo-ci <inherit|off|local|remote|local-and-remote> | /repo-ci issues <inherit|none|comma-list> | /repo-ci rounds <inherit|N>";
+const REPO_CI_USAGE: &str = "Usage: /repo-ci setup | /repo-ci learn | /repo-ci <inherit|off|local|remote|local-and-remote> | /repo-ci issues <inherit|none|comma-list> | /repo-ci rounds <inherit|N>";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -287,7 +287,10 @@ impl ChatWidget {
             SlashCommand::RepoCi => {
                 self.add_info_message(
                     REPO_CI_USAGE.to_string(),
-                    Some("This only changes the current session.".to_string()),
+                    Some(
+                        "Use /repo-ci setup to enable repo CI for this repo and learn it, or use the other forms to change only the current session."
+                            .to_string(),
+                    ),
                 );
             }
             SlashCommand::Memories => {
@@ -621,6 +624,29 @@ impl ChatWidget {
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot { path: args });
             }
             SlashCommand::RepoCi if !trimmed.is_empty() => {
+                if matches!(trimmed, "setup" | "enable") {
+                    self.submit_op(AppCommand::run_user_shell_command(repo_ci_setup_command(
+                        &self.config,
+                    )));
+                    self.add_info_message(
+                        "Starting repo CI setup for this repository.".to_string(),
+                        Some(
+                            "This runs `repo-ci enable --cwd` and then `repo-ci learn --cwd` in a user shell."
+                                .to_string(),
+                        ),
+                    );
+                    return;
+                }
+                if trimmed == "learn" {
+                    self.submit_op(AppCommand::run_user_shell_command(repo_ci_learn_command(
+                        &self.config,
+                    )));
+                    self.add_info_message(
+                        "Starting repo CI learning for this repository.".to_string(),
+                        Some("This runs `repo-ci learn --cwd` in a user shell.".to_string()),
+                    );
+                    return;
+                }
                 if let Some(raw_issue_types) = trimmed.strip_prefix("issues ") {
                     let issue_types = match parse_repo_ci_issue_types(raw_issue_types) {
                         Ok(issue_types) => issue_types,
@@ -913,6 +939,28 @@ fn repo_ci_session_mode_message(mode: Option<RepoCiSessionMode>) -> String {
             "Repo CI runs local and remote checks for this session.".to_string()
         }
     }
+}
+
+fn repo_ci_setup_command(config: &Config) -> String {
+    let codex = repo_ci_codex_command(config);
+    format!("{codex} repo-ci enable --cwd && {codex} repo-ci learn --cwd")
+}
+
+fn repo_ci_learn_command(config: &Config) -> String {
+    let codex = repo_ci_codex_command(config);
+    format!("{codex} repo-ci learn --cwd")
+}
+
+fn repo_ci_codex_command(config: &Config) -> String {
+    config
+        .codex_self_exe
+        .as_ref()
+        .map(|path| shell_quote(path.to_string_lossy().as_ref()))
+        .unwrap_or_else(|| "codex".to_string())
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn parse_repo_ci_issue_types(raw: &str) -> Result<Option<Vec<RepoCiIssueType>>, String> {

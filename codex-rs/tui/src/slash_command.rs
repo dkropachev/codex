@@ -117,7 +117,9 @@ impl SlashCommand {
                 "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>"
             }
             SlashCommand::Experimental => "toggle experimental features",
-            SlashCommand::RepoCi => "override repo CI automation for this session",
+            SlashCommand::RepoCi => {
+                "set up repo CI for this repo or override repo CI automation for this session"
+            }
             SlashCommand::Memories => "configure memory use and generation",
             SlashCommand::Mcp => "list configured MCP tools; use /mcp verbose for details",
             SlashCommand::Apps => "manage apps",

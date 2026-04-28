@@ -46,12 +46,14 @@ mod app_cmd;
 mod desktop_app;
 mod marketplace_cmd;
 mod mcp_cmd;
+mod repo_ci_learn;
 mod responses_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
+use crate::repo_ci_learn::learn_repo_ci_with_ai;
 use crate::responses_cmd::ResponsesCommand;
 use crate::responses_cmd::run_responses_command;
 
@@ -1512,7 +1514,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "repo-ci",
             )?;
-            run_repo_ci_command(sub).await?;
+            run_repo_ci_command(sub, &root_config_overrides).await?;
         }
     }
 
@@ -1561,7 +1563,10 @@ async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyho
     Ok(())
 }
 
-async fn run_repo_ci_command(sub: RepoCiSubcommand) -> anyhow::Result<()> {
+async fn run_repo_ci_command(
+    sub: RepoCiSubcommand,
+    root_config_overrides: &CliConfigOverrides,
+) -> anyhow::Result<()> {
     match sub {
         RepoCiSubcommand::Enable(args) => repo_ci_enable(args).await,
         RepoCiSubcommand::Disable(args) => repo_ci_disable(args).await,
@@ -1579,14 +1584,16 @@ async fn run_repo_ci_command(sub: RepoCiSubcommand) -> anyhow::Result<()> {
         RepoCiSubcommand::Learn(args) => {
             let codex_home = find_codex_home()?;
             let cwd = std::env::current_dir()?;
-            let outcome = codex_repo_ci::learn(
+            let outcome = learn_repo_ci_with_ai(
+                root_config_overrides,
                 &codex_home,
                 &cwd,
                 LearnOptions {
                     automation: args.automation.into(),
                     local_test_time_budget_sec: args.local_test_time_budget_sec,
                 },
-            )?;
+            )
+            .await?;
             println!("Learned repo CI for {}", outcome.paths.repo_root.display());
             println!("Runner: {}", outcome.paths.runner_path.display());
             println!("Manifest: {}", outcome.paths.manifest_path.display());
