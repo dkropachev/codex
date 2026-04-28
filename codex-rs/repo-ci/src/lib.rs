@@ -16,6 +16,8 @@ use std::process::ExitStatus;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+mod inference;
+
 const MANIFEST_VERSION: u32 = 2;
 const JSONL_ENV: &str = "CODEX_REPO_CI_JSONL";
 
@@ -427,6 +429,9 @@ fn source_candidates(repo_root: &Path) -> Result<Vec<(PathBuf, SourceKind)>> {
         (PathBuf::from("rust-toolchain.toml"), SourceKind::Tooling),
         (PathBuf::from("justfile"), SourceKind::Tooling),
         (PathBuf::from("Justfile"), SourceKind::Tooling),
+        (PathBuf::from("Makefile"), SourceKind::Tooling),
+        (PathBuf::from("makefile"), SourceKind::Tooling),
+        (PathBuf::from("GNUmakefile"), SourceKind::Tooling),
         (PathBuf::from("package.json"), SourceKind::BuildManifest),
         (PathBuf::from("package-lock.json"), SourceKind::Lockfile),
         (PathBuf::from("pnpm-lock.yaml"), SourceKind::Lockfile),
@@ -436,6 +441,13 @@ fn source_candidates(repo_root: &Path) -> Result<Vec<(PathBuf, SourceKind)>> {
         (PathBuf::from("uv.lock"), SourceKind::Lockfile),
         (PathBuf::from("tox.ini"), SourceKind::Tooling),
         (PathBuf::from("pytest.ini"), SourceKind::Tooling),
+        (PathBuf::from("build.sbt"), SourceKind::BuildManifest),
+        (PathBuf::from(".scalafmt.conf"), SourceKind::Tooling),
+        (
+            PathBuf::from("project/build.properties"),
+            SourceKind::Tooling,
+        ),
+        (PathBuf::from("project/plugins.sbt"), SourceKind::Tooling),
     ];
     let workflow_dir = repo_root.join(".github/workflows");
     if workflow_dir.is_dir() {
@@ -456,55 +468,7 @@ fn source_candidates(repo_root: &Path) -> Result<Vec<(PathBuf, SourceKind)>> {
 }
 
 fn infer_steps(repo_root: &Path) -> Result<(Vec<RepoCiStep>, Vec<RepoCiStep>, Vec<RepoCiStep>)> {
-    let mut prepare = Vec::new();
-    let mut fast = Vec::new();
-    let mut full = Vec::new();
-
-    if has_file(repo_root, "justfile") || has_file(repo_root, "Justfile") {
-        let justfile =
-            read_optional(repo_root, "justfile")?.or(read_optional(repo_root, "Justfile")?);
-        if let Some(justfile) = justfile {
-            add_just_steps(&justfile, &mut prepare, &mut fast, &mut full);
-        }
-    }
-
-    if has_file(repo_root, "Cargo.toml") && fast.is_empty() {
-        prepare.push(step("cargo-fetch", "cargo fetch", StepPhase::Prepare));
-        fast.push(step(
-            "cargo-fmt",
-            "cargo fmt --all -- --check",
-            StepPhase::Lint,
-        ));
-        fast.push(step(
-            "cargo-clippy",
-            "cargo clippy --workspace --all-targets",
-            StepPhase::Lint,
-        ));
-        fast.push(step(
-            "cargo-test",
-            "cargo test --workspace",
-            StepPhase::Test,
-        ));
-        full.extend(fast.clone());
-    }
-
-    if has_file(repo_root, "package.json") {
-        add_node_steps(repo_root, &mut prepare, &mut fast, &mut full);
-    }
-
-    if has_file(repo_root, "pyproject.toml")
-        || has_file(repo_root, "requirements.txt")
-        || has_file(repo_root, "uv.lock")
-    {
-        add_python_steps(repo_root, &mut prepare, &mut fast, &mut full);
-    }
-
-    if fast.is_empty() {
-        fast.push(step("git-diff-check", "git diff --check", StepPhase::Lint));
-        full.extend(fast.clone());
-    }
-
-    Ok((prepare, fast, full))
+    inference::infer_steps(repo_root)
 }
 
 pub fn default_issue_types() -> Vec<RepoCiIssueType> {
@@ -550,7 +514,7 @@ fn infer_issue_types(repo_root: &Path) -> Vec<RepoCiIssueType> {
     issue_types
 }
 
-fn add_just_steps(
+pub(crate) fn add_just_steps(
     justfile: &str,
     prepare: &mut Vec<RepoCiStep>,
     fast: &mut Vec<RepoCiStep>,
@@ -591,7 +555,7 @@ fn add_just_steps(
     }
 }
 
-fn add_node_steps(
+pub(crate) fn add_node_steps(
     repo_root: &Path,
     prepare: &mut Vec<RepoCiStep>,
     fast: &mut Vec<RepoCiStep>,
@@ -636,7 +600,7 @@ fn add_node_steps(
     }
 }
 
-fn add_python_steps(
+pub(crate) fn add_python_steps(
     repo_root: &Path,
     prepare: &mut Vec<RepoCiStep>,
     fast: &mut Vec<RepoCiStep>,
@@ -663,14 +627,14 @@ fn add_python_steps(
     }
 }
 
-fn justfile_has_recipe(justfile: &str, recipe: &str) -> bool {
+pub(crate) fn justfile_has_recipe(justfile: &str, recipe: &str) -> bool {
     let prefix = format!("{recipe}:");
     justfile
         .lines()
         .any(|line| line.starts_with(&prefix) || line.starts_with(&format!("@{prefix}")))
 }
 
-fn step(id: &str, command: &str, phase: StepPhase) -> RepoCiStep {
+pub(crate) fn step(id: &str, command: &str, phase: StepPhase) -> RepoCiStep {
     RepoCiStep {
         id: id.to_string(),
         command: command.to_string(),
@@ -678,7 +642,7 @@ fn step(id: &str, command: &str, phase: StepPhase) -> RepoCiStep {
     }
 }
 
-fn read_optional(repo_root: &Path, relative: &str) -> Result<Option<String>> {
+pub(crate) fn read_optional(repo_root: &Path, relative: &str) -> Result<Option<String>> {
     let path = repo_root.join(relative);
     if path.exists() {
         fs::read_to_string(&path)
@@ -689,7 +653,7 @@ fn read_optional(repo_root: &Path, relative: &str) -> Result<Option<String>> {
     }
 }
 
-fn has_file(repo_root: &Path, relative: &str) -> bool {
+pub(crate) fn has_file(repo_root: &Path, relative: &str) -> bool {
     repo_root.join(relative).is_file()
 }
 
@@ -791,6 +755,93 @@ mod tests {
             ]
         );
         assert_eq!(full, fast);
+    }
+
+    #[test]
+    fn learns_makefile_steps_for_scala_repo() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            temp.path().join("Makefile"),
+            "lint:\n\t@echo lint\n\nbuild:\n\t@echo build\n\ntest-unit:\n\t@echo unit\n\ntest-integration:\n\t@echo integration\n",
+        )
+        .expect("write makefile");
+        fs::write(temp.path().join("build.sbt"), "lazy val root = project").expect("write sbt");
+
+        let (prepare, fast, full) = infer_steps(temp.path()).expect("infer steps");
+
+        assert_eq!(prepare, Vec::<RepoCiStep>::new());
+        assert_eq!(
+            fast,
+            vec![
+                step("make-lint", "make lint", StepPhase::Lint),
+                step("make-build", "make build", StepPhase::Build),
+                step("make-test-unit", "make test-unit", StepPhase::Test),
+            ]
+        );
+        assert_eq!(
+            full,
+            vec![
+                step("make-lint", "make lint", StepPhase::Lint),
+                step("make-build", "make build", StepPhase::Build),
+                step("make-test-unit", "make test-unit", StepPhase::Test),
+                step(
+                    "make-test-integration",
+                    "make test-integration",
+                    StepPhase::Test,
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn learns_sbt_steps_without_makefile() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(temp.path().join("build.sbt"), "lazy val root = project").expect("write sbt");
+        fs::write(temp.path().join(".scalafmt.conf"), "version=3.0.0").expect("write scalafmt");
+
+        let (prepare, fast, full) = infer_steps(temp.path()).expect("infer steps");
+
+        assert_eq!(prepare, Vec::<RepoCiStep>::new());
+        assert_eq!(
+            fast,
+            vec![
+                step(
+                    "sbt-scalafmt-check",
+                    "sbt scalafmtCheckAll",
+                    StepPhase::Lint
+                ),
+                step("sbt-compile", "sbt compile", StepPhase::Build),
+                step("sbt-test", "sbt test", StepPhase::Test),
+            ]
+        );
+        assert_eq!(full, fast);
+    }
+
+    #[test]
+    fn collects_makefile_and_sbt_sources() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(temp.path().join("Makefile"), "lint:\n\t@true\n").expect("write makefile");
+        fs::write(temp.path().join("build.sbt"), "lazy val root = project").expect("write sbt");
+        fs::write(temp.path().join(".scalafmt.conf"), "version=3.0.0").expect("write scalafmt");
+        fs::create_dir_all(temp.path().join("project")).expect("create project dir");
+        fs::write(temp.path().join("project/plugins.sbt"), "addSbtPlugin(...)")
+            .expect("write plugins");
+
+        let sources = collect_sources(temp.path()).expect("collect sources");
+        let paths = sources
+            .into_iter()
+            .map(|source| source.path)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from(".scalafmt.conf"),
+                PathBuf::from("Makefile"),
+                PathBuf::from("build.sbt"),
+                PathBuf::from("project/plugins.sbt"),
+            ]
+        );
     }
 
     #[test]
