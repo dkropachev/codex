@@ -49,6 +49,8 @@ use codex_mcp::with_codex_apps_mcp;
 
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
 const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
+const TOOL_SUGGEST_DIRECTORY_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(3);
+const TOOL_SUGGEST_DIRECTORY_FAILURE_BACKOFF: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AppToolPolicy {
@@ -82,6 +84,16 @@ struct CachedAccessibleConnectors {
 
 static ACCESSIBLE_CONNECTORS_CACHE: LazyLock<StdMutex<Option<CachedAccessibleConnectors>>> =
     LazyLock::new(|| StdMutex::new(None));
+
+#[derive(Clone)]
+struct CachedToolSuggestDirectoryFailure {
+    key: AllConnectorsCacheKey,
+    expires_at: Instant,
+}
+
+static TOOL_SUGGEST_DIRECTORY_FAILURE_CACHE: LazyLock<
+    StdMutex<Option<CachedToolSuggestDirectoryFailure>>,
+> = LazyLock::new(|| StdMutex::new(None));
 
 #[derive(Debug, Clone)]
 pub struct AccessibleConnectorsStatus {
@@ -401,6 +413,46 @@ fn write_cached_accessible_connectors(
     });
 }
 
+fn has_recent_tool_suggest_directory_failure(cache_key: &AllConnectorsCacheKey) -> bool {
+    let mut cache_guard = TOOL_SUGGEST_DIRECTORY_FAILURE_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let now = Instant::now();
+
+    if let Some(cached) = cache_guard.as_ref() {
+        if now < cached.expires_at && cached.key == *cache_key {
+            return true;
+        }
+        if now >= cached.expires_at {
+            *cache_guard = None;
+        }
+    }
+
+    false
+}
+
+fn write_tool_suggest_directory_failure(cache_key: AllConnectorsCacheKey) {
+    let mut cache_guard = TOOL_SUGGEST_DIRECTORY_FAILURE_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *cache_guard = Some(CachedToolSuggestDirectoryFailure {
+        key: cache_key,
+        expires_at: Instant::now() + TOOL_SUGGEST_DIRECTORY_FAILURE_BACKOFF,
+    });
+}
+
+fn clear_tool_suggest_directory_failure(cache_key: &AllConnectorsCacheKey) {
+    let mut cache_guard = TOOL_SUGGEST_DIRECTORY_FAILURE_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if cache_guard
+        .as_ref()
+        .is_some_and(|cached| cached.key == *cache_key)
+    {
+        *cache_guard = None;
+    }
+}
+
 async fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
     let mut connector_ids = PluginsManager::new(config.codex_home.to_path_buf())
         .plugins_for_config(config)
@@ -455,23 +507,62 @@ async fn list_directory_connectors_for_tool_suggest_with_auth(
         is_workspace_account,
     );
 
-    codex_connectors::list_all_connectors_with_options(
-        cache_key,
-        is_workspace_account,
-        /*force_refetch*/ false,
-        |path| {
-            let auth_provider = auth_provider.clone();
-            async move {
-                chatgpt_get_request_with_auth_provider::<DirectoryListResponse>(
-                    config,
-                    path,
-                    auth_provider,
-                )
-                .await
-            }
-        },
+    list_directory_connectors_for_tool_suggest_with_fetch(cache_key, is_workspace_account, |path| {
+        let auth_provider = auth_provider.clone();
+        async move {
+            chatgpt_get_request_with_auth_provider::<DirectoryListResponse>(
+                config,
+                path,
+                auth_provider,
+            )
+            .await
+        }
+    })
+    .await
+}
+
+async fn list_directory_connectors_for_tool_suggest_with_fetch<F, Fut>(
+    cache_key: AllConnectorsCacheKey,
+    is_workspace_account: bool,
+    fetch_page: F,
+) -> anyhow::Result<Vec<AppInfo>>
+where
+    F: FnMut(String) -> Fut,
+    Fut: Future<Output = anyhow::Result<DirectoryListResponse>>,
+{
+    if has_recent_tool_suggest_directory_failure(&cache_key) {
+        anyhow::bail!(
+            "skipping discoverable tool suggestions after a recent connector directory failure"
+        );
+    }
+
+    match tokio::time::timeout(
+        TOOL_SUGGEST_DIRECTORY_DISCOVERY_TIMEOUT,
+        codex_connectors::list_all_connectors_with_options(
+            cache_key.clone(),
+            is_workspace_account,
+            /*force_refetch*/ false,
+            fetch_page,
+        ),
     )
     .await
+    {
+        Ok(Ok(connectors)) => {
+            clear_tool_suggest_directory_failure(&cache_key);
+            Ok(connectors)
+        }
+        Ok(Err(err)) => {
+            write_tool_suggest_directory_failure(cache_key);
+            Err(err)
+        }
+        Err(_) => {
+            write_tool_suggest_directory_failure(cache_key);
+            anyhow::bail!(
+                "timed out loading discoverable tool suggestions after {:?}",
+                TOOL_SUGGEST_DIRECTORY_DISCOVERY_TIMEOUT
+            );
+        }
+    }
 }
 
 async fn chatgpt_get_request_with_auth_provider<T: DeserializeOwned>(
