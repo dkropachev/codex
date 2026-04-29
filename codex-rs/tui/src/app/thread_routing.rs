@@ -678,6 +678,7 @@ impl App {
                 mode,
                 issue_types,
                 review_rounds,
+                long_ci,
             } => {
                 app_server
                     .thread_repo_ci_session_config_set(
@@ -685,6 +686,7 @@ impl App {
                         *mode,
                         issue_types.clone(),
                         *review_rounds,
+                        *long_ci,
                     )
                     .await?;
                 Ok(true)

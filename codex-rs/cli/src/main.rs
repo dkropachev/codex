@@ -800,6 +800,9 @@ enum RepoCiSubcommand {
     /// Configure targeted review/fix round limit.
     #[clap(name = "review-rounds")]
     ReviewRounds(RepoCiReviewRoundsCli),
+    /// Configure whether repo CI runs long local checks.
+    #[clap(name = "long-ci")]
+    LongCi(RepoCiLongCiCli),
 }
 
 #[derive(Debug, Args)]
@@ -822,6 +825,8 @@ struct RepoCiEnableArgs {
     scope: RepoCiScopeArgs,
     #[arg(long, value_enum, default_value_t = RepoCiAutomationArg::LocalAndRemote)]
     automation: RepoCiAutomationArg,
+    #[arg(long = "long-ci", default_value_t = false)]
+    long_ci: bool,
 }
 
 #[derive(Debug, Args)]
@@ -889,6 +894,27 @@ struct RepoCiReviewRoundsSetArgs {
     value: u8,
 }
 
+#[derive(Debug, Parser)]
+struct RepoCiLongCiCli {
+    #[command(subcommand)]
+    sub: RepoCiLongCiSubcommand,
+}
+
+#[derive(Debug, Parser)]
+enum RepoCiLongCiSubcommand {
+    Set(RepoCiLongCiSetArgs),
+    Show(RepoCiScopeArgs),
+    Clear(RepoCiScopeArgs),
+}
+
+#[derive(Debug, Args)]
+struct RepoCiLongCiSetArgs {
+    #[command(flatten)]
+    scope: RepoCiScopeArgs,
+    #[arg(value_enum, default_value_t = RepoCiLongCiArg::On)]
+    value: RepoCiLongCiArg,
+}
+
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum RepoCiAutomationArg {
     Local,
@@ -944,11 +970,26 @@ enum RepoCiRunModeArg {
     Full,
 }
 
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum RepoCiLongCiArg {
+    On,
+    Off,
+}
+
 impl From<RepoCiRunModeArg> for RunMode {
     fn from(value: RepoCiRunModeArg) -> Self {
         match value {
             RepoCiRunModeArg::Fast => Self::Fast,
             RepoCiRunModeArg::Full => Self::Full,
+        }
+    }
+}
+
+impl RepoCiLongCiArg {
+    fn as_bool(self) -> bool {
+        match self {
+            Self::On => true,
+            Self::Off => false,
         }
     }
 }
@@ -1738,6 +1779,7 @@ async fn run_repo_ci_command(
         }
         RepoCiSubcommand::IssueTypes(issue_types) => repo_ci_issue_types(issue_types).await,
         RepoCiSubcommand::ReviewRounds(review_rounds) => repo_ci_review_rounds(review_rounds).await,
+        RepoCiSubcommand::LongCi(long_ci) => repo_ci_long_ci(long_ci).await,
     }
 }
 
@@ -1836,6 +1878,10 @@ async fn repo_ci_enable(args: RepoCiEnableArgs) -> anyhow::Result<()> {
         .set_path_value(
             append_segment(&segments, "local_test_time_budget_sec"),
             toml_edit::value(300),
+        )
+        .set_path_value(
+            append_segment(&segments, "long_ci"),
+            toml_edit::value(args.long_ci),
         )
         .set_path_value(
             append_segment(&segments, "max_local_fix_rounds"),
@@ -1975,6 +2021,56 @@ async fn repo_ci_review_rounds(review_rounds: RepoCiReviewRoundsCli) -> anyhow::
                 .await?;
             println!(
                 "Cleared repo CI review rounds for {}.",
+                repo_ci_scope_label(&args)
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn repo_ci_long_ci(long_ci: RepoCiLongCiCli) -> anyhow::Result<()> {
+    match long_ci.sub {
+        RepoCiLongCiSubcommand::Set(args) => {
+            let codex_home = find_codex_home()?;
+            let segments = append_segment(&repo_ci_scope_segments(&args.scope)?, "long_ci");
+            ConfigEditsBuilder::new(&codex_home)
+                .set_path_value(segments, toml_edit::value(args.value.as_bool()))
+                .apply()
+                .await?;
+            println!(
+                "Set repo CI long checks for {} to {}.",
+                repo_ci_scope_label(&args.scope),
+                if args.value.as_bool() {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
+            Ok(())
+        }
+        RepoCiLongCiSubcommand::Show(args) => {
+            let codex_home = find_codex_home()?;
+            let segments = append_segment(&repo_ci_scope_segments(&args)?, "long_ci");
+            let item = repo_ci_config_item(&codex_home, &segments)?;
+            if let Some(item) = item {
+                println!("{item}");
+            } else {
+                println!(
+                    "No repo CI long-check setting configured for {}.",
+                    repo_ci_scope_label(&args)
+                );
+            }
+            Ok(())
+        }
+        RepoCiLongCiSubcommand::Clear(args) => {
+            let codex_home = find_codex_home()?;
+            let segments = append_segment(&repo_ci_scope_segments(&args)?, "long_ci");
+            ConfigEditsBuilder::new(&codex_home)
+                .clear_path(segments)
+                .apply()
+                .await?;
+            println!(
+                "Cleared repo CI long-check setting for {}.",
                 repo_ci_scope_label(&args)
             );
             Ok(())
@@ -3399,6 +3495,7 @@ mod tests {
             "--cwd",
             "--automation",
             "local",
+            "--long-ci",
         ])
         .expect("parse should succeed");
         let Some(Subcommand::RepoCi(RepoCiCli { sub })) = cli.subcommand else {
@@ -3409,6 +3506,7 @@ mod tests {
         };
         assert!(args.scope.cwd);
         assert!(matches!(args.automation, RepoCiAutomationArg::Local));
+        assert!(args.long_ci);
     }
 
     #[test]
@@ -3463,6 +3561,24 @@ mod tests {
         };
         assert!(args.scope.global);
         assert_eq!(args.value, 4);
+    }
+
+    #[test]
+    fn repo_ci_long_ci_set_parses() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "repo-ci", "long-ci", "set", "--global", "on"])
+                .expect("parse should succeed");
+        let Some(Subcommand::RepoCi(RepoCiCli { sub })) = cli.subcommand else {
+            panic!("expected repo-ci subcommand");
+        };
+        let RepoCiSubcommand::LongCi(RepoCiLongCiCli {
+            sub: RepoCiLongCiSubcommand::Set(args),
+        }) = sub
+        else {
+            panic!("expected repo-ci long-ci set");
+        };
+        assert!(args.scope.global);
+        assert!(args.value.as_bool());
     }
 
     #[test]

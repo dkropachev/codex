@@ -85,6 +85,7 @@ pub(crate) struct TurnContext {
     pub(crate) repo_ci_session_mode: Option<RepoCiSessionMode>,
     pub(crate) repo_ci_issue_types: Option<Vec<RepoCiIssueType>>,
     pub(crate) repo_ci_review_rounds: Option<u8>,
+    pub(crate) repo_ci_long_ci: Option<bool>,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_self_exe: Option<PathBuf>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
@@ -227,6 +228,7 @@ impl TurnContext {
             repo_ci_session_mode: self.repo_ci_session_mode,
             repo_ci_issue_types: self.repo_ci_issue_types.clone(),
             repo_ci_review_rounds: self.repo_ci_review_rounds,
+            repo_ci_long_ci: self.repo_ci_long_ci,
             final_output_json_schema: self.final_output_json_schema.clone(),
             codex_self_exe: self.codex_self_exe.clone(),
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
@@ -380,6 +382,7 @@ impl Session {
         per_turn_config.repo_ci_session_mode = session_configuration.repo_ci_session_mode;
         per_turn_config.repo_ci_issue_types = session_configuration.repo_ci_issue_types.clone();
         per_turn_config.repo_ci_review_rounds = session_configuration.repo_ci_review_rounds;
+        per_turn_config.repo_ci_long_ci = session_configuration.repo_ci_long_ci;
         let resolved_web_search_mode = resolve_web_search_mode_for_turn(
             &per_turn_config.web_search_mode,
             session_configuration.sandbox_policy.get(),
@@ -506,6 +509,7 @@ impl Session {
             repo_ci_session_mode: session_configuration.repo_ci_session_mode,
             repo_ci_issue_types: session_configuration.repo_ci_issue_types.clone(),
             repo_ci_review_rounds: session_configuration.repo_ci_review_rounds,
+            repo_ci_long_ci: session_configuration.repo_ci_long_ci,
             final_output_json_schema: None,
             codex_self_exe: per_turn_config.codex_self_exe.clone(),
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),

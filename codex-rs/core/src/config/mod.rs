@@ -593,6 +593,7 @@ pub struct Config {
     pub repo_ci_session_mode: Option<RepoCiSessionMode>,
     pub repo_ci_issue_types: Option<Vec<RepoCiIssueType>>,
     pub repo_ci_review_rounds: Option<u8>,
+    pub repo_ci_long_ci: Option<bool>,
 
     /// Settings specific to the task-path-based multi-agent tool surface.
     pub multi_agent_v2: MultiAgentV2Config,
@@ -1427,6 +1428,7 @@ pub struct ConfigOverrides {
     pub repo_ci_session_mode: Option<RepoCiSessionMode>,
     pub repo_ci_issue_types: Option<Vec<RepoCiIssueType>>,
     pub repo_ci_review_rounds: Option<u8>,
+    pub repo_ci_long_ci: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -1650,6 +1652,7 @@ impl Config {
             repo_ci_session_mode,
             repo_ci_issue_types,
             repo_ci_review_rounds,
+            repo_ci_long_ci,
             additional_writable_roots,
         } = overrides;
 
@@ -2468,6 +2471,7 @@ impl Config {
             repo_ci_session_mode,
             repo_ci_issue_types,
             repo_ci_review_rounds,
+            repo_ci_long_ci,
             multi_agent_v2,
             features,
             suppress_unstable_features_warning: cfg

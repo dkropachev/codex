@@ -865,6 +865,7 @@ impl AppServerSession {
         mode: Option<RepoCiSessionMode>,
         issue_types: Option<Vec<codex_protocol::protocol::RepoCiIssueType>>,
         review_rounds: Option<u8>,
+        long_ci: Option<bool>,
     ) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadRepoCiSessionConfigSetResponse = self
@@ -877,6 +878,7 @@ impl AppServerSession {
                     issue_types: issue_types
                         .map(|values| values.into_iter().map(Into::into).collect()),
                     review_rounds,
+                    long_ci,
                 },
             })
             .await

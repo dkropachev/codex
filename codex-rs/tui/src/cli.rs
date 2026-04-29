@@ -76,6 +76,10 @@ pub struct Cli {
     #[arg(long = "repo-ci-review-rounds")]
     pub repo_ci_review_rounds: Option<u8>,
 
+    /// Run the full local repo CI runner, including long integration/e2e checks, for this session.
+    #[arg(long = "repo-ci-long-ci", default_value_t = false)]
+    pub repo_ci_long_ci: bool,
+
     /// Disable alternate screen mode
     ///
     /// Runs the TUI in inline mode, preserving terminal scrollback history. This is useful
@@ -236,6 +240,7 @@ mod tests {
             "correctness,security",
             "--repo-ci-review-rounds",
             "3",
+            "--repo-ci-long-ci",
         ])
         .expect("parse should succeed");
 
@@ -248,6 +253,7 @@ mod tests {
             ]))
         );
         assert_eq!(cli.repo_ci_review_rounds, Some(3));
+        assert!(cli.repo_ci_long_ci);
     }
 
     #[test]

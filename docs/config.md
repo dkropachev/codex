@@ -69,6 +69,7 @@ repo_ci = true
 enabled = true
 automation = "local-and-remote"
 local_test_time_budget_sec = 300
+long_ci = false
 max_local_fix_rounds = 3
 max_remote_fix_rounds = 2
 review_issue_types = ["correctness", "reliability", "maintainability"]
@@ -96,6 +97,11 @@ You can also override targeted review scope with
 `codex --repo-ci-issue-types correctness,reliability` or
 `/repo-ci issues inherit|none|comma-list`, and override the review round limit
 with `codex --repo-ci-review-rounds N` or `/repo-ci rounds inherit|N`.
+Use `long_ci = true`, `codex --repo-ci-long-ci`, or
+`/repo-ci long-ci on|off|inherit` to run the full local runner for the session,
+including longer integration/e2e checks. Persist it with
+`codex repo-ci enable --cwd --long-ci`, `codex repo-ci long-ci set --global on`,
+or any other repo-ci scope flag.
 
 When repo CI is enabled for a trusted repository, Codex compares the worktree at
 the start and end of each regular turn. If the turn changed files, Codex first

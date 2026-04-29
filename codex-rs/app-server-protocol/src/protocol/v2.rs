@@ -4020,6 +4020,9 @@ pub struct ThreadRepoCiSessionConfigSetParams {
     /// Null clears the session override and returns to repo/user config.
     #[ts(optional = nullable)]
     pub review_rounds: Option<u8>,
+    /// Null clears the session override and returns to repo/user config.
+    #[ts(optional = nullable)]
+    pub long_ci: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

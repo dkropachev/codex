@@ -624,6 +624,7 @@ impl Codex {
             repo_ci_session_mode: config.repo_ci_session_mode,
             repo_ci_issue_types: config.repo_ci_issue_types.clone(),
             repo_ci_review_rounds: config.repo_ci_review_rounds,
+            repo_ci_long_ci: config.repo_ci_long_ci,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.

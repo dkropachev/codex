@@ -3870,6 +3870,7 @@ impl CodexMessageProcessor {
             mode,
             issue_types,
             review_rounds,
+            long_ci,
         } = params;
 
         let (_, thread) = match self.load_thread(&thread_id).await {
@@ -3893,6 +3894,7 @@ impl CodexMessageProcessor {
                             .collect()
                     }),
                     review_rounds,
+                    long_ci,
                 },
             )
             .await

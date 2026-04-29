@@ -2162,6 +2162,10 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "long_ci": {
+          "description": "Whether local repo CI should run the full runner, including long integration/e2e checks.",
+          "type": "boolean"
+        },
         "max_local_fix_rounds": {
           "description": "Maximum number of local fix attempts before surfacing the failure.",
           "format": "uint8",

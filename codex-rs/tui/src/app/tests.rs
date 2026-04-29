@@ -4897,6 +4897,7 @@ async fn repo_ci_session_mode_is_submitted_to_app_server() {
         Some(codex_protocol::protocol::RepoCiSessionMode::Remote),
         /*issue_types*/ None,
         /*review_rounds*/ None,
+        /*long_ci*/ None,
     );
 
     let handled = app
@@ -4928,6 +4929,7 @@ async fn repo_ci_session_config_is_submitted_to_app_server() {
             codex_protocol::protocol::RepoCiIssueType::Maintainability,
         ]),
         Some(4),
+        Some(true),
     );
 
     let handled = app

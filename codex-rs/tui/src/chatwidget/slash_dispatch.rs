@@ -31,7 +31,7 @@ const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
     "'/side' is unavailable while code review is running.";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
 const MODEL_POLICY_USAGE: &str = "Usage: /model-policy <enable|disable|inherit>";
-const REPO_CI_USAGE: &str = "Usage: /repo-ci setup | /repo-ci learn | /repo-ci retry | /repo-ci <inherit|off|local|remote|local-and-remote> | /repo-ci issues <inherit|none|comma-list> | /repo-ci rounds <inherit|N>";
+const REPO_CI_USAGE: &str = "Usage: /repo-ci setup | /repo-ci learn | /repo-ci retry | /repo-ci <inherit|off|local|remote|local-and-remote> | /repo-ci issues <inherit|none|comma-list> | /repo-ci rounds <inherit|N> | /repo-ci long-ci <inherit|on|off>";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -683,6 +683,7 @@ impl ChatWidget {
                         /*mode*/ None,
                         issue_types.clone(),
                         /*review_rounds*/ None,
+                        /*long_ci*/ None,
                     ));
                     self.add_info_message(
                         repo_ci_issue_types_message(issue_types.as_deref()),
@@ -706,11 +707,34 @@ impl ChatWidget {
                         /*mode*/ None,
                         /*issue_types*/ None,
                         review_rounds,
+                        /*long_ci*/ None,
                     ));
                     self.add_info_message(
                         repo_ci_review_rounds_message(review_rounds),
                         Some(
                             "This override lasts until the session ends or you run /repo-ci rounds inherit."
+                                .to_string(),
+                        ),
+                    );
+                    return;
+                }
+                if let Some(raw_long_ci) = trimmed.strip_prefix("long-ci ") {
+                    let long_ci = match parse_repo_ci_long_ci(raw_long_ci) {
+                        Ok(long_ci) => long_ci,
+                        Err(message) => {
+                            self.add_error_message(message);
+                            self.add_info_message(REPO_CI_USAGE.to_string(), /*hint*/ None);
+                            return;
+                        }
+                    };
+                    self.submit_op(AppCommand::set_repo_ci_session_config(
+                        /*mode*/ None, /*issue_types*/ None, /*review_rounds*/ None,
+                        long_ci,
+                    ));
+                    self.add_info_message(
+                        repo_ci_long_ci_message(long_ci),
+                        Some(
+                            "This override lasts until the session ends or you run /repo-ci long-ci inherit."
                                 .to_string(),
                         ),
                     );
@@ -726,6 +750,7 @@ impl ChatWidget {
                 };
                 self.submit_op(AppCommand::set_repo_ci_session_config(
                     mode, /*issue_types*/ None, /*review_rounds*/ None,
+                    /*long_ci*/ None,
                 ));
                 self.add_info_message(
                     repo_ci_session_mode_message(mode),
@@ -1067,6 +1092,15 @@ fn parse_repo_ci_review_rounds(raw: &str) -> Result<Option<u8>, String> {
         .map_err(|_| format!("Invalid repo CI review round count `{trimmed}`."))
 }
 
+fn parse_repo_ci_long_ci(raw: &str) -> Result<Option<bool>, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "enable" | "enabled" | "on" | "true" => Ok(Some(true)),
+        "disable" | "disabled" | "off" | "false" => Ok(Some(false)),
+        "inherit" | "default" | "config" => Ok(None),
+        other => Err(format!("Unknown repo CI long CI setting `{other}`.")),
+    }
+}
+
 fn repo_ci_issue_types_message(issue_types: Option<&[RepoCiIssueType]>) -> String {
     match issue_types {
         None => "Repo CI issue types now inherit repo/user config for this session.".to_string(),
@@ -1088,6 +1122,16 @@ fn repo_ci_review_rounds_message(review_rounds: Option<u8>) -> String {
         Some(review_rounds) => {
             format!("Repo CI targeted review now uses {review_rounds} round(s) for this session.")
         }
+    }
+}
+
+fn repo_ci_long_ci_message(long_ci: Option<bool>) -> String {
+    match long_ci {
+        None => {
+            "Repo CI long-check setting now inherits repo/user config for this session.".to_string()
+        }
+        Some(true) => "Repo CI long local checks are enabled for this session.".to_string(),
+        Some(false) => "Repo CI long local checks are disabled for this session.".to_string(),
     }
 }
 

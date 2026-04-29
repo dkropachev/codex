@@ -46,6 +46,7 @@ async fn thread_repo_ci_session_config_set_accepts_loaded_thread() -> Result<()>
                 RepoCiIssueType::Security,
             ]),
             review_rounds: Some(3),
+            long_ci: Some(true),
         })
         .await?;
     let set_resp: JSONRPCResponse = timeout(

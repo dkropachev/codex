@@ -129,6 +129,7 @@ fn parse_status_paths(stdout: &[u8]) -> Vec<String> {
 struct EffectiveRepoCiConfig {
     automation: RepoCiAutomationToml,
     local_test_time_budget_sec: u64,
+    long_ci: bool,
     max_local_fix_rounds: u8,
     max_remote_fix_rounds: u8,
     review_issue_types: Vec<RepoCiIssueType>,
@@ -139,6 +140,7 @@ impl EffectiveRepoCiConfig {
     fn from_scope(
         scope: &RepoCiScopeToml,
         review_issue_types: Vec<RepoCiIssueType>,
+        long_ci: bool,
     ) -> Option<Self> {
         if scope.enabled != Some(true) {
             return None;
@@ -148,6 +150,7 @@ impl EffectiveRepoCiConfig {
                 .automation
                 .unwrap_or(RepoCiAutomationToml::LocalAndRemote),
             local_test_time_budget_sec: scope.local_test_time_budget_sec.unwrap_or(300),
+            long_ci,
             max_local_fix_rounds: scope.max_local_fix_rounds.unwrap_or(3),
             max_remote_fix_rounds: scope.max_remote_fix_rounds.unwrap_or(2),
             review_issue_types,
@@ -160,6 +163,7 @@ impl EffectiveRepoCiConfig {
         base: Option<&RepoCiScopeToml>,
         review_issue_types: Vec<RepoCiIssueType>,
         review_rounds: Option<u8>,
+        long_ci: bool,
     ) -> Option<Self> {
         if mode == RepoCiSessionMode::Off {
             return None;
@@ -169,6 +173,7 @@ impl EffectiveRepoCiConfig {
             local_test_time_budget_sec: base
                 .and_then(|scope| scope.local_test_time_budget_sec)
                 .unwrap_or(300),
+            long_ci,
             max_local_fix_rounds: base
                 .and_then(|scope| scope.max_local_fix_rounds)
                 .unwrap_or(3),
@@ -1717,12 +1722,18 @@ fn effective_config(turn_context: &TurnContext) -> Option<EffectiveRepoCiConfig>
         .repo_ci_review_rounds
         .or(turn_context.config.repo_ci_review_rounds)
         .or_else(|| scoped_config.and_then(|scope| scope.max_review_fix_rounds));
+    let long_ci = turn_context
+        .repo_ci_long_ci
+        .or(turn_context.config.repo_ci_long_ci)
+        .or_else(|| scoped_config.and_then(|scope| scope.long_ci))
+        .unwrap_or(false);
     if let Some(mode) = turn_context.repo_ci_session_mode {
         return EffectiveRepoCiConfig::from_session_mode(
             mode,
             scoped_config,
             review_issue_types,
             review_rounds,
+            long_ci,
         );
     }
     if let Some(mode) = turn_context.config.repo_ci_session_mode {
@@ -1731,9 +1742,11 @@ fn effective_config(turn_context: &TurnContext) -> Option<EffectiveRepoCiConfig>
             scoped_config,
             review_issue_types,
             review_rounds,
+            long_ci,
         );
     }
-    scoped_config.and_then(|scope| EffectiveRepoCiConfig::from_scope(scope, review_issue_types))
+    scoped_config
+        .and_then(|scope| EffectiveRepoCiConfig::from_scope(scope, review_issue_types, long_ci))
 }
 
 fn scoped_repo_ci_config<'a>(
@@ -1846,12 +1859,22 @@ fn run_local_repo_ci(
     if !config.local_enabled() {
         return Ok(LocalRepoCiOutcome::Skipped);
     }
-    let run = codex_repo_ci::run_capture(codex_home, cwd, codex_repo_ci::RunMode::Fast)?;
+    let run_mode = if config.long_ci {
+        codex_repo_ci::RunMode::Full
+    } else {
+        codex_repo_ci::RunMode::Fast
+    };
+    let runner_label = if config.long_ci {
+        "local full runner"
+    } else {
+        "local fast runner"
+    };
+    let run = codex_repo_ci::run_capture(codex_home, cwd, run_mode)?;
     if run.status.success {
         Ok(LocalRepoCiOutcome::Passed)
     } else {
         Ok(LocalRepoCiOutcome::Failed {
-            output: format_run_output("local fast runner", &run.stdout, &run.stderr, &run.steps),
+            output: format_run_output(runner_label, &run.stdout, &run.stderr, &run.steps),
         })
     }
 }
@@ -2488,6 +2511,7 @@ mod tests {
             Some(&scope),
             codex_repo_ci::default_issue_types(),
             None,
+            false,
         )
         .expect("session override enables repo ci");
 
@@ -2500,6 +2524,7 @@ mod tests {
         let config = EffectiveRepoCiConfig {
             automation: RepoCiAutomationToml::Local,
             local_test_time_budget_sec: 300,
+            long_ci: false,
             max_local_fix_rounds: 3,
             max_remote_fix_rounds: 2,
             review_issue_types: Vec::new(),
@@ -2514,6 +2539,7 @@ mod tests {
         let config = EffectiveRepoCiConfig {
             automation: RepoCiAutomationToml::Local,
             local_test_time_budget_sec: 300,
+            long_ci: false,
             max_local_fix_rounds: 3,
             max_remote_fix_rounds: 2,
             review_issue_types: codex_repo_ci::default_issue_types(),
@@ -2537,6 +2563,7 @@ mod tests {
                 Some(&scope),
                 codex_repo_ci::default_issue_types(),
                 None,
+                false,
             ),
             None
         );
@@ -2554,6 +2581,7 @@ mod tests {
         let config = EffectiveRepoCiConfig {
             automation: RepoCiAutomationToml::Local,
             local_test_time_budget_sec: 300,
+            long_ci: false,
             max_local_fix_rounds: 3,
             max_remote_fix_rounds: 2,
             review_issue_types: vec![RepoCiIssueType::Correctness, RepoCiIssueType::Security],
@@ -2936,6 +2964,7 @@ mod tests {
             &EffectiveRepoCiConfig {
                 automation: RepoCiAutomationToml::Local,
                 local_test_time_budget_sec: 300,
+                long_ci: false,
                 max_local_fix_rounds: 3,
                 max_remote_fix_rounds: 2,
                 review_issue_types: Vec::new(),

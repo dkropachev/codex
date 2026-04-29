@@ -1183,6 +1183,7 @@ async fn repo_ci_slash_command_sets_session_mode() {
             mode: Some(codex_protocol::protocol::RepoCiSessionMode::Remote),
             issue_types: None,
             review_rounds: None,
+            long_ci: None,
         })
     );
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
@@ -1208,6 +1209,7 @@ async fn repo_ci_slash_command_without_args_shows_usage_snapshot() {
     assert!(rendered.contains("/repo-ci setup"));
     assert!(rendered.contains("/repo-ci learn"));
     assert!(rendered.contains("/repo-ci retry"));
+    assert!(rendered.contains("/repo-ci long-ci"));
 }
 
 #[tokio::test]
@@ -1271,6 +1273,7 @@ async fn repo_ci_issues_slash_command_sets_session_config() {
             mode: None,
             issue_types: Some(issue_types),
             review_rounds: None,
+            long_ci: None,
         }) if issue_types == vec![
             codex_protocol::protocol::RepoCiIssueType::Correctness,
             codex_protocol::protocol::RepoCiIssueType::Security,
@@ -1294,9 +1297,31 @@ async fn repo_ci_rounds_slash_command_sets_session_config() {
             mode: None,
             issue_types: None,
             review_rounds: Some(3),
+            long_ci: None,
         })
     );
     assert_eq!(recall_latest_after_clearing(&mut chat), "/repo-ci rounds 3");
+}
+
+#[tokio::test]
+async fn repo_ci_long_ci_slash_command_sets_session_config() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/repo-ci long-ci on");
+
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::SetRepoCiSessionConfig {
+            mode: None,
+            issue_types: None,
+            review_rounds: None,
+            long_ci: Some(true),
+        })
+    );
+    assert_eq!(
+        recall_latest_after_clearing(&mut chat),
+        "/repo-ci long-ci on"
+    );
 }
 
 #[tokio::test]
