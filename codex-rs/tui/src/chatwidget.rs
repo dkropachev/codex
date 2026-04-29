@@ -428,6 +428,7 @@ const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it l
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 2] = ["model-with-reasoning", "current-dir"];
+const REPO_CI_STATUS_DETAILS_MAX_LINES: usize = 8;
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -2161,6 +2162,19 @@ impl ChatWidget {
             StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,
         );
+    }
+
+    fn set_repo_ci_status(&mut self, message: String) {
+        if let Some((header, details)) = message.split_once('\n') {
+            self.set_status(
+                header.to_string(),
+                Some(details.trim_start().to_string()),
+                StatusDetailsCapitalization::Preserve,
+                REPO_CI_STATUS_DETAILS_MAX_LINES,
+            );
+        } else {
+            self.set_status_header(message);
+        }
     }
 
     /// Sets the currently rendered footer status-line value.
@@ -7101,7 +7115,7 @@ impl ChatWidget {
             ServerNotification::Warning(notification) => self.on_warning(notification.message),
             ServerNotification::RepoCiStatus(notification) => {
                 self.bottom_pane.ensure_status_indicator();
-                self.set_status_header(notification.message)
+                self.set_repo_ci_status(notification.message)
             }
             ServerNotification::GuardianWarning(notification) => {
                 self.on_warning(notification.message)
@@ -7638,7 +7652,7 @@ impl ChatWidget {
             | EventMsg::GuardianWarning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::RepoCiStatus(event) => {
                 self.bottom_pane.ensure_status_indicator();
-                self.set_status_header(event.message);
+                self.set_repo_ci_status(event.message);
             }
             EventMsg::GuardianAssessment(ev) => self.on_guardian_assessment(ev),
             EventMsg::ModelReroute(_) => {}
