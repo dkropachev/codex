@@ -175,6 +175,8 @@ use codex_app_server_protocol::ThreadMemoryModeSetResponse;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateResponse;
+use codex_app_server_protocol::ThreadModelPolicySessionConfigSetParams;
+use codex_app_server_protocol::ThreadModelPolicySessionConfigSetResponse;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
@@ -992,6 +994,13 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadRepoCiSessionConfigSet { request_id, params } => {
                 self.thread_repo_ci_session_config_set(
+                    to_connection_request_id(request_id),
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::ThreadModelPolicySessionConfigSet { request_id, params } => {
+                self.thread_model_policy_session_config_set(
                     to_connection_request_id(request_id),
                     params,
                 )
@@ -3897,6 +3906,54 @@ impl CodexMessageProcessor {
                 self.send_internal_error(
                     request_id,
                     format!("failed to set repo CI session config: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn thread_model_policy_session_config_set(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadModelPolicySessionConfigSetParams,
+    ) {
+        let ThreadModelPolicySessionConfigSetParams { thread_id, enabled } = params;
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        if enabled == Some(true) && self.config.model_policy.is_none() {
+            self.send_invalid_request_error(
+                request_id,
+                "cannot enable model policy for this session because no [model_policy] is configured"
+                    .to_string(),
+            )
+            .await;
+            return;
+        }
+
+        match self
+            .submit_core_op(
+                &request_id,
+                thread.as_ref(),
+                Op::SetModelPolicySessionConfig { enabled },
+            )
+            .await
+        {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadModelPolicySessionConfigSetResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to set model policy session config: {err}"),
                 )
                 .await;
             }

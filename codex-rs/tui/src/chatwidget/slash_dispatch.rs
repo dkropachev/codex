@@ -30,6 +30,7 @@ const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
 const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
     "'/side' is unavailable while code review is running.";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
+const MODEL_POLICY_USAGE: &str = "Usage: /model-policy <enable|disable|inherit>";
 const REPO_CI_USAGE: &str = "Usage: /repo-ci setup | /repo-ci learn | /repo-ci retry | /repo-ci <inherit|off|local|remote|local-and-remote> | /repo-ci issues <inherit|none|comma-list> | /repo-ci rounds <inherit|N>";
 
 impl ChatWidget {
@@ -283,6 +284,15 @@ impl ChatWidget {
             }
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
+            }
+            SlashCommand::ModelPolicy => {
+                self.add_info_message(
+                    MODEL_POLICY_USAGE.to_string(),
+                    Some(
+                        "This override affects only the current thread and lasts until the session ends or you run /model-policy inherit."
+                            .to_string(),
+                    ),
+                );
             }
             SlashCommand::RepoCi => {
                 self.add_info_message(
@@ -725,6 +735,24 @@ impl ChatWidget {
                     ),
                 );
             }
+            SlashCommand::ModelPolicy if !trimmed.is_empty() => {
+                let enabled = match parse_model_policy_enabled(trimmed) {
+                    Ok(enabled) => enabled,
+                    Err(message) => {
+                        self.add_error_message(message);
+                        self.add_info_message(MODEL_POLICY_USAGE.to_string(), /*hint*/ None);
+                        return;
+                    }
+                };
+                self.submit_op(AppCommand::set_model_policy_session_config(enabled));
+                self.add_info_message(
+                    model_policy_session_message(enabled),
+                    Some(
+                        "This override affects only the current thread and lasts until the session ends or you run /model-policy inherit."
+                            .to_string(),
+                    ),
+                );
+            }
             _ => self.dispatch_command(cmd),
         }
         if source == SlashCommandDispatchSource::Live {
@@ -869,6 +897,7 @@ impl ChatWidget {
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
+            | SlashCommand::ModelPolicy
             | SlashCommand::RepoCi
             | SlashCommand::Memories
             | SlashCommand::Quit
@@ -939,6 +968,23 @@ fn parse_repo_ci_session_mode(raw: &str) -> Result<Option<RepoCiSessionMode>, St
         "remote" => Ok(Some(RepoCiSessionMode::Remote)),
         "local-and-remote" | "both" => Ok(Some(RepoCiSessionMode::LocalAndRemote)),
         other => Err(format!("Unknown repo CI mode `{other}`.")),
+    }
+}
+
+fn parse_model_policy_enabled(raw: &str) -> Result<Option<bool>, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "enable" | "enabled" | "on" => Ok(Some(true)),
+        "disable" | "disabled" | "off" => Ok(Some(false)),
+        "inherit" | "default" | "config" => Ok(None),
+        _ => Err(MODEL_POLICY_USAGE.to_string()),
+    }
+}
+
+fn model_policy_session_message(enabled: Option<bool>) -> String {
+    match enabled {
+        Some(true) => "Model policy is enabled for this session.".to_string(),
+        Some(false) => "Model policy is disabled for this session.".to_string(),
+        None => "Model policy now inherits repo/user config for this session.".to_string(),
     }
 }
 

@@ -2,7 +2,6 @@ use super::*;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::models::AdditionalPermissionProfile;
-use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::protocol::RepoCiIssueType;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
@@ -367,6 +366,11 @@ impl Session {
         let config = session_configuration.original_config_do_not_use.clone();
         let mut per_turn_config = (*config).clone();
         per_turn_config.cwd = cwd;
+        if let Some(enabled) = session_configuration.model_policy_enabled_override
+            && let Some(model_policy) = per_turn_config.model_policy.as_mut()
+        {
+            model_policy.enabled = enabled;
+        }
         per_turn_config.model_reasoning_effort =
             session_configuration.collaboration_mode.reasoning_effort();
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;

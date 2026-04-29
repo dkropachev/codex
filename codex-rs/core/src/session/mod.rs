@@ -620,6 +620,7 @@ impl Codex {
             persist_extended_history,
             inherited_shell_snapshot,
             user_shell_override,
+            model_policy_enabled_override: None,
             repo_ci_session_mode: config.repo_ci_session_mode,
             repo_ci_issue_types: config.repo_ci_issue_types.clone(),
             repo_ci_review_rounds: config.repo_ci_review_rounds,

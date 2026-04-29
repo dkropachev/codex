@@ -59,6 +59,8 @@ use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadMemoryMode;
 use codex_app_server_protocol::ThreadMemoryModeSetParams;
 use codex_app_server_protocol::ThreadMemoryModeSetResponse;
+use codex_app_server_protocol::ThreadModelPolicySessionConfigSetParams;
+use codex_app_server_protocol::ThreadModelPolicySessionConfigSetResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -879,6 +881,26 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/repoCiSessionConfig/set failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_model_policy_session_config_set(
+        &mut self,
+        thread_id: ThreadId,
+        enabled: Option<bool>,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadModelPolicySessionConfigSetResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadModelPolicySessionConfigSet {
+                request_id,
+                params: ThreadModelPolicySessionConfigSetParams {
+                    thread_id: thread_id.to_string(),
+                    enabled,
+                },
+            })
+            .await
+            .wrap_err("thread/modelPolicySessionConfig/set failed in TUI")?;
         Ok(())
     }
 

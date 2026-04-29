@@ -1300,6 +1300,46 @@ async fn repo_ci_rounds_slash_command_sets_session_config() {
 }
 
 #[tokio::test]
+async fn model_policy_slash_command_sets_session_config() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/model-policy disable");
+
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::SetModelPolicySessionConfig {
+            enabled: Some(false),
+        })
+    );
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::InsertHistoryCell(_))),
+        "expected model-policy status history event; events: {events:?}"
+    );
+    assert_eq!(
+        recall_latest_after_clearing(&mut chat),
+        "/model-policy disable"
+    );
+}
+
+#[tokio::test]
+async fn model_policy_slash_command_without_args_shows_usage() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/model-policy");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Usage: /model-policy <enable|disable|inherit>"));
+}
+
+#[tokio::test]
 async fn unrecognized_slash_command_is_not_added_to_local_recall() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

@@ -313,6 +313,10 @@ client_request_definitions! {
         params: v2::ThreadRepoCiSessionConfigSetParams,
         response: v2::ThreadRepoCiSessionConfigSetResponse,
     },
+    ThreadModelPolicySessionConfigSet => "thread/modelPolicySessionConfig/set" {
+        params: v2::ThreadModelPolicySessionConfigSetParams,
+        response: v2::ThreadModelPolicySessionConfigSetResponse,
+    },
     #[experimental("memory/reset")]
     MemoryReset => "memory/reset" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
@@ -1891,6 +1895,29 @@ mod tests {
                     "mode": "remote",
                     "issueTypes": ["correctness", "security"],
                     "reviewRounds": 3
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_model_policy_session_config_set() -> Result<()> {
+        let request = ClientRequest::ThreadModelPolicySessionConfigSet {
+            request_id: RequestId::Integer(10),
+            params: v2::ThreadModelPolicySessionConfigSetParams {
+                thread_id: "thr_123".to_string(),
+                enabled: Some(false),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/modelPolicySessionConfig/set",
+                "id": 10,
+                "params": {
+                    "threadId": "thr_123",
+                    "enabled": false
                 }
             }),
             serde_json::to_value(&request)?,

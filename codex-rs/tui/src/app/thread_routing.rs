@@ -689,6 +689,12 @@ impl App {
                     .await?;
                 Ok(true)
             }
+            AppCommandView::SetModelPolicySessionConfig { enabled } => {
+                app_server
+                    .thread_model_policy_session_config_set(thread_id, *enabled)
+                    .await?;
+                Ok(true)
+            }
             AppCommandView::OverrideTurnContext { .. } => Ok(true),
             AppCommandView::Other(Op::ApproveGuardianDeniedAction { event }) => {
                 app_server

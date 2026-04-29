@@ -755,6 +755,14 @@ pub enum Op {
         review_rounds: Option<u8>,
     },
 
+    /// Override model policy enablement for this session.
+    ///
+    /// `None` clears the session override and returns to repo/user config.
+    SetModelPolicySessionConfig {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        enabled: Option<bool>,
+    },
+
     /// Request the list of skills for the provided `cwd` values or the session default.
     ListSkills {
         /// Working directories to scope repo skills discovery.
@@ -917,6 +925,7 @@ impl Op {
             Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
             Self::ReloadUserConfig => "reload_user_config",
             Self::SetRepoCiSessionConfig { .. } => "set_repo_ci_session_config",
+            Self::SetModelPolicySessionConfig { .. } => "set_model_policy_session_config",
             Self::ListSkills { .. } => "list_skills",
             Self::Compact => "compact",
             Self::DropMemories => "drop_memories",

@@ -1206,6 +1206,30 @@
             },
             "method": {
               "enum": [
+                "thread/modelPolicySessionConfig/set"
+              ],
+              "title": "Thread/modelPolicySessionConfig/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadModelPolicySessionConfigSetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/modelPolicySessionConfig/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/unarchive"
               ],
               "title": "Thread/unarchiveRequestMethod",
@@ -13766,6 +13790,31 @@
         "thread"
       ],
       "title": "ThreadMetadataUpdateResponse",
+      "type": "object"
+    },
+    "ThreadModelPolicySessionConfigSetParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "enabled": {
+          "description": "Null clears the session override and returns to repo/user config.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadModelPolicySessionConfigSetParams",
+      "type": "object"
+    },
+    "ThreadModelPolicySessionConfigSetResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadModelPolicySessionConfigSetResponse",
       "type": "object"
     },
     "ThreadNameUpdatedNotification": {

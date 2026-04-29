@@ -87,6 +87,7 @@ pub(crate) struct SessionConfiguration {
     pub(super) persist_extended_history: bool,
     pub(super) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(super) user_shell_override: Option<shell::Shell>,
+    pub(super) model_policy_enabled_override: Option<bool>,
     pub(super) repo_ci_session_mode: Option<RepoCiSessionMode>,
     pub(super) repo_ci_issue_types: Option<Vec<RepoCiIssueType>>,
     pub(super) repo_ci_review_rounds: Option<u8>,
@@ -216,6 +217,9 @@ impl SessionConfiguration {
         if let Some(app_server_client_version) = updates.app_server_client_version.clone() {
             next_configuration.app_server_client_version = Some(app_server_client_version);
         }
+        if let Some(model_policy_enabled_override) = updates.model_policy_enabled_override {
+            next_configuration.model_policy_enabled_override = model_policy_enabled_override;
+        }
         if let Some(repo_ci_session_mode) = updates.repo_ci_session_mode {
             next_configuration.repo_ci_session_mode = repo_ci_session_mode;
         }
@@ -248,6 +252,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
+    pub(crate) model_policy_enabled_override: Option<Option<bool>>,
     pub(crate) repo_ci_session_mode: Option<Option<RepoCiSessionMode>>,
     pub(crate) repo_ci_issue_types: Option<Option<Vec<RepoCiIssueType>>>,
     pub(crate) repo_ci_review_rounds: Option<Option<u8>>,

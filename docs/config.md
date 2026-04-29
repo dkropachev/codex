@@ -204,6 +204,11 @@ new internal session, such as spawned agents and memory consolidation agents. If
 a policy route cannot be applied, Codex leaves the original model configuration
 unchanged and continues with the default model selection.
 
+Inside the TUI, `/model-policy enable|disable|inherit` temporarily overrides
+whether the current thread uses the configured model policy. This override lasts
+until the session ends or you return to `inherit`, and `enable` requires an
+existing `[model_policy]` configuration.
+
 ## Custom CA Certificates
 
 Codex can trust a custom root CA bundle for outbound HTTPS and secure websocket

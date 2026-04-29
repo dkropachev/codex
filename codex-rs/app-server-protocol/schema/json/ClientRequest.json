@@ -3616,6 +3616,24 @@
       ],
       "type": "object"
     },
+    "ThreadModelPolicySessionConfigSetParams": {
+      "properties": {
+        "enabled": {
+          "description": "Null clears the session override and returns to repo/user config.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadReadParams": {
       "properties": {
         "includeTurns": {
@@ -4696,6 +4714,30 @@
         "params"
       ],
       "title": "Thread/repoCiSessionConfig/setRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/modelPolicySessionConfig/set"
+          ],
+          "title": "Thread/modelPolicySessionConfig/setRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadModelPolicySessionConfigSetParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/modelPolicySessionConfig/setRequest",
       "type": "object"
     },
     {
