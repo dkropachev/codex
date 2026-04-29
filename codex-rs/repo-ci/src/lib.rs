@@ -17,6 +17,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 mod inference;
+mod learning_hints;
 
 const MANIFEST_VERSION: u32 = 2;
 const JSONL_ENV: &str = "CODEX_REPO_CI_JSONL";
@@ -131,6 +132,9 @@ pub struct LearnedPlan {
     pub fast_steps: Vec<RepoCiStep>,
     pub full_steps: Vec<RepoCiStep>,
 }
+
+pub use learning_hints::RepoCiLearningHints;
+pub use learning_hints::WorkflowRunHint;
 
 #[derive(Debug, Clone)]
 pub struct LearnOutcome {
@@ -469,6 +473,11 @@ fn source_candidates(repo_root: &Path) -> Result<Vec<(PathBuf, SourceKind)>> {
 
 fn infer_steps(repo_root: &Path) -> Result<(Vec<RepoCiStep>, Vec<RepoCiStep>, Vec<RepoCiStep>)> {
     inference::infer_steps(repo_root)
+}
+
+/// Collect prompt scaffolding for AI-based repo CI discovery.
+pub fn collect_learning_hints(repo_root: &Path) -> Result<RepoCiLearningHints> {
+    learning_hints::collect_learning_hints(repo_root)
 }
 
 pub fn default_issue_types() -> Vec<RepoCiIssueType> {

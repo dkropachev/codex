@@ -5,6 +5,7 @@ use codex_repo_ci::CapturedStep;
 use codex_repo_ci::LearnOptions;
 use codex_repo_ci::LearnOutcome;
 use codex_repo_ci::LearnedPlan;
+use codex_repo_ci::RepoCiLearningHints;
 use codex_repo_ci::RepoCiStep;
 use codex_repo_ci::StepPhase;
 use codex_repo_ci::ValidationPhase;
@@ -13,6 +14,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process::Stdio;
@@ -59,12 +61,14 @@ pub(crate) async fn learn_repo_ci_with_ai(
     options: LearnOptions,
 ) -> Result<LearnOutcome> {
     let repo_root = codex_repo_ci::repo_root_for_cwd(cwd)?;
+    let learning_hints = codex_repo_ci::collect_learning_hints(&repo_root)?;
     let mut prior_plan = None;
     let mut failure_feedback = None;
 
     for attempt in 1..=MAX_LEARN_ATTEMPTS {
         let prompt = learn_prompt(
             &repo_root,
+            &learning_hints,
             options.local_test_time_budget_sec,
             attempt,
             prior_plan.as_ref(),
@@ -95,6 +99,7 @@ pub(crate) async fn learn_repo_ci_with_ai(
 
 fn learn_prompt(
     repo_root: &Path,
+    learning_hints: &RepoCiLearningHints,
     local_test_time_budget_sec: u64,
     attempt: usize,
     prior_plan: Option<&AiLearnedPlan>,
@@ -105,6 +110,7 @@ fn learn_prompt(
         repo_root.display(),
         local_test_time_budget_sec,
     );
+    prompt.push_str(&render_learning_hints(learning_hints));
     if let Some(plan) = prior_plan
         && let Ok(plan_json) = serde_json::to_string_pretty(plan)
     {
@@ -119,11 +125,94 @@ fn learn_prompt(
         prompt.push_str(feedback);
         prompt.push_str("\n```\n");
         prompt.push_str(
-            "Preserve commands that already worked when possible, and only change what is needed to make validation pass.\n",
+            "Preserve verified-good commands when possible, and only narrow the failing part of the plan instead of replacing the whole plan.\n",
         );
     }
     prompt.push_str(&format!("\nThis is repair attempt {attempt}.\n"));
     prompt
+}
+
+fn render_learning_hints(learning_hints: &RepoCiLearningHints) -> String {
+    let mut prompt = String::from("\nStrong repo signals:\n");
+    prompt.push_str(&render_step_hint_section(
+        "Inferred prepare-step candidates",
+        &learning_hints.prepare_steps,
+    ));
+    prompt.push_str(&render_step_hint_section(
+        "Inferred fast-step candidates",
+        &learning_hints.fast_steps,
+    ));
+    prompt.push_str(&render_step_hint_section(
+        "Inferred full-step candidates",
+        &learning_hints.full_steps,
+    ));
+    prompt.push_str(&render_workflow_hint_section(
+        &learning_hints.workflow_run_hints,
+    ));
+    prompt.push_str("\nPrompt rules for strong signals:\n");
+    prompt.push_str(
+        "- Prefer repo-native entrypoints already present in Makefiles, workflows, package scripts, or checked-in repo scripts.\n",
+    );
+    if has_repo_native_hints(learning_hints) {
+        prompt.push_str(
+            "- Do not replace discovered repo-native lint/test/build commands with generic fallback checks like `git diff --check` unless validation proves the repo-native commands are unusable.\n",
+        );
+    }
+    prompt.push_str(
+        "- Treat inferred candidate fastSteps as the default baseline unless validation proves they are unusable.\n",
+    );
+    prompt.push_str(
+        "- Use workflow-only matrix expansion mainly to shape fullSteps, not to bloat fastSteps.\n",
+    );
+    prompt
+}
+
+fn render_step_hint_section(title: &str, steps: &[RepoCiStep]) -> String {
+    let mut rendered = format!("{title}:\n");
+    if steps.is_empty() {
+        rendered.push_str("- (none)\n");
+        return rendered;
+    }
+    for step in steps {
+        rendered.push_str(&format!(
+            "- {} [{}] {}\n",
+            step.id,
+            phase_name(&step.phase),
+            step.command,
+        ));
+    }
+    rendered
+}
+
+fn render_workflow_hint_section(hints: &[codex_repo_ci::WorkflowRunHint]) -> String {
+    let mut rendered = String::from("Workflow run hints:\n");
+    if hints.is_empty() {
+        rendered.push_str("- (none)\n");
+        return rendered;
+    }
+    for hint in hints {
+        rendered.push_str(&format!("- {} => {}\n", hint.origin, hint.command));
+    }
+    rendered
+}
+
+fn has_repo_native_hints(learning_hints: &RepoCiLearningHints) -> bool {
+    learning_hints
+        .prepare_steps
+        .iter()
+        .chain(learning_hints.fast_steps.iter())
+        .chain(learning_hints.full_steps.iter())
+        .any(|step| step.command != "git diff --check")
+        || !learning_hints.workflow_run_hints.is_empty()
+}
+
+fn phase_name(phase: &StepPhase) -> &'static str {
+    match phase {
+        StepPhase::Prepare => "prepare",
+        StepPhase::Lint => "lint",
+        StepPhase::Build => "build",
+        StepPhase::Test => "test",
+    }
 }
 
 async fn run_exec_for_plan(
@@ -292,25 +381,91 @@ fn render_validation_feedback(outcome: &LearnOutcome) -> Result<String> {
         "fastSteps": outcome.manifest.fast_steps,
         "fullSteps": outcome.manifest.full_steps,
     }))?;
-    let steps = render_captured_steps(&outcome.validation_run.steps);
-    let feedback = format!(
-        "Validation phase: {phase}\nExit code: {:?}\n\nCurrent plan:\n{plan_json}\n\nRecorded steps:\n{steps}\n\nstdout:\n{}\n\nstderr:\n{}",
+    let step_summary = summarize_validation_steps(
+        &validation_steps(outcome),
+        &outcome.validation_run.steps,
         outcome.validation_exit_code,
+    );
+    let feedback = format!(
+        "Validation phase: {phase}\nExit code: {:?}\n\nCurrent plan:\n{plan_json}\n\nValidation summary:\n{}\n\nstdout:\n{}\n\nstderr:\n{}",
+        outcome.validation_exit_code,
+        step_summary,
         truncate_for_feedback(&outcome.validation_run.stdout, MAX_FEEDBACK_BYTES / 2),
         truncate_for_feedback(&outcome.validation_run.stderr, MAX_FEEDBACK_BYTES / 2),
     );
     Ok(truncate_for_feedback(&feedback, MAX_FEEDBACK_BYTES))
 }
 
-fn render_captured_steps(steps: &[CapturedStep]) -> String {
-    if steps.is_empty() {
-        return "(none)".to_string();
+fn validation_steps(outcome: &LearnOutcome) -> Vec<RepoCiStep> {
+    let mut steps = outcome.manifest.prepare_steps.clone();
+    if matches!(outcome.validation_phase, ValidationPhase::Fast) {
+        steps.extend(outcome.manifest.fast_steps.clone());
     }
     steps
-        .iter()
-        .map(|step| format!("{} {:?} {:?}", step.id, step.event, step.exit_code))
-        .collect::<Vec<_>>()
-        .join("\n")
+}
+
+fn summarize_validation_steps(
+    validation_steps: &[RepoCiStep],
+    captured_steps: &[CapturedStep],
+    validation_exit_code: Option<i32>,
+) -> String {
+    let mut step_statuses = HashMap::new();
+    for step in captured_steps {
+        step_statuses.insert(step.id.clone(), (step.event.clone(), step.exit_code));
+    }
+
+    let mut passed = Vec::new();
+    let mut failed = None;
+    let mut not_run = Vec::new();
+    let mut failure_seen = false;
+
+    for step in validation_steps {
+        match step_statuses.get(&step.id) {
+            Some((_, Some(0))) if !failure_seen => passed.push(step_summary_line(step)),
+            Some((event, exit_code)) if !failure_seen => {
+                failed = Some(format!(
+                    "{} (event: {:?}, exit_code: {:?}, validation exit code: {:?})",
+                    step_summary_line(step),
+                    event,
+                    exit_code,
+                    validation_exit_code,
+                ));
+                failure_seen = true;
+            }
+            _ => not_run.push(step_summary_line(step)),
+        }
+    }
+
+    let mut summary = String::from("Passed steps:\n");
+    if passed.is_empty() {
+        summary.push_str("- (none)\n");
+    } else {
+        for step in passed {
+            summary.push_str(&format!("- {step}\n"));
+        }
+    }
+
+    summary.push_str("Failed step:\n");
+    if let Some(failed) = failed {
+        summary.push_str(&format!("- {failed}\n"));
+    } else {
+        summary.push_str("- (none)\n");
+    }
+
+    summary.push_str("Not-run remaining steps:\n");
+    if not_run.is_empty() {
+        summary.push_str("- (none)\n");
+    } else {
+        for step in not_run {
+            summary.push_str(&format!("- {step}\n"));
+        }
+    }
+
+    summary
+}
+
+fn step_summary_line(step: &RepoCiStep) -> String {
+    format!("{} [{}] {}", step.id, phase_name(&step.phase), step.command)
 }
 
 fn parse_json_payload<T>(text: &str) -> Result<T>
@@ -421,5 +576,110 @@ mod tests {
     fn truncate_for_feedback_handles_utf8_boundaries() {
         let truncated = truncate_for_feedback("abé🙂xyz", 7);
         assert_eq!(truncated, "ab\n...\nxyz");
+    }
+
+    #[test]
+    fn learn_prompt_includes_strong_repo_signals() {
+        let hints = RepoCiLearningHints {
+            prepare_steps: vec![],
+            fast_steps: vec![
+                RepoCiStep {
+                    id: "make-lint".to_string(),
+                    command: "make lint".to_string(),
+                    phase: StepPhase::Lint,
+                },
+                RepoCiStep {
+                    id: "make-test-unit".to_string(),
+                    command: "make test-unit".to_string(),
+                    phase: StepPhase::Test,
+                },
+            ],
+            full_steps: vec![RepoCiStep {
+                id: "make-build".to_string(),
+                command: "make build".to_string(),
+                phase: StepPhase::Build,
+            }],
+            workflow_run_hints: vec![codex_repo_ci::WorkflowRunHint {
+                origin: ".github/workflows/tests.yml::lint (Lint)".to_string(),
+                command: "make lint".to_string(),
+            }],
+        };
+
+        let prompt = learn_prompt(Path::new("/tmp/repo"), &hints, 120, 1, None, None);
+
+        assert!(prompt.contains("Strong repo signals:"));
+        assert!(prompt.contains("make lint"));
+        assert!(prompt.contains("make test-unit"));
+        assert!(prompt.contains("make build"));
+        assert!(prompt.contains("Do not replace discovered repo-native lint/test/build commands with generic fallback checks like `git diff --check` unless validation proves the repo-native commands are unusable."));
+    }
+
+    #[test]
+    fn validation_feedback_separates_passed_failed_and_not_run_steps() {
+        let outcome = LearnOutcome {
+            paths: codex_repo_ci::RepoCiPaths {
+                repo_root: Path::new("/tmp/repo").to_path_buf(),
+                state_dir: Path::new("/tmp/state").to_path_buf(),
+                manifest_path: Path::new("/tmp/state/manifest.json").to_path_buf(),
+                runner_path: Path::new("/tmp/state/run_ci.sh").to_path_buf(),
+            },
+            manifest: codex_repo_ci::RepoCiManifest {
+                version: 2,
+                repo_root: Path::new("/tmp/repo").to_path_buf(),
+                repo_key: "repo".to_string(),
+                automation: codex_repo_ci::AutomationMode::Local,
+                local_test_time_budget_sec: 120,
+                learned_at_unix_sec: 0,
+                learning_sources: vec![],
+                inferred_issue_types: vec![],
+                prepare_steps: vec![RepoCiStep {
+                    id: "prepare".to_string(),
+                    command: "make prepare".to_string(),
+                    phase: StepPhase::Prepare,
+                }],
+                fast_steps: vec![
+                    RepoCiStep {
+                        id: "lint".to_string(),
+                        command: "make lint".to_string(),
+                        phase: StepPhase::Lint,
+                    },
+                    RepoCiStep {
+                        id: "unit".to_string(),
+                        command: "make test-unit".to_string(),
+                        phase: StepPhase::Test,
+                    },
+                ],
+                full_steps: vec![],
+                validation: codex_repo_ci::ValidationStatus::Failed { exit_code: Some(2) },
+            },
+            validation_exit_code: Some(2),
+            validation_phase: ValidationPhase::Fast,
+            validation_run: codex_repo_ci::CapturedRun {
+                status: codex_repo_ci::CapturedExitStatus {
+                    code: Some(2),
+                    success: false,
+                },
+                stdout: "lint failed".to_string(),
+                stderr: String::new(),
+                steps: vec![
+                    CapturedStep {
+                        id: "prepare".to_string(),
+                        event: codex_repo_ci::CapturedStepEvent::Finished,
+                        exit_code: Some(0),
+                    },
+                    CapturedStep {
+                        id: "lint".to_string(),
+                        event: codex_repo_ci::CapturedStepEvent::Finished,
+                        exit_code: Some(2),
+                    },
+                ],
+            },
+        };
+
+        let feedback = render_validation_feedback(&outcome).expect("feedback");
+
+        assert!(feedback.contains("Passed steps:\n- prepare [prepare] make prepare"));
+        assert!(feedback.contains("Failed step:\n- lint [lint] make lint"));
+        assert!(feedback.contains("Not-run remaining steps:\n- unit [test] make test-unit"));
     }
 }
