@@ -27,11 +27,13 @@ fn strip_osc_sequences(s: &str) -> std::borrow::Cow<'_, str> {
 
     let bytes = s.as_bytes();
     let mut index = 0;
+    let mut visible_start = 0;
     let mut output = String::with_capacity(s.len());
     let mut modified = false;
 
     while index < bytes.len() {
         if bytes[index] == 0x1B && bytes.get(index + 1) == Some(&b']') {
+            output.push_str(&s[visible_start..index]);
             modified = true;
             index += 2;
             while index < bytes.len() {
@@ -45,20 +47,31 @@ fn strip_osc_sequences(s: &str) -> std::borrow::Cow<'_, str> {
                 }
                 index += 1;
             }
+            visible_start = index;
+            continue;
+        }
+
+        if bytes[index] == 0x1B && index + 1 == bytes.len() {
+            output.push_str(&s[visible_start..index]);
+            modified = true;
+            index += 1;
+            visible_start = index;
             continue;
         }
 
         if bytes[index] == 0x07 {
+            output.push_str(&s[visible_start..index]);
             modified = true;
             index += 1;
+            visible_start = index;
             continue;
         }
 
-        output.push(bytes[index] as char);
         index += 1;
     }
 
     if modified {
+        output.push_str(&s[visible_start..]);
         std::borrow::Cow::Owned(output)
     } else {
         std::borrow::Cow::Borrowed(s)
@@ -131,8 +144,25 @@ mod tests {
     }
 
     #[test]
+    fn strip_osc_sequences_removes_unterminated_osc() {
+        let input = "\x1b]10;?";
+        assert_eq!(strip_osc_sequences(input), "");
+    }
+
+    #[test]
+    fn strip_osc_sequences_removes_dangling_escape() {
+        let input = "visible\x1b";
+        assert_eq!(strip_osc_sequences(input), "visible");
+    }
+
+    #[test]
     fn ansi_escape_line_strips_osc_payloads() {
         let input = "\x1b]8;;https://github.com\x07github.com\x1b]8;;\x07";
         assert_eq!(line_text(ansi_escape_line(input)), "github.com");
+    }
+
+    #[test]
+    fn ansi_escape_line_drops_dangling_escape() {
+        assert_eq!(line_text(ansi_escape_line("\x1b")), "");
     }
 }
