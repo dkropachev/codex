@@ -298,8 +298,9 @@ pub(crate) async fn maybe_run_after_agent(
 
     if config.review_enabled() {
         for attempt in 1..=config.max_review_fix_rounds {
+            let review_snapshot = codex_repo_ci::BranchDiffSnapshot::capture(&turn_context.cwd);
             let review =
-                match run_targeted_review(sess, turn_context, &config, &current_snapshot).await {
+                match run_targeted_review(sess, turn_context, &config, &review_snapshot).await {
                     Ok(review) => review,
                     Err(err) => {
                         send_status(
@@ -1013,7 +1014,7 @@ async fn run_targeted_review(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     config: &EffectiveRepoCiConfig,
-    snapshot: &WorktreeSnapshot,
+    snapshot: &codex_repo_ci::BranchDiffSnapshot,
 ) -> Result<RepoCiReviewOutput> {
     send_status(
         sess,
@@ -1289,7 +1290,10 @@ where
     Ok(serde_json::from_str(json_text)?)
 }
 
-fn targeted_review_prompt(config: &EffectiveRepoCiConfig, snapshot: &WorktreeSnapshot) -> String {
+fn targeted_review_prompt(
+    config: &EffectiveRepoCiConfig,
+    snapshot: &codex_repo_ci::BranchDiffSnapshot,
+) -> String {
     let selected = config
         .review_issue_types
         .iter()
@@ -1302,7 +1306,8 @@ fn targeted_review_prompt(config: &EffectiveRepoCiConfig, snapshot: &WorktreeSna
         .map(repo_ci_issue_type_slug)
         .collect::<Vec<_>>();
     format!(
-        "Review the current repository changes and return strict JSON only.\n\nIn scope issue types:\n- {}\n\nExplicitly out of scope issue types:\n- {}\n\nRules:\n- Only report issues in the selected scope.\n- Do not expand into every possible review category.\n- Prefer absolute file paths in findings.\n- Use locationHint only when you cannot provide a specific file path.\n- Inspect the workspace as needed before answering.\n\nChanged paths:\n```text\n{}\n```\n\nDiff summary:\n```text\n{}\n```",
+        "Review the current branch changes and return strict JSON only.\n\nReview scope:\n{}\n\nIn scope issue types:\n- {}\n\nExplicitly out of scope issue types:\n- {}\n\nRules:\n- Review the whole branch diff, not only the latest turn or uncommitted files.\n- Only report issues in the selected scope.\n- Do not expand into every possible review category.\n- Prefer absolute file paths in findings.\n- Use locationHint only when you cannot provide a specific file path.\n- Inspect the workspace as needed before answering.\n\nBranch changed paths:\n```text\n{}\n```\n\nBranch diff summary:\n```text\n{}\n```",
+        snapshot.scope_description(),
         selected.join("\n- "),
         excluded.join("\n- "),
         if snapshot.changed_paths.is_empty() {
@@ -2324,14 +2329,17 @@ mod tests {
             review_issue_types: vec![RepoCiIssueType::Correctness, RepoCiIssueType::Security],
             max_review_fix_rounds: 2,
         };
-        let snapshot = WorktreeSnapshot {
-            digest: "abc".to_string(),
+        let snapshot = codex_repo_ci::BranchDiffSnapshot {
+            base_ref: Some("origin/main".to_string()),
+            merge_base: Some("abc".to_string()),
             changed_paths: vec!["src/main.rs".to_string()],
             diff_summary: "1 file changed".to_string(),
         };
 
         let prompt = targeted_review_prompt(&config, &snapshot);
 
+        assert!(prompt.contains("Review the whole branch diff"));
+        assert!(prompt.contains("Whole branch diff against `origin/main` using merge base `abc`"));
         assert!(prompt.contains("- correctness"));
         assert!(prompt.contains("- security"));
         for excluded in [
