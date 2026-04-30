@@ -4894,7 +4894,7 @@ async fn repo_ci_session_mode_is_submitted_to_app_server() {
         .await
         .expect("primary thread should be registered");
     let op = AppCommand::set_repo_ci_session_config(
-        Some(codex_protocol::protocol::RepoCiSessionMode::Remote),
+        Some(Some(codex_protocol::protocol::RepoCiSessionMode::Remote)),
         /*issue_types*/ None,
         /*review_rounds*/ None,
         /*long_ci*/ None,
@@ -4924,12 +4924,12 @@ async fn repo_ci_session_config_is_submitted_to_app_server() {
         .expect("primary thread should be registered");
     let op = AppCommand::set_repo_ci_session_config(
         None,
-        Some(vec![
+        Some(Some(vec![
             codex_protocol::protocol::RepoCiIssueType::Correctness,
             codex_protocol::protocol::RepoCiIssueType::Maintainability,
-        ]),
-        Some(4),
-        Some(true),
+        ])),
+        Some(Some(4)),
+        Some(Some(true)),
     );
 
     let handled = app

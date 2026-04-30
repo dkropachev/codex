@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use codex_config::config_toml::AccountPoolDefinitionToml;
 use codex_config::config_toml::AccountPoolPolicyToml;
 use codex_config::config_toml::AccountPoolToml;
 use codex_config::config_toml::ModelRouterCandidateToml;
+use codex_login::AuthManager;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_model_router::CandidateMetrics;
 use codex_model_router::CandidateRoute;
@@ -86,6 +88,27 @@ pub(crate) fn apply_model_router(
     apply_candidate(&mut router_config, candidate)?;
     *config = router_config;
     Ok(())
+}
+
+pub(crate) fn auth_manager_for_config(
+    config: &Config,
+    parent: &Arc<AuthManager>,
+) -> Arc<AuthManager> {
+    if config_account_pool_default(config) == parent.default_account_pool_id() {
+        return Arc::clone(parent);
+    }
+    AuthManager::shared_from_config_with_parent_auth(config, parent)
+}
+
+fn config_account_pool_default(config: &Config) -> Option<String> {
+    let account_pool = config.account_pool.as_ref()?;
+    if !account_pool.enabled {
+        return None;
+    }
+    account_pool
+        .default_pool
+        .clone()
+        .or_else(|| account_pool.pools.keys().next().cloned())
 }
 
 fn build_candidate_routes(
@@ -239,6 +262,7 @@ mod tests {
     use codex_config::config_toml::ModelRouterCandidateToml;
     use codex_config::config_toml::ModelRouterReasoningEffortToml;
     use codex_config::config_toml::ModelRouterToml;
+    use codex_login::AuthManager;
     use codex_protocol::config_types::ServiceTier;
     use codex_protocol::openai_models::ReasoningEffort;
 
@@ -292,6 +316,35 @@ mod tests {
                 .as_ref()
                 .and_then(|pool| pool.default_pool.as_deref()),
             Some("account:spark-account")
+        );
+    }
+
+    #[tokio::test]
+    async fn auth_manager_for_config_rebuilds_for_routed_account_pool() {
+        let mut config = config::test_config().await;
+        config.account_pool = Some(AccountPoolToml {
+            enabled: true,
+            default_pool: Some("base".to_string()),
+            pools: BTreeMap::from([(
+                "base".to_string(),
+                AccountPoolDefinitionToml {
+                    provider: OPENAI_PROVIDER_ID.to_string(),
+                    policy: AccountPoolPolicyToml::Drain,
+                    accounts: vec!["base-account".to_string()],
+                },
+            )]),
+        });
+        let parent =
+            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
+        let mut routed_config = config;
+
+        set_single_account(&mut routed_config, "work-account");
+        let routed = auth_manager_for_config(&routed_config, &parent);
+
+        assert_eq!(parent.default_account_pool_id().as_deref(), Some("base"));
+        assert_eq!(
+            routed.default_account_pool_id().as_deref(),
+            Some("account:work-account")
         );
     }
 

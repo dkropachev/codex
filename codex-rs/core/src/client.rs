@@ -330,6 +330,33 @@ impl ModelClient {
         }
     }
 
+    pub(crate) fn with_provider_info(
+        &self,
+        provider_info: ModelProviderInfo,
+        auth_manager: Option<Arc<AuthManager>>,
+    ) -> Self {
+        let client = Self::new(
+            auth_manager,
+            self.state.conversation_id,
+            self.state.installation_id.clone(),
+            provider_info,
+            self.state.session_source.clone(),
+            self.state.model_verbosity,
+            self.state.enable_request_compression,
+            self.state.include_timing_metrics,
+            self.state.beta_features_header.clone(),
+        );
+        client.state.window_generation.store(
+            self.state.window_generation.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        client.state.disable_websockets.store(
+            self.state.disable_websockets.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        client
+    }
+
     /// Creates a fresh turn-scoped streaming session.
     ///
     /// This constructor does not perform network I/O itself; the session opens a websocket lazily

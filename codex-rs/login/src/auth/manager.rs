@@ -1588,6 +1588,12 @@ impl AuthManager {
         self.account_pool.as_ref().and_then(|pool| pool.status())
     }
 
+    pub fn default_account_pool_id(&self) -> Option<String> {
+        self.account_pool
+            .as_ref()
+            .map(|pool| pool.default_pool_id().to_string())
+    }
+
     pub fn active_account_pool_member_id(&self) -> Option<String> {
         self.account_pool
             .as_ref()
@@ -1685,6 +1691,17 @@ impl AuthManager {
             })
             .map(Arc::new);
         Arc::new(auth_manager)
+    }
+
+    pub fn shared_from_config_with_parent_auth(
+        config: &impl AuthManagerConfig,
+        parent: &Self,
+    ) -> Arc<Self> {
+        let auth_manager = Self::shared_from_config(config, parent.codex_api_key_env_enabled());
+        if let Some(external_auth) = parent.external_auth() {
+            auth_manager.set_external_auth(external_auth);
+        }
+        auth_manager
     }
 
     pub fn unauthorized_recovery(self: &Arc<Self>) -> UnauthorizedRecovery {

@@ -39,13 +39,22 @@ use tracing::warn;
 use crate::Prompt;
 use crate::ResponseEvent;
 use crate::codex_delegate::run_codex_thread_one_shot;
+use crate::context::ContextualUserFragment;
+use crate::context::RepoCiFollowup;
 use crate::model_router::ModelRouterSource;
 use crate::model_router::apply_model_router;
+use crate::model_router::auth_manager_for_config;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 
 const MAX_OUTPUT_BYTES: usize = 24_000;
 const MAX_CHANGED_PATHS_BYTES: usize = 8_000;
+const MAX_FOLLOWUP_OUTPUT_BYTES: usize = 1_200;
+const MAX_FOLLOWUP_CHANGED_PATHS_BYTES: usize = 600;
+const MAX_FOLLOWUP_DIFF_BYTES: usize = 800;
+const MAX_FOLLOWUP_TRIAGE_SUMMARY_BYTES: usize = 400;
+const MAX_FOLLOWUP_REVIEW_SUMMARY_BYTES: usize = 500;
+const MAX_FOLLOWUP_FINDINGS_BYTES: usize = 1_800;
 const TRIAGE_BASE_INSTRUCTIONS: &str =
     "You classify repository CI failures. Return strict JSON only. Do not suggest code edits.";
 
@@ -1610,30 +1619,45 @@ fn review_fix_output_schema() -> serde_json::Value {
 }
 
 fn review_findings_prompt(review: &RepoCiReviewOutput) -> ResponseItem {
-    let findings = review
-        .findings
-        .iter()
-        .map(|finding| {
-            format!(
-                "- [{}] {}: {}\n  {}",
-                repo_ci_issue_type_slug(finding.issue_type),
-                finding.title,
-                finding.location(),
-                finding.body
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: format!(
-                "Repo CI targeted review found scoped issues that still need fixes.\n\nSummary: {}\n\nFindings:\n{}",
-                review.summary, findings
-            ),
-        }],
-        phase: None,
+    let findings = bounded_review_findings(review);
+    ContextualUserFragment::into(RepoCiFollowup::new(format!(
+        "Repo CI targeted review found scoped issues that still need fixes.\n\nSummary: {}\n\nFindings:\n{}",
+        truncate_middle(&review.summary, MAX_FOLLOWUP_REVIEW_SUMMARY_BYTES),
+        findings
+    )))
+}
+
+fn bounded_review_findings(review: &RepoCiReviewOutput) -> String {
+    let mut output = String::new();
+    let mut omitted = 0usize;
+    for finding in &review.findings {
+        let rendered = format!(
+            "- [{}] {}: {}\n  {}",
+            repo_ci_issue_type_slug(finding.issue_type),
+            finding.title,
+            finding.location(),
+            finding.body
+        );
+        let separator_len = usize::from(!output.is_empty());
+        if output.len() + separator_len + rendered.len() > MAX_FOLLOWUP_FINDINGS_BYTES {
+            omitted += 1;
+            continue;
+        }
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(&rendered);
+    }
+    if omitted > 0 {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(&format!("... omitted {omitted} additional finding(s) ..."));
+    }
+    if output.is_empty() {
+        "(no findings were included)".to_string()
+    } else {
+        output
     }
 }
 
@@ -2161,7 +2185,12 @@ async fn run_model_triage(
         .or(turn_context.reasoning_effort)
         .or(model_info.default_reasoning_level);
 
-    let mut client_session = sess.services.model_client.new_session();
+    let routed_auth_manager = auth_manager_for_config(&policy_config, &sess.services.auth_manager);
+    let routed_model_client = sess.services.model_client.with_provider_info(
+        policy_config.model_provider.clone(),
+        Some(routed_auth_manager),
+    );
+    let mut client_session = routed_model_client.new_session();
     let prompt = Prompt {
         input: vec![ResponseItem::Message {
             id: None,
@@ -2293,22 +2322,17 @@ fn repair_prompt(
     let changed_paths = if changed_paths.is_empty() {
         "(no changed paths recorded)".to_string()
     } else {
-        format_changed_paths_for_prompt(changed_paths)
+        truncate_middle(&changed_paths.join("\n"), MAX_FOLLOWUP_CHANGED_PATHS_BYTES)
     };
     let text = format!(
         "Repo CI {kind} checks failed after your changes.\n\nTriage classification: {} ({:?} confidence)\nTriage summary: {}\n\nChanged paths:\n```text\n{changed_paths}\n```\n\nDiff summary:\n```text\n{}\n```\n\nIf the failure is related or uncertain, fix the code, then let repo CI run again. Do not edit code for clearly unrelated failures.\n\nFailure output:\n```text\n{}\n```",
         triage.classification.as_str(),
         triage.confidence,
-        triage.summary,
-        truncate_middle(diff_summary, 4_000),
-        truncate_middle(output, MAX_OUTPUT_BYTES)
+        truncate_middle(&triage.summary, MAX_FOLLOWUP_TRIAGE_SUMMARY_BYTES),
+        truncate_middle(diff_summary, MAX_FOLLOWUP_DIFF_BYTES),
+        truncate_middle(output, MAX_FOLLOWUP_OUTPUT_BYTES)
     );
-    ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText { text }],
-        phase: None,
-    }
+    ContextualUserFragment::into(RepoCiFollowup::new(text))
 }
 
 fn format_changed_paths_for_prompt(changed_paths: &[String]) -> String {
@@ -2594,6 +2618,28 @@ mod tests {
     }
 
     #[test]
+    fn repair_prompt_is_bounded_contextual_followup() {
+        let changed_paths = (0..500)
+            .map(|index| format!("src/generated/file_{index}.rs"))
+            .collect::<Vec<_>>();
+        let triage =
+            TriageResult::deterministic(FailureClassification::Related, "triage ".repeat(1_000));
+
+        let prompt = response_item_text(&repair_prompt(
+            "local",
+            &"output ".repeat(10_000),
+            &changed_paths,
+            &"diff ".repeat(10_000),
+            &triage,
+        ));
+
+        assert!(prompt.starts_with("<repo_ci_followup>"));
+        assert!(prompt.ends_with("</repo_ci_followup>"));
+        assert!(prompt.len() < 5_000);
+        assert!(prompt.contains("omitted"));
+    }
+
+    #[test]
     fn targeted_review_prompt_lists_selected_and_excluded_issue_types() {
         let config = EffectiveRepoCiConfig {
             automation: RepoCiAutomationToml::Local,
@@ -2657,6 +2703,46 @@ mod tests {
             absolute_file_path: Some(PathBuf::from(path)),
             location_hint: None,
             reason: "outside configured issue-type filter".to_string(),
+        }
+    }
+
+    #[test]
+    fn review_findings_prompt_is_bounded_contextual_followup() {
+        let review = RepoCiReviewOutput {
+            summary: "summary ".repeat(1_000),
+            findings: (0..50)
+                .map(|index| RepoCiReviewFinding {
+                    title: format!("finding {index}"),
+                    body: "body ".repeat(500),
+                    issue_type: RepoCiIssueType::Correctness,
+                    absolute_file_path: Some(PathBuf::from(format!("/tmp/repo/src/{index}.rs"))),
+                    location_hint: None,
+                })
+                .collect(),
+            disregarded_findings: Vec::new(),
+        };
+
+        let prompt = response_item_text(&review_findings_prompt(&review));
+
+        assert!(prompt.starts_with("<repo_ci_followup>"));
+        assert!(prompt.ends_with("</repo_ci_followup>"));
+        assert!(prompt.len() < 5_000);
+        assert!(prompt.contains("omitted"));
+    }
+
+    fn response_item_text(item: &ResponseItem) -> String {
+        match item {
+            ResponseItem::Message { content, .. } => content
+                .iter()
+                .filter_map(|content| match content {
+                    ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                        Some(text.as_str())
+                    }
+                    ContentItem::InputImage { .. } => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
         }
     }
 

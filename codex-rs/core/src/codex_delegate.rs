@@ -40,6 +40,7 @@ use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
 use crate::mcp_tool_call::is_mcp_tool_approval_question_id;
 use crate::mcp_tool_call::lookup_mcp_tool_metadata;
+use crate::model_router::auth_manager_for_config;
 use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
@@ -72,6 +73,7 @@ pub(crate) async fn run_codex_thread_interactive(
     subagent_source: SubAgentSource,
     initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
+    let auth_manager = auth_manager_for_config(&config, &auth_manager);
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {

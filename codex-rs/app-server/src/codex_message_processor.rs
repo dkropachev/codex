@@ -3888,12 +3888,16 @@ impl CodexMessageProcessor {
                 &request_id,
                 thread.as_ref(),
                 Op::SetRepoCiSessionConfig {
-                    mode: mode.map(codex_app_server_protocol::RepoCiSessionMode::to_core),
-                    issue_types: issue_types.map(|values| {
-                        values
-                            .into_iter()
-                            .map(codex_app_server_protocol::RepoCiIssueType::to_core)
-                            .collect()
+                    mode: mode.map(|mode| {
+                        mode.map(codex_app_server_protocol::RepoCiSessionMode::to_core)
+                    }),
+                    issue_types: issue_types.map(|issue_types| {
+                        issue_types.map(|values| {
+                            values
+                                .into_iter()
+                                .map(codex_app_server_protocol::RepoCiIssueType::to_core)
+                                .collect()
+                        })
                     }),
                     review_rounds,
                     long_ci,

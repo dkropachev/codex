@@ -206,7 +206,7 @@ fn current_pr(cwd: &Path) -> Result<Option<GhPr>> {
 }
 
 fn push_pr_head(cwd: &Path, pr: &GhPr) -> Result<()> {
-    let remote = remote_target(pr);
+    let remote = remote_target(cwd, pr);
     let mut push_ref = String::from("HEAD:");
     push_ref.push_str(&pr.head_ref_name);
     run_command_with_retry(
@@ -218,15 +218,83 @@ fn push_pr_head(cwd: &Path, pr: &GhPr) -> Result<()> {
     Ok(())
 }
 
-fn remote_target(pr: &GhPr) -> String {
+fn remote_target(cwd: &Path, pr: &GhPr) -> String {
     if let Some(repo) = &pr.head_repository {
-        format!(
-            "git@github.com:{}/{}.git",
-            pr.head_repository_owner.login, repo.name
+        if let Some(remote) =
+            matching_github_remote(cwd, &pr.head_repository_owner.login, &repo.name)
+        {
+            return remote;
+        }
+        let protocol = gh_git_protocol(cwd);
+        github_remote_url(
+            &pr.head_repository_owner.login,
+            &repo.name,
+            protocol.as_deref(),
         )
     } else {
         "origin".to_string()
     }
+}
+
+fn matching_github_remote(cwd: &Path, owner: &str, repo: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["remote", "-v"])
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let name = parts.next()?;
+            let url = parts.next()?;
+            github_remote_matches(url, owner, repo).then(|| name.to_string())
+        })
+        .next()
+}
+
+fn github_remote_url(owner: &str, repo: &str, protocol: Option<&str>) -> String {
+    if protocol == Some("https") {
+        format!("https://github.com/{owner}/{repo}.git")
+    } else {
+        format!("git@github.com:{owner}/{repo}.git")
+    }
+}
+
+fn gh_git_protocol(cwd: &Path) -> Option<String> {
+    let output = Command::new("gh")
+        .args(["config", "get", "git_protocol"])
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn github_remote_matches(url: &str, owner: &str, repo: &str) -> bool {
+    normalize_github_remote(url)
+        .as_deref()
+        .is_some_and(|remote| remote.eq_ignore_ascii_case(&format!("{owner}/{repo}")))
+}
+
+fn normalize_github_remote(url: &str) -> Option<String> {
+    let url = url.trim().trim_end_matches('/').trim_end_matches(".git");
+    if let Some(rest) = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("http://github.com/"))
+        .or_else(|| url.strip_prefix("ssh://git@github.com/"))
+        .or_else(|| url.strip_prefix("git://github.com/"))
+    {
+        return Some(rest.trim_matches('/').to_string());
+    }
+    url.strip_prefix("git@github.com:")
+        .map(|rest| rest.trim_matches('/').to_string())
 }
 
 fn remote_head_ref(pr: &GhPr) -> String {
@@ -266,7 +334,7 @@ fn ensure_local_head_matches(cwd: &Path, expected: &str) -> Result<()> {
 }
 
 fn remote_head(cwd: &Path, pr: &GhPr) -> Result<Option<String>> {
-    let remote = remote_target(pr);
+    let remote = remote_target(cwd, pr);
     let head_ref = remote_head_ref(pr);
     let output = run_command_with_retry(
         cwd,
@@ -284,7 +352,7 @@ fn ensure_remote_ref_matches_head(cwd: &Path, pr: &GhPr, expected: &str) -> Resu
         anyhow!(
             "Repo CI remote checks cannot be marked passed because {} was not found on {}",
             remote_head_ref(pr),
-            remote_target(pr)
+            remote_target(cwd, pr)
         )
     })?;
     if actual == expected {
@@ -447,6 +515,45 @@ mod tests {
                 login: "owner".to_string(),
             },
         }
+    }
+
+    fn github_pr(owner: &str, repo: &str, head_ref_name: &str) -> GhPr {
+        GhPr {
+            head_ref_name: head_ref_name.to_string(),
+            head_repository: Some(GhRepository {
+                name: repo.to_string(),
+            }),
+            head_repository_owner: GhRepositoryOwner {
+                login: owner.to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn remote_target_prefers_matching_existing_https_remote() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        fs::create_dir(&repo_root).expect("create repo");
+        run_git(&repo_root, &["init"]);
+        run_git(
+            &repo_root,
+            &["remote", "add", "fork", "https://github.com/owner/repo.git"],
+        );
+        let pr = github_pr("owner", "repo", "feature");
+
+        assert_eq!(remote_target(&repo_root, &pr), "fork");
+    }
+
+    #[test]
+    fn github_remote_url_uses_https_when_gh_protocol_is_https() {
+        assert_eq!(
+            github_remote_url("owner", "repo", Some("https")),
+            "https://github.com/owner/repo.git"
+        );
+        assert_eq!(
+            github_remote_url("owner", "repo", Some("ssh")),
+            "git@github.com:owner/repo.git"
+        );
     }
 
     #[test]

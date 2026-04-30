@@ -1189,10 +1189,10 @@ pub(super) async fn submission_loop(
                         &sess,
                         sub.id.clone(),
                         SessionSettingsUpdate {
-                            repo_ci_session_mode: Some(mode),
-                            repo_ci_issue_types: Some(issue_types),
-                            repo_ci_review_rounds: Some(review_rounds),
-                            repo_ci_long_ci: Some(long_ci),
+                            repo_ci_session_mode: mode,
+                            repo_ci_issue_types: issue_types,
+                            repo_ci_review_rounds: review_rounds,
+                            repo_ci_long_ci: long_ci,
                             ..Default::default()
                         },
                     )
