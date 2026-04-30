@@ -12,8 +12,14 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Child;
 use std::process::Command;
 use std::process::ExitStatus;
+use std::process::Output;
+use std::process::Stdio;
+use std::thread;
+use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -26,6 +32,8 @@ mod repo_ci_ai_learning;
 
 const MANIFEST_VERSION: u32 = 2;
 const JSONL_ENV: &str = "CODEX_REPO_CI_JSONL";
+const RUNNER_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const RUNNER_TERMINATION_GRACE: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -295,9 +303,13 @@ pub fn learn_with_plan(
     write_runner(&paths.runner_path, &manifest)?;
     write_manifest(&paths.manifest_path, &manifest)?;
 
-    let prepare_run = capture_runner(&paths, "prepare")?;
+    let timeout = Some(Duration::from_secs(options.local_test_time_budget_sec));
+    let prepare_run = capture_runner(&paths, "prepare", timeout)?;
     let (validation_phase, validation_run) = if prepare_run.status.success {
-        (ValidationPhase::Fast, capture_runner(&paths, "fast")?)
+        (
+            ValidationPhase::Fast,
+            capture_runner(&paths, "fast", timeout)?,
+        )
     } else {
         (ValidationPhase::Prepare, prepare_run)
     };
@@ -337,7 +349,12 @@ pub fn run(codex_home: &Path, cwd: &Path, mode: RunMode) -> Result<std::process:
 pub fn run_capture(codex_home: &Path, cwd: &Path, mode: RunMode) -> Result<CapturedRun> {
     let paths = paths_for_repo(codex_home, cwd)?;
     require_runner(&paths)?;
-    capture_runner(&paths, mode.as_str())
+    let manifest = read_manifest(&paths.manifest_path)?;
+    capture_runner(
+        &paths,
+        mode.as_str(),
+        Some(Duration::from_secs(manifest.local_test_time_budget_sec)),
+    )
 }
 
 pub fn status(codex_home: &Path, cwd: &Path) -> Result<StatusOutcome> {
@@ -387,22 +404,119 @@ fn run_runner(paths: &RepoCiPaths, arg: &str) -> Result<std::process::ExitStatus
         .with_context(|| format!("failed to run {}", paths.runner_path.display()))
 }
 
-fn capture_runner(paths: &RepoCiPaths, arg: &str) -> Result<CapturedRun> {
+fn capture_runner(
+    paths: &RepoCiPaths,
+    arg: &str,
+    timeout: Option<Duration>,
+) -> Result<CapturedRun> {
     let jsonl_path = paths.state_dir.join(format!("run-{arg}-steps.jsonl"));
     let _ = fs::remove_file(&jsonl_path);
-    let output = Command::new("bash")
-        .arg(&paths.runner_path)
-        .arg(arg)
-        .env(JSONL_ENV, &jsonl_path)
-        .current_dir(&paths.repo_root)
-        .output()
-        .with_context(|| format!("failed to run {}", paths.runner_path.display()))?;
+    let output = capture_runner_output(paths, arg, &jsonl_path, timeout)?;
     Ok(CapturedRun {
         status: output.status.into(),
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         steps: read_captured_steps(&jsonl_path)?,
     })
+}
+
+fn capture_runner_output(
+    paths: &RepoCiPaths,
+    arg: &str,
+    jsonl_path: &Path,
+    timeout: Option<Duration>,
+) -> Result<Output> {
+    let mut command = Command::new("bash");
+    command
+        .arg(&paths.runner_path)
+        .arg(arg)
+        .env(JSONL_ENV, jsonl_path)
+        .current_dir(&paths.repo_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_runner_command(&mut command);
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("failed to run {}", paths.runner_path.display()))?;
+
+    let Some(timeout) = timeout else {
+        return child
+            .wait_with_output()
+            .with_context(|| format!("failed to wait for {}", paths.runner_path.display()));
+    };
+
+    let start = Instant::now();
+    loop {
+        if child
+            .try_wait()
+            .with_context(|| format!("failed to poll {}", paths.runner_path.display()))?
+            .is_some()
+        {
+            return child
+                .wait_with_output()
+                .with_context(|| format!("failed to wait for {}", paths.runner_path.display()));
+        }
+        if start.elapsed() >= timeout {
+            terminate_runner_child(&mut child);
+            let mut output = child.wait_with_output().with_context(|| {
+                format!(
+                    "failed to wait for {} after timeout",
+                    paths.runner_path.display()
+                )
+            })?;
+            let timeout_message = format!(
+                "\nrepo-ci runner `{arg}` timed out after {}s\n",
+                timeout.as_secs()
+            );
+            output.stderr.extend_from_slice(timeout_message.as_bytes());
+            return Ok(output);
+        }
+        thread::sleep(RUNNER_POLL_INTERVAL);
+    }
+}
+
+#[cfg(unix)]
+fn configure_runner_command(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn configure_runner_command(_command: &mut Command) {}
+
+fn terminate_runner_child(child: &mut Child) {
+    terminate_runner_child_gracefully(child);
+    thread::sleep(RUNNER_TERMINATION_GRACE);
+    if child.try_wait().ok().flatten().is_none() {
+        terminate_runner_child_forcefully(child);
+    }
+}
+
+#[cfg(unix)]
+fn terminate_runner_child_gracefully(child: &mut Child) {
+    let _ = Command::new("kill")
+        .args(["-TERM", "--", &format!("-{}", child.id())])
+        .status();
+}
+
+#[cfg(not(unix))]
+fn terminate_runner_child_gracefully(child: &mut Child) {
+    let _ = child.kill();
+}
+
+#[cfg(unix)]
+fn terminate_runner_child_forcefully(child: &mut Child) {
+    let _ = Command::new("kill")
+        .args(["-KILL", "--", &format!("-{}", child.id())])
+        .status();
+    let _ = child.kill();
+}
+
+#[cfg(not(unix))]
+fn terminate_runner_child_forcefully(child: &mut Child) {
+    let _ = child.kill();
 }
 
 fn read_captured_steps(path: &Path) -> Result<Vec<CapturedStep>> {
@@ -1027,7 +1141,7 @@ mod tests {
         };
         write_runner(&paths.runner_path, &manifest).expect("write runner");
 
-        let run = capture_runner(&paths, "fast").expect("capture");
+        let run = capture_runner(&paths, "fast", None).expect("capture");
 
         assert!(
             run.status.success,
@@ -1048,6 +1162,50 @@ mod tests {
                     exit_code: Some(0),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn capture_runner_times_out_and_records_started_step() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo = temp.path().join("repo");
+        let state_dir = temp.path().join("state");
+        fs::create_dir(&repo).expect("create repo");
+        fs::create_dir(&state_dir).expect("create state");
+        let paths = RepoCiPaths {
+            repo_root: repo.clone(),
+            state_dir,
+            manifest_path: temp.path().join("manifest.json"),
+            runner_path: temp.path().join("run_ci.sh"),
+        };
+        let manifest = RepoCiManifest {
+            version: MANIFEST_VERSION,
+            repo_root: repo,
+            repo_key: "repo".to_string(),
+            automation: AutomationMode::Local,
+            local_test_time_budget_sec: 300,
+            learned_at_unix_sec: 1,
+            learning_sources: vec![],
+            inferred_issue_types: default_issue_types(),
+            prepare_steps: vec![],
+            fast_steps: vec![step("slow", "sleep 10", StepPhase::Test)],
+            full_steps: vec![],
+            validation: ValidationStatus::NotRun,
+        };
+        write_runner(&paths.runner_path, &manifest).expect("write runner");
+
+        let run = capture_runner(&paths, "fast", Some(Duration::from_millis(100)))
+            .expect("capture should return timed-out run");
+
+        assert!(!run.status.success);
+        assert!(run.stderr.contains("repo-ci runner `fast` timed out"));
+        assert_eq!(
+            run.steps,
+            vec![CapturedStep {
+                id: "slow".to_string(),
+                event: CapturedStepEvent::Started,
+                exit_code: None,
+            }]
         );
     }
 

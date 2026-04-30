@@ -52,6 +52,8 @@ const TRIAGE_BASE_INSTRUCTIONS: &str =
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RepoCiTurnState {
     initial_snapshot: WorktreeSnapshot,
+    review_fix_rounds: u8,
+    review_exhausted: bool,
     local_fix_rounds: u8,
     remote_fix_rounds: u8,
     remote_completed: bool,
@@ -61,6 +63,8 @@ impl RepoCiTurnState {
     pub(crate) fn new(cwd: &Path) -> Self {
         Self {
             initial_snapshot: WorktreeSnapshot::capture(cwd),
+            review_fix_rounds: 0,
+            review_exhausted: false,
             local_fix_rounds: 0,
             remote_fix_rounds: 0,
             remote_completed: false,
@@ -351,11 +355,12 @@ impl RepoCiReviewIssueTracker {
     }
 
     fn summary_message(&self) -> Option<String> {
-        if self.resolved.is_empty() && self.disregarded.is_empty() {
+        if self.active.is_empty() && self.resolved.is_empty() && self.disregarded.is_empty() {
             return None;
         }
         Some(format!(
-            "Repo CI targeted review summary.\n\nResolved issues:\n{}\n\nDisregarded by issue-type filter:\n{}",
+            "Repo CI targeted review summary.\n\nUnresolved issues:\n{}\n\nResolved issues:\n{}\n\nDisregarded by issue-type filter:\n{}",
+            format_review_item_lines(self.active.values().map(RepoCiReviewFinding::summary_line)),
             format_review_item_lines(
                 self.resolved
                     .values()
@@ -445,9 +450,10 @@ pub(crate) async fn maybe_run_after_agent(
     let mut ran_review = false;
     let mut review_summary_state = RepoCiState::Passed;
     let mut review_summary_attempt = None;
-    if config.review_enabled() {
+    if config.review_enabled() && !state.review_exhausted {
         ran_review = true;
-        for attempt in 1..=config.max_review_fix_rounds {
+        loop {
+            let review_attempt = state.review_fix_rounds.saturating_add(1);
             let review_snapshot = codex_repo_ci::BranchDiffSnapshot::capture(&turn_context.cwd);
             let review =
                 match run_targeted_review(sess, turn_context, &config, &review_snapshot).await {
@@ -459,45 +465,52 @@ pub(crate) async fn maybe_run_after_agent(
                             RepoCiPhase::Triage,
                             RepoCiState::Failed,
                             RepoCiScope::Local,
-                            Some(attempt),
+                            Some(review_attempt),
                             Some(config.max_review_fix_rounds),
                             format!("Repo CI targeted review failed: {err:#}"),
                         )
                         .await;
                         review_summary_state = RepoCiState::Failed;
-                        review_summary_attempt = Some(attempt);
+                        review_summary_attempt = Some(review_attempt);
                         break;
                     }
                 };
             review_tracker.record_review(&review, &config.review_issue_types);
             if review.findings.is_empty() {
-                review_summary_attempt = Some(attempt);
+                state.review_fix_rounds = 0;
+                state.review_exhausted = false;
+                review_summary_attempt = Some(review_attempt);
                 break;
             }
-            if attempt == config.max_review_fix_rounds {
+            if state.review_fix_rounds >= config.max_review_fix_rounds {
+                state.review_exhausted = true;
                 send_status(
                     sess,
                     turn_context,
                     RepoCiPhase::Triage,
                     RepoCiState::Exhausted,
                     RepoCiScope::Local,
-                    Some(attempt),
+                    Some(state.review_fix_rounds),
                     Some(config.max_review_fix_rounds),
                     "Repo CI targeted review still found issues after the configured review rounds."
                         .to_string(),
                 )
                 .await;
+                review_summary_state = RepoCiState::Exhausted;
+                review_summary_attempt = Some(state.review_fix_rounds);
                 send_review_resolution_summary(
                     sess,
                     turn_context,
                     &review_tracker,
                     RepoCiState::Exhausted,
-                    Some(attempt),
+                    Some(state.review_fix_rounds),
                     Some(config.max_review_fix_rounds),
                 )
                 .await;
-                return Some(review_findings_prompt(&review));
+                break;
             }
+            state.review_fix_rounds = state.review_fix_rounds.saturating_add(1);
+            let fix_attempt = state.review_fix_rounds;
             let worker_outputs = match run_review_fix_workers(sess, turn_context, &review).await {
                 Ok(worker_outputs) => worker_outputs,
                 Err(err) => {
@@ -507,7 +520,7 @@ pub(crate) async fn maybe_run_after_agent(
                         RepoCiPhase::Triage,
                         RepoCiState::Failed,
                         RepoCiScope::Local,
-                        Some(attempt),
+                        Some(fix_attempt),
                         Some(config.max_review_fix_rounds),
                         format!("Repo CI fix workers failed: {err:#}"),
                     )
@@ -517,7 +530,7 @@ pub(crate) async fn maybe_run_after_agent(
                         turn_context,
                         &review_tracker,
                         RepoCiState::Failed,
-                        Some(attempt),
+                        Some(fix_attempt),
                         Some(config.max_review_fix_rounds),
                     )
                     .await;
@@ -530,7 +543,7 @@ pub(crate) async fn maybe_run_after_agent(
                 RepoCiPhase::Triage,
                 RepoCiState::Retrying,
                 RepoCiScope::Local,
-                Some(attempt),
+                Some(fix_attempt),
                 Some(config.max_review_fix_rounds),
                 aggregate_worker_summary(&worker_outputs),
             )
