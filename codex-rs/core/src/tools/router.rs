@@ -55,7 +55,7 @@ pub struct ToolRouter {
     index: ToolRouterIndex,
     model_visible_specs: Vec<ToolSpec>,
     parallel_mcp_server_names: HashSet<String>,
-    tool_router_ledger_tokens: Option<ToolRouterLedgerTokens>,
+    tool_router_token_estimates: Option<ToolRouterTokenEstimates>,
 }
 
 pub(crate) struct ToolRouterParams<'a> {
@@ -68,7 +68,7 @@ pub(crate) struct ToolRouterParams<'a> {
 }
 
 #[derive(Clone, Copy)]
-struct ToolRouterLedgerTokens {
+struct ToolRouterTokenEstimates {
     visible_router_schema_tokens: i64,
     hidden_tool_schema_tokens: i64,
 }
@@ -119,9 +119,9 @@ impl ToolRouter {
                 .map(|configured_tool| configured_tool.spec.clone())
                 .collect()
         };
-        let (model_visible_specs, tool_router_ledger_tokens) = if config.tool_router {
+        let (model_visible_specs, tool_router_token_estimates) = if config.tool_router {
             let router_spec = create_tool_router_tool();
-            let ledger_tokens = ToolRouterLedgerTokens {
+            let token_estimates = ToolRouterTokenEstimates {
                 visible_router_schema_tokens: estimate_tool_schema_tokens(std::slice::from_ref(
                     &router_spec,
                 )),
@@ -129,7 +129,7 @@ impl ToolRouter {
                     &unwrapped_model_visible_specs,
                 ),
             };
-            (vec![router_spec], Some(ledger_tokens))
+            (vec![router_spec], Some(token_estimates))
         } else {
             (unwrapped_model_visible_specs, None)
         };
@@ -140,7 +140,7 @@ impl ToolRouter {
             index,
             model_visible_specs,
             parallel_mcp_server_names,
-            tool_router_ledger_tokens,
+            tool_router_token_estimates,
         }
     }
 
@@ -575,16 +575,12 @@ impl ToolRouter {
         returned_output_tokens: i64,
         outcome: Option<String>,
     ) {
-        let Some(tokens) = self.tool_router_ledger_tokens else {
+        let Some(tokens) = self.tool_router_token_estimates else {
             return;
         };
         let Some(state_db) = session.services.state_db.as_deref() else {
             return;
         };
-        let estimated_schema_tokens_saved =
-            tokens.hidden_tool_schema_tokens - tokens.visible_router_schema_tokens;
-        let spark_overhead = usage.spark_prompt_tokens + usage.spark_completion_tokens;
-        let net_tokens_saved = estimated_schema_tokens_saved - spark_overhead;
         if let Err(err) = state_db
             .record_tool_router_ledger_entry(ToolRouterLedgerEntry {
                 thread_id: session.conversation_id.to_string(),
@@ -594,10 +590,8 @@ impl ToolRouter {
                 selected_tools: usage.selected_tools.clone(),
                 visible_router_schema_tokens: tokens.visible_router_schema_tokens,
                 hidden_tool_schema_tokens: tokens.hidden_tool_schema_tokens,
-                estimated_schema_tokens_saved,
                 spark_prompt_tokens: usage.spark_prompt_tokens,
                 spark_completion_tokens: usage.spark_completion_tokens,
-                net_tokens_saved,
                 fanout_call_count: usage.fanout_call_count,
                 returned_output_tokens,
                 original_output_tokens: returned_output_tokens,

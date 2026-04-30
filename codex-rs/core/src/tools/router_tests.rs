@@ -220,7 +220,7 @@ async fn routed_inner_dispatch_records_router_source() -> anyhow::Result<()> {
         index,
         model_visible_specs: Vec::new(),
         parallel_mcp_server_names: HashSet::new(),
-        tool_router_ledger_tokens: None,
+        tool_router_token_estimates: None,
     };
     let call = ToolCall {
         tool_name: ToolName::plain("tool_router"),

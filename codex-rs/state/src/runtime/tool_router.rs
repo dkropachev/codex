@@ -15,10 +15,8 @@ pub struct ToolRouterLedgerEntry {
     pub selected_tools: Vec<String>,
     pub visible_router_schema_tokens: i64,
     pub hidden_tool_schema_tokens: i64,
-    pub estimated_schema_tokens_saved: i64,
     pub spark_prompt_tokens: i64,
     pub spark_completion_tokens: i64,
-    pub net_tokens_saved: i64,
     pub fanout_call_count: i64,
     pub returned_output_tokens: i64,
     pub original_output_tokens: i64,
@@ -52,7 +50,10 @@ pub struct ToolRouterDiagnosticsSummary {
     pub spark_script_fallbacks: i64,
     pub fanout_routes: i64,
     pub total_fanout_calls: i64,
-    pub net_tokens_saved: i64,
+    pub visible_router_schema_tokens: i64,
+    pub hidden_tool_schema_tokens: i64,
+    pub spark_prompt_tokens: i64,
+    pub spark_completion_tokens: i64,
     pub returned_output_tokens: i64,
     pub success_rate_basis_points: i64,
     pub learned_rule_count: i64,
@@ -92,17 +93,15 @@ impl StateRuntime {
                 selected_tools_json,
                 visible_router_schema_tokens,
                 hidden_tool_schema_tokens,
-                estimated_schema_tokens_saved,
                 spark_prompt_tokens,
                 spark_completion_tokens,
-                net_tokens_saved,
                 fanout_call_count,
                 returned_output_tokens,
                 original_output_tokens,
                 truncated_output_tokens,
                 outcome
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(now_ms)
@@ -113,10 +112,8 @@ impl StateRuntime {
         .bind(selected_tools_json)
         .bind(entry.visible_router_schema_tokens)
         .bind(entry.hidden_tool_schema_tokens)
-        .bind(entry.estimated_schema_tokens_saved)
         .bind(entry.spark_prompt_tokens)
         .bind(entry.spark_completion_tokens)
-        .bind(entry.net_tokens_saved)
         .bind(entry.fanout_call_count)
         .bind(entry.returned_output_tokens)
         .bind(entry.original_output_tokens)
@@ -226,7 +223,10 @@ impl StateRuntime {
                 COALESCE(SUM(CASE WHEN route_kind = 'spark_script' THEN 1 ELSE 0 END), 0) AS spark_script_fallbacks,
                 COALESCE(SUM(CASE WHEN fanout_call_count > 1 THEN 1 ELSE 0 END), 0) AS fanout_routes,
                 COALESCE(SUM(fanout_call_count), 0) AS total_fanout_calls,
-                COALESCE(SUM(net_tokens_saved), 0) AS net_tokens_saved,
+                COALESCE(SUM(visible_router_schema_tokens), 0) AS visible_router_schema_tokens,
+                COALESCE(SUM(hidden_tool_schema_tokens), 0) AS hidden_tool_schema_tokens,
+                COALESCE(SUM(spark_prompt_tokens), 0) AS spark_prompt_tokens,
+                COALESCE(SUM(spark_completion_tokens), 0) AS spark_completion_tokens,
                 COALESCE(SUM(returned_output_tokens), 0) AS returned_output_tokens
             FROM tool_router_ledger
             WHERE created_at_ms >= ?
@@ -260,7 +260,10 @@ impl StateRuntime {
             spark_script_fallbacks: row.try_get("spark_script_fallbacks")?,
             fanout_routes: row.try_get("fanout_routes")?,
             total_fanout_calls: row.try_get("total_fanout_calls")?,
-            net_tokens_saved: row.try_get("net_tokens_saved")?,
+            visible_router_schema_tokens: row.try_get("visible_router_schema_tokens")?,
+            hidden_tool_schema_tokens: row.try_get("hidden_tool_schema_tokens")?,
+            spark_prompt_tokens: row.try_get("spark_prompt_tokens")?,
+            spark_completion_tokens: row.try_get("spark_completion_tokens")?,
             returned_output_tokens: row.try_get("returned_output_tokens")?,
             success_rate_basis_points: basis_points(successful_calls, total_calls),
             learned_rule_count: rules_row.try_get("learned_rule_count")?,
@@ -445,10 +448,8 @@ mod tests {
                 selected_tools: vec!["exec_command".to_string()],
                 visible_router_schema_tokens: 10,
                 hidden_tool_schema_tokens: 100,
-                estimated_schema_tokens_saved: 90,
-                spark_prompt_tokens: 0,
-                spark_completion_tokens: 0,
-                net_tokens_saved: 90,
+                spark_prompt_tokens: 11,
+                spark_completion_tokens: 3,
                 fanout_call_count: 1,
                 returned_output_tokens: 7,
                 original_output_tokens: 9,
@@ -459,7 +460,16 @@ mod tests {
             .expect("record ledger entry");
 
         let row = sqlx::query(
-            "SELECT selected_tools_json, net_tokens_saved FROM tool_router_ledger WHERE call_id = ?",
+            r#"
+            SELECT
+                selected_tools_json,
+                visible_router_schema_tokens,
+                hidden_tool_schema_tokens,
+                spark_prompt_tokens,
+                spark_completion_tokens
+            FROM tool_router_ledger
+            WHERE call_id = ?
+            "#,
         )
         .bind("call")
         .fetch_one(runtime.pool.as_ref())
@@ -472,10 +482,41 @@ mod tests {
             r#"["exec_command"]"#
         );
         assert_eq!(
-            row.try_get::<i64, _>("net_tokens_saved")
-                .expect("net tokens"),
-            90
+            (
+                row.try_get::<i64, _>("visible_router_schema_tokens")
+                    .expect("visible schema tokens"),
+                row.try_get::<i64, _>("hidden_tool_schema_tokens")
+                    .expect("hidden schema tokens"),
+                row.try_get::<i64, _>("spark_prompt_tokens")
+                    .expect("spark prompt tokens"),
+                row.try_get::<i64, _>("spark_completion_tokens")
+                    .expect("spark completion tokens"),
+            ),
+            (10, 100, 11, 3)
         );
+    }
+
+    #[tokio::test]
+    async fn tool_router_ledger_schema_omits_derived_savings_columns() {
+        let codex_home = TempDir::new().expect("temp dir");
+        let runtime = StateRuntime::init(codex_home.path().to_path_buf(), "test".to_string())
+            .await
+            .expect("state runtime");
+
+        let columns = sqlx::query("PRAGMA table_info(tool_router_ledger)")
+            .fetch_all(runtime.pool.as_ref())
+            .await
+            .expect("table info")
+            .into_iter()
+            .map(|row| row.try_get::<String, _>("name").expect("column name"))
+            .collect::<BTreeSet<_>>();
+
+        assert!(columns.contains("visible_router_schema_tokens"));
+        assert!(columns.contains("hidden_tool_schema_tokens"));
+        assert!(columns.contains("spark_prompt_tokens"));
+        assert!(columns.contains("spark_completion_tokens"));
+        assert!(!columns.contains("estimated_schema_tokens_saved"));
+        assert!(!columns.contains("net_tokens_saved"));
     }
 
     #[tokio::test]
@@ -557,10 +598,10 @@ mod tests {
             .expect("state runtime");
 
         for entry in [
-            ledger_entry("call-1", "deterministic", 1, 40, Some("ok")),
-            ledger_entry("call-2", "spark_script", 1, -15, Some("failed")),
-            ledger_entry("call-3", "learned_rule", 3, 20, Some("ok")),
-            ledger_entry("call-4", "error", 0, 0, Some("route_error")),
+            ledger_entry("call-1", "deterministic", 1, 0, 0, Some("ok")),
+            ledger_entry("call-2", "spark_script", 1, 11, 4, Some("failed")),
+            ledger_entry("call-3", "learned_rule", 3, 0, 0, Some("ok")),
+            ledger_entry("call-4", "error", 0, 0, 0, Some("route_error")),
         ] {
             runtime
                 .record_tool_router_ledger_entry(entry)
@@ -598,7 +639,10 @@ mod tests {
                 spark_script_fallbacks: 1,
                 fanout_routes: 1,
                 total_fanout_calls: 5,
-                net_tokens_saved: 45,
+                visible_router_schema_tokens: 40,
+                hidden_tool_schema_tokens: 400,
+                spark_prompt_tokens: 11,
+                spark_completion_tokens: 4,
                 returned_output_tokens: 28,
                 success_rate_basis_points: 5000,
                 learned_rule_count: 1,
@@ -741,7 +785,8 @@ mod tests {
         call_id: &str,
         route_kind: &str,
         fanout_call_count: i64,
-        net_tokens_saved: i64,
+        spark_prompt_tokens: i64,
+        spark_completion_tokens: i64,
         outcome: Option<&str>,
     ) -> ToolRouterLedgerEntry {
         ToolRouterLedgerEntry {
@@ -752,10 +797,8 @@ mod tests {
             selected_tools: Vec::new(),
             visible_router_schema_tokens: 10,
             hidden_tool_schema_tokens: 100,
-            estimated_schema_tokens_saved: 90,
-            spark_prompt_tokens: 0,
-            spark_completion_tokens: 0,
-            net_tokens_saved,
+            spark_prompt_tokens,
+            spark_completion_tokens,
             fanout_call_count,
             returned_output_tokens: 7,
             original_output_tokens: 7,
