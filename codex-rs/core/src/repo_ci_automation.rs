@@ -1545,7 +1545,7 @@ fn review_fix_prompt(group: &RepoCiFixGroup) -> String {
         .collect::<Vec<_>>()
         .join("\n\n");
     format!(
-        "Fix the scoped repo CI review findings below.\n\nYou are not alone in the codebase. Do not revert edits made by others, and adjust to concurrent changes if needed.\nOnly edit the owned paths for this worker:\n```text\n{owned_paths}\n```\n\nFindings:\n{findings}\n\nAfter applying fixes, return strict JSON with a short summary and touchedFiles."
+        "Fix the scoped repo CI review findings below.\n\nYou are not alone in the codebase. Do not revert edits made by others, and adjust to concurrent changes if needed.\nOnly edit the owned paths for this worker:\n```text\n{owned_paths}\n```\n\nFindings:\n{findings}\n\nRun only targeted checks; skip full test suites, which repo-ci runs afterward.\n\nAfter applying fixes, return strict JSON with a short summary and touchedFiles."
     )
 }
 
