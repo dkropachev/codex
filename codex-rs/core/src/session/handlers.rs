@@ -176,6 +176,7 @@ pub(super) async fn user_input_or_turn_inner(
                     repo_ci_issue_types: None,
                     repo_ci_review_rounds: None,
                     repo_ci_long_ci: None,
+                    repo_ci_turn_overrides: None,
                 },
                 None,
             )
@@ -197,6 +198,7 @@ pub(super) async fn user_input_or_turn_inner(
             collaboration_mode,
             personality,
             environments,
+            repo_ci,
         } => {
             let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
                 Some(collab_mode)
@@ -231,6 +233,7 @@ pub(super) async fn user_input_or_turn_inner(
                     repo_ci_issue_types: None,
                     repo_ci_review_rounds: None,
                     repo_ci_long_ci: None,
+                    repo_ci_turn_overrides: repo_ci,
                 },
                 responsesapi_client_metadata,
             )

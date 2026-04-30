@@ -612,7 +612,7 @@ Turns attach user input (text or images) to a thread and trigger Codex generatio
 - `{"type":"image","url":"https://…png"}`
 - `{"type":"localImage","path":"/tmp/screenshot.png"}`
 
-You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn. Experimental `environments` is turn-scoped: omit it to inherit the thread's sticky environments, pass `[]` to run the turn with no environments, or pass explicit environment ids to override the sticky selection for this turn only.
+You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn. Experimental `environments` is turn-scoped: omit it to inherit the thread's sticky environments, pass `[]` to run the turn with no environments, or pass explicit environment ids to override the sticky selection for this turn only. Experimental `repoCi` is also turn-scoped: omit a field to inherit the thread/session repo CI setting, or pass `null` for that field to clear it for this turn.
 
 `approvalsReviewer` accepts:
 
@@ -641,6 +641,12 @@ You can optionally specify config overrides on the new turn. If specified, these
     "effort": "medium",
     "summary": "concise",
     "personality": "friendly",
+    // Experimental: repo CI settings for this turn only.
+    "repoCi": {
+        "mode": "local",
+        "issueTypes": ["correctness", "testability"],
+        "reviewRounds": 2
+    },
     // Optional JSON Schema to constrain the final assistant message for this turn.
     "outputSchema": {
         "type": "object",

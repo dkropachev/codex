@@ -15303,6 +15303,51 @@
       "title": "TurnPlanUpdatedNotification",
       "type": "object"
     },
+    "TurnRepoCiConfigParams": {
+      "properties": {
+        "issueTypes": {
+          "items": {
+            "$ref": "#/definitions/RepoCiIssueType"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "longCi": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/RepoCiSessionMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reviewRounds": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "TurnStartParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {

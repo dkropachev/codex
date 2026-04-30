@@ -17,6 +17,7 @@ use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RepoCiIssueType;
 use codex_protocol::protocol::RepoCiSessionMode;
+use codex_protocol::protocol::RepoCiTurnOverrides;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::SandboxPolicy;
@@ -55,6 +56,22 @@ pub(crate) enum AppCommandView<'a> {
         final_output_json_schema: &'a Option<Value>,
         collaboration_mode: &'a Option<CollaborationMode>,
         personality: &'a Option<Personality>,
+    },
+    UserInputWithTurnContext {
+        items: &'a [UserInput],
+        cwd: &'a Option<PathBuf>,
+        approval_policy: &'a Option<AskForApproval>,
+        approvals_reviewer: &'a Option<ApprovalsReviewer>,
+        sandbox_policy: &'a Option<SandboxPolicy>,
+        permission_profile: &'a Option<PermissionProfile>,
+        model: &'a Option<String>,
+        effort: &'a Option<Option<ReasoningEffortConfig>>,
+        summary: &'a Option<ReasoningSummaryConfig>,
+        service_tier: &'a Option<Option<ServiceTier>>,
+        final_output_json_schema: &'a Option<Value>,
+        collaboration_mode: &'a Option<CollaborationMode>,
+        personality: &'a Option<Personality>,
+        repo_ci: &'a Option<RepoCiTurnOverrides>,
     },
     OverrideTurnContext {
         cwd: &'a Option<PathBuf>,
@@ -177,6 +194,44 @@ impl AppCommand {
             final_output_json_schema,
             collaboration_mode,
             personality,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn user_input_with_turn_context(
+        items: Vec<UserInput>,
+        cwd: Option<PathBuf>,
+        approval_policy: Option<AskForApproval>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
+        sandbox_policy: Option<SandboxPolicy>,
+        permission_profile: Option<PermissionProfile>,
+        model: Option<String>,
+        effort: Option<Option<ReasoningEffortConfig>>,
+        summary: Option<ReasoningSummaryConfig>,
+        service_tier: Option<Option<ServiceTier>>,
+        final_output_json_schema: Option<Value>,
+        collaboration_mode: Option<CollaborationMode>,
+        personality: Option<Personality>,
+        repo_ci: Option<RepoCiTurnOverrides>,
+    ) -> Self {
+        Self(Op::UserInputWithTurnContext {
+            items,
+            environments: None,
+            final_output_json_schema,
+            responsesapi_client_metadata: None,
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            permission_profile,
+            windows_sandbox_level: None,
+            model,
+            effort,
+            summary,
+            service_tier,
+            collaboration_mode,
+            personality,
+            repo_ci,
         })
     }
 
@@ -347,6 +402,40 @@ impl AppCommand {
                 final_output_json_schema,
                 collaboration_mode,
                 personality,
+            },
+            Op::UserInputWithTurnContext {
+                items,
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                permission_profile,
+                model,
+                effort,
+                summary,
+                service_tier,
+                final_output_json_schema,
+                collaboration_mode,
+                personality,
+                repo_ci,
+                environments: _,
+                responsesapi_client_metadata: _,
+                windows_sandbox_level: _,
+            } => AppCommandView::UserInputWithTurnContext {
+                items,
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                permission_profile,
+                model,
+                effort,
+                summary,
+                service_tier,
+                final_output_json_schema,
+                collaboration_mode,
+                personality,
+                repo_ci,
             },
             Op::OverrideTurnContext {
                 cwd,

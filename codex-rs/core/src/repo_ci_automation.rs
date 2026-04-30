@@ -1640,7 +1640,6 @@ fn review_findings_prompt(review: &RepoCiReviewOutput) -> ResponseItem {
                 review.summary, findings
             ),
         }],
-        end_turn: None,
         phase: None,
     }
 }
@@ -2165,7 +2164,6 @@ async fn run_model_triage(
             content: vec![ContentItem::InputText {
                 text: triage_prompt,
             }],
-            end_turn: None,
             phase: None,
         }],
         base_instructions: BaseInstructions {
@@ -2304,7 +2302,6 @@ fn repair_prompt(
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText { text }],
-        end_turn: None,
         phase: None,
     }
 }
@@ -2817,13 +2814,13 @@ mod tests {
     #[test]
     fn remote_classification_never_ignores_whole_suite_failure() {
         let checks = [
-            GhCheck {
+            codex_repo_ci::RemoteRepoCiCheck {
                 name: "infra outage".to_string(),
                 state: "FAILURE".to_string(),
                 bucket: Some("fail".to_string()),
                 link: None,
             },
-            GhCheck {
+            codex_repo_ci::RemoteRepoCiCheck {
                 name: "unrelated flaky job".to_string(),
                 state: "FAILURE".to_string(),
                 bucket: Some("fail".to_string()),
@@ -2841,13 +2838,13 @@ mod tests {
     #[test]
     fn remote_classification_ignores_only_partial_unrelated_failures() {
         let checks = [
-            GhCheck {
+            codex_repo_ci::RemoteRepoCiCheck {
                 name: "build".to_string(),
                 state: "SUCCESS".to_string(),
                 bucket: Some("pass".to_string()),
                 link: None,
             },
-            GhCheck {
+            codex_repo_ci::RemoteRepoCiCheck {
                 name: "infra outage".to_string(),
                 state: "FAILURE".to_string(),
                 bucket: Some("fail".to_string()),

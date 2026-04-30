@@ -102,6 +102,12 @@ Use `long_ci = true`, `codex --repo-ci-long-ci`, or
 including longer integration/e2e checks. Persist it with
 `codex repo-ci enable --cwd --long-ci`, `codex repo-ci long-ci set --global on`,
 or any other repo-ci scope flag.
+Append task text after the options to apply repo CI only to that task, for
+example `/repo-ci local rounds 2 long-ci on fix the failing tests`. In that form Codex
+applies the requested repo CI settings only to the submitted turn, without
+changing the session defaults used by later turns. If the repository has
+not been learned yet, or the learned runner is stale, Codex learns and validates
+the runner inside that turn before running repo CI.
 
 When repo CI is enabled for a trusted repository, Codex compares the worktree at
 the start and end of each regular turn. If the turn changed files, Codex first

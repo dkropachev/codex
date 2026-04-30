@@ -87,7 +87,7 @@
       },
       "properties": {
         "interrupt_message": {
-          "description": "Whether to record a model-visible message when an agent turn is interrupted. Defaults to true.",
+          "description": "Whether interrupted turns should leave a model-visible marker.",
           "type": "boolean"
         },
         "job_max_runtime_seconds": {
@@ -2381,6 +2381,7 @@
     "ThreadStoreToml": {
       "oneOf": [
         {
+          "additionalProperties": false,
           "properties": {
             "type": {
               "enum": [
@@ -2395,6 +2396,7 @@
           "type": "object"
         },
         {
+          "additionalProperties": false,
           "properties": {
             "endpoint": {
               "type": "string"
@@ -2408,6 +2410,25 @@
           },
           "required": [
             "endpoint",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "in_memory"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
             "type"
           ],
           "type": "object"
@@ -2832,7 +2853,7 @@
           "$ref": "#/definitions/ThreadStoreToml"
         }
       ],
-      "description": "Experimental / do not use. Selects the thread store implementation."
+      "description": "Experimental / do not use. Selects the backing store for thread data."
     },
     "experimental_thread_store_endpoint": {
       "description": "Experimental / do not use. When set, app-server uses a remote thread store at this endpoint instead of the local filesystem/SQLite store.",
@@ -3158,6 +3179,21 @@
     "instructions": {
       "description": "System instructions.",
       "type": "string"
+    },
+    "js_repl_node_module_dirs": {
+      "description": "Ordered list of directories to search for Node modules in `js_repl`.",
+      "items": {
+        "$ref": "#/definitions/AbsolutePathBuf"
+      },
+      "type": "array"
+    },
+    "js_repl_node_path": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Optional absolute path to the Node runtime used by `js_repl`."
     },
     "log_dir": {
       "allOf": [

@@ -5330,6 +5330,49 @@ pub struct TurnStartParams {
     #[experimental("turn/start.collaborationMode")]
     #[ts(optional = nullable)]
     pub collaboration_mode: Option<CollaborationMode>,
+    /// Optional turn-scoped repo CI overrides. Field omission inherits the
+    /// thread/session setting; explicit null clears it for this turn.
+    #[experimental("turn/start.repoCi")]
+    #[ts(optional = nullable)]
+    pub repo_ci: Option<TurnRepoCiConfigParams>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnRepoCiConfigParams {
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub mode: Option<Option<RepoCiSessionMode>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub issue_types: Option<Option<Vec<RepoCiIssueType>>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub review_rounds: Option<Option<u8>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub long_ci: Option<Option<bool>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -10711,6 +10754,7 @@ mod tests {
             output_schema: None,
             collaboration_mode: None,
             personality: None,
+            repo_ci: None,
         };
         let serialized_without_override =
             serde_json::to_value(&without_override).expect("params should serialize");

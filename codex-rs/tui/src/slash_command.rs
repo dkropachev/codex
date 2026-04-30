@@ -33,6 +33,7 @@ pub enum SlashCommand {
     Init,
     Compact,
     Plan,
+    Goal,
     Collab,
     Agent,
     Side,
@@ -108,6 +109,7 @@ impl SlashCommand {
             SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
             SlashCommand::Settings => "configure realtime microphone/speaker",
             SlashCommand::Plan => "switch to Plan mode",
+            SlashCommand::Goal => "set or manage the current thread goal",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::Side => "start a side conversation in an ephemeral fork",
@@ -121,9 +123,7 @@ impl SlashCommand {
             SlashCommand::ModelPolicy => {
                 "temporarily enable or disable model policy for this session"
             }
-            SlashCommand::RepoCi => {
-                "set up repo CI for this repo or override repo CI automation for this session"
-            }
+            SlashCommand::RepoCi => "configure repo CI or run one task with repo CI",
             SlashCommand::Memories => "configure memory use and generation",
             SlashCommand::Mcp => "list configured MCP tools; use /mcp verbose for details",
             SlashCommand::Apps => "manage apps",
@@ -146,6 +146,7 @@ impl SlashCommand {
             self,
             SlashCommand::Review
                 | SlashCommand::Rename
+                | SlashCommand::Goal
                 | SlashCommand::Plan
                 | SlashCommand::Fast
                 | SlashCommand::Mcp
@@ -190,6 +191,7 @@ impl SlashCommand {
             | SlashCommand::RepoCi
             | SlashCommand::Memories
             | SlashCommand::Review
+            | SlashCommand::Goal
             | SlashCommand::Plan
             | SlashCommand::Clear
             | SlashCommand::Logout

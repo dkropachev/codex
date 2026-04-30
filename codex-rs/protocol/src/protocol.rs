@@ -517,6 +517,10 @@ pub enum Op {
         /// Updated personality preference.
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
+
+        /// Turn-scoped repo CI overrides. These do not persist to later turns.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repo_ci: Option<RepoCiTurnOverrides>,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
@@ -2150,6 +2154,18 @@ pub enum RepoCiIssueType {
     #[serde(rename = "ux-config-cli")]
     #[ts(rename = "ux-config-cli")]
     UxConfigCli,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+pub struct RepoCiTurnOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<Option<RepoCiSessionMode>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue_types: Option<Option<Vec<RepoCiIssueType>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_rounds: Option<Option<u8>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_ci: Option<Option<bool>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -4591,7 +4607,7 @@ mod tests {
     }
 
     #[test]
-    fn file_system_policy_rejects_legacy_bridge_for_non_workspace_writes() {
+    fn file_system_policy_projects_direct_write_roots_into_legacy_workspace_write() {
         let cwd = if cfg!(windows) {
             Path::new(r"C:\workspace")
         } else {
@@ -4604,19 +4620,23 @@ mod tests {
         };
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: external_write_path,
+                path: external_write_path.clone(),
             },
             access: FileSystemAccessMode::Write,
         }]);
 
-        let err = policy
+        let legacy_policy = policy
             .to_legacy_sandbox_policy(NetworkSandboxPolicy::Restricted, cwd)
-            .expect_err("non-workspace writes should be rejected");
+            .expect("direct write roots should project into legacy workspace-write");
 
-        assert!(
-            err.to_string()
-                .contains("filesystem writes outside the workspace root"),
-            "{err}"
+        assert_eq!(
+            legacy_policy,
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![external_write_path],
+                network_access: false,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            }
         );
     }
 

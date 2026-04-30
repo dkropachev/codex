@@ -90,6 +90,7 @@ use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
+use codex_app_server_protocol::TurnRepoCiConfigParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
@@ -112,6 +113,7 @@ use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::RepoCiSessionMode;
+use codex_protocol::protocol::RepoCiTurnOverrides;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::SandboxPolicy;
@@ -573,6 +575,7 @@ impl AppServerSession {
         collaboration_mode: Option<codex_protocol::config_types::CollaborationMode>,
         personality: Option<codex_protocol::config_types::Personality>,
         output_schema: Option<serde_json::Value>,
+        repo_ci: Option<RepoCiTurnOverrides>,
     ) -> Result<TurnStartResponse> {
         let request_id = self.next_request_id();
         let (sandbox_policy, permission_profile) = turn_start_permission_overrides(
@@ -600,6 +603,7 @@ impl AppServerSession {
                     personality,
                     output_schema,
                     collaboration_mode,
+                    repo_ci: repo_ci.map(repo_ci_turn_overrides_to_params),
                 },
             })
             .await
@@ -1196,6 +1200,17 @@ fn turn_start_permission_overrides(
         }
         (ThreadParamsMode::Embedded, None) => (None, None),
         (ThreadParamsMode::Remote, _) => (Some(sandbox_policy.into()), None),
+    }
+}
+
+fn repo_ci_turn_overrides_to_params(overrides: RepoCiTurnOverrides) -> TurnRepoCiConfigParams {
+    TurnRepoCiConfigParams {
+        mode: overrides.mode.map(|mode| mode.map(Into::into)),
+        issue_types: overrides.issue_types.map(|issue_types| {
+            issue_types.map(|issue_types| issue_types.into_iter().map(Into::into).collect())
+        }),
+        review_rounds: overrides.review_rounds,
+        long_ci: overrides.long_ci,
     }
 }
 

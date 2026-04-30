@@ -25,7 +25,10 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::function_call_output_content_items_to_text;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
@@ -418,6 +421,10 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_policy_skip() {
         .set(AskForApproval::OnFailure)
         .expect("test setup should allow updating approval policy");
     turn_context_raw.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
+    turn_context_raw.sandbox_policy =
+        codex_config::Constrained::allow_any(SandboxPolicy::DangerFullAccess);
+    turn_context_raw.file_system_sandbox_policy = FileSystemSandboxPolicy::unrestricted();
+    turn_context_raw.network_sandbox_policy = NetworkSandboxPolicy::Enabled;
     let mut config = (*turn_context_raw.config).clone();
     config.approvals_reviewer = ApprovalsReviewer::User;
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
