@@ -29,9 +29,11 @@ mod learning_hints;
 mod remote_commit;
 mod remote_workflow;
 mod repo_ci_ai_learning;
+mod storage;
 
 const MANIFEST_VERSION: u32 = 2;
 const JSONL_ENV: &str = "CODEX_REPO_CI_JSONL";
+const REPO_ROOT_ENV: &str = "CODEX_REPO_CI_REPO_ROOT";
 const RUNNER_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const RUNNER_TERMINATION_GRACE: Duration = Duration::from_secs(1);
 
@@ -253,8 +255,7 @@ pub fn repo_root_for_cwd(cwd: &Path) -> Result<PathBuf> {
 
 pub fn paths_for_repo(codex_home: &Path, cwd: &Path) -> Result<RepoCiPaths> {
     let repo_root = repo_root_for_cwd(cwd)?;
-    let repo_key = repo_key(&repo_root);
-    let state_dir = codex_home.join("repo-ci").join(repo_key);
+    let state_dir = storage::artifact_state_dir(codex_home, &repo_root);
     Ok(RepoCiPaths {
         repo_root,
         manifest_path: state_dir.join("manifest.json"),
@@ -288,7 +289,7 @@ pub fn learn_with_plan(
     fs::create_dir_all(&paths.state_dir)?;
     let mut manifest = RepoCiManifest {
         version: MANIFEST_VERSION,
-        repo_key: repo_key(&paths.repo_root),
+        repo_key: storage::repo_key(&paths.repo_root),
         repo_root: paths.repo_root.clone(),
         automation: options.automation,
         local_test_time_budget_sec: options.local_test_time_budget_sec,
@@ -399,6 +400,7 @@ fn run_runner(paths: &RepoCiPaths, arg: &str) -> Result<std::process::ExitStatus
     Command::new("bash")
         .arg(&paths.runner_path)
         .arg(arg)
+        .env(REPO_ROOT_ENV, &paths.repo_root)
         .current_dir(&paths.repo_root)
         .status()
         .with_context(|| format!("failed to run {}", paths.runner_path.display()))
@@ -409,14 +411,20 @@ fn capture_runner(
     arg: &str,
     timeout: Option<Duration>,
 ) -> Result<CapturedRun> {
-    let jsonl_path = paths.state_dir.join(format!("run-{arg}-steps.jsonl"));
-    let _ = fs::remove_file(&jsonl_path);
+    let run_dir = paths.state_dir.join("runs");
+    fs::create_dir_all(&run_dir)?;
+    let now_micros = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_micros());
+    let jsonl_path = run_dir.join(format!("{arg}-{}-{}.jsonl", std::process::id(), now_micros));
     let output = capture_runner_output(paths, arg, &jsonl_path, timeout)?;
+    let steps = read_captured_steps(&jsonl_path)?;
+    let _ = fs::remove_file(&jsonl_path);
     Ok(CapturedRun {
         status: output.status.into(),
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        steps: read_captured_steps(&jsonl_path)?,
+        steps,
     })
 }
 
@@ -431,6 +439,7 @@ fn capture_runner_output(
         .arg(&paths.runner_path)
         .arg(arg)
         .env(JSONL_ENV, jsonl_path)
+        .env(REPO_ROOT_ENV, &paths.repo_root)
         .current_dir(&paths.repo_root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -811,17 +820,11 @@ fn hash_file(path: &Path) -> Option<String> {
     Some(format!("{:x}", hasher.finalize()))
 }
 
-fn repo_key(repo_root: &Path) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(repo_root.to_string_lossy().as_bytes());
-    let hash = format!("{:x}", hasher.finalize());
-    hash[..16].to_string()
-}
-
 fn write_runner(path: &Path, manifest: &RepoCiManifest) -> Result<()> {
     let mut script =
         String::from("#!/usr/bin/env bash\nset -euo pipefail\n\nmode=\"${1:-fast}\"\nrepo_root=");
     script.push_str(&shell_quote(&manifest.repo_root.to_string_lossy()));
+    script.push_str("\nrepo_root=\"${CODEX_REPO_CI_REPO_ROOT:-$repo_root}\"");
     script.push_str("\ncd \"$repo_root\"\n\nrecord_step() {\n  if [[ -n \"${CODEX_REPO_CI_JSONL:-}\" ]]; then\n    local id_json=\"$1\"\n    id_json=\"${id_json//\\\\/\\\\\\\\}\"\n    id_json=\"${id_json//\\\"/\\\\\\\"}\"\n    printf '{\"id\":\"%s\",\"event\":\"%s\",\"exit_code\":%s}\\n' \"$id_json\" \"$2\" \"$3\" >> \"$CODEX_REPO_CI_JSONL\"\n  fi\n}\n\nrun_step() {\n  local id=\"$1\"\n  shift\n  echo \"==> ${id}\"\n  record_step \"$id\" started null\n  set +e\n  \"$@\"\n  local status=$?\n  set -e\n  record_step \"$id\" finished \"$status\"\n  return \"$status\"\n}\n\nprepare() {\n");
     if manifest.prepare_steps.is_empty() {
         script.push_str("  :\n");
@@ -1093,7 +1096,7 @@ mod tests {
         let manifest = RepoCiManifest {
             version: MANIFEST_VERSION,
             repo_root: repo.clone(),
-            repo_key: repo_key(&repo),
+            repo_key: storage::repo_key(&repo),
             automation: AutomationMode::LocalAndRemote,
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
@@ -1141,7 +1144,7 @@ mod tests {
         };
         write_runner(&paths.runner_path, &manifest).expect("write runner");
 
-        let run = capture_runner(&paths, "fast", None).expect("capture");
+        let run = capture_runner(&paths, "fast", /*timeout*/ None).expect("capture");
 
         assert!(
             run.status.success,
@@ -1206,6 +1209,47 @@ mod tests {
                 event: CapturedStepEvent::Started,
                 exit_code: None,
             }]
+        );
+    }
+
+    #[test]
+    fn shared_runner_uses_current_repo_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let learned_repo = temp.path().join("learned");
+        let current_repo = temp.path().join("current");
+        let state_dir = temp.path().join("state");
+        fs::create_dir(&learned_repo).expect("create learned repo");
+        fs::create_dir(&current_repo).expect("create current repo");
+        fs::create_dir(&state_dir).expect("create state");
+        fs::write(current_repo.join("marker"), "").expect("write marker");
+        let paths = RepoCiPaths {
+            repo_root: current_repo,
+            state_dir,
+            manifest_path: temp.path().join("manifest.json"),
+            runner_path: temp.path().join("run_ci.sh"),
+        };
+        let manifest = RepoCiManifest {
+            version: MANIFEST_VERSION,
+            repo_root: learned_repo,
+            repo_key: "repo".to_string(),
+            automation: AutomationMode::Local,
+            local_test_time_budget_sec: 300,
+            learned_at_unix_sec: 1,
+            learning_sources: vec![],
+            inferred_issue_types: default_issue_types(),
+            prepare_steps: vec![],
+            fast_steps: vec![step("current-root", "test -f marker", StepPhase::Test)],
+            full_steps: vec![],
+            validation: ValidationStatus::NotRun,
+        };
+        write_runner(&paths.runner_path, &manifest).expect("write runner");
+
+        let run = capture_runner(&paths, "fast", /*timeout*/ None).expect("capture");
+
+        assert!(
+            run.status.success,
+            "stdout:\n{}\nstderr:\n{}",
+            run.stdout, run.stderr
         );
     }
 
