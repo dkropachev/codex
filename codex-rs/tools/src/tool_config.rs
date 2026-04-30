@@ -93,6 +93,7 @@ pub struct ToolsConfig {
     pub web_search_config: Option<WebSearchConfig>,
     pub web_search_tool_type: WebSearchToolType,
     pub image_gen_tool: bool,
+    pub tool_router: bool,
     pub search_tool: bool,
     pub tool_suggest: bool,
     pub exec_permission_approvals_enabled: bool,
@@ -157,6 +158,7 @@ impl ToolsConfig {
         let include_image_gen_tool = *image_generation_tool_auth_allowed
             && features.enabled(Feature::ImageGeneration)
             && supports_image_generation(model_info);
+        let include_tool_router = features.enabled(Feature::ToolRouter);
         let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
         let request_permissions_tool_enabled = features.enabled(Feature::RequestPermissionsTool);
         let shell_command_backend =
@@ -212,6 +214,7 @@ impl ToolsConfig {
             web_search_config: None,
             web_search_tool_type: model_info.web_search_tool_type,
             image_gen_tool: include_image_gen_tool,
+            tool_router: include_tool_router,
             search_tool: include_search_tool,
             tool_suggest: include_tool_suggest,
             exec_permission_approvals_enabled,

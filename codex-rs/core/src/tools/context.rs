@@ -33,6 +33,10 @@ pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolCallSource {
     Direct,
+    Routed {
+        /// Model-visible `tool_router` call that selected this internal tool.
+        router_call_id: String,
+    },
     CodeMode {
         /// Runtime cell that issued the nested tool request.
         cell_id: String,

@@ -111,6 +111,39 @@ fn config_account_pool_default(config: &Config) -> Option<String> {
         .or_else(|| account_pool.pools.keys().next().cloned())
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct AppliedModelRouterCandidate {
+    pub(crate) config: Config,
+    pub(crate) auth_scope_changed: bool,
+}
+
+pub(crate) fn apply_model_router_candidate_by_id(
+    config: &Config,
+    candidate_id: &str,
+) -> Result<Option<AppliedModelRouterCandidate>, String> {
+    let Some(model_router) = config.model_router.as_ref() else {
+        return Ok(None);
+    };
+    if !model_router.enabled {
+        return Ok(None);
+    }
+    let Some(candidate) = model_router
+        .candidates
+        .iter()
+        .find(|candidate| candidate.id.as_deref() == Some(candidate_id))
+    else {
+        return Ok(None);
+    };
+
+    let auth_scope_changed = candidate.account.is_some() || candidate.account_pool.is_some();
+    let mut routed_config = config.clone();
+    apply_candidate(&mut routed_config, candidate)?;
+    Ok(Some(AppliedModelRouterCandidate {
+        config: routed_config,
+        auth_scope_changed,
+    }))
+}
+
 fn build_candidate_routes(
     config: &Config,
     task_key: &str,
@@ -403,5 +436,29 @@ mod tests {
 
         assert!(err.contains("unknown model_provider"));
         assert_eq!(config.model.as_deref(), Some("parent-model"));
+    }
+
+    #[tokio::test]
+    async fn applies_candidate_by_id_without_mutating_source_config() {
+        let mut config = config::test_config().await;
+        config.model = Some("parent-model".to_string());
+        config.model_router = Some(ModelRouterToml {
+            enabled: true,
+            candidates: vec![ModelRouterCandidateToml {
+                id: Some("spark".to_string()),
+                model: Some("gpt-5.3-codex-spark".to_string()),
+                account: Some("spark-account".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let applied = apply_model_router_candidate_by_id(&config, "spark")
+            .expect("candidate should apply")
+            .expect("candidate");
+
+        assert_eq!(config.model.as_deref(), Some("parent-model"));
+        assert_eq!(applied.config.model.as_deref(), Some("gpt-5.3-codex-spark"));
+        assert!(applied.auth_scope_changed);
     }
 }

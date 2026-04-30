@@ -181,6 +181,13 @@ fn image_generation_is_stable_and_enabled_by_default() {
 }
 
 #[test]
+fn tool_router_is_under_development_and_disabled_by_default() {
+    assert_eq!(Feature::ToolRouter.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::ToolRouter.default_enabled(), false);
+    assert_eq!(feature_for_key("tool_router"), Some(Feature::ToolRouter));
+}
+
+#[test]
 fn use_legacy_landlock_config_records_deprecation_notice() {
     let mut entries = BTreeMap::new();
     entries.insert("use_legacy_landlock".to_string(), true);
