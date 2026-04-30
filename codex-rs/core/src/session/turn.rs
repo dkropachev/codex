@@ -627,6 +627,7 @@ pub(crate) async fn run_turn(
                         &sess,
                         &turn_context,
                         &mut repo_ci_state,
+                        &cancellation_token,
                     )
                     .await
                     {

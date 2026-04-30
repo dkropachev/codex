@@ -436,6 +436,7 @@ pub(crate) async fn maybe_run_after_agent(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     state: &mut RepoCiTurnState,
+    cancellation_token: &CancellationToken,
 ) -> Option<ResponseItem> {
     let mut config = effective_config(turn_context)?;
     if !turn_context.config.active_project.is_trusted() {
@@ -588,13 +589,24 @@ pub(crate) async fn maybe_run_after_agent(
         "Repo CI local checks started.".to_string(),
     )
     .await;
+    let repo_ci_cancellation = codex_repo_ci::RepoCiCancellation::default();
+    let cancellation_task = tokio::spawn({
+        let cancellation_token = cancellation_token.clone();
+        let repo_ci_cancellation = repo_ci_cancellation.clone();
+        async move {
+            cancellation_token.cancelled().await;
+            repo_ci_cancellation.cancel();
+        }
+    });
     let result = tokio::task::spawn_blocking({
         let codex_home = turn_context.config.codex_home.clone();
         let cwd = turn_context.cwd.clone();
         let config = config.clone();
-        move || run_local_repo_ci(&codex_home, &cwd, &config)
+        let repo_ci_cancellation = repo_ci_cancellation.clone();
+        move || run_local_repo_ci(&codex_home, &cwd, &config, repo_ci_cancellation)
     })
     .await;
+    cancellation_task.abort();
     let local_outcome = match result {
         Ok(Ok(outcome)) => outcome,
         Ok(Err(err)) => {
@@ -1871,6 +1883,7 @@ fn run_local_repo_ci(
     codex_home: &Path,
     cwd: &Path,
     config: &EffectiveRepoCiConfig,
+    cancellation: codex_repo_ci::RepoCiCancellation,
 ) -> Result<LocalRepoCiOutcome> {
     if !config.local_enabled() {
         return Ok(LocalRepoCiOutcome::Skipped);
@@ -1885,7 +1898,8 @@ fn run_local_repo_ci(
     } else {
         "local fast runner"
     };
-    let run = codex_repo_ci::run_capture(codex_home, cwd, run_mode)?;
+    let run =
+        codex_repo_ci::run_capture_with_cancellation(codex_home, cwd, run_mode, cancellation)?;
     if run.status.success {
         Ok(LocalRepoCiOutcome::Passed)
     } else {
@@ -3063,6 +3077,7 @@ mod tests {
                 review_issue_types: Vec::new(),
                 max_review_fix_rounds: 0,
             },
+            codex_repo_ci::RepoCiCancellation::default(),
         )
         .expect_err("missing runner should fail");
 
