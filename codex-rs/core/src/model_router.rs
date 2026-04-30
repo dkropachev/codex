@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+mod auto_candidates;
+
 use codex_config::config_toml::AccountPoolDefinitionToml;
 use codex_config::config_toml::AccountPoolPolicyToml;
 use codex_config::config_toml::AccountPoolToml;
@@ -14,6 +16,8 @@ use codex_model_router::TokenPrice;
 use codex_model_router::estimate_task_usage;
 use codex_model_router::estimate_token_cost;
 use codex_model_router::select_candidate;
+use codex_models_manager::manager::SharedModelsManager;
+use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::SubAgentSource;
 
 use crate::config::Config;
@@ -49,6 +53,7 @@ pub(crate) fn apply_model_router(
     config: &mut Config,
     source: ModelRouterSource,
     prompt_bytes: usize,
+    available_models: &[ModelPreset],
 ) -> Result<(), String> {
     let Some(model_router) = config.model_router.as_ref() else {
         return Ok(());
@@ -58,14 +63,15 @@ pub(crate) fn apply_model_router(
     }
 
     let task_key = source.task_key();
-    let routes = build_candidate_routes(config, &task_key, prompt_bytes);
+    let candidate_set = build_candidate_set(config, &task_key, prompt_bytes, available_models);
     tracing::debug!(
         task_key = task_key,
         candidates = model_router.candidates.len(),
+        auto_candidates = candidate_set.auto_candidate_count,
         "evaluating model router"
     );
 
-    let Some(selection) = select_candidate(&task_key, prompt_bytes, &routes) else {
+    let Some(selection) = select_candidate(&task_key, prompt_bytes, &candidate_set.routes) else {
         return Ok(());
     };
     tracing::debug!(
@@ -78,7 +84,7 @@ pub(crate) fn apply_model_router(
     if selection.index == 0 {
         return Ok(());
     }
-    let Some(candidate) = model_router.candidates.get(selection.index - 1) else {
+    let Some(candidate) = candidate_set.candidates.get(selection.index - 1) else {
         return Err(format!(
             "model_router selected missing candidate index {}",
             selection.index
@@ -120,6 +126,7 @@ pub(crate) struct AppliedModelRouterCandidate {
 pub(crate) fn apply_model_router_candidate_by_id(
     config: &Config,
     candidate_id: &str,
+    available_models: &[ModelPreset],
 ) -> Result<Option<AppliedModelRouterCandidate>, String> {
     let Some(model_router) = config.model_router.as_ref() else {
         return Ok(None);
@@ -131,28 +138,61 @@ pub(crate) fn apply_model_router_candidate_by_id(
         .candidates
         .iter()
         .find(|candidate| candidate.id.as_deref() == Some(candidate_id))
+        .cloned()
+        .or_else(|| {
+            auto_candidates::candidate_from_available_model_by_id(
+                config,
+                available_models,
+                candidate_id,
+            )
+        })
     else {
         return Ok(None);
     };
 
     let auth_scope_changed = candidate.account.is_some() || candidate.account_pool.is_some();
     let mut routed_config = config.clone();
-    apply_candidate(&mut routed_config, candidate)?;
+    apply_candidate(&mut routed_config, &candidate)?;
     Ok(Some(AppliedModelRouterCandidate {
         config: routed_config,
         auth_scope_changed,
     }))
 }
 
-fn build_candidate_routes(
+pub(crate) fn available_model_presets(models_manager: &SharedModelsManager) -> Vec<ModelPreset> {
+    models_manager.try_list_models().unwrap_or_else(|err| {
+        tracing::debug!(error = %err, "failed to read available models for model router");
+        Vec::new()
+    })
+}
+
+struct CandidateSet {
+    routes: Vec<CandidateRoute>,
+    candidates: Vec<ModelRouterCandidateToml>,
+    auto_candidate_count: usize,
+}
+
+fn build_candidate_set(
     config: &Config,
     task_key: &str,
     prompt_bytes: usize,
-) -> Vec<CandidateRoute> {
+    available_models: &[ModelPreset],
+) -> CandidateSet {
     let Some(model_router) = config.model_router.as_ref() else {
-        return Vec::new();
+        return CandidateSet {
+            routes: Vec::new(),
+            candidates: Vec::new(),
+            auto_candidate_count: 0,
+        };
     };
-    let mut routes = Vec::with_capacity(model_router.candidates.len() + 1);
+    let auto_candidates =
+        auto_candidates::candidates_from_available_models(config, available_models);
+    let auto_candidate_count = auto_candidates.len();
+    let mut candidates = Vec::with_capacity(model_router.candidates.len() + auto_candidate_count);
+    candidates.extend(model_router.candidates.iter().cloned());
+    candidates.extend(auto_candidates);
+
+    let mut routes = Vec::with_capacity(candidates.len() + 1);
     routes.push(CandidateRoute {
         id: Some("incumbent".to_string()),
         model: config.model.clone(),
@@ -161,7 +201,7 @@ fn build_candidate_routes(
         metrics: CandidateMetrics::default(),
     });
     let task_class = RouterTaskClass::infer(task_key, prompt_bytes);
-    routes.extend(model_router.candidates.iter().map(|candidate| {
+    routes.extend(candidates.iter().map(|candidate| {
         CandidateRoute {
             id: candidate.id.clone(),
             model: candidate.model.clone().or_else(|| config.model.clone()),
@@ -173,7 +213,11 @@ fn build_candidate_routes(
             metrics: candidate_metrics(candidate, task_class, prompt_bytes),
         }
     }));
-    routes
+    CandidateSet {
+        routes,
+        candidates,
+        auto_candidate_count,
+    }
 }
 
 fn candidate_metrics(
@@ -297,13 +341,14 @@ mod tests {
     use codex_config::config_toml::ModelRouterToml;
     use codex_login::AuthManager;
     use codex_protocol::config_types::ServiceTier;
+    use codex_protocol::openai_models::ModelPreset;
     use codex_protocol::openai_models::ReasoningEffort;
 
     use super::*;
     use crate::config;
 
     #[tokio::test]
-    async fn no_candidates_leaves_incumbent_unchanged() {
+    async fn no_available_models_leaves_incumbent_unchanged() {
         let mut config = config::test_config().await;
         config.model = Some("parent-model".to_string());
         config.model_router = Some(ModelRouterToml {
@@ -316,10 +361,33 @@ mod tests {
             &mut config,
             ModelRouterSource::SubAgent(SubAgentSource::Review),
             80,
+            &[],
         )
         .expect("router should apply");
 
         assert_eq!(config.model.as_deref(), Some("parent-model"));
+    }
+
+    #[tokio::test]
+    async fn no_explicit_candidates_uses_available_models() {
+        let mut config = config::test_config().await;
+        config.model = Some("gpt-5.4".to_string());
+        config.model_router = Some(ModelRouterToml {
+            enabled: true,
+            candidates: Vec::new(),
+            ..Default::default()
+        });
+        let available_models = vec![model_preset("gpt-5.3-codex-spark")];
+
+        apply_model_router(
+            &mut config,
+            ModelRouterSource::Module("repo_ci.triage"),
+            80,
+            &available_models,
+        )
+        .expect("router should apply");
+
+        assert_eq!(config.model.as_deref(), Some("gpt-5.3-codex-spark"));
     }
 
     #[tokio::test]
@@ -338,8 +406,13 @@ mod tests {
             ..Default::default()
         });
 
-        apply_model_router(&mut config, ModelRouterSource::Module("repo_ci.triage"), 80)
-            .expect("router should apply");
+        apply_model_router(
+            &mut config,
+            ModelRouterSource::Module("repo_ci.triage"),
+            80,
+            &[],
+        )
+        .expect("router should apply");
 
         assert_eq!(config.model.as_deref(), Some("gpt-5.3-codex-spark"));
         assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::Low));
@@ -406,6 +479,7 @@ mod tests {
             &mut config,
             ModelRouterSource::SubAgent(SubAgentSource::Review),
             80,
+            &[],
         )
         .expect("router should apply");
 
@@ -431,6 +505,7 @@ mod tests {
             &mut config,
             ModelRouterSource::SubAgent(SubAgentSource::Review),
             1,
+            &[],
         )
         .expect_err("unknown provider should fail");
 
@@ -453,12 +528,51 @@ mod tests {
             ..Default::default()
         });
 
-        let applied = apply_model_router_candidate_by_id(&config, "spark")
+        let applied = apply_model_router_candidate_by_id(&config, "spark", &[])
             .expect("candidate should apply")
             .expect("candidate");
 
         assert_eq!(config.model.as_deref(), Some("parent-model"));
         assert_eq!(applied.config.model.as_deref(), Some("gpt-5.3-codex-spark"));
         assert!(applied.auth_scope_changed);
+    }
+
+    #[tokio::test]
+    async fn candidate_by_id_uses_available_spark_model() {
+        let mut config = config::test_config().await;
+        config.model = Some("parent-model".to_string());
+        config.model_router = Some(ModelRouterToml {
+            enabled: true,
+            candidates: Vec::new(),
+            ..Default::default()
+        });
+        let available_models = vec![model_preset("gpt-5.3-codex-spark")];
+
+        let applied = apply_model_router_candidate_by_id(&config, "spark", &available_models)
+            .expect("candidate lookup should succeed")
+            .expect("candidate");
+
+        assert_eq!(config.model.as_deref(), Some("parent-model"));
+        assert_eq!(applied.config.model.as_deref(), Some("gpt-5.3-codex-spark"));
+        assert!(!applied.auth_scope_changed);
+    }
+
+    fn model_preset(model: &str) -> ModelPreset {
+        ModelPreset {
+            id: model.to_string(),
+            model: model.to_string(),
+            display_name: model.to_string(),
+            description: String::new(),
+            default_reasoning_effort: ReasoningEffort::None,
+            supported_reasoning_efforts: Vec::new(),
+            supports_personality: false,
+            additional_speed_tiers: Vec::new(),
+            is_default: false,
+            upgrade: None,
+            show_in_picker: true,
+            availability_nux: None,
+            supported_in_api: true,
+            input_modalities: Vec::new(),
+        }
     }
 }

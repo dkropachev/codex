@@ -13,6 +13,7 @@ use crate::memories::storage::rollout_summary_file_stem;
 use crate::memories::storage::sync_rollout_summaries_from_memories;
 use crate::model_router::ModelRouterSource;
 use crate::model_router::apply_model_router;
+use crate::model_router::available_model_presets;
 use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
 use codex_config::Constrained;
@@ -139,10 +140,12 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
 
     // 5. Spawn the agent
     let prompt = agent::get_prompt(config, &selection, &removed_extension_resources);
+    let available_models = available_model_presets(&session.services.models_manager);
     if let Err(err) = apply_model_router(
         &mut agent_config,
         ModelRouterSource::SubAgent(SubAgentSource::MemoryConsolidation),
         prompt.len(),
+        &available_models,
     ) {
         tracing::warn!("failed to apply memory consolidation model router: {err}");
     }

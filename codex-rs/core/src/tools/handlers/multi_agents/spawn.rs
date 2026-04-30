@@ -8,6 +8,7 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
 use crate::model_router::ModelRouterSource;
 use crate::model_router::apply_model_router;
+use crate::model_router::available_model_presets;
 use crate::session::turn_context::TurnEnvironment;
 use codex_protocol::protocol::SessionSource;
 
@@ -93,13 +94,16 @@ impl ToolHandler for Handler {
         if args.model.is_none()
             && args.reasoning_effort.is_none()
             && let SessionSource::SubAgent(source) = spawn_source.clone()
-            && let Err(err) = apply_model_router(
+        {
+            let available_models = available_model_presets(&session.services.models_manager);
+            if let Err(err) = apply_model_router(
                 &mut config,
                 ModelRouterSource::SubAgent(source),
                 prompt.len(),
-            )
-        {
-            tracing::warn!("failed to apply spawn_agent model router: {err}");
+                &available_models,
+            ) {
+                tracing::warn!("failed to apply spawn_agent model router: {err}");
+            }
         }
         apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
         apply_spawn_agent_overrides(&mut config, child_depth);

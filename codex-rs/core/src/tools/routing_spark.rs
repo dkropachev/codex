@@ -6,6 +6,7 @@ use crate::client_common::ResponseEvent;
 use crate::config::Config;
 use crate::function_tool::FunctionCallError;
 use crate::model_router::apply_model_router_candidate_by_id;
+use crate::model_router::available_model_presets;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::router::ToolCall;
@@ -118,10 +119,14 @@ pub(super) async fn resolve_with_spark(
     call_id: String,
     args: &RouterArgs,
 ) -> Result<Option<RouterResolution>, FunctionCallError> {
-    let Some(applied) = apply_model_router_candidate_by_id(&turn.config, SPARK_CANDIDATE_ID)
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to apply Spark router config: {err}"))
-        })?
+    let available_models = available_model_presets(&session.services.models_manager);
+    let Some(applied) =
+        apply_model_router_candidate_by_id(&turn.config, SPARK_CANDIDATE_ID, &available_models)
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to apply Spark router config: {err}"
+                ))
+            })?
     else {
         return Ok(None);
     };

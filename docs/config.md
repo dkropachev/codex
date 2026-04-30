@@ -177,8 +177,8 @@ policy = "drain"
 
 `[model_router]` enables adaptive routing for internal Codex model calls.
 There are no static source rules. The router treats the current model config as
-the implicit incumbent, keeps explicit candidates, and can add candidates
-discovered from configured providers and registered accounts.
+the implicit incumbent, automatically adds candidates from currently available
+models, and keeps explicit candidates as optional overrides.
 
 ```toml
 [model_router]
@@ -187,6 +187,8 @@ discovery = "curated"
 subscription_pricing = "amortized_scarce"
 savings_reference = "implicit_incumbent"
 
+# Optional. When omitted, Codex uses the available model catalog for the
+# current provider and scores those candidates automatically.
 [[model_router.candidates]]
 id = "spark"
 model = "gpt-5.3-codex-spark"
