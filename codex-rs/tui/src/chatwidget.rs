@@ -17,9 +17,9 @@
 //!
 //! The bottom pane exposes a single "task running" indicator that drives the spinner and interrupt
 //! hints. This module treats that indicator as derived UI-busy state: it is set while an agent turn
-//! is in progress and while MCP server startup is in progress. Those lifecycles are tracked
-//! independently (`agent_turn_running` and `mcp_startup_status`) and synchronized via
-//! `update_task_running_state`.
+//! is in progress, review mode is active, or MCP server startup is in progress. Those lifecycles are
+//! tracked independently (`agent_turn_running`, `is_review_mode`, and `mcp_startup_status`) and
+//! synchronized via `update_task_running_state`.
 //!
 //! For preamble-capable models, assistant output may include commentary before
 //! the final answer. During streaming we hide the status row to avoid duplicate
@@ -2013,10 +2013,11 @@ impl ChatWidget {
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
-    /// both the agent turn lifecycle and MCP startup lifecycle.
+    /// the agent turn lifecycle, review lifecycle, and MCP startup lifecycle.
     fn update_task_running_state(&mut self) {
-        self.bottom_pane
-            .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+        self.bottom_pane.set_task_running(
+            self.agent_turn_running || self.is_review_mode || self.mcp_startup_status.is_some(),
+        );
         self.refresh_status_surfaces();
     }
 
@@ -2870,6 +2871,7 @@ impl ChatWidget {
         self.pending_status_indicator_restore = false;
         self.user_turn_pending_start = false;
         self.agent_turn_running = false;
+        self.clear_review_mode_for_turn_end();
         self.goal_status_active_turn_started_at = None;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
@@ -3227,6 +3229,13 @@ impl ChatWidget {
         }
     }
 
+    fn clear_review_mode_for_turn_end(&mut self) {
+        if self.is_review_mode {
+            self.is_review_mode = false;
+            self.restore_pre_review_token_info();
+        }
+    }
+
     pub(crate) fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
         if let Some(mut snapshot) = snapshot {
             let limit_id = snapshot
@@ -3334,6 +3343,7 @@ impl ChatWidget {
         // Reset running state and clear streaming buffers.
         self.user_turn_pending_start = false;
         self.agent_turn_running = false;
+        self.clear_review_mode_for_turn_end();
         self.goal_status_active_turn_started_at = None;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
@@ -7873,10 +7883,10 @@ impl ChatWidget {
         if self.pre_review_token_info.is_none() {
             self.pre_review_token_info = Some(self.token_info.clone());
         }
-        if !from_replay && !self.bottom_pane.is_task_running() {
-            self.bottom_pane.set_task_running(/*running*/ true);
-        }
         self.is_review_mode = true;
+        if !from_replay {
+            self.update_task_running_state();
+        }
         let banner = format!(">> Code review started: {hint} <<");
         self.add_to_history(history_cell::new_review_status_line(banner));
         self.request_redraw();
@@ -7888,6 +7898,7 @@ impl ChatWidget {
         self.flush_active_cell();
         self.is_review_mode = false;
         self.restore_pre_review_token_info();
+        self.update_task_running_state();
         self.add_to_history(history_cell::new_review_status_line(
             "<< Code review finished >>".to_string(),
         ));
