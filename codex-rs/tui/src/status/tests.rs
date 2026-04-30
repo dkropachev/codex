@@ -7,6 +7,7 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::status::StatusAccountDisplay;
 use crate::test_support::PathBufExt;
+use crate::test_support::normalize_codex_version_for_snapshot;
 use crate::test_support::test_path_buf;
 use chrono::Duration as ChronoDuration;
 use chrono::TimeZone;
@@ -62,15 +63,10 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
 }
 
 fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
-    let version_marker = "OpenAI Codex (";
-    let snapshot_version = "v0.125.0";
-
-    lines
+    let lines = lines
         .into_iter()
         .map(|line| {
-            let line = if let (Some(dir_pos), Some(pipe_idx)) =
-                (line.find("Directory: "), line.rfind('│'))
-            {
+            if let (Some(dir_pos), Some(pipe_idx)) = (line.find("Directory: "), line.rfind('│')) {
                 let prefix = &line[..dir_pos + "Directory: ".len()];
                 let suffix = &line[pipe_idx..];
                 let content_width = pipe_idx.saturating_sub(dir_pos + "Directory: ".len());
@@ -84,46 +80,11 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
                 rebuilt
             } else {
                 line
-            };
-
-            let Some(version_pos) = line.find(version_marker) else {
-                return line;
-            };
-            let version_start = version_pos + version_marker.len();
-            let Some(version_end_offset) = line[version_start..].find(')') else {
-                return line;
-            };
-            let version_end = version_start + version_end_offset;
-            let version_len = version_end - version_start;
-            let snapshot_version_len = snapshot_version.len();
-            let mut suffix = line[version_end..].to_string();
-
-            if snapshot_version_len > version_len {
-                let spaces_to_remove = snapshot_version_len - version_len;
-                let removable_spaces = suffix[1..]
-                    .bytes()
-                    .take_while(|byte| *byte == b' ')
-                    .take(spaces_to_remove)
-                    .count();
-                suffix.replace_range(1..1 + removable_spaces, "");
-            } else if snapshot_version_len < version_len {
-                suffix.insert_str(1, &" ".repeat(version_len - snapshot_version_len));
             }
-
-            let mut rebuilt = line[..version_start].to_string();
-            rebuilt.push_str(snapshot_version);
-            rebuilt.push_str(&suffix);
-            rebuilt
         })
-        .collect()
-}
+        .collect();
 
-#[test]
-fn sanitize_directory_normalizes_bazel_version_width() {
-    let bazel_line = "│  >_ OpenAI Codex (v0.0.0)     │".to_string();
-    let expected = "│  >_ OpenAI Codex (v0.125.0)   │".to_string();
-
-    assert_eq!(sanitize_directory(vec![bazel_line]), vec![expected]);
+    normalize_codex_version_for_snapshot(lines, "v0.125.0")
 }
 
 fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) -> i64 {
