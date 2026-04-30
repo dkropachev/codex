@@ -45,6 +45,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 
 const MAX_OUTPUT_BYTES: usize = 24_000;
+const MAX_CHANGED_PATHS_BYTES: usize = 8_000;
 const TRIAGE_BASE_INSTRUCTIONS: &str =
     "You classify repository CI failures. Return strict JSON only. Do not suggest code edits.";
 
@@ -1512,7 +1513,7 @@ fn targeted_review_prompt(
         if snapshot.changed_paths.is_empty() {
             "(no changed paths recorded)".to_string()
         } else {
-            snapshot.changed_paths.join("\n")
+            format_changed_paths_for_prompt(&snapshot.changed_paths)
         },
         truncate_middle(&snapshot.diff_summary, 4_000),
     )
@@ -2214,7 +2215,7 @@ fn triage_prompt_text(input: &TriageInput<'_>) -> String {
     let changed_paths = if input.changed_paths.is_empty() {
         "(no changed paths recorded)".to_string()
     } else {
-        input.changed_paths.join("\n")
+        format_changed_paths_for_prompt(input.changed_paths)
     };
     format!(
         "Classify this repo CI {kind} failure.\n\nRules:\n- Return JSON only.\n- classification must be one of related, unrelated, whole_suite, unknown.\n- Use unrelated only when the failure is clearly not caused by the current branch.\n- Use whole_suite if all or nearly all checks failed or the output indicates broad infrastructure failure.\n- Use unknown when evidence is insufficient.\n\nDeterministic initial classification: {classification}\n\nChanged paths:\n```text\n{changed_paths}\n```\n\nDiff summary:\n```text\n{}\n```\n\nFailure output:\n```text\n{}\n```",
@@ -2288,7 +2289,7 @@ fn repair_prompt(
     let changed_paths = if changed_paths.is_empty() {
         "(no changed paths recorded)".to_string()
     } else {
-        changed_paths.join("\n")
+        format_changed_paths_for_prompt(changed_paths)
     };
     let text = format!(
         "Repo CI {kind} checks failed after your changes.\n\nTriage classification: {} ({:?} confidence)\nTriage summary: {}\n\nChanged paths:\n```text\n{changed_paths}\n```\n\nDiff summary:\n```text\n{}\n```\n\nIf the failure is related or uncertain, fix the code, then let repo CI run again. Do not edit code for clearly unrelated failures.\n\nFailure output:\n```text\n{}\n```",
@@ -2304,6 +2305,10 @@ fn repair_prompt(
         content: vec![ContentItem::InputText { text }],
         phase: None,
     }
+}
+
+fn format_changed_paths_for_prompt(changed_paths: &[String]) -> String {
+    truncate_middle(&changed_paths.join("\n"), MAX_CHANGED_PATHS_BYTES)
 }
 
 fn truncate_middle(value: &str, max_bytes: usize) -> String {
@@ -2570,6 +2575,18 @@ mod tests {
         let truncated = truncate_middle("prefix 😎 middle 😎 suffix", 12);
         assert!(truncated.contains("omitted"));
         assert!(truncated.is_char_boundary(truncated.len()));
+    }
+
+    #[test]
+    fn format_changed_paths_for_prompt_caps_large_lists() {
+        let changed_paths = (0..2_000)
+            .map(|index| format!("src/generated/file_{index}.rs"))
+            .collect::<Vec<_>>();
+
+        let formatted = format_changed_paths_for_prompt(&changed_paths);
+
+        assert!(formatted.len() < changed_paths.join("\n").len());
+        assert!(formatted.contains("omitted"));
     }
 
     #[test]
