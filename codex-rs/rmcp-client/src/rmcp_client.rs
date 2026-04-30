@@ -65,6 +65,7 @@ use crate::http_client_adapter::StreamableHttpClientAdapterError;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
+use crate::stdio_server_launcher::ResolvedStdioServerCommand;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerTransport;
@@ -100,6 +101,9 @@ enum TransportRecipe {
     Stdio {
         command: StdioServerCommand,
         launcher: Arc<dyn StdioServerLauncher>,
+    },
+    ResolvedStdio {
+        command: ResolvedStdioServerCommand,
     },
     StreamableHttp {
         server_name: String,
@@ -249,6 +253,7 @@ pub type SendElicitation = Box<
     dyn Fn(RequestId, Elicitation) -> BoxFuture<'static, Result<ElicitationResponse>> + Send + Sync,
 >;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolWithConnectorId {
     pub tool: Tool,
     pub connector_id: Option<String>,
@@ -256,6 +261,7 @@ pub struct ToolWithConnectorId {
     pub connector_description: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListToolsWithConnectorIdResult {
     pub next_cursor: Option<String>,
     pub tools: Vec<ToolWithConnectorId>,
@@ -284,6 +290,25 @@ impl RmcpClient {
             command: StdioServerCommand::new(program, args, env, env_vars.to_vec(), cwd),
             launcher,
         };
+        let transport = Self::create_pending_transport(&transport_recipe)
+            .await
+            .map_err(io::Error::other)?;
+
+        Ok(Self {
+            state: Mutex::new(ClientState::Connecting {
+                transport: Some(transport),
+            }),
+            transport_recipe,
+            initialize_context: Mutex::new(None),
+            session_recovery_lock: Semaphore::new(/*permits*/ 1),
+            elicitation_pause_state: ElicitationPauseState::new(),
+        })
+    }
+
+    pub async fn new_resolved_stdio_client(
+        command: ResolvedStdioServerCommand,
+    ) -> io::Result<Self> {
+        let transport_recipe = TransportRecipe::ResolvedStdio { command };
         let transport = Self::create_pending_transport(&transport_recipe)
             .await
             .map_err(io::Error::other)?;
@@ -661,6 +686,10 @@ impl RmcpClient {
         match transport_recipe {
             TransportRecipe::Stdio { command, launcher } => {
                 let transport = launcher.launch(command.clone()).await?;
+                Ok(PendingTransport::Stdio { transport })
+            }
+            TransportRecipe::ResolvedStdio { command } => {
+                let transport = crate::stdio_server_launcher::LocalStdioServerLauncher::launch_resolved_command(command.clone())?;
                 Ok(PendingTransport::Stdio { transport })
             }
             TransportRecipe::StreamableHttp {

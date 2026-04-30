@@ -114,6 +114,8 @@ pub struct McpConfig {
     /// ChatGPT auth is checked separately at runtime before the built-in apps
     /// MCP server is added.
     pub apps_enabled: bool,
+    /// Whether local stdio MCP servers may be reused through the user broker.
+    pub mcp_process_reuse_enabled: bool,
     /// User-configured and plugin-provided MCP servers keyed by server name.
     pub configured_mcp_servers: HashMap<String, McpServerConfig>,
     /// Plugin metadata used to attribute MCP tools/connectors to plugin display names.
@@ -240,6 +242,7 @@ pub async fn read_mcp_resource(
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance(config),
         auth,
+        config.mcp_process_reuse_enabled,
     )
     .await;
 
@@ -305,6 +308,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance,
         auth,
+        config.mcp_process_reuse_enabled,
     )
     .await;
 

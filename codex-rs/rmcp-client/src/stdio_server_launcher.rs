@@ -81,6 +81,21 @@ pub struct StdioServerCommand {
     cwd: Option<PathBuf>,
 }
 
+/// Fully resolved local stdio process launch data.
+///
+/// This is the exact process shape used by [`LocalStdioServerLauncher`] after
+/// applying Codex's MCP environment rules, fallback cwd handling, and
+/// platform-specific program resolution. Callers that need to compare or
+/// reproduce local MCP launches should use this data instead of reconstructing
+/// those rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedStdioServerCommand {
+    pub program: OsString,
+    pub args: Vec<OsString>,
+    pub env: HashMap<OsString, OsString>,
+    pub cwd: PathBuf,
+}
+
 /// Client-side rmcp transport for a launched MCP stdio server.
 ///
 /// The concrete process placement stays private to this module. `RmcpClient`
@@ -154,6 +169,19 @@ impl StdioServerCommand {
     }
 }
 
+/// Resolve local stdio launch data using the same rules as
+/// [`LocalStdioServerLauncher`].
+pub fn resolve_local_stdio_command(
+    program: OsString,
+    args: Vec<OsString>,
+    env: Option<HashMap<OsString, OsString>>,
+    env_vars: Vec<McpServerEnvVar>,
+    cwd: Option<PathBuf>,
+    fallback_cwd: PathBuf,
+) -> io::Result<ResolvedStdioServerCommand> {
+    StdioServerCommand::new(program, args, env, env_vars, cwd).resolve_local(fallback_cwd)
+}
+
 // Local public implementation.
 
 /// Starts MCP stdio servers as local child processes.
@@ -210,27 +238,28 @@ impl LocalStdioServerLauncher {
         command: StdioServerCommand,
         fallback_cwd: PathBuf,
     ) -> io::Result<StdioServerTransport> {
-        let StdioServerCommand {
+        Self::launch_resolved_command(command.resolve_local(fallback_cwd)?)
+    }
+
+    pub(crate) fn launch_resolved_command(
+        command: ResolvedStdioServerCommand,
+    ) -> io::Result<StdioServerTransport> {
+        let ResolvedStdioServerCommand {
             program,
             args,
             env,
-            env_vars,
             cwd,
         } = command;
         let program_name = program.to_string_lossy().into_owned();
-        let envs = create_env_for_mcp_server(env, &env_vars).map_err(io::Error::other)?;
-        let cwd = cwd.unwrap_or(fallback_cwd);
-        let resolved_program =
-            program_resolver::resolve(program, &envs, &cwd).map_err(io::Error::other)?;
 
-        let mut command = Command::new(resolved_program);
+        let mut command = Command::new(program);
         command
             .kill_on_drop(true)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .current_dir(cwd)
             .env_clear()
-            .envs(envs)
+            .envs(env)
             .args(args);
         #[cfg(unix)]
         command.process_group(0);
@@ -261,6 +290,27 @@ impl LocalStdioServerLauncher {
         Ok(StdioServerTransport {
             inner: StdioServerTransportInner::Local(transport),
             _process_group_guard: process_group_guard,
+        })
+    }
+}
+
+impl StdioServerCommand {
+    fn resolve_local(self, fallback_cwd: PathBuf) -> io::Result<ResolvedStdioServerCommand> {
+        let StdioServerCommand {
+            program,
+            args,
+            env,
+            env_vars,
+            cwd,
+        } = self;
+        let env = create_env_for_mcp_server(env, &env_vars).map_err(io::Error::other)?;
+        let cwd = cwd.unwrap_or(fallback_cwd);
+        let program = program_resolver::resolve(program, &env, &cwd).map_err(io::Error::other)?;
+        Ok(ResolvedStdioServerCommand {
+            program,
+            args,
+            env,
+            cwd,
         })
     }
 }

@@ -23,6 +23,7 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
         apps_enabled: false,
+        mcp_process_reuse_enabled: false,
         configured_mcp_servers: HashMap::new(),
         plugin_capability_summaries: Vec::new(),
     }

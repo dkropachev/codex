@@ -182,6 +182,10 @@ enum Subcommand {
     #[clap(hide = true, name = "stdio-to-uds")]
     StdioToUds(StdioToUdsCommand),
 
+    /// Internal: run the MCP stdio process reuse broker.
+    #[clap(hide = true, name = "mcp-broker")]
+    McpBroker(McpBrokerCommand),
+
     /// [EXPERIMENTAL] Run the standalone exec-server service.
     ExecServer(ExecServerCommand),
 
@@ -258,6 +262,12 @@ enum DebugAppServerSubcommand {
 struct DebugAppServerSendMessageV2Command {
     #[arg(value_name = "USER_MESSAGE", required = true)]
     user_message: String,
+}
+
+#[derive(Debug, Parser)]
+struct McpBrokerCommand {
+    #[arg(long)]
+    socket: PathBuf,
 }
 
 #[derive(Debug, Parser)]
@@ -1481,6 +1491,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )?;
             let socket_path = cmd.socket_path;
             codex_stdio_to_uds::run(socket_path.as_path()).await?;
+        }
+        Some(Subcommand::McpBroker(cmd)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "mcp-broker",
+            )?;
+            codex_mcp::run_mcp_broker(cmd.socket).await?;
         }
         Some(Subcommand::ExecServer(cmd)) => {
             reject_remote_mode_for_subcommand(

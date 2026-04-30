@@ -498,6 +498,9 @@
             "js_repl_tools_only": {
               "type": "boolean"
             },
+            "mcp_process_reuse": {
+              "type": "boolean"
+            },
             "memories": {
               "type": "boolean"
             },
@@ -2995,6 +2998,9 @@
           "type": "boolean"
         },
         "js_repl_tools_only": {
+          "type": "boolean"
+        },
+        "mcp_process_reuse": {
           "type": "boolean"
         },
         "memories": {

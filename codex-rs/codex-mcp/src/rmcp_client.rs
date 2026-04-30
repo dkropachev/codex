@@ -10,12 +10,15 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::broker;
+use crate::broker::BrokerClient;
 use crate::codex_apps::CachedCodexAppsToolsLoad;
 use crate::codex_apps::CodexAppsToolsCacheContext;
 use crate::codex_apps::filter_disallowed_codex_apps_tools;
@@ -60,6 +63,7 @@ use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::ProtocolVersion;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 /// MCP server capability indicating that Codex should include [`SandboxState`]
 /// in tool-call request `_meta` under this key.
@@ -73,13 +77,78 @@ pub(crate) const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Clone)]
 pub(crate) struct ManagedClient {
-    pub(crate) client: Arc<RmcpClient>,
+    pub(crate) client: McpClientHandle,
     pub(crate) tools: Vec<ToolInfo>,
     pub(crate) tool_filter: ToolFilter,
     pub(crate) tool_timeout: Option<Duration>,
     pub(crate) server_instructions: Option<String>,
     pub(crate) server_supports_sandbox_state_meta_capability: bool,
     pub(crate) codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+}
+
+#[derive(Clone)]
+pub(crate) enum McpClientHandle {
+    Direct(Arc<RmcpClient>),
+    Broker(Arc<BrokerClient>),
+}
+
+impl McpClientHandle {
+    async fn list_tools_with_connector_ids(
+        &self,
+        params: Option<rmcp::model::PaginatedRequestParams>,
+        timeout: Option<Duration>,
+    ) -> Result<codex_rmcp_client::ListToolsWithConnectorIdResult> {
+        match self {
+            Self::Direct(client) => client.list_tools_with_connector_ids(params, timeout).await,
+            Self::Broker(client) => client.list_tools_with_connector_ids(params, timeout).await,
+        }
+    }
+
+    pub(crate) async fn list_resources(
+        &self,
+        params: Option<rmcp::model::PaginatedRequestParams>,
+        timeout: Option<Duration>,
+    ) -> Result<rmcp::model::ListResourcesResult> {
+        match self {
+            Self::Direct(client) => client.list_resources(params, timeout).await,
+            Self::Broker(client) => client.list_resources(params, timeout).await,
+        }
+    }
+
+    pub(crate) async fn list_resource_templates(
+        &self,
+        params: Option<rmcp::model::PaginatedRequestParams>,
+        timeout: Option<Duration>,
+    ) -> Result<rmcp::model::ListResourceTemplatesResult> {
+        match self {
+            Self::Direct(client) => client.list_resource_templates(params, timeout).await,
+            Self::Broker(client) => client.list_resource_templates(params, timeout).await,
+        }
+    }
+
+    pub(crate) async fn read_resource(
+        &self,
+        params: rmcp::model::ReadResourceRequestParams,
+        timeout: Option<Duration>,
+    ) -> Result<rmcp::model::ReadResourceResult> {
+        match self {
+            Self::Direct(client) => client.read_resource(params, timeout).await,
+            Self::Broker(client) => client.read_resource(params, timeout).await,
+        }
+    }
+
+    pub(crate) async fn call_tool(
+        &self,
+        name: String,
+        arguments: Option<serde_json::Value>,
+        meta: Option<serde_json::Value>,
+        timeout: Option<Duration>,
+    ) -> Result<rmcp::model::CallToolResult> {
+        match self {
+            Self::Direct(client) => client.call_tool(name, arguments, meta, timeout).await,
+            Self::Broker(client) => client.call_tool(name, arguments, meta, timeout).await,
+        }
+    }
 }
 
 impl ManagedClient {
@@ -132,6 +201,8 @@ impl AsyncManagedClient {
         tool_plugin_provenance: Arc<ToolPluginProvenance>,
         runtime_environment: McpRuntimeEnvironment,
         runtime_auth_provider: Option<SharedAuthProvider>,
+        codex_home: PathBuf,
+        mcp_process_reuse_enabled: bool,
     ) -> Self {
         let tool_filter = ToolFilter::from_config(&config);
         let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
@@ -148,6 +219,31 @@ impl AsyncManagedClient {
                     return Err(error.into());
                 }
 
+                if mcp_process_reuse_enabled {
+                    match try_broker_managed_client(BrokerStartupParams {
+                        server_name: server_name.clone(),
+                        config: config.clone(),
+                        runtime_environment: runtime_environment.clone(),
+                        codex_home: codex_home.clone(),
+                        tool_filter: startup_tool_filter.clone(),
+                        tx_event: tx_event.clone(),
+                        elicitation_requests: elicitation_requests.clone(),
+                        codex_apps_tools_cache_context: codex_apps_tools_cache_context.clone(),
+                    })
+                    .or_cancel(&cancel_token)
+                    .await
+                    {
+                        Ok(Ok(Some(managed))) => return Ok(managed),
+                        Ok(Ok(None)) => {}
+                        Ok(Err(error)) => {
+                            warn!(
+                                "MCP process reuse failed for server `{server_name}`; falling back to direct stdio startup: {error}"
+                            );
+                        }
+                        Err(CancelErr::Cancelled) => return Err(StartupOutcomeError::Cancelled),
+                    }
+                }
+
                 let client = Arc::new(
                     make_rmcp_client(
                         &server_name,
@@ -160,7 +256,7 @@ impl AsyncManagedClient {
                 );
                 match start_server_task(
                     server_name,
-                    client,
+                    McpClientHandle::Direct(client),
                     StartServerTaskParams {
                         startup_timeout: config
                             .startup_timeout_sec
@@ -309,7 +405,7 @@ pub(crate) fn elicitation_capability_for_server(
 
 pub(crate) async fn list_tools_for_client_uncached(
     server_name: &str,
-    client: &Arc<RmcpClient>,
+    client: &McpClientHandle,
     timeout: Option<Duration>,
     server_instructions: Option<&str>,
 ) -> Result<Vec<ToolInfo>> {
@@ -397,28 +493,15 @@ fn validate_mcp_server_name(server_name: &str) -> Result<()> {
     Ok(())
 }
 
-async fn start_server_task(
-    server_name: String,
-    client: Arc<RmcpClient>,
-    params: StartServerTaskParams,
-) -> Result<ManagedClient, StartupOutcomeError> {
-    let StartServerTaskParams {
-        startup_timeout,
-        tool_timeout,
-        tool_filter,
-        tx_event,
-        elicitation_requests,
-        codex_apps_tools_cache_context,
-    } = params;
-    let elicitation = elicitation_capability_for_server(&server_name);
-    let params = InitializeRequestParams {
+fn initialize_request_params(server_name: &str) -> InitializeRequestParams {
+    InitializeRequestParams {
         meta: None,
         capabilities: ClientCapabilities {
             experimental: None,
             extensions: None,
             roots: None,
             sampling: None,
-            elicitation,
+            elicitation: elicitation_capability_for_server(server_name),
             tasks: None,
         },
         client_info: Implementation {
@@ -430,11 +513,123 @@ async fn start_server_task(
             website_url: None,
         },
         protocol_version: ProtocolVersion::V_2025_06_18,
+    }
+}
+
+struct BrokerStartupParams {
+    server_name: String,
+    config: McpServerConfig,
+    runtime_environment: McpRuntimeEnvironment,
+    codex_home: PathBuf,
+    tool_filter: ToolFilter,
+    tx_event: Sender<Event>,
+    elicitation_requests: ElicitationRequestManager,
+    codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+}
+
+async fn try_broker_managed_client(
+    params: BrokerStartupParams,
+) -> Result<Option<ManagedClient>, StartupOutcomeError> {
+    let BrokerStartupParams {
+        server_name,
+        config,
+        runtime_environment,
+        codex_home,
+        tool_filter,
+        tx_event,
+        elicitation_requests,
+        codex_apps_tools_cache_context,
+    } = params;
+    if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        return Ok(None);
+    }
+    match config.experimental_environment.as_deref() {
+        None | Some("local") => {}
+        Some(_) => return Ok(None),
+    }
+
+    let Some((identity, launch)) =
+        broker::reusable_stdio_identity(&config.transport, &runtime_environment)?
+    else {
+        return Ok(None);
     };
 
+    let startup_timeout = config.startup_timeout_sec.or(Some(DEFAULT_STARTUP_TIMEOUT));
+    let tool_timeout = config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT);
+    let initialize_params = initialize_request_params(&server_name);
     let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
+    let (client, initialize_result) = BrokerClient::acquire(
+        &codex_home,
+        identity,
+        launch,
+        initialize_params,
+        startup_timeout,
+        send_elicitation,
+    )
+    .await
+    .map_err(StartupOutcomeError::from)?;
+    let client = McpClientHandle::Broker(Arc::new(client));
+    let server_supports_sandbox_state_meta_capability = initialize_result
+        .capabilities
+        .experimental
+        .as_ref()
+        .and_then(|exp| exp.get(MCP_SANDBOX_STATE_META_CAPABILITY))
+        .is_some();
+    let fetch_start = Instant::now();
+    let tools = list_tools_for_client_uncached(
+        &server_name,
+        &client,
+        startup_timeout,
+        initialize_result.instructions.as_deref(),
+    )
+    .await
+    .map_err(StartupOutcomeError::from)?;
+    emit_duration(
+        MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
+        fetch_start.elapsed(),
+        &[],
+    );
+    write_cached_codex_apps_tools_if_needed(
+        &server_name,
+        codex_apps_tools_cache_context.as_ref(),
+        &tools,
+    );
+    let tools = filter_tools(tools, &tool_filter);
 
-    let initialize_result = client
+    Ok(Some(ManagedClient {
+        client,
+        tools,
+        tool_timeout: Some(tool_timeout),
+        tool_filter,
+        server_instructions: initialize_result.instructions,
+        server_supports_sandbox_state_meta_capability,
+        codex_apps_tools_cache_context,
+    }))
+}
+
+async fn start_server_task(
+    server_name: String,
+    client: McpClientHandle,
+    params: StartServerTaskParams,
+) -> Result<ManagedClient, StartupOutcomeError> {
+    let StartServerTaskParams {
+        startup_timeout,
+        tool_timeout,
+        tool_filter,
+        tx_event,
+        elicitation_requests,
+        codex_apps_tools_cache_context,
+    } = params;
+    let params = initialize_request_params(&server_name);
+
+    let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
+    let McpClientHandle::Direct(direct_client) = &client else {
+        return Err(StartupOutcomeError::from(anyhow!(
+            "brokered MCP client cannot be initialized through direct startup"
+        )));
+    };
+
+    let initialize_result = direct_client
         .initialize(params, startup_timeout, send_elicitation)
         .await
         .map_err(StartupOutcomeError::from)?;
@@ -475,7 +670,7 @@ async fn start_server_task(
     let tools = filter_tools(tools, &tool_filter);
 
     let managed = ManagedClient {
-        client: Arc::clone(&client),
+        client: client.clone(),
         tools,
         tool_timeout: Some(tool_timeout),
         tool_filter,
