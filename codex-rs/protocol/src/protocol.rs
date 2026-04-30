@@ -761,10 +761,10 @@ pub enum Op {
         long_ci: Option<bool>,
     },
 
-    /// Override model policy enablement for this session.
+    /// Override model router enablement for this session.
     ///
     /// `None` clears the session override and returns to repo/user config.
-    SetModelPolicySessionConfig {
+    SetModelRouterSessionConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         enabled: Option<bool>,
     },
@@ -931,7 +931,7 @@ impl Op {
             Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
             Self::ReloadUserConfig => "reload_user_config",
             Self::SetRepoCiSessionConfig { .. } => "set_repo_ci_session_config",
-            Self::SetModelPolicySessionConfig { .. } => "set_model_policy_session_config",
+            Self::SetModelRouterSessionConfig { .. } => "set_model_router_session_config",
             Self::ListSkills { .. } => "list_skills",
             Self::Compact => "compact",
             Self::DropMemories => "drop_memories",

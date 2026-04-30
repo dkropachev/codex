@@ -48,7 +48,7 @@ mod thread_list;
 mod thread_loaded_list;
 mod thread_memory_mode_set;
 mod thread_metadata_update;
-mod thread_model_policy_session_config_set;
+mod thread_model_router_session_config_set;
 mod thread_name_websocket;
 mod thread_read;
 mod thread_repo_ci_session_config_set;

@@ -313,9 +313,9 @@ client_request_definitions! {
         params: v2::ThreadRepoCiSessionConfigSetParams,
         response: v2::ThreadRepoCiSessionConfigSetResponse,
     },
-    ThreadModelPolicySessionConfigSet => "thread/modelPolicySessionConfig/set" {
-        params: v2::ThreadModelPolicySessionConfigSetParams,
-        response: v2::ThreadModelPolicySessionConfigSetResponse,
+    ThreadModelRouterSessionConfigSet => "thread/modelRouterSessionConfig/set" {
+        params: v2::ThreadModelRouterSessionConfigSetParams,
+        response: v2::ThreadModelRouterSessionConfigSetResponse,
     },
     #[experimental("memory/reset")]
     MemoryReset => "memory/reset" {
@@ -1905,17 +1905,17 @@ mod tests {
     }
 
     #[test]
-    fn serialize_thread_model_policy_session_config_set() -> Result<()> {
-        let request = ClientRequest::ThreadModelPolicySessionConfigSet {
+    fn serialize_thread_model_router_session_config_set() -> Result<()> {
+        let request = ClientRequest::ThreadModelRouterSessionConfigSet {
             request_id: RequestId::Integer(10),
-            params: v2::ThreadModelPolicySessionConfigSetParams {
+            params: v2::ThreadModelRouterSessionConfigSetParams {
                 thread_id: "thr_123".to_string(),
                 enabled: Some(false),
             },
         };
         assert_eq!(
             json!({
-                "method": "thread/modelPolicySessionConfig/set",
+                "method": "thread/modelRouterSessionConfig/set",
                 "id": 10,
                 "params": {
                     "threadId": "thr_123",

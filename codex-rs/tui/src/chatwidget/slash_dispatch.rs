@@ -31,7 +31,7 @@ const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
 const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
     "'/side' is unavailable while code review is running.";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
-const MODEL_POLICY_USAGE: &str = "Usage: /model-policy <enable|disable|inherit>";
+const MODEL_ROUTER_USAGE: &str = "Usage: /model-router <enable|disable|inherit>";
 const REPO_CI_USAGE: &str = "Usage: /repo-ci setup | /repo-ci learn | /repo-ci retry | /repo-ci <options> [task]\nOptions: <inherit|off|local|remote|local-and-remote> [issues <inherit|none|comma-list>] [rounds <inherit|N>] [long-ci <inherit|on|off>]";
 
 impl ChatWidget {
@@ -366,11 +366,11 @@ impl ChatWidget {
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
             }
-            SlashCommand::ModelPolicy => {
+            SlashCommand::ModelRouter => {
                 self.add_info_message(
-                    MODEL_POLICY_USAGE.to_string(),
+                    MODEL_ROUTER_USAGE.to_string(),
                     Some(
-                        "This override affects only the current thread and lasts until the session ends or you run /model-policy inherit."
+                        "This override affects only the current thread and lasts until the session ends or you run /model-router inherit."
                             .to_string(),
                     ),
                 );
@@ -856,20 +856,20 @@ impl ChatWidget {
                     source,
                 );
             }
-            SlashCommand::ModelPolicy if !trimmed.is_empty() => {
-                let enabled = match parse_model_policy_enabled(trimmed) {
+            SlashCommand::ModelRouter if !trimmed.is_empty() => {
+                let enabled = match parse_model_router_enabled(trimmed) {
                     Ok(enabled) => enabled,
                     Err(message) => {
                         self.add_error_message(message);
-                        self.add_info_message(MODEL_POLICY_USAGE.to_string(), /*hint*/ None);
+                        self.add_info_message(MODEL_ROUTER_USAGE.to_string(), /*hint*/ None);
                         return;
                     }
                 };
-                self.submit_op(AppCommand::set_model_policy_session_config(enabled));
+                self.submit_op(AppCommand::set_model_router_session_config(enabled));
                 self.add_info_message(
-                    model_policy_session_message(enabled),
+                    model_router_session_message(enabled),
                     Some(
-                        "This override affects only the current thread and lasts until the session ends or you run /model-policy inherit."
+                        "This override affects only the current thread and lasts until the session ends or you run /model-router inherit."
                             .to_string(),
                     ),
                 );
@@ -1020,7 +1020,7 @@ impl ChatWidget {
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
-            | SlashCommand::ModelPolicy
+            | SlashCommand::ModelRouter
             | SlashCommand::RepoCi
             | SlashCommand::Memories
             | SlashCommand::Quit
@@ -1207,20 +1207,20 @@ fn repo_ci_command_tokens(raw: &str) -> Vec<RepoCiCommandToken<'_>> {
     tokens
 }
 
-fn parse_model_policy_enabled(raw: &str) -> Result<Option<bool>, String> {
+fn parse_model_router_enabled(raw: &str) -> Result<Option<bool>, String> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "enable" | "enabled" | "on" => Ok(Some(true)),
         "disable" | "disabled" | "off" => Ok(Some(false)),
         "inherit" | "default" | "config" => Ok(None),
-        _ => Err(MODEL_POLICY_USAGE.to_string()),
+        _ => Err(MODEL_ROUTER_USAGE.to_string()),
     }
 }
 
-fn model_policy_session_message(enabled: Option<bool>) -> String {
+fn model_router_session_message(enabled: Option<bool>) -> String {
     match enabled {
-        Some(true) => "Model policy is enabled for this session.".to_string(),
-        Some(false) => "Model policy is disabled for this session.".to_string(),
-        None => "Model policy now inherits repo/user config for this session.".to_string(),
+        Some(true) => "Model router is enabled for this session.".to_string(),
+        Some(false) => "Model router is disabled for this session.".to_string(),
+        None => "Model router now inherits repo/user config for this session.".to_string(),
     }
 }
 

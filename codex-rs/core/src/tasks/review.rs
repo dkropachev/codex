@@ -19,8 +19,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::config::Constrained;
-use crate::model_policy::ModelPolicySource;
-use crate::model_policy::apply_model_policy;
+use crate::model_router::ModelRouterSource;
+use crate::model_router::apply_model_router;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::session::session::Session;
@@ -126,12 +126,12 @@ async fn start_review_conversation(
         .iter()
         .map(|item| format!("{item:?}").len())
         .sum::<usize>();
-    if let Err(err) = apply_model_policy(
+    if let Err(err) = apply_model_router(
         &mut sub_agent_config,
-        ModelPolicySource::SubAgent(SubAgentSource::Review),
+        ModelRouterSource::SubAgent(SubAgentSource::Review),
         prompt_bytes,
     ) {
-        tracing::warn!("failed to apply review model policy: {err}");
+        tracing::warn!("failed to apply review model router: {err}");
     }
     (run_codex_thread_one_shot(
         sub_agent_config,

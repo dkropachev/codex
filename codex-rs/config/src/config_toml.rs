@@ -204,9 +204,9 @@ pub struct ConfigToml {
     #[serde(default, deserialize_with = "deserialize_account_pool")]
     pub account_pool: Option<AccountPoolToml>,
 
-    /// Optional routing policy for internal model calls.
-    #[serde(default, deserialize_with = "deserialize_model_policy")]
-    pub model_policy: Option<ModelPolicyToml>,
+    /// Optional adaptive router for internal model calls.
+    #[serde(default, deserialize_with = "deserialize_model_router")]
+    pub model_router: Option<ModelRouterToml>,
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: Option<usize>,
@@ -519,55 +519,68 @@ pub enum AccountPoolPolicyToml {
     LoadBalance,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
-pub struct ModelPolicyToml {
+pub struct ModelRouterToml {
     #[serde(default)]
     pub enabled: bool,
 
     #[serde(default)]
-    pub rules: Vec<ModelPolicyRuleToml>,
+    pub discovery: Option<ModelRouterDiscoveryToml>,
 
     #[serde(default)]
-    pub default_route: Option<ModelPolicyRouteToml>,
+    pub subscription_pricing: Option<ModelRouterSubscriptionPricingToml>,
+
+    #[serde(default)]
+    pub savings_reference: Option<ModelRouterSavingsReferenceToml>,
+
+    #[serde(default)]
+    pub candidates: Vec<ModelRouterCandidateToml>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct ModelPolicyRuleToml {
-    /// Source selector, for example `subagent`, `subagent.review`,
-    /// `module.memory_consolidation`, or `*`. Accepts one selector or a list.
-    #[serde(
-        default,
-        alias = "sources",
-        deserialize_with = "deserialize_model_policy_sources"
-    )]
-    pub source: Option<Vec<String>>,
-
-    /// Inclusive lower prompt-size bound, in UTF-8 bytes.
-    pub min_prompt_bytes: Option<usize>,
-
-    /// Inclusive upper prompt-size bound, in UTF-8 bytes.
-    pub max_prompt_bytes: Option<usize>,
-
-    #[serde(flatten)]
-    pub route: ModelPolicyRouteToml,
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelRouterDiscoveryToml {
+    #[default]
+    Curated,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelRouterSubscriptionPricingToml {
+    #[default]
+    AmortizedScarce,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelRouterSavingsReferenceToml {
+    #[default]
+    ImplicitIncumbent,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
-pub struct ModelPolicyRouteToml {
+pub struct ModelRouterCandidateToml {
+    pub id: Option<String>,
     pub model: Option<String>,
     pub model_provider: Option<String>,
     pub service_tier: Option<ServiceTier>,
-    pub reasoning_effort: Option<ModelPolicyReasoningEffortToml>,
+    pub reasoning_effort: Option<ModelRouterReasoningEffortToml>,
     pub account_pool: Option<String>,
     pub account: Option<String>,
+    pub intelligence_score: Option<f64>,
+    pub success_rate: Option<f64>,
+    pub median_latency_ms: Option<u64>,
+    pub input_price_per_million: Option<f64>,
+    pub cached_input_price_per_million: Option<f64>,
+    pub output_price_per_million: Option<f64>,
+    pub reasoning_output_price_per_million: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum ModelPolicyReasoningEffortToml {
+pub enum ModelRouterReasoningEffortToml {
     /// Preserve the reasoning effort already selected by the parent/default config.
     Inherit,
     None,
@@ -578,16 +591,16 @@ pub enum ModelPolicyReasoningEffortToml {
     XHigh,
 }
 
-impl ModelPolicyReasoningEffortToml {
+impl ModelRouterReasoningEffortToml {
     pub fn as_reasoning_effort(self) -> Option<ReasoningEffort> {
         match self {
-            ModelPolicyReasoningEffortToml::Inherit => None,
-            ModelPolicyReasoningEffortToml::None => Some(ReasoningEffort::None),
-            ModelPolicyReasoningEffortToml::Minimal => Some(ReasoningEffort::Minimal),
-            ModelPolicyReasoningEffortToml::Low => Some(ReasoningEffort::Low),
-            ModelPolicyReasoningEffortToml::Medium => Some(ReasoningEffort::Medium),
-            ModelPolicyReasoningEffortToml::High => Some(ReasoningEffort::High),
-            ModelPolicyReasoningEffortToml::XHigh => Some(ReasoningEffort::XHigh),
+            ModelRouterReasoningEffortToml::Inherit => None,
+            ModelRouterReasoningEffortToml::None => Some(ReasoningEffort::None),
+            ModelRouterReasoningEffortToml::Minimal => Some(ReasoningEffort::Minimal),
+            ModelRouterReasoningEffortToml::Low => Some(ReasoningEffort::Low),
+            ModelRouterReasoningEffortToml::Medium => Some(ReasoningEffort::Medium),
+            ModelRouterReasoningEffortToml::High => Some(ReasoningEffort::High),
+            ModelRouterReasoningEffortToml::XHigh => Some(ReasoningEffort::XHigh),
         }
     }
 }
@@ -739,8 +752,7 @@ pub struct AgentsToml {
     /// Default maximum runtime in seconds for agent job workers.
     #[schemars(range(min = 1))]
     pub job_max_runtime_seconds: Option<u64>,
-
-    /// Whether interrupted turns should leave a model-visible marker.
+    /// Whether spawned agents receive an interrupted-turn history marker.
     pub interrupt_message: Option<bool>,
 
     /// User-defined role declarations keyed by role name.
@@ -1106,111 +1118,115 @@ where
     Ok(account_pool)
 }
 
-pub fn validate_model_policy(model_policy: &ModelPolicyToml) -> Result<(), String> {
-    if !model_policy.enabled {
+pub fn validate_model_router(model_router: &ModelRouterToml) -> Result<(), String> {
+    if !model_router.enabled {
         return Ok(());
     }
 
-    if model_policy.rules.is_empty() && model_policy.default_route.is_none() {
-        return Err(
-            "model_policy: enabled model policy must define rules or default_route".to_string(),
-        );
-    }
-    if let Some(route) = &model_policy.default_route {
-        validate_model_policy_route("model_policy.default_route", route)?;
-    }
-    for (index, rule) in model_policy.rules.iter().enumerate() {
-        let label = format!("model_policy.rules[{index}]");
-        if let Some(sources) = &rule.source
-            && sources.is_empty()
-        {
-            return Err(format!("{label}: source must not be an empty list"));
-        }
-        if let Some(sources) = &rule.source
-            && sources.iter().any(|source| source.trim().is_empty())
-        {
-            return Err(format!("{label}: source entries must not be empty"));
-        }
-        if let (Some(min), Some(max)) = (rule.min_prompt_bytes, rule.max_prompt_bytes)
-            && min > max
-        {
-            return Err(format!(
-                "{label}: min_prompt_bytes must be <= max_prompt_bytes"
-            ));
-        }
-        if rule.source.is_none()
-            && rule.min_prompt_bytes.is_none()
-            && rule.max_prompt_bytes.is_none()
-        {
-            return Err(format!(
-                "{label}: rule must specify source or a prompt-size bound"
-            ));
-        }
-        validate_model_policy_route(&label, &rule.route)?;
+    for (index, candidate) in model_router.candidates.iter().enumerate() {
+        let label = format!("model_router.candidates[{index}]");
+        validate_model_router_candidate(&label, candidate)?;
     }
 
     Ok(())
 }
 
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum OneOrManyStrings {
-    One(String),
-    Many(Vec<String>),
-}
-
-fn deserialize_model_policy_sources<'de, D>(
-    deserializer: D,
-) -> Result<Option<Vec<String>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let source = Option::<OneOrManyStrings>::deserialize(deserializer)?;
-    Ok(source.map(|source| match source {
-        OneOrManyStrings::One(source) => vec![source],
-        OneOrManyStrings::Many(sources) => sources,
-    }))
-}
-
-fn validate_model_policy_route(label: &str, route: &ModelPolicyRouteToml) -> Result<(), String> {
-    if route.model.is_none()
-        && route.model_provider.is_none()
-        && route.service_tier.is_none()
-        && route.reasoning_effort.is_none()
-        && route.account_pool.is_none()
-        && route.account.is_none()
+fn validate_model_router_candidate(
+    label: &str,
+    candidate: &ModelRouterCandidateToml,
+) -> Result<(), String> {
+    if let Some(id) = &candidate.id
+        && id.trim().is_empty()
     {
-        return Err(format!("{label}: route must set at least one target field"));
+        return Err(format!("{label}: id must not be empty"));
     }
-    if route.account_pool.is_some() && route.account.is_some() {
+    if candidate.model.is_none()
+        && candidate.model_provider.is_none()
+        && candidate.service_tier.is_none()
+        && candidate.reasoning_effort.is_none()
+        && candidate.account_pool.is_none()
+        && candidate.account.is_none()
+        && candidate.intelligence_score.is_none()
+        && candidate.success_rate.is_none()
+        && candidate.median_latency_ms.is_none()
+        && candidate.input_price_per_million.is_none()
+        && candidate.cached_input_price_per_million.is_none()
+        && candidate.output_price_per_million.is_none()
+        && candidate.reasoning_output_price_per_million.is_none()
+    {
+        return Err(format!(
+            "{label}: candidate must set at least one target field"
+        ));
+    }
+    if candidate.account_pool.is_some() && candidate.account.is_some() {
         return Err(format!(
             "{label}: account_pool and account are mutually exclusive"
         ));
     }
-    if let Some(account) = &route.account
+    if let Some(account) = &candidate.account
         && (account.trim().is_empty() || !is_safe_account_id(account))
     {
         return Err(format!(
             "{label}: account must not be empty or contain path separators or parent directory components"
         ));
     }
-    if let Some(account_pool) = &route.account_pool
+    if let Some(account_pool) = &candidate.account_pool
         && account_pool.trim().is_empty()
     {
         return Err(format!("{label}: account_pool must not be empty"));
     }
+    validate_unit_interval(label, "intelligence_score", candidate.intelligence_score)?;
+    validate_unit_interval(label, "success_rate", candidate.success_rate)?;
+    validate_non_negative(
+        label,
+        "input_price_per_million",
+        candidate.input_price_per_million,
+    )?;
+    validate_non_negative(
+        label,
+        "cached_input_price_per_million",
+        candidate.cached_input_price_per_million,
+    )?;
+    validate_non_negative(
+        label,
+        "output_price_per_million",
+        candidate.output_price_per_million,
+    )?;
+    validate_non_negative(
+        label,
+        "reasoning_output_price_per_million",
+        candidate.reasoning_output_price_per_million,
+    )?;
     Ok(())
 }
 
-fn deserialize_model_policy<'de, D>(deserializer: D) -> Result<Option<ModelPolicyToml>, D::Error>
+fn validate_unit_interval(label: &str, field: &str, value: Option<f64>) -> Result<(), String> {
+    if let Some(value) = value
+        && !(0.0..=1.0).contains(&value)
+    {
+        return Err(format!("{label}: {field} must be between 0.0 and 1.0"));
+    }
+    Ok(())
+}
+
+fn validate_non_negative(label: &str, field: &str, value: Option<f64>) -> Result<(), String> {
+    if let Some(value) = value
+        && (!value.is_finite() || value < 0.0)
+    {
+        return Err(format!("{label}: {field} must be non-negative"));
+    }
+    Ok(())
+}
+
+fn deserialize_model_router<'de, D>(deserializer: D) -> Result<Option<ModelRouterToml>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let model_policy = Option::<ModelPolicyToml>::deserialize(deserializer)?;
-    if let Some(model_policy) = model_policy.as_ref() {
-        validate_model_policy(model_policy).map_err(serde::de::Error::custom)?;
+    let model_router = Option::<ModelRouterToml>::deserialize(deserializer)?;
+    if let Some(model_router) = model_router.as_ref() {
+        validate_model_router(model_router).map_err(serde::de::Error::custom)?;
     }
-    Ok(model_policy)
+    Ok(model_router)
 }
 
 pub fn validate_oss_provider(provider: &str) -> std::io::Result<()> {
@@ -1261,60 +1277,82 @@ mod tests {
     }
 
     #[test]
-    fn parses_model_policy_config() {
+    fn parses_model_router_config() {
         let config: ConfigToml = toml::from_str(
             r#"
-            [model_policy]
+            [model_router]
             enabled = true
+            discovery = "curated"
+            subscription_pricing = "amortized_scarce"
+            savings_reference = "implicit_incumbent"
 
-            [[model_policy.rules]]
-            source = ["subagent", "module.repo_ci"]
-            max_prompt_bytes = 20000
+            [[model_router.candidates]]
+            id = "spark"
             model = "gpt-5.3-codex-spark"
             service_tier = "flex"
             reasoning_effort = "inherit"
             account = "spark-account"
+            intelligence_score = 0.62
+            success_rate = 0.97
+            median_latency_ms = 1800
+            input_price_per_million = 0.25
+            cached_input_price_per_million = 0.025
+            output_price_per_million = 1.25
 
-            [model_policy.default_route]
+            [[model_router.candidates]]
+            id = "codex-pro"
             account_pool = "codex-pro"
             "#,
         )
         .expect("config should parse");
 
-        let model_policy = config.model_policy.expect("model policy");
-        assert_eq!(model_policy.enabled, true);
-        assert_eq!(model_policy.rules.len(), 1);
-        let rule = model_policy.rules.first().expect("rule");
+        let model_router = config.model_router.expect("model router");
+        assert_eq!(model_router.enabled, true);
         assert_eq!(
-            rule.source.as_deref(),
-            Some(["subagent".to_string(), "module.repo_ci".to_string()].as_slice())
+            model_router.discovery,
+            Some(ModelRouterDiscoveryToml::Curated)
         );
-        assert_eq!(rule.max_prompt_bytes, Some(20000));
-        assert_eq!(rule.route.model.as_deref(), Some("gpt-5.3-codex-spark"));
-        assert_eq!(rule.route.service_tier, Some(ServiceTier::Flex));
         assert_eq!(
-            rule.route.reasoning_effort,
-            Some(ModelPolicyReasoningEffortToml::Inherit)
+            model_router.subscription_pricing,
+            Some(ModelRouterSubscriptionPricingToml::AmortizedScarce)
         );
-        assert_eq!(rule.route.account.as_deref(), Some("spark-account"));
         assert_eq!(
-            model_policy
-                .default_route
-                .as_ref()
-                .and_then(|route| route.account_pool.as_deref()),
+            model_router.savings_reference,
+            Some(ModelRouterSavingsReferenceToml::ImplicitIncumbent)
+        );
+        assert_eq!(model_router.candidates.len(), 2);
+        let candidate = model_router.candidates.first().expect("candidate");
+        assert_eq!(candidate.id.as_deref(), Some("spark"));
+        assert_eq!(candidate.model.as_deref(), Some("gpt-5.3-codex-spark"));
+        assert_eq!(candidate.service_tier, Some(ServiceTier::Flex));
+        assert_eq!(
+            candidate.reasoning_effort,
+            Some(ModelRouterReasoningEffortToml::Inherit)
+        );
+        assert_eq!(candidate.account.as_deref(), Some("spark-account"));
+        assert_eq!(candidate.intelligence_score, Some(0.62));
+        assert_eq!(candidate.success_rate, Some(0.97));
+        assert_eq!(candidate.median_latency_ms, Some(1800));
+        assert_eq!(candidate.input_price_per_million, Some(0.25));
+        assert_eq!(candidate.cached_input_price_per_million, Some(0.025));
+        assert_eq!(candidate.output_price_per_million, Some(1.25));
+        assert_eq!(
+            model_router
+                .candidates
+                .get(1)
+                .and_then(|candidate| candidate.account_pool.as_deref()),
             Some("codex-pro")
         );
     }
 
     #[test]
-    fn rejects_model_policy_with_ambiguous_account_target() {
+    fn rejects_model_router_with_ambiguous_account_target() {
         let err = toml::from_str::<ConfigToml>(
             r#"
-            [model_policy]
+            [model_router]
             enabled = true
 
-            [[model_policy.rules]]
-            source = "subagent"
+            [[model_router.candidates]]
             model = "gpt-5.3-codex-spark"
             account_pool = "codex-pro"
             account = "work-pro"

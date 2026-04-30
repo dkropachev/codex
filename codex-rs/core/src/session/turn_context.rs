@@ -408,10 +408,10 @@ impl Session {
         let config = session_configuration.original_config_do_not_use.clone();
         let mut per_turn_config = (*config).clone();
         per_turn_config.cwd = cwd;
-        if let Some(enabled) = session_configuration.model_policy_enabled_override
-            && let Some(model_policy) = per_turn_config.model_policy.as_mut()
+        if let Some(enabled) = session_configuration.model_router_enabled_override
+            && let Some(model_router) = per_turn_config.model_router.as_mut()
         {
-            model_policy.enabled = enabled;
+            model_router.enabled = enabled;
         }
         per_turn_config.model_reasoning_effort =
             session_configuration.collaboration_mode.reasoning_effort();

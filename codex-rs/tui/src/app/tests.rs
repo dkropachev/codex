@@ -4941,7 +4941,7 @@ async fn repo_ci_session_config_is_submitted_to_app_server() {
 }
 
 #[tokio::test]
-async fn model_policy_session_config_is_submitted_to_app_server() {
+async fn model_router_session_config_is_submitted_to_app_server() {
     let mut app = make_test_app().await;
     let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
         .await
@@ -4954,12 +4954,12 @@ async fn model_policy_session_config_is_submitted_to_app_server() {
     app.enqueue_primary_thread_session(started.session, started.turns)
         .await
         .expect("primary thread should be registered");
-    let op = AppCommand::set_model_policy_session_config(Some(false));
+    let op = AppCommand::set_model_router_session_config(Some(false));
 
     let handled = app
         .try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op)
         .await
-        .expect("model policy session config submission should not fail");
+        .expect("model router session config submission should not fail");
 
     assert_eq!(handled, true);
 }

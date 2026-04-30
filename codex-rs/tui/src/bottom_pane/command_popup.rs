@@ -312,7 +312,7 @@ mod tests {
             .collect();
         assert_eq!(
             cmds,
-            vec!["model", "model-policy", "memories", "mention", "mcp"]
+            vec!["model", "model-router", "memories", "mention", "mcp"]
         );
     }
 

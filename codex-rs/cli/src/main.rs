@@ -58,6 +58,7 @@ use crate::repo_ci_learn::learn_repo_ci_with_ai;
 use crate::repo_ci_learn::run_repo_ci_exec_json;
 
 use codex_config::CONFIG_TOML_FILE;
+use codex_config::LoaderOverrides;
 use codex_core::build_models_manager;
 use codex_core::clear_memory_roots_contents;
 use codex_core::config::Config;
@@ -1125,7 +1126,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     codex_app_server::run_main_with_transport(
                         arg0_paths.clone(),
                         root_config_overrides,
-                        codex_core::config_loader::LoaderOverrides::default(),
+                        LoaderOverrides::default(),
                         analytics_default_enabled,
                         transport,
                         codex_protocol::protocol::SessionSource::VSCode,
@@ -2476,7 +2477,7 @@ async fn run_interactive_tui(
     codex_tui::run_main(
         interactive,
         arg0_paths,
-        codex_core::config_loader::LoaderOverrides::default(),
+        LoaderOverrides::default(),
         normalized_remote,
         remote_auth_token,
     )

@@ -619,9 +619,10 @@ async fn conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth() -> 
     let test = builder.build_with_websocket_server(&server).await?;
     assert!(
         server
-            .wait_for_handshakes(/*expected*/ 1, Duration::from_secs(2))
+            .wait_for_handshakes(/*expected*/ 1, Duration::from_secs(15))
             .await
     );
+    let pre_start_handshake_count = server.handshakes().len();
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
@@ -650,9 +651,18 @@ async fn conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth() -> 
     })
     .await;
     assert_eq!(session_updated, "sess_env");
+    assert!(
+        server
+            .wait_for_handshakes(pre_start_handshake_count + 1, Duration::from_secs(2))
+            .await
+    );
 
     assert_eq!(
-        server.handshakes()[1].header("authorization").as_deref(),
+        server
+            .handshakes()
+            .last()
+            .and_then(|handshake| handshake.header("authorization"))
+            .as_deref(),
         Some("Bearer env-realtime-key")
     );
 

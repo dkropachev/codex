@@ -39,8 +39,8 @@ use tracing::warn;
 use crate::Prompt;
 use crate::ResponseEvent;
 use crate::codex_delegate::run_codex_thread_one_shot;
-use crate::model_policy::ModelPolicySource;
-use crate::model_policy::apply_model_policy;
+use crate::model_router::ModelRouterSource;
+use crate::model_router::apply_model_router;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 
@@ -1089,7 +1089,7 @@ async fn prepare_remote_repo_ci_commit(
     let decision = match run_repo_ci_read_only_subagent_json::<codex_repo_ci::RemoteCommitDecision>(
         sess,
         turn_context,
-        ModelPolicySource::Module("repo_ci.commit"),
+        ModelRouterSource::Module("repo_ci.commit"),
         SubAgentSource::Other("repo_ci_commit".to_string()),
         prompt,
         codex_repo_ci::remote_commit_decision_schema(),
@@ -1244,7 +1244,7 @@ async fn run_targeted_review(
     let output: RepoCiReviewOutput = run_repo_ci_subagent_json(
         sess,
         turn_context,
-        ModelPolicySource::Module("repo_ci.review"),
+        ModelRouterSource::Module("repo_ci.review"),
         SubAgentSource::Other("repo_ci_review".to_string()),
         prompt,
         review_output_schema(),
@@ -1289,7 +1289,7 @@ async fn run_review_fix_workers(
             run_repo_ci_subagent_json::<RepoCiFixWorkerOutput>(
                 sess,
                 turn_context,
-                ModelPolicySource::Module("repo_ci.fix"),
+                ModelRouterSource::Module("repo_ci.fix"),
                 SubAgentSource::Other(format!("repo_ci_fix_{index}")),
                 prompt,
                 review_fix_output_schema(),
@@ -1328,7 +1328,7 @@ fn group_review_findings(findings: &[RepoCiReviewFinding]) -> Vec<RepoCiFixGroup
 async fn run_repo_ci_subagent_json<T>(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    model_policy_source: ModelPolicySource,
+    model_router_source: ModelRouterSource,
     subagent_source: SubAgentSource,
     prompt: String,
     schema: serde_json::Value,
@@ -1337,7 +1337,7 @@ where
     T: for<'de> Deserialize<'de>,
 {
     let mut sub_agent_config =
-        repo_ci_phase_config(turn_context, model_policy_source, prompt.len());
+        repo_ci_phase_config(turn_context, model_router_source, prompt.len());
     if let Err(err) = sub_agent_config
         .web_search_mode
         .set(WebSearchMode::Disabled)
@@ -1387,7 +1387,7 @@ where
     run_repo_ci_read_only_subagent_json(
         sess,
         turn_context,
-        ModelPolicySource::Module("repo_ci.learn"),
+        ModelRouterSource::Module("repo_ci.learn"),
         SubAgentSource::Other("repo_ci_learn".to_string()),
         prompt,
         schema,
@@ -1398,7 +1398,7 @@ where
 async fn run_repo_ci_read_only_subagent_json<T>(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    model_policy_source: ModelPolicySource,
+    model_router_source: ModelRouterSource,
     subagent_source: SubAgentSource,
     prompt: String,
     schema: serde_json::Value,
@@ -1407,7 +1407,7 @@ where
     T: for<'de> Deserialize<'de>,
 {
     let mut sub_agent_config =
-        repo_ci_phase_config(turn_context, model_policy_source, prompt.len());
+        repo_ci_phase_config(turn_context, model_router_source, prompt.len());
     if let Err(err) = sub_agent_config
         .web_search_mode
         .set(WebSearchMode::Disabled)
@@ -1450,23 +1450,23 @@ where
 
 fn repo_ci_phase_config(
     turn_context: &TurnContext,
-    model_policy_source: ModelPolicySource,
+    model_router_source: ModelRouterSource,
     prompt_bytes: usize,
 ) -> crate::config::Config {
     repo_ci_phase_config_from_base(
         turn_context.config.as_ref().clone(),
-        model_policy_source,
+        model_router_source,
         prompt_bytes,
     )
 }
 
 fn repo_ci_phase_config_from_base(
     mut config: crate::config::Config,
-    model_policy_source: ModelPolicySource,
+    model_router_source: ModelRouterSource,
     prompt_bytes: usize,
 ) -> crate::config::Config {
-    if let Err(err) = apply_model_policy(&mut config, model_policy_source, prompt_bytes) {
-        warn!("failed to apply repo CI model policy: {err}");
+    if let Err(err) = apply_model_router(&mut config, model_router_source, prompt_bytes) {
+        warn!("failed to apply repo CI model router: {err}");
     }
     config
 }
@@ -2133,7 +2133,7 @@ async fn run_model_triage(
     let triage_prompt = triage_prompt_text(input);
     let policy_config = repo_ci_phase_config(
         turn_context,
-        ModelPolicySource::Module("repo_ci.triage"),
+        ModelRouterSource::Module("repo_ci.triage"),
         triage_prompt.len(),
     );
     let model = policy_config
@@ -2383,9 +2383,8 @@ async fn send_status(
 mod tests {
     use super::*;
     use crate::config;
-    use codex_config::config_toml::ModelPolicyRouteToml;
-    use codex_config::config_toml::ModelPolicyRuleToml;
-    use codex_config::config_toml::ModelPolicyToml;
+    use codex_config::config_toml::ModelRouterCandidateToml;
+    use codex_config::config_toml::ModelRouterToml;
     use codex_config::config_toml::RepoCiToml;
     use codex_protocol::config_types::ServiceTier;
     use pretty_assertions::assert_eq;
@@ -2747,66 +2746,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repo_ci_triage_phase_applies_model_policy() {
+    async fn repo_ci_triage_phase_applies_model_router() {
         let mut base = config::test_config().await;
-        base.model_policy = Some(ModelPolicyToml {
+        base.model_router = Some(ModelRouterToml {
             enabled: true,
-            rules: vec![ModelPolicyRuleToml {
-                source: Some(vec!["module.repo_ci.triage".to_string()]),
-                route: ModelPolicyRouteToml {
-                    model: Some("triage-model".to_string()),
-                    service_tier: Some(ServiceTier::Flex),
-                    ..Default::default()
-                },
+            candidates: vec![ModelRouterCandidateToml {
+                model: Some("triage-model".to_string()),
+                service_tier: Some(ServiceTier::Flex),
                 ..Default::default()
             }],
-            default_route: None,
+            ..Default::default()
         });
         let config =
-            repo_ci_phase_config_from_base(base, ModelPolicySource::Module("repo_ci.triage"), 10);
+            repo_ci_phase_config_from_base(base, ModelRouterSource::Module("repo_ci.triage"), 10);
 
         assert_eq!(config.model.as_deref(), Some("triage-model"));
         assert_eq!(config.service_tier, Some(ServiceTier::Flex));
     }
 
     #[tokio::test]
-    async fn repo_ci_review_phase_applies_model_policy() {
+    async fn repo_ci_review_phase_applies_model_router() {
         let mut base = config::test_config().await;
-        base.model_policy = Some(ModelPolicyToml {
+        base.model_router = Some(ModelRouterToml {
             enabled: true,
-            rules: vec![ModelPolicyRuleToml {
-                source: Some(vec!["module.repo_ci.review".to_string()]),
-                route: ModelPolicyRouteToml {
-                    model: Some("review-model".to_string()),
-                    ..Default::default()
-                },
+            candidates: vec![ModelRouterCandidateToml {
+                model: Some("review-model".to_string()),
+                intelligence_score: Some(0.8),
                 ..Default::default()
             }],
-            default_route: None,
+            ..Default::default()
         });
         let config =
-            repo_ci_phase_config_from_base(base, ModelPolicySource::Module("repo_ci.review"), 10);
+            repo_ci_phase_config_from_base(base, ModelRouterSource::Module("repo_ci.review"), 10);
 
         assert_eq!(config.model.as_deref(), Some("review-model"));
     }
 
     #[tokio::test]
-    async fn repo_ci_fix_phase_applies_model_policy() {
+    async fn repo_ci_fix_phase_applies_model_router() {
         let mut base = config::test_config().await;
-        base.model_policy = Some(ModelPolicyToml {
+        base.model_router = Some(ModelRouterToml {
             enabled: true,
-            rules: vec![ModelPolicyRuleToml {
-                source: Some(vec!["module.repo_ci.fix".to_string()]),
-                route: ModelPolicyRouteToml {
-                    model: Some("fix-model".to_string()),
-                    ..Default::default()
-                },
+            candidates: vec![ModelRouterCandidateToml {
+                model: Some("fix-model".to_string()),
+                intelligence_score: Some(0.8),
                 ..Default::default()
             }],
-            default_route: None,
+            ..Default::default()
         });
         let config =
-            repo_ci_phase_config_from_base(base, ModelPolicySource::Module("repo_ci.fix"), 10);
+            repo_ci_phase_config_from_base(base, ModelRouterSource::Module("repo_ci.fix"), 10);
 
         assert_eq!(config.model.as_deref(), Some("fix-model"));
     }

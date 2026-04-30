@@ -47,6 +47,7 @@ members = [
     "codex-mcp",
     "mcp-server",
     "model-provider-info",
+    "model-router",
     "models-manager",
     "network-proxy",
     "ollama",
@@ -157,6 +158,7 @@ codex-login = { path = "login" }
 codex-mcp = { path = "codex-mcp" }
 codex-mcp-server = { path = "mcp-server" }
 codex-model-provider-info = { path = "model-provider-info" }
+codex-model-router = { path = "model-router" }
 codex-models-manager = { path = "models-manager" }
 codex-network-proxy = { path = "network-proxy" }
 codex-ollama = { path = "ollama" }

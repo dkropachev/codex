@@ -62,6 +62,7 @@ mod device_key_tests;
 mod goals;
 mod logs;
 mod memories;
+mod model_router;
 mod remote_control;
 #[cfg(test)]
 mod test_support;
@@ -71,6 +72,8 @@ pub use device_key::DeviceKeyBindingRecord;
 pub use goals::ThreadGoalAccountingMode;
 pub use goals::ThreadGoalAccountingOutcome;
 pub use goals::ThreadGoalUpdate;
+pub use model_router::ModelRouterLedgerEntry;
+pub use model_router::ModelRouterSavingsSummary;
 pub use remote_control::RemoteControlEnrollmentRecord;
 pub use threads::ThreadFilterOptions;
 

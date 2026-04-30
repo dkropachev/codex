@@ -21,10 +21,11 @@ pub enum SlashCommand {
     #[strum(serialize = "sandbox-add-read-dir")]
     SandboxReadRoot,
     Experimental,
-    ModelPolicy,
+    ModelRouter,
     RepoCi,
     Memories,
     Skills,
+    Goal,
     Review,
     Rename,
     New,
@@ -33,7 +34,6 @@ pub enum SlashCommand {
     Init,
     Compact,
     Plan,
-    Goal,
     Collab,
     Agent,
     Side,
@@ -91,6 +91,7 @@ impl SlashCommand {
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
+            SlashCommand::Goal => "set or inspect the current thread goal",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Limits => "show current ChatGPT usage limits",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
@@ -109,7 +110,6 @@ impl SlashCommand {
             SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
             SlashCommand::Settings => "configure realtime microphone/speaker",
             SlashCommand::Plan => "switch to Plan mode",
-            SlashCommand::Goal => "set or manage the current thread goal",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::Side => "start a side conversation in an ephemeral fork",
@@ -120,8 +120,8 @@ impl SlashCommand {
                 "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>"
             }
             SlashCommand::Experimental => "toggle experimental features",
-            SlashCommand::ModelPolicy => {
-                "temporarily enable or disable model policy for this session"
+            SlashCommand::ModelRouter => {
+                "temporarily enable or disable model router for this session"
             }
             SlashCommand::RepoCi => "configure repo CI or run one task with repo CI",
             SlashCommand::Memories => "configure memory use and generation",
@@ -144,15 +144,15 @@ impl SlashCommand {
     pub fn supports_inline_args(self) -> bool {
         matches!(
             self,
-            SlashCommand::Review
+            SlashCommand::Goal
+                | SlashCommand::Review
                 | SlashCommand::Rename
-                | SlashCommand::Goal
                 | SlashCommand::Plan
                 | SlashCommand::Fast
                 | SlashCommand::Mcp
                 | SlashCommand::Side
                 | SlashCommand::Resume
-                | SlashCommand::ModelPolicy
+                | SlashCommand::ModelRouter
                 | SlashCommand::RepoCi
                 | SlashCommand::SandboxReadRoot
         )
@@ -187,11 +187,11 @@ impl SlashCommand {
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
-            | SlashCommand::ModelPolicy
+            | SlashCommand::ModelRouter
             | SlashCommand::RepoCi
             | SlashCommand::Memories
-            | SlashCommand::Review
             | SlashCommand::Goal
+            | SlashCommand::Review
             | SlashCommand::Plan
             | SlashCommand::Clear
             | SlashCommand::Logout

@@ -175,8 +175,8 @@ use codex_app_server_protocol::ThreadMemoryModeSetResponse;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateResponse;
-use codex_app_server_protocol::ThreadModelPolicySessionConfigSetParams;
-use codex_app_server_protocol::ThreadModelPolicySessionConfigSetResponse;
+use codex_app_server_protocol::ThreadModelRouterSessionConfigSetParams;
+use codex_app_server_protocol::ThreadModelRouterSessionConfigSetResponse;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
@@ -1001,8 +1001,8 @@ impl CodexMessageProcessor {
                 )
                 .await;
             }
-            ClientRequest::ThreadModelPolicySessionConfigSet { request_id, params } => {
-                self.thread_model_policy_session_config_set(
+            ClientRequest::ThreadModelRouterSessionConfigSet { request_id, params } => {
+                self.thread_model_router_session_config_set(
                     to_connection_request_id(request_id),
                     params,
                 )
@@ -3916,12 +3916,12 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_model_policy_session_config_set(
+    async fn thread_model_router_session_config_set(
         &self,
         request_id: ConnectionRequestId,
-        params: ThreadModelPolicySessionConfigSetParams,
+        params: ThreadModelRouterSessionConfigSetParams,
     ) {
-        let ThreadModelPolicySessionConfigSetParams { thread_id, enabled } = params;
+        let ThreadModelRouterSessionConfigSetParams { thread_id, enabled } = params;
 
         let (_, thread) = match self.load_thread(&thread_id).await {
             Ok(v) => v,
@@ -3931,10 +3931,10 @@ impl CodexMessageProcessor {
             }
         };
 
-        if enabled == Some(true) && self.config.model_policy.is_none() {
+        if enabled == Some(true) && self.config.model_router.is_none() {
             self.send_invalid_request_error(
                 request_id,
-                "cannot enable model policy for this session because no [model_policy] is configured"
+                "cannot enable model router for this session because no [model_router] is configured"
                     .to_string(),
             )
             .await;
@@ -3945,19 +3945,19 @@ impl CodexMessageProcessor {
             .submit_core_op(
                 &request_id,
                 thread.as_ref(),
-                Op::SetModelPolicySessionConfig { enabled },
+                Op::SetModelRouterSessionConfig { enabled },
             )
             .await
         {
             Ok(_) => {
                 self.outgoing
-                    .send_response(request_id, ThreadModelPolicySessionConfigSetResponse {})
+                    .send_response(request_id, ThreadModelRouterSessionConfigSetResponse {})
                     .await;
             }
             Err(err) => {
                 self.send_internal_error(
                     request_id,
-                    format!("failed to set model policy session config: {err}"),
+                    format!("failed to set model router session config: {err}"),
                 )
                 .await;
             }

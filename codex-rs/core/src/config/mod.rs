@@ -24,7 +24,7 @@ use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigToml;
-use codex_config::config_toml::ModelPolicyToml;
+use codex_config::config_toml::ModelRouterToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
@@ -536,7 +536,7 @@ pub struct Config {
     pub account_pool: Option<codex_config::config_toml::AccountPoolToml>,
 
     /// Optional routing policy for internal model calls.
-    pub model_policy: Option<ModelPolicyToml>,
+    pub model_router: Option<ModelRouterToml>,
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: usize,
@@ -2552,7 +2552,7 @@ impl Config {
             mcp_oauth_callback_url: cfg.mcp_oauth_callback_url.clone(),
             model_providers,
             account_pool: cfg.account_pool,
-            model_policy: cfg.model_policy,
+            model_router: cfg.model_router,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(AGENTS_MD_MAX_BYTES),
             project_doc_fallback_filenames: cfg
                 .project_doc_fallback_filenames

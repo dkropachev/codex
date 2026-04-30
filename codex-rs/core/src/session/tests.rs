@@ -2294,7 +2294,7 @@ async fn set_rate_limits_retains_previous_credits() {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
-        model_policy_enabled_override: None,
+        model_router_enabled_override: None,
         repo_ci_session_mode: None,
         repo_ci_issue_types: None,
         repo_ci_review_rounds: None,
@@ -2404,7 +2404,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
-        model_policy_enabled_override: None,
+        model_router_enabled_override: None,
         repo_ci_session_mode: None,
         repo_ci_issue_types: None,
         repo_ci_review_rounds: None,
@@ -2810,51 +2810,46 @@ async fn session_settings_null_service_tier_update_clears_service_tier() {
 }
 
 #[tokio::test]
-async fn session_settings_model_policy_override_updates_per_turn_config() {
+async fn session_settings_model_router_override_updates_per_turn_config() {
     let mut session_configuration = make_session_configuration_for_tests().await;
     session_configuration.original_config_do_not_use = Arc::new({
         let mut config = (*session_configuration.original_config_do_not_use).clone();
-        config.model_policy = Some(codex_config::config_toml::ModelPolicyToml {
+        config.model_router = Some(codex_config::config_toml::ModelRouterToml {
             enabled: false,
-            rules: vec![codex_config::config_toml::ModelPolicyRuleToml {
-                source: Some(vec!["*".to_string()]),
-                min_prompt_bytes: None,
-                max_prompt_bytes: None,
-                route: codex_config::config_toml::ModelPolicyRouteToml {
-                    model: Some("gpt-5.4".to_string()),
-                    ..Default::default()
-                },
+            candidates: vec![codex_config::config_toml::ModelRouterCandidateToml {
+                model: Some("gpt-5.4".to_string()),
+                ..Default::default()
             }],
-            default_route: None,
+            ..Default::default()
         });
         config
     });
 
     let updated = session_configuration
         .apply(&SessionSettingsUpdate {
-            model_policy_enabled_override: Some(Some(true)),
+            model_router_enabled_override: Some(Some(true)),
             ..Default::default()
         })
-        .expect("model policy override should apply");
+        .expect("model router override should apply");
 
     let per_turn_config = Session::build_per_turn_config(&updated, updated.cwd.clone(), None);
-    let model_policy = per_turn_config
-        .model_policy
-        .expect("model policy should remain configured");
-    assert!(model_policy.enabled);
+    let model_router = per_turn_config
+        .model_router
+        .expect("model router should remain configured");
+    assert!(model_router.enabled);
 
     let inherited = updated
         .apply(&SessionSettingsUpdate {
-            model_policy_enabled_override: Some(None),
+            model_router_enabled_override: Some(None),
             ..Default::default()
         })
         .expect("inherit override should apply");
     let inherited_per_turn_config =
         Session::build_per_turn_config(&inherited, inherited.cwd.clone(), None);
-    let inherited_model_policy = inherited_per_turn_config
-        .model_policy
-        .expect("model policy should remain configured");
-    assert!(!inherited_model_policy.enabled);
+    let inherited_model_router = inherited_per_turn_config
+        .model_router
+        .expect("model router should remain configured");
+    assert!(!inherited_model_router.enabled);
 }
 
 pub(crate) async fn make_session_configuration_for_tests() -> SessionConfiguration {
@@ -2907,7 +2902,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
-        model_policy_enabled_override: None,
+        model_router_enabled_override: None,
         repo_ci_session_mode: None,
         repo_ci_issue_types: None,
         repo_ci_review_rounds: None,
@@ -3373,7 +3368,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
-        model_policy_enabled_override: None,
+        model_router_enabled_override: None,
         repo_ci_session_mode: None,
         repo_ci_issue_types: None,
         repo_ci_review_rounds: None,
@@ -3485,7 +3480,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
-        model_policy_enabled_override: None,
+        model_router_enabled_override: None,
         repo_ci_session_mode: None,
         repo_ci_issue_types: None,
         repo_ci_review_rounds: None,
@@ -3707,7 +3702,7 @@ async fn make_session_with_config_and_rx(
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
-        model_policy_enabled_override: None,
+        model_router_enabled_override: None,
         repo_ci_session_mode: None,
         repo_ci_issue_types: None,
         repo_ci_review_rounds: None,
@@ -4863,7 +4858,7 @@ where
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
-        model_policy_enabled_override: None,
+        model_router_enabled_override: None,
         repo_ci_session_mode: None,
         repo_ci_issue_types: None,
         repo_ci_review_rounds: None,

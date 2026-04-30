@@ -87,7 +87,7 @@
       },
       "properties": {
         "interrupt_message": {
-          "description": "Whether interrupted turns should leave a model-visible marker.",
+          "description": "Whether spawned agents receive an interrupted-turn history marker.",
           "type": "boolean"
         },
         "job_max_runtime_seconds": {
@@ -1187,121 +1187,6 @@
       },
       "type": "object"
     },
-    "ModelPolicyReasoningEffortToml": {
-      "oneOf": [
-        {
-          "enum": [
-            "none",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Preserve the reasoning effort already selected by the parent/default config.",
-          "enum": [
-            "inherit"
-          ],
-          "type": "string"
-        }
-      ]
-    },
-    "ModelPolicyRouteToml": {
-      "additionalProperties": false,
-      "properties": {
-        "account": {
-          "type": "string"
-        },
-        "account_pool": {
-          "type": "string"
-        },
-        "model": {
-          "type": "string"
-        },
-        "model_provider": {
-          "type": "string"
-        },
-        "reasoning_effort": {
-          "$ref": "#/definitions/ModelPolicyReasoningEffortToml"
-        },
-        "service_tier": {
-          "$ref": "#/definitions/ServiceTier"
-        }
-      },
-      "type": "object"
-    },
-    "ModelPolicyRuleToml": {
-      "additionalProperties": false,
-      "properties": {
-        "account": {
-          "type": "string"
-        },
-        "account_pool": {
-          "type": "string"
-        },
-        "max_prompt_bytes": {
-          "description": "Inclusive upper prompt-size bound, in UTF-8 bytes.",
-          "format": "uint",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "min_prompt_bytes": {
-          "description": "Inclusive lower prompt-size bound, in UTF-8 bytes.",
-          "format": "uint",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "model": {
-          "type": "string"
-        },
-        "model_provider": {
-          "type": "string"
-        },
-        "reasoning_effort": {
-          "$ref": "#/definitions/ModelPolicyReasoningEffortToml"
-        },
-        "service_tier": {
-          "$ref": "#/definitions/ServiceTier"
-        },
-        "source": {
-          "default": null,
-          "description": "Source selector, for example `subagent`, `subagent.review`, `module.memory_consolidation`, or `*`. Accepts one selector or a list.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
-    "ModelPolicyToml": {
-      "additionalProperties": false,
-      "properties": {
-        "default_route": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ModelPolicyRouteToml"
-            }
-          ],
-          "default": null
-        },
-        "enabled": {
-          "default": false,
-          "type": "boolean"
-        },
-        "rules": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/ModelPolicyRuleToml"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
     "ModelProviderAuthInfo": {
       "additionalProperties": false,
       "description": "Configuration for obtaining a provider bearer token from a command.",
@@ -1465,6 +1350,143 @@
           ],
           "default": "responses",
           "description": "Which wire protocol this provider expects."
+        }
+      },
+      "type": "object"
+    },
+    "ModelRouterCandidateToml": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "type": "string"
+        },
+        "account_pool": {
+          "type": "string"
+        },
+        "cached_input_price_per_million": {
+          "format": "double",
+          "type": "number"
+        },
+        "id": {
+          "type": "string"
+        },
+        "input_price_per_million": {
+          "format": "double",
+          "type": "number"
+        },
+        "intelligence_score": {
+          "format": "double",
+          "type": "number"
+        },
+        "median_latency_ms": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "model_provider": {
+          "type": "string"
+        },
+        "output_price_per_million": {
+          "format": "double",
+          "type": "number"
+        },
+        "reasoning_effort": {
+          "$ref": "#/definitions/ModelRouterReasoningEffortToml"
+        },
+        "reasoning_output_price_per_million": {
+          "format": "double",
+          "type": "number"
+        },
+        "service_tier": {
+          "$ref": "#/definitions/ServiceTier"
+        },
+        "success_rate": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "ModelRouterDiscoveryToml": {
+      "enum": [
+        "curated"
+      ],
+      "type": "string"
+    },
+    "ModelRouterReasoningEffortToml": {
+      "oneOf": [
+        {
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Preserve the reasoning effort already selected by the parent/default config.",
+          "enum": [
+            "inherit"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ModelRouterSavingsReferenceToml": {
+      "enum": [
+        "implicit_incumbent"
+      ],
+      "type": "string"
+    },
+    "ModelRouterSubscriptionPricingToml": {
+      "enum": [
+        "amortized_scarce"
+      ],
+      "type": "string"
+    },
+    "ModelRouterToml": {
+      "additionalProperties": false,
+      "properties": {
+        "candidates": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ModelRouterCandidateToml"
+          },
+          "type": "array"
+        },
+        "discovery": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelRouterDiscoveryToml"
+            }
+          ],
+          "default": null
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "savings_reference": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelRouterSavingsReferenceToml"
+            }
+          ],
+          "default": null
+        },
+        "subscription_pricing": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelRouterSubscriptionPricingToml"
+            }
+          ],
+          "default": null
         }
       },
       "type": "object"
@@ -3276,15 +3298,6 @@
       ],
       "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by Codex will likely degrade model performance."
     },
-    "model_policy": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/ModelPolicyToml"
-        }
-      ],
-      "default": null,
-      "description": "Optional routing policy for internal model calls."
-    },
     "model_provider": {
       "description": "Provider to use from the model_providers map.",
       "type": "string"
@@ -3302,6 +3315,15 @@
     },
     "model_reasoning_summary": {
       "$ref": "#/definitions/ReasoningSummary"
+    },
+    "model_router": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ModelRouterToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional adaptive router for internal model calls."
     },
     "model_supports_reasoning_summaries": {
       "description": "Override to force-enable reasoning summaries for the configured model.",

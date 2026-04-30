@@ -123,8 +123,8 @@ unavailable. Failing local checks are fed back into the same turn for repair
 until the configured local retry limit is reached. Progress is emitted as
 structured repo CI status events rather than generic warnings.
 
-When a failure occurs, Codex asks the model configured for the repo-ci phase in
-`model_policy` to classify the failure as `related`, `unrelated`,
+When a failure occurs, Codex asks the model selected by `model_router` for the
+repo-ci phase to classify the failure as `related`, `unrelated`,
 `whole_suite`, or `unknown`. If no model result is available, Codex uses
 deterministic fallback classification and never ignores `unknown` or
 `whole_suite` failures.
@@ -170,56 +170,67 @@ accounts = ["work-pro", "personal-pro"]
 policy = "drain"
 ```
 
-## Model policy
+## Model router
 
-`[model_policy]` routes internal Codex model calls by source and prompt size.
-Rules are checked in order. Prompt size bounds use UTF-8 bytes, not tokens.
+`[model_router]` enables adaptive routing for internal Codex model calls.
+There are no static source rules. The router treats the current model config as
+the implicit incumbent, keeps explicit candidates, and can add candidates
+discovered from configured providers and registered accounts.
 
 ```toml
-[model_policy]
+[model_router]
 enabled = true
+discovery = "curated"
+subscription_pricing = "amortized_scarce"
+savings_reference = "implicit_incumbent"
 
-[[model_policy.rules]]
-source = ["subagent", "module.repo_ci.triage"]
-max_prompt_bytes = 20000
+[[model_router.candidates]]
+id = "spark"
 model = "gpt-5.3-codex-spark"
 service_tier = "flex"
 reasoning_effort = "inherit"
 account_pool = "spark"
+intelligence_score = 0.62
+median_latency_ms = 1800
+input_price_per_million = 0.25
+cached_input_price_per_million = 0.025
+output_price_per_million = 1.25
 
-[[model_policy.rules]]
-source = "module.repo_ci.review"
-min_prompt_bytes = 20001
+[[model_router.candidates]]
+id = "work"
 model = "gpt-5.4"
 reasoning_effort = "medium"
 account = "work-pro"
 
-[[model_policy.rules]]
-source = "module.repo_ci.fix"
+[[model_router.candidates]]
+id = "high-quality"
 model = "gpt-5.4"
 reasoning_effort = "high"
 ```
 
-Supported source selectors include `subagent`, `agent`,
-`subagent.review`, `subagent.thread_spawn`, `subagent.memory_consolidation`,
-`module.repo_ci.triage`, `module.repo_ci.review`, and `module.repo_ci.fix`.
-`module.repo_ci` also works as a coarse fallback selector for repo-ci phases.
-Use `source = "*"` to match every internal source, or use `source = [...]` /
-`sources = [...]` to match any of several sources. A route may set `model`,
-`model_provider`, `service_tier`, `reasoning_effort`, `account_pool`, or
-`account`.
+The router automatically uses the current model config as the incumbent route,
+then scores that route alongside candidates for the current task class. A
+candidate may set `model`, `model_provider`, `service_tier`, `reasoning_effort`,
+`account_pool`, `account`, optional observed metrics such as
+`intelligence_score`, `success_rate`, and `median_latency_ms`, and optional
+token prices.
 `reasoning_effort = "inherit"` keeps the reasoning level from the parent or
 default config. `account_pool` references an existing
 `[account_pool.pools.<name>]`; `account` routes to one account id under
-`~/.codex/accounts/<account-id>`. Account routes apply when the policy starts a
+`~/.codex/accounts/<account-id>`. Account routes apply when the router starts a
 new internal session, such as spawned agents and memory consolidation agents. If
-a policy route cannot be applied, Codex leaves the original model configuration
+a router candidate cannot be applied, Codex leaves the original model configuration
 unchanged and continues with the default model selection.
 
-Inside the TUI, `/model-policy enable|disable|inherit` temporarily overrides
-whether the current thread uses the configured model policy. This override lasts
+The router records actual production cost, router exploration overhead, and
+counterfactual cost against the implicit incumbent so it can report gross and
+net AI-cost savings. Router overhead includes shadow calls, canary extras,
+benchmark probes, self-assessments, judges, and verifiers.
+
+Inside the TUI, `/model-router enable|disable|inherit|status` temporarily overrides
+whether the current thread uses the configured model router. This override lasts
 until the session ends or you return to `inherit`, and `enable` requires an
-existing `[model_policy]` configuration.
+existing `[model_router]` configuration.
 
 ## Custom CA Certificates
 
