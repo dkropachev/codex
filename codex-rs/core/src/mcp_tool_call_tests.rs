@@ -27,6 +27,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
+use serial_test::serial;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -1913,6 +1914,7 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
 }
 
 #[tokio::test]
+#[serial(arc_monitor_env)]
 async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
     use wiremock::Mock;
     use wiremock::MockServer;
@@ -1985,6 +1987,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
 }
 
 #[tokio::test]
+#[serial(arc_monitor_env)]
 async fn custom_approve_mode_blocks_when_arc_returns_interrupt_for_model() {
     use wiremock::Mock;
     use wiremock::MockServer;
@@ -2057,6 +2060,7 @@ async fn custom_approve_mode_blocks_when_arc_returns_interrupt_for_model() {
 }
 
 #[tokio::test]
+#[serial(arc_monitor_env)]
 async fn approve_mode_blocks_when_arc_returns_interrupt_without_annotations() {
     use wiremock::Mock;
     use wiremock::MockServer;
@@ -2207,6 +2211,7 @@ async fn full_access_mode_skips_arc_monitor_for_all_approval_modes() {
 }
 
 #[tokio::test]
+#[serial(arc_monitor_env)]
 async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_enabled() {
     use wiremock::Mock;
     use wiremock::ResponseTemplate;

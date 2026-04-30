@@ -177,6 +177,7 @@ pub(crate) enum AppEvent {
     CodexOp(Op),
 
     /// Approve one retry of a recent auto-review denial selected in the TUI.
+    #[allow(dead_code)]
     ApproveRecentAutoReviewDenial {
         thread_id: ThreadId,
         id: String,

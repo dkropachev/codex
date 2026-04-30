@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
 use sha2::Sha256;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
@@ -424,14 +425,22 @@ fn read_manifest(path: &Path) -> Result<RepoCiManifest> {
 
 fn collect_sources(repo_root: &Path) -> Result<Vec<SourceHash>> {
     let mut sources = Vec::new();
+    let mut seen_paths = HashSet::new();
     for (relative, kind) in source_candidates(repo_root)? {
-        if let Some(sha256) = hash_file(&repo_root.join(&relative)) {
-            sources.push(SourceHash {
-                path: relative,
-                sha256,
-                kind,
-            });
+        let absolute_path = repo_root.join(&relative);
+        let Some(sha256) = hash_file(&absolute_path) else {
+            continue;
+        };
+        if let Ok(canonical_path) = fs::canonicalize(&absolute_path)
+            && !seen_paths.insert(canonical_path)
+        {
+            continue;
         }
+        sources.push(SourceHash {
+            path: relative,
+            sha256,
+            kind,
+        });
     }
     sources.sort_by(|left, right| left.path.cmp(&right.path));
     sources.dedup_by(|left, right| left.path == right.path);

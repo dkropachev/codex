@@ -1209,7 +1209,7 @@ async fn repo_ci_slash_command_without_args_shows_usage_snapshot() {
     assert!(rendered.contains("/repo-ci setup"));
     assert!(rendered.contains("/repo-ci learn"));
     assert!(rendered.contains("/repo-ci retry"));
-    assert!(rendered.contains("/repo-ci long-ci"));
+    assert!(rendered.contains("long-ci <inherit|on|off>"));
 }
 
 #[tokio::test]

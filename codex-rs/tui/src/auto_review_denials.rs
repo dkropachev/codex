@@ -22,10 +22,12 @@ impl RecentAutoReviewDenials {
         self.entries.truncate(MAX_RECENT_DENIALS);
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn entries(&self) -> impl Iterator<Item = &GuardianAssessmentEvent> {
         self.entries.iter()
     }
@@ -36,6 +38,7 @@ impl RecentAutoReviewDenials {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn action_summary(action: &GuardianAssessmentAction) -> String {
     match action {
         GuardianAssessmentAction::Command { command, .. } => command.clone(),

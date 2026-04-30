@@ -46,6 +46,7 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
     }
 }
 
+#[allow(dead_code)]
 pub fn requery_default_colors() {
     imp::requery_default_colors();
 }
@@ -100,6 +101,7 @@ mod imp {
             self.value
         }
 
+        #[allow(dead_code)]
         fn refresh_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
             self.value = init();
             self.attempted = true;
@@ -118,6 +120,7 @@ mod imp {
         cache.get_or_init_with(|| query_default_colors().unwrap_or_default())
     }
 
+    #[allow(dead_code)]
     pub(super) fn requery_default_colors() {
         if let Ok(mut cache) = default_colors_cache().lock() {
             // Don't try to refresh if the cache is already attempted and failed.
@@ -150,6 +153,7 @@ mod imp {
         None
     }
 
+    #[allow(dead_code)]
     pub(super) fn requery_default_colors() {}
 }
 

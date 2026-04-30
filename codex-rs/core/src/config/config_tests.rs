@@ -1215,9 +1215,7 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
     )
     .await?;
 
-    let memories_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
-        codex_home.path().join("memories"),
-    )?)?;
+    let memories_root = codex_home.path().join("memories").abs();
     assert!(
         config
             .permissions

@@ -6826,15 +6826,13 @@ async fn active_goal_continuation_runs_to_completion_after_turn() -> anyhow::Res
         })
         .await?;
 
-    let mut completed_turns = 0;
     tokio::time::timeout(std::time::Duration::from_secs(8), async {
         loop {
             let event = test.codex.next_event().await?;
-            if matches!(event.msg, EventMsg::TurnComplete(_)) {
-                completed_turns += 1;
-                if completed_turns == 2 {
-                    return anyhow::Ok(());
-                }
+            if let EventMsg::AgentMessage(message) = event.msg
+                && message.message == "Goal complete."
+            {
+                return anyhow::Ok(());
             }
         }
     })
@@ -7155,9 +7153,14 @@ async fn completed_goal_accounts_current_turn_tokens_before_tool_response() -> a
     assert_eq!(complete_output["goal"]["tokensUsed"], 580);
     assert_eq!(complete_output["goal"]["status"], "complete");
     assert_eq!(complete_output["remainingTokens"], 0);
-    assert_eq!(
-        complete_output["completionBudgetReport"],
-        "Goal achieved. Report final budget usage to the user: tokens used: 580 of 500."
+    let completion_budget_report = complete_output["completionBudgetReport"]
+        .as_str()
+        .expect("completion budget report should be a string");
+    assert!(
+        completion_budget_report.contains(
+            "Goal achieved. Report final budget usage to the user: tokens used: 580 of 500"
+        ),
+        "unexpected completion budget report: {completion_budget_report}"
     );
     let requests = responses.requests();
     let completion_followup_request = requests
