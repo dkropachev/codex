@@ -623,7 +623,9 @@ pub(crate) async fn maybe_run_after_agent(
         }
         LocalRepoCiOutcome::Passed => {
             state.local_fix_rounds = 0;
-            state.initial_snapshot = current_snapshot.clone();
+            if !config.remote_enabled() || state.remote_completed {
+                state.initial_snapshot = current_snapshot.clone();
+            }
             send_status(
                 sess,
                 turn_context,
@@ -726,6 +728,7 @@ pub(crate) async fn maybe_run_after_agent(
         Ok(Ok(codex_repo_ci::RemoteRepoCiWorkflowStart::Ready(workflow))) => workflow,
         Ok(Ok(codex_repo_ci::RemoteRepoCiWorkflowStart::Skipped(reason))) => {
             state.remote_completed = true;
+            state.initial_snapshot = current_snapshot.clone();
             send_status(
                 sess,
                 turn_context,
@@ -772,14 +775,13 @@ pub(crate) async fn maybe_run_after_agent(
         }
     };
 
-    if prepare_remote_repo_ci_commit(sess, turn_context)
-        .await
-        .is_err()
-    {
-        send_final_review_summary!();
-        return None;
-    }
-    current_snapshot = WorktreeSnapshot::capture(&turn_context.cwd);
+    let remote_commit_decision = match prepare_remote_repo_ci_commit(sess, turn_context).await {
+        Ok(decision) => decision,
+        Err(_) => {
+            send_final_review_summary!();
+            return None;
+        }
+    };
 
     send_status(
         sess,
@@ -794,7 +796,7 @@ pub(crate) async fn maybe_run_after_agent(
     .await;
     let result = tokio::task::spawn_blocking({
         let cwd = turn_context.cwd.clone();
-        move || run_remote_repo_ci(&cwd, &workflow)
+        move || run_remote_repo_ci(&cwd, &workflow, remote_commit_decision.as_ref())
     })
     .await;
     let remote_outcome = match result {
@@ -834,6 +836,7 @@ pub(crate) async fn maybe_run_after_agent(
     match remote_outcome {
         RemoteRepoCiOutcome::Skipped(reason) => {
             state.remote_completed = true;
+            state.initial_snapshot = WorktreeSnapshot::capture(&turn_context.cwd);
             send_status(
                 sess,
                 turn_context,
@@ -848,9 +851,22 @@ pub(crate) async fn maybe_run_after_agent(
             send_final_review_summary!();
             None
         }
-        RemoteRepoCiOutcome::Passed => {
+        RemoteRepoCiOutcome::Passed { prepared_commit } => {
+            if let Some(applied) = prepared_commit {
+                send_status(
+                    sess,
+                    turn_context,
+                    RepoCiPhase::Remote,
+                    RepoCiState::Passed,
+                    RepoCiScope::Remote,
+                    None,
+                    None,
+                    format_remote_commit_applied(&applied),
+                )
+                .await;
+            }
             state.remote_completed = true;
-            state.initial_snapshot = current_snapshot.clone();
+            state.initial_snapshot = WorktreeSnapshot::capture(&turn_context.cwd);
             send_status(
                 sess,
                 turn_context,
@@ -883,7 +899,7 @@ pub(crate) async fn maybe_run_after_agent(
             .await;
             if triage.should_ignore() {
                 state.remote_completed = true;
-                state.initial_snapshot = current_snapshot.clone();
+                state.initial_snapshot = WorktreeSnapshot::capture(&turn_context.cwd);
                 send_status(
                     sess,
                     turn_context,
@@ -1060,7 +1076,7 @@ async fn ensure_repo_ci_learned(
 async fn prepare_remote_repo_ci_commit(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-) -> Result<()> {
+) -> Result<Option<codex_repo_ci::RemoteCommitDecision>> {
     let context = tokio::task::spawn_blocking({
         let cwd = turn_context.cwd.clone();
         move || codex_repo_ci::remote_commit_decision_context(&cwd)
@@ -1068,7 +1084,7 @@ async fn prepare_remote_repo_ci_commit(
     .await
     .context("repo-ci remote commit inspection task failed")??;
     let Some(context) = context else {
-        return Ok(());
+        return Ok(None);
     };
 
     send_status(
@@ -1115,44 +1131,7 @@ async fn prepare_remote_repo_ci_commit(
         }
     };
 
-    let result = tokio::task::spawn_blocking({
-        let cwd = turn_context.cwd.clone();
-        let decision = decision.clone();
-        move || codex_repo_ci::apply_remote_commit_decision(&cwd, &decision)
-    })
-    .await
-    .context("repo-ci remote commit task failed");
-    match result {
-        Ok(Ok(Some(applied))) => {
-            send_status(
-                sess,
-                turn_context,
-                RepoCiPhase::Remote,
-                RepoCiState::Passed,
-                RepoCiScope::Remote,
-                None,
-                None,
-                format_remote_commit_applied(&applied),
-            )
-            .await;
-            Ok(())
-        }
-        Ok(Ok(None)) => Ok(()),
-        Ok(Err(err)) | Err(err) => {
-            send_status(
-                sess,
-                turn_context,
-                RepoCiPhase::Remote,
-                RepoCiState::Failed,
-                RepoCiScope::Remote,
-                None,
-                None,
-                format!("Repo CI remote commit preparation failed: {err:#}"),
-            )
-            .await;
-            Err(err)
-        }
-    }
+    Ok(Some(decision))
 }
 
 fn format_remote_commit_applied(applied: &codex_repo_ci::RemoteCommitApplied) -> String {
@@ -1890,7 +1869,9 @@ fn automation_to_repo_ci(automation: RepoCiAutomationToml) -> codex_repo_ci::Aut
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RemoteRepoCiOutcome {
     Skipped(String),
-    Passed,
+    Passed {
+        prepared_commit: Option<codex_repo_ci::RemoteCommitApplied>,
+    },
     Failed {
         output: String,
         classification: FailureClassification,
@@ -1900,12 +1881,20 @@ enum RemoteRepoCiOutcome {
 fn run_remote_repo_ci(
     cwd: &Path,
     workflow: &codex_repo_ci::RemoteRepoCiWorkflow,
+    commit_decision: Option<&codex_repo_ci::RemoteCommitDecision>,
 ) -> Result<RemoteRepoCiOutcome> {
-    match codex_repo_ci::run_started_remote_workflow(cwd, workflow)? {
+    let run = codex_repo_ci::run_started_remote_workflow_with_commit_decision(
+        cwd,
+        workflow,
+        commit_decision,
+    )?;
+    match run.outcome {
         codex_repo_ci::RemoteRepoCiWorkflowOutcome::Skipped(reason) => {
             Ok(RemoteRepoCiOutcome::Skipped(reason))
         }
-        codex_repo_ci::RemoteRepoCiWorkflowOutcome::Passed => Ok(RemoteRepoCiOutcome::Passed),
+        codex_repo_ci::RemoteRepoCiWorkflowOutcome::Passed => Ok(RemoteRepoCiOutcome::Passed {
+            prepared_commit: run.prepared_commit,
+        }),
         codex_repo_ci::RemoteRepoCiWorkflowOutcome::Failed {
             watch_status,
             checks,
@@ -1923,7 +1912,9 @@ fn run_remote_repo_ci(
                 .filter(|check| check.bucket.as_deref() == Some("fail") || check.state == "FAILURE")
                 .collect::<Vec<_>>();
             if failed.is_empty() {
-                return Ok(RemoteRepoCiOutcome::Passed);
+                return Ok(RemoteRepoCiOutcome::Passed {
+                    prepared_commit: run.prepared_commit,
+                });
             }
             let classification = classify_remote_failure(checks.len(), &failed);
             Ok(RemoteRepoCiOutcome::Failed {

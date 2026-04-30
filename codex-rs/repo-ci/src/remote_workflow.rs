@@ -1,3 +1,7 @@
+use crate::remote_commit::RemoteCommitApplied;
+use crate::remote_commit::RemoteCommitDecision;
+use crate::remote_commit::apply_remote_commit_decision;
+use crate::remote_commit::fallback_remote_commit_decision;
 use crate::remote_commit::git_status_short;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -51,6 +55,13 @@ pub enum RemoteRepoCiWorkflowOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteRepoCiWorkflowRun {
+    pub outcome: RemoteRepoCiWorkflowOutcome,
+    pub prepared_commit: Option<RemoteCommitApplied>,
+    pub pushed_head: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteRepoCiWorkflow {
     pr: GhPr,
 }
@@ -88,20 +99,42 @@ pub fn run_started_remote_workflow(
     cwd: &Path,
     workflow: &RemoteRepoCiWorkflow,
 ) -> Result<RemoteRepoCiWorkflowOutcome> {
+    Ok(run_started_remote_workflow_with_commit_decision(cwd, workflow, None)?.outcome)
+}
+
+pub fn run_started_remote_workflow_with_commit_decision(
+    cwd: &Path,
+    workflow: &RemoteRepoCiWorkflow,
+    commit_decision: Option<&RemoteCommitDecision>,
+) -> Result<RemoteRepoCiWorkflowRun> {
+    let prepared_commit = prepare_remote_commit(cwd, commit_decision)?;
     ensure_clean_worktree(cwd)?;
+    let pushed_head = local_head(cwd)?;
     push_pr_head(cwd, &workflow.pr)?;
+    ensure_remote_ref_matches_head(cwd, &workflow.pr, &pushed_head)?;
     let watch_output = run_gh_output_with_retry(
         cwd,
         &["pr", "checks", "--watch", "--fail-fast"],
         "watch GitHub PR checks",
     )?;
     if watch_output.status.success() {
-        return Ok(RemoteRepoCiWorkflowOutcome::Passed);
+        ensure_clean_worktree(cwd)?;
+        ensure_local_head_matches(cwd, &pushed_head)?;
+        ensure_remote_ref_matches_head(cwd, &workflow.pr, &pushed_head)?;
+        return Ok(RemoteRepoCiWorkflowRun {
+            outcome: RemoteRepoCiWorkflowOutcome::Passed,
+            prepared_commit,
+            pushed_head: Some(pushed_head),
+        });
     }
     let checks = pr_checks(cwd)?;
-    Ok(RemoteRepoCiWorkflowOutcome::Failed {
-        watch_status: watch_output.status,
-        checks,
+    Ok(RemoteRepoCiWorkflowRun {
+        outcome: RemoteRepoCiWorkflowOutcome::Failed {
+            watch_status: watch_output.status,
+            checks,
+        },
+        prepared_commit,
+        pushed_head: Some(pushed_head),
     })
 }
 
@@ -173,16 +206,9 @@ fn current_pr(cwd: &Path) -> Result<Option<GhPr>> {
 }
 
 fn push_pr_head(cwd: &Path, pr: &GhPr) -> Result<()> {
+    let remote = remote_target(pr);
     let mut push_ref = String::from("HEAD:");
     push_ref.push_str(&pr.head_ref_name);
-    let remote = if let Some(repo) = &pr.head_repository {
-        format!(
-            "git@github.com:{}/{}.git",
-            pr.head_repository_owner.login, repo.name
-        )
-    } else {
-        "origin".to_string()
-    };
     run_command_with_retry(
         cwd,
         "git",
@@ -190,6 +216,83 @@ fn push_pr_head(cwd: &Path, pr: &GhPr) -> Result<()> {
         "push PR head to GitHub",
     )?;
     Ok(())
+}
+
+fn remote_target(pr: &GhPr) -> String {
+    if let Some(repo) = &pr.head_repository {
+        format!(
+            "git@github.com:{}/{}.git",
+            pr.head_repository_owner.login, repo.name
+        )
+    } else {
+        "origin".to_string()
+    }
+}
+
+fn remote_head_ref(pr: &GhPr) -> String {
+    let mut head_ref = String::from("refs/heads/");
+    head_ref.push_str(&pr.head_ref_name);
+    head_ref
+}
+
+fn prepare_remote_commit(
+    cwd: &Path,
+    commit_decision: Option<&RemoteCommitDecision>,
+) -> Result<Option<RemoteCommitApplied>> {
+    let fallback;
+    let decision = match commit_decision {
+        Some(decision) => decision,
+        None => {
+            fallback = fallback_remote_commit_decision();
+            &fallback
+        }
+    };
+    apply_remote_commit_decision(cwd, decision)
+}
+
+fn local_head(cwd: &Path) -> Result<String> {
+    let output = run_command_with_retry(cwd, "git", &["rev-parse", "HEAD"], "resolve local HEAD")?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn ensure_local_head_matches(cwd: &Path, expected: &str) -> Result<()> {
+    let actual = local_head(cwd)?;
+    if actual == expected {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "Repo CI remote checks cannot be marked passed because local HEAD changed after push: expected {expected}, found {actual}"
+    ))
+}
+
+fn remote_head(cwd: &Path, pr: &GhPr) -> Result<Option<String>> {
+    let remote = remote_target(pr);
+    let head_ref = remote_head_ref(pr);
+    let output = run_command_with_retry(
+        cwd,
+        "git",
+        &["ls-remote", &remote, &head_ref],
+        "resolve pushed PR head",
+    )?;
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.split_whitespace().next().map(str::to_string)))
+}
+
+fn ensure_remote_ref_matches_head(cwd: &Path, pr: &GhPr, expected: &str) -> Result<()> {
+    let actual = remote_head(cwd, pr)?.ok_or_else(|| {
+        anyhow!(
+            "Repo CI remote checks cannot be marked passed because {} was not found on {}",
+            remote_head_ref(pr),
+            remote_target(pr)
+        )
+    })?;
+    if actual == expected {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "Repo CI remote checks cannot be marked passed because pushed PR head does not match local HEAD: expected {expected}, found {actual}"
+    ))
 }
 
 fn pr_checks(cwd: &Path) -> Result<Vec<RemoteRepoCiCheck>> {
@@ -303,7 +406,48 @@ fn ceil_char_boundary(text: &str, mut index: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use std::fs;
+    use std::path::Path;
+
+    fn init_repo() -> (tempfile::TempDir, std::path::PathBuf) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        fs::create_dir(&repo_root).expect("create repo");
+        run_git(&repo_root, &["init"]);
+        run_git(&repo_root, &["config", "user.email", "repo-ci@example.com"]);
+        run_git(&repo_root, &["config", "user.name", "Repo CI"]);
+        fs::write(repo_root.join("base.txt"), "base\n").expect("write base");
+        run_git(&repo_root, &["add", "base.txt"]);
+        run_git(&repo_root, &["commit", "-m", "base"]);
+        (temp, repo_root)
+    }
+
+    fn run_git(cwd: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {} failed with {}\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn local_origin_pr(head_ref_name: &str) -> GhPr {
+        GhPr {
+            head_ref_name: head_ref_name.to_string(),
+            head_repository: None,
+            head_repository_owner: GhRepositoryOwner {
+                login: "owner".to_string(),
+            },
+        }
+    }
 
     #[test]
     fn dirty_worktree_blocks_remote_workflow() {
@@ -320,5 +464,67 @@ mod tests {
         let err = ensure_clean_worktree(&repo_root).expect_err("dirty tree should fail");
         assert!(err.to_string().contains("working tree is dirty"));
         assert!(err.to_string().contains("dirty.txt"));
+    }
+
+    #[test]
+    fn remote_workflow_prepares_dirty_tree_with_fallback_commit() {
+        let (_temp, repo_root) = init_repo();
+        fs::write(repo_root.join("base.txt"), "base\nchanged\n").expect("write change");
+
+        let applied = prepare_remote_commit(&repo_root, None)
+            .expect("prepare commit")
+            .expect("dirty tree should be committed");
+
+        assert_eq!(
+            applied,
+            RemoteCommitApplied {
+                strategy: crate::RemoteCommitStrategy::SeparateCommit,
+                title: Some("repo-ci: prepare remote retry".to_string()),
+            }
+        );
+        assert!(
+            git_status_short(&repo_root)
+                .expect("status")
+                .trim()
+                .is_empty()
+        );
+        let log = Command::new("git")
+            .args(["log", "--oneline", "-1"])
+            .current_dir(&repo_root)
+            .output()
+            .expect("git log");
+        assert!(String::from_utf8_lossy(&log.stdout).contains("repo-ci: prepare remote retry"));
+    }
+
+    #[test]
+    fn remote_head_validation_rejects_unpushed_head() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let remote_root = temp.path().join("origin.git");
+        fs::create_dir(&remote_root).expect("create remote dir");
+        run_git(&remote_root, &["init", "--bare"]);
+
+        let repo_root = temp.path().join("repo");
+        fs::create_dir(&repo_root).expect("create repo");
+        run_git(&repo_root, &["init"]);
+        run_git(&repo_root, &["config", "user.email", "repo-ci@example.com"]);
+        run_git(&repo_root, &["config", "user.name", "Repo CI"]);
+        fs::write(repo_root.join("base.txt"), "base\n").expect("write base");
+        run_git(&repo_root, &["add", "base.txt"]);
+        run_git(&repo_root, &["commit", "-m", "base"]);
+        run_git(
+            &repo_root,
+            &["remote", "add", "origin", remote_root.to_str().unwrap()],
+        );
+        run_git(&repo_root, &["push", "origin", "HEAD:master"]);
+
+        fs::write(repo_root.join("base.txt"), "base\nlocal\n").expect("write local change");
+        run_git(&repo_root, &["commit", "-am", "local"]);
+        let local = local_head(&repo_root).expect("local head");
+        let pr = local_origin_pr("master");
+
+        let err = ensure_remote_ref_matches_head(&repo_root, &pr, &local)
+            .expect_err("unpushed local head should not validate");
+
+        assert!(err.to_string().contains("does not match local HEAD"));
     }
 }

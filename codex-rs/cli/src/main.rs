@@ -1725,10 +1725,15 @@ async fn run_repo_ci_command(
                         println!("{reason}");
                     }
                     codex_repo_ci::RemoteRepoCiWorkflowStart::Ready(workflow) => {
-                        prepare_repo_ci_remote_commit(root_config_overrides, &cwd).await?;
-                        handle_remote_workflow_outcome(
-                            codex_repo_ci::run_started_remote_workflow(&cwd, &workflow)?,
+                        let commit_decision =
+                            repo_ci_remote_commit_decision(root_config_overrides, &cwd).await?;
+                        let run = codex_repo_ci::run_started_remote_workflow_with_commit_decision(
+                            &cwd,
+                            &workflow,
+                            commit_decision.as_ref(),
                         )?;
+                        print_repo_ci_remote_commit_applied(run.prepared_commit.as_ref());
+                        handle_remote_workflow_outcome(run.outcome)?;
                     }
                 }
             }
@@ -1784,13 +1789,13 @@ async fn run_repo_ci_command(
     }
 }
 
-async fn prepare_repo_ci_remote_commit(
+async fn repo_ci_remote_commit_decision(
     root_config_overrides: &CliConfigOverrides,
     cwd: &std::path::Path,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<codex_repo_ci::RemoteCommitDecision>> {
     let repo_root = codex_repo_ci::repo_root_for_cwd(cwd)?;
     let Some(context) = codex_repo_ci::remote_commit_decision_context(&repo_root)? else {
-        return Ok(());
+        return Ok(None);
     };
     let prompt = codex_repo_ci::render_remote_commit_decision_prompt(&context);
     let decision = match run_repo_ci_exec_json::<codex_repo_ci::RemoteCommitDecision>(
@@ -1808,23 +1813,27 @@ async fn prepare_repo_ci_remote_commit(
             codex_repo_ci::fallback_remote_commit_decision()
         }
     };
-    if let Some(applied) = codex_repo_ci::apply_remote_commit_decision(&repo_root, &decision)? {
-        match applied.strategy {
-            codex_repo_ci::RemoteCommitStrategy::AmendPriorCommit => {
-                println!("Repo CI amended the prior commit before remote checks.");
-            }
-            codex_repo_ci::RemoteCommitStrategy::SeparateCommit => {
-                println!(
-                    "Repo CI created commit `{}` before remote checks.",
-                    applied
-                        .title
-                        .as_deref()
-                        .unwrap_or("repo-ci: prepare remote retry")
-                );
-            }
+    Ok(Some(decision))
+}
+
+fn print_repo_ci_remote_commit_applied(applied: Option<&codex_repo_ci::RemoteCommitApplied>) {
+    let Some(applied) = applied else {
+        return;
+    };
+    match applied.strategy {
+        codex_repo_ci::RemoteCommitStrategy::AmendPriorCommit => {
+            println!("Repo CI amended the prior commit before remote checks.");
+        }
+        codex_repo_ci::RemoteCommitStrategy::SeparateCommit => {
+            println!(
+                "Repo CI created commit `{}` before remote checks.",
+                applied
+                    .title
+                    .as_deref()
+                    .unwrap_or("repo-ci: prepare remote retry")
+            );
         }
     }
-    Ok(())
 }
 
 fn handle_remote_workflow_outcome(
