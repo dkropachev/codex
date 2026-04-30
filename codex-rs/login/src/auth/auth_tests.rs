@@ -13,6 +13,7 @@ use codex_protocol::config_types::ModelProviderAuthInfo;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
 use serde_json::json;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tempfile::tempdir;
@@ -297,6 +298,56 @@ fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
     assert_eq!(manager.refresh_failure_for_auth(&updated_auth), None);
 }
 
+#[tokio::test]
+async fn pooled_refresh_token_refreshes_active_member_storage() {
+    let codex_home = tempdir().unwrap();
+    write_auth_file_with_tokens(
+        codex_home.path(),
+        "parent-account",
+        "parent-access-token",
+        "parent-refresh-token",
+    )
+    .expect("write parent auth");
+    let member_home = codex_home.path().join("accounts").join("work-pro");
+    std::fs::create_dir_all(&member_home).expect("create member auth dir");
+    write_auth_file_with_tokens(
+        &member_home,
+        "work-pro",
+        "old-access-token",
+        "old-refresh-token",
+    )
+    .expect("write member auth");
+    let manager = AuthManager::shared_from_config(
+        &PooledAuthConfig {
+            codex_home: codex_home.path().to_path_buf(),
+        },
+        /*enable_codex_api_key_env*/ false,
+    );
+    let auth = manager.auth_cached().expect("pooled auth should load");
+    assert_eq!(auth.get_account_id().as_deref(), Some("work-pro"));
+
+    write_auth_file_with_tokens(
+        &member_home,
+        "work-pro",
+        "new-access-token",
+        "new-refresh-token",
+    )
+    .expect("write refreshed member auth");
+
+    manager
+        .refresh_token()
+        .await
+        .expect("pooled refresh should use member manager");
+
+    let auth_dot_json = manager
+        .auth_cached()
+        .and_then(|auth| auth.get_current_auth_json())
+        .expect("refreshed pooled auth should be cached");
+    let tokens = auth_dot_json.tokens.expect("tokens should be present");
+    assert_eq!(tokens.access_token, "new-access-token");
+    assert_eq!(tokens.refresh_token, "new-refresh-token");
+}
+
 #[test]
 fn external_auth_tokens_without_chatgpt_metadata_cannot_seed_chatgpt_auth() {
     let err = AuthDotJson::from_external_tokens(&ExternalAuthTokens::access_token_only(
@@ -539,6 +590,33 @@ fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result
     Ok(fake_jwt)
 }
 
+fn write_auth_file_with_tokens(
+    codex_home: &Path,
+    chatgpt_account_id: &str,
+    access_token: &str,
+    refresh_token: &str,
+) -> std::io::Result<()> {
+    let fake_jwt = fake_jwt_for_auth_file_params(&AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: Some("pro".to_string()),
+        chatgpt_account_id: Some(chatgpt_account_id.to_string()),
+    })?;
+    let auth_file = get_auth_file(codex_home);
+    let auth_json_data = json!({
+        "auth_mode": AuthMode::Chatgpt,
+        "tokens": {
+            "id_token": fake_jwt,
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "account_id": chatgpt_account_id
+        },
+        "last_refresh": Utc::now(),
+    });
+    let auth_json = serde_json::to_string_pretty(&auth_json_data)?;
+    std::fs::write(auth_file, auth_json)?;
+    Ok(())
+}
+
 fn fake_jwt_for_auth_file_params(params: &AuthFileParams) -> std::io::Result<String> {
     #[derive(Serialize)]
     struct Header {
@@ -585,6 +663,44 @@ async fn build_config(
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         forced_login_method,
         forced_chatgpt_workspace_id,
+    }
+}
+
+struct PooledAuthConfig {
+    codex_home: PathBuf,
+}
+
+impl AuthManagerConfig for PooledAuthConfig {
+    fn codex_home(&self) -> PathBuf {
+        self.codex_home.clone()
+    }
+
+    fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode {
+        AuthCredentialsStoreMode::File
+    }
+
+    fn forced_chatgpt_workspace_id(&self) -> Option<String> {
+        None
+    }
+
+    fn chatgpt_base_url(&self) -> String {
+        "https://chatgpt.com/backend-api".to_string()
+    }
+
+    fn account_pool(&self) -> Option<codex_config::config_toml::AccountPoolToml> {
+        Some(codex_config::config_toml::AccountPoolToml {
+            enabled: true,
+            default_pool: Some("codex-pro".to_string()),
+            pools: [(
+                "codex-pro".to_string(),
+                codex_config::config_toml::AccountPoolDefinitionToml {
+                    provider: "openai".to_string(),
+                    policy: codex_config::config_toml::AccountPoolPolicyToml::Drain,
+                    accounts: vec!["work-pro".to_string()],
+                },
+            )]
+            .into(),
+        })
     }
 }
 

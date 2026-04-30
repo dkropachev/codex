@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Command;
 use std::process::Output;
@@ -50,21 +51,31 @@ pub struct RemoteCommitApplied {
     pub title: Option<String>,
 }
 
-pub fn remote_commit_decision_context(cwd: &Path) -> Result<Option<RemoteCommitDecisionContext>> {
+pub fn remote_commit_changed_paths(cwd: &Path) -> Result<Vec<String>> {
     let repo_root = crate::repo_root_for_cwd(cwd)?;
-    remote_commit_decision_context_for_root(&repo_root)
+    Ok(changed_paths_from_status(&git_status_short(&repo_root)?))
+}
+
+pub fn remote_commit_decision_context(
+    cwd: &Path,
+    owned_paths: &[String],
+) -> Result<Option<RemoteCommitDecisionContext>> {
+    let repo_root = crate::repo_root_for_cwd(cwd)?;
+    remote_commit_decision_context_for_root(&repo_root, owned_paths)
 }
 
 fn remote_commit_decision_context_for_root(
     repo_root: &Path,
+    owned_paths: &[String],
 ) -> Result<Option<RemoteCommitDecisionContext>> {
     let status_short = git_status_short(repo_root)?;
     if status_short.trim().is_empty() {
         return Ok(None);
     }
     let changed_paths = changed_paths_from_status(&status_short);
+    ensure_only_owned_paths(&changed_paths, owned_paths)?;
     let recent_commits = recent_commits(repo_root)?;
-    let change_details = commit_change_details(repo_root)?;
+    let change_details = commit_change_details(repo_root, &changed_paths)?;
     Ok(Some(RemoteCommitDecisionContext {
         changed_paths,
         status_short,
@@ -141,16 +152,13 @@ pub fn fallback_remote_commit_decision() -> RemoteCommitDecision {
 pub fn apply_remote_commit_decision(
     cwd: &Path,
     decision: &RemoteCommitDecision,
+    owned_paths: &[String],
 ) -> Result<Option<RemoteCommitApplied>> {
     let repo_root = crate::repo_root_for_cwd(cwd)?;
-    if remote_commit_decision_context_for_root(&repo_root)?.is_none() {
+    let Some(context) = remote_commit_decision_context_for_root(&repo_root, owned_paths)? else {
         return Ok(None);
-    }
-    run_git_output(
-        &repo_root,
-        &["add", "--all"],
-        "stage repo-ci remote changes",
-    )?;
+    };
+    stage_owned_paths(&repo_root, &context.status_short)?;
     let staged = Command::new("git")
         .args(["diff", "--cached", "--quiet", "--exit-code"])
         .current_dir(&repo_root)
@@ -232,6 +240,35 @@ fn changed_paths_from_status(status_short: &str) -> Vec<String> {
         .collect()
 }
 
+fn ensure_only_owned_paths(changed_paths: &[String], owned_paths: &[String]) -> Result<()> {
+    let owned_paths = owned_paths.iter().collect::<BTreeSet<_>>();
+    let unexpected = changed_paths
+        .iter()
+        .filter(|path| !owned_paths.contains(path))
+        .cloned()
+        .collect::<Vec<_>>();
+    if unexpected.is_empty() {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "Repo CI remote commit refused to include dirty path(s) outside repo-ci-owned changes:\n{}",
+        format_path_list(&unexpected)
+    ))
+}
+
+fn format_path_list(paths: &[String]) -> String {
+    const MAX_PATHS: usize = 12;
+    let mut formatted = paths
+        .iter()
+        .take(MAX_PATHS)
+        .map(|path| format!("- {path}"))
+        .collect::<Vec<_>>();
+    if paths.len() > MAX_PATHS {
+        formatted.push(format!("... and {} more", paths.len() - MAX_PATHS));
+    }
+    formatted.join("\n")
+}
+
 fn recent_commits(cwd: &Path) -> Result<String> {
     let output = Command::new("git")
         .args(["log", "--oneline", "--decorate", "-5"])
@@ -244,15 +281,28 @@ fn recent_commits(cwd: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn commit_change_details(cwd: &Path) -> Result<RemoteCommitChangeDetails> {
+fn commit_change_details(
+    cwd: &Path,
+    changed_paths: &[String],
+) -> Result<RemoteCommitChangeDetails> {
     let mut diff = Vec::new();
     append_diff_command(
         cwd,
         &["diff", "--cached", "--no-ext-diff", "--binary"],
+        changed_paths,
         &mut diff,
     )?;
-    append_diff_command(cwd, &["diff", "--no-ext-diff", "--binary"], &mut diff)?;
+    append_diff_command(
+        cwd,
+        &["diff", "--no-ext-diff", "--binary"],
+        changed_paths,
+        &mut diff,
+    )?;
+    let changed_paths = changed_paths.iter().collect::<BTreeSet<_>>();
     for path in untracked_paths(cwd)? {
+        if !changed_paths.contains(&path) {
+            continue;
+        }
         append_untracked_diff(cwd, &path, &mut diff)?;
     }
     if diff.len() > REMOTE_COMMIT_DECISION_MAX_DIFF_BYTES {
@@ -266,20 +316,38 @@ fn commit_change_details(cwd: &Path) -> Result<RemoteCommitChangeDetails> {
     })
 }
 
-fn append_diff_command(cwd: &Path, args: &[&str], diff: &mut Vec<u8>) -> Result<()> {
+fn append_diff_command(
+    cwd: &Path,
+    args: &[&str],
+    changed_paths: &[String],
+    diff: &mut Vec<u8>,
+) -> Result<()> {
     let output = Command::new("git")
         .args(args)
+        .arg("--")
+        .args(changed_paths)
         .current_dir(cwd)
         .output()
         .with_context(|| format!("failed to run `git {}`", args.join(" ")))?;
     if !output.status.success() {
         return Err(command_error(
             "collect git diff for repo-ci remote commit decision",
-            &format!("git {}", args.join(" ")),
+            &format!("git {} -- <repo-ci-owned-paths>", args.join(" ")),
             &output,
         ));
     }
     diff.extend_from_slice(&output.stdout);
+    Ok(())
+}
+
+fn stage_owned_paths(cwd: &Path, status_short: &str) -> Result<()> {
+    for path in changed_paths_from_status(status_short) {
+        run_git_output(
+            cwd,
+            &["add", "--all", "--", &path],
+            "stage repo-ci remote changes",
+        )?;
+    }
     Ok(())
 }
 
@@ -421,7 +489,8 @@ mod tests {
         let (_temp, repo_root) = init_repo();
         fs::write(repo_root.join("base.txt"), "base\nchanged\n").expect("write change");
 
-        let context = remote_commit_decision_context(&repo_root)
+        let owned_paths = vec!["base.txt".to_string()];
+        let context = remote_commit_decision_context(&repo_root, &owned_paths)
             .expect("context")
             .expect("dirty context");
 
@@ -445,7 +514,8 @@ mod tests {
         )
         .expect("write large change");
 
-        let context = remote_commit_decision_context(&repo_root)
+        let owned_paths = vec!["base.txt".to_string()];
+        let context = remote_commit_decision_context(&repo_root, &owned_paths)
             .expect("context")
             .expect("dirty context");
 
@@ -473,7 +543,8 @@ mod tests {
             rationale: "test".to_string(),
         };
 
-        let applied = apply_remote_commit_decision(&repo_root, &decision)
+        let owned_paths = vec!["base.txt".to_string()];
+        let applied = apply_remote_commit_decision(&repo_root, &decision, &owned_paths)
             .expect("apply")
             .expect("applied");
 
@@ -492,5 +563,41 @@ mod tests {
         );
         let log = recent_commits(&repo_root).expect("recent commits");
         assert!(log.contains("repo-ci test commit"));
+    }
+
+    #[test]
+    fn commit_decision_context_rejects_unowned_dirty_paths() {
+        let (_temp, repo_root) = init_repo();
+        fs::write(repo_root.join("base.txt"), "base\nchanged\n").expect("write change");
+        fs::write(repo_root.join("secret.txt"), "secret\n").expect("write secret");
+        let owned_paths = vec!["base.txt".to_string()];
+
+        let err = remote_commit_decision_context(&repo_root, &owned_paths)
+            .expect_err("unowned dirty path should be rejected");
+
+        assert!(err.to_string().contains("outside repo-ci-owned changes"));
+        assert!(err.to_string().contains("secret.txt"));
+    }
+
+    #[test]
+    fn apply_commit_decision_rejects_unowned_dirty_paths() {
+        let (_temp, repo_root) = init_repo();
+        fs::write(repo_root.join("base.txt"), "base\nchanged\n").expect("write change");
+        fs::write(repo_root.join("secret.txt"), "secret\n").expect("write secret");
+        let decision = RemoteCommitDecision {
+            strategy: RemoteCommitStrategy::SeparateCommit,
+            title: "repo-ci test commit".to_string(),
+            body: "body".to_string(),
+            rationale: "test".to_string(),
+        };
+        let owned_paths = vec!["base.txt".to_string()];
+
+        let err = apply_remote_commit_decision(&repo_root, &decision, &owned_paths)
+            .expect_err("unowned dirty path should be rejected");
+
+        assert!(err.to_string().contains("outside repo-ci-owned changes"));
+        assert!(err.to_string().contains("secret.txt"));
+        let log = recent_commits(&repo_root).expect("recent commits");
+        assert!(!log.contains("repo-ci test commit"));
     }
 }

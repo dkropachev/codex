@@ -78,6 +78,9 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+const MODEL_ROUTER_MISSING_CONFIG_MESSAGE: &str =
+    "cannot enable model router for this session because no [model_router] is configured";
+
 pub async fn interrupt(sess: &Arc<Session>) {
     sess.interrupt_task().await;
 }
@@ -1200,6 +1203,17 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::SetModelRouterSessionConfig { enabled } => {
+                    if let Some(message) = model_router_session_config_error(&config, enabled) {
+                        sess.send_event_raw(Event {
+                            id: sub.id.clone(),
+                            msg: EventMsg::Error(ErrorEvent {
+                                message: message.to_string(),
+                                codex_error_info: Some(CodexErrorInfo::BadRequest),
+                            }),
+                        })
+                        .await;
+                        return false;
+                    }
                     override_turn_context(
                         &sess,
                         sub.id.clone(),
@@ -1319,6 +1333,17 @@ Approved action:
 
     if let Err(items) = sess.inject_response_items(items).await {
         sess.queue_response_items_for_next_turn(items).await;
+    }
+}
+
+pub(super) fn model_router_session_config_error(
+    config: &Config,
+    enabled: Option<bool>,
+) -> Option<&'static str> {
+    if enabled == Some(true) && config.model_router.is_none() {
+        Some(MODEL_ROUTER_MISSING_CONFIG_MESSAGE)
+    } else {
+        None
     }
 }
 

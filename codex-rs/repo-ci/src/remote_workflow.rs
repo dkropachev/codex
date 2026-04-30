@@ -1,8 +1,10 @@
 use crate::remote_commit::RemoteCommitApplied;
 use crate::remote_commit::RemoteCommitDecision;
+use crate::remote_commit::RemoteCommitStrategy;
 use crate::remote_commit::apply_remote_commit_decision;
 use crate::remote_commit::fallback_remote_commit_decision;
 use crate::remote_commit::git_status_short;
+use crate::remote_commit::remote_commit_changed_paths;
 use anyhow::Result;
 use anyhow::anyhow;
 use serde::Deserialize;
@@ -99,18 +101,27 @@ pub fn run_started_remote_workflow(
     cwd: &Path,
     workflow: &RemoteRepoCiWorkflow,
 ) -> Result<RemoteRepoCiWorkflowOutcome> {
-    Ok(run_started_remote_workflow_with_commit_decision(cwd, workflow, None)?.outcome)
+    let owned_paths = remote_commit_changed_paths(cwd)?;
+    Ok(
+        run_started_remote_workflow_with_commit_decision(cwd, workflow, None, &owned_paths)?
+            .outcome,
+    )
 }
 
 pub fn run_started_remote_workflow_with_commit_decision(
     cwd: &Path,
     workflow: &RemoteRepoCiWorkflow,
     commit_decision: Option<&RemoteCommitDecision>,
+    owned_paths: &[String],
 ) -> Result<RemoteRepoCiWorkflowRun> {
-    let prepared_commit = prepare_remote_commit(cwd, commit_decision)?;
+    let prepared_commit = prepare_remote_commit(cwd, commit_decision, owned_paths)?;
     ensure_clean_worktree(cwd)?;
     let pushed_head = local_head(cwd)?;
-    push_pr_head(cwd, &workflow.pr)?;
+    push_pr_head(
+        cwd,
+        &workflow.pr,
+        PushMode::for_prepared_commit(&prepared_commit),
+    )?;
     ensure_remote_ref_matches_head(cwd, &workflow.pr, &pushed_head)?;
     let watch_output = run_gh_output_with_retry(
         cwd,
@@ -205,16 +216,53 @@ fn current_pr(cwd: &Path) -> Result<Option<GhPr>> {
     Err(last_error.unwrap_or_else(|| anyhow!("retry loop did not run for `{command_display}`")))
 }
 
-fn push_pr_head(cwd: &Path, pr: &GhPr) -> Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PushMode {
+    FastForwardOnly,
+    ForceWithLease,
+}
+
+impl PushMode {
+    fn for_prepared_commit(prepared_commit: &Option<RemoteCommitApplied>) -> Self {
+        if prepared_commit
+            .as_ref()
+            .is_some_and(|applied| applied.strategy == RemoteCommitStrategy::AmendPriorCommit)
+        {
+            Self::ForceWithLease
+        } else {
+            Self::FastForwardOnly
+        }
+    }
+}
+
+fn push_pr_head(cwd: &Path, pr: &GhPr, mode: PushMode) -> Result<()> {
     let remote = remote_target(cwd, pr);
     let mut push_ref = String::from("HEAD:");
     push_ref.push_str(&pr.head_ref_name);
-    run_command_with_retry(
-        cwd,
-        "git",
-        &["push", &remote, &push_ref],
-        "push PR head to GitHub",
-    )?;
+    let lease_arg = match mode {
+        PushMode::FastForwardOnly => None,
+        PushMode::ForceWithLease => {
+            let expected = remote_head_for_remote(cwd, &remote, pr)?.ok_or_else(|| {
+                anyhow!(
+                    "Repo CI remote checks cannot force-with-lease push because {} was not found on {}",
+                    remote_head_ref(pr),
+                    remote
+                )
+            })?;
+            Some(format!(
+                "--force-with-lease={}:{}",
+                remote_head_ref(pr),
+                expected
+            ))
+        }
+    };
+    let mut args = vec!["push"];
+    if let Some(lease_arg) = lease_arg.as_deref() {
+        args.push(lease_arg);
+    }
+    args.push(&remote);
+    args.push(&push_ref);
+    run_command_with_retry(cwd, "git", &args, "push PR head to GitHub")?;
     Ok(())
 }
 
@@ -306,6 +354,7 @@ fn remote_head_ref(pr: &GhPr) -> String {
 fn prepare_remote_commit(
     cwd: &Path,
     commit_decision: Option<&RemoteCommitDecision>,
+    owned_paths: &[String],
 ) -> Result<Option<RemoteCommitApplied>> {
     let fallback;
     let decision = match commit_decision {
@@ -315,7 +364,7 @@ fn prepare_remote_commit(
             &fallback
         }
     };
-    apply_remote_commit_decision(cwd, decision)
+    apply_remote_commit_decision(cwd, decision, owned_paths)
 }
 
 fn local_head(cwd: &Path) -> Result<String> {
@@ -335,11 +384,15 @@ fn ensure_local_head_matches(cwd: &Path, expected: &str) -> Result<()> {
 
 fn remote_head(cwd: &Path, pr: &GhPr) -> Result<Option<String>> {
     let remote = remote_target(cwd, pr);
+    remote_head_for_remote(cwd, &remote, pr)
+}
+
+fn remote_head_for_remote(cwd: &Path, remote: &str, pr: &GhPr) -> Result<Option<String>> {
     let head_ref = remote_head_ref(pr);
     let output = run_command_with_retry(
         cwd,
         "git",
-        &["ls-remote", &remote, &head_ref],
+        &["ls-remote", remote, &head_ref],
         "resolve pushed PR head",
     )?;
     Ok(String::from_utf8_lossy(&output.stdout)
@@ -577,8 +630,9 @@ mod tests {
     fn remote_workflow_prepares_dirty_tree_with_fallback_commit() {
         let (_temp, repo_root) = init_repo();
         fs::write(repo_root.join("base.txt"), "base\nchanged\n").expect("write change");
+        let owned_paths = vec!["base.txt".to_string()];
 
-        let applied = prepare_remote_commit(&repo_root, None)
+        let applied = prepare_remote_commit(&repo_root, None, &owned_paths)
             .expect("prepare commit")
             .expect("dirty tree should be committed");
 
@@ -601,6 +655,43 @@ mod tests {
             .output()
             .expect("git log");
         assert!(String::from_utf8_lossy(&log.stdout).contains("repo-ci: prepare remote retry"));
+    }
+
+    #[test]
+    fn amended_commit_push_uses_force_with_lease() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let remote_root = temp.path().join("origin.git");
+        fs::create_dir(&remote_root).expect("create remote dir");
+        run_git(&remote_root, &["init", "--bare"]);
+
+        let repo_root = temp.path().join("repo");
+        fs::create_dir(&repo_root).expect("create repo");
+        run_git(&repo_root, &["init"]);
+        run_git(&repo_root, &["config", "user.email", "repo-ci@example.com"]);
+        run_git(&repo_root, &["config", "user.name", "Repo CI"]);
+        fs::write(repo_root.join("base.txt"), "base\n").expect("write base");
+        run_git(&repo_root, &["add", "base.txt"]);
+        run_git(&repo_root, &["commit", "-m", "base"]);
+        run_git(
+            &repo_root,
+            &["remote", "add", "origin", remote_root.to_str().unwrap()],
+        );
+        run_git(&repo_root, &["push", "origin", "HEAD:feature"]);
+
+        fs::write(repo_root.join("base.txt"), "base\namended\n").expect("write amended");
+        run_git(&repo_root, &["commit", "--amend", "-am", "base"]);
+        let pr = local_origin_pr("feature");
+
+        push_pr_head(&repo_root, &pr, PushMode::ForceWithLease)
+            .expect("force-with-lease push should update amended head");
+
+        let local = local_head(&repo_root).expect("local head");
+        assert_eq!(
+            remote_head(&repo_root, &pr)
+                .expect("remote head")
+                .as_deref(),
+            Some(local.as_str())
+        );
     }
 
     #[test]

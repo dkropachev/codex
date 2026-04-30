@@ -149,6 +149,7 @@ pub use remote_commit::RemoteCommitDecisionContext;
 pub use remote_commit::RemoteCommitStrategy;
 pub use remote_commit::apply_remote_commit_decision;
 pub use remote_commit::fallback_remote_commit_decision;
+pub use remote_commit::remote_commit_changed_paths;
 pub use remote_commit::remote_commit_decision_context;
 pub use remote_commit::remote_commit_decision_schema;
 pub use remote_commit::render_remote_commit_decision_prompt;

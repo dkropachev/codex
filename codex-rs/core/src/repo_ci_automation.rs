@@ -55,6 +55,11 @@ const MAX_FOLLOWUP_DIFF_BYTES: usize = 800;
 const MAX_FOLLOWUP_TRIAGE_SUMMARY_BYTES: usize = 400;
 const MAX_FOLLOWUP_REVIEW_SUMMARY_BYTES: usize = 500;
 const MAX_FOLLOWUP_FINDINGS_BYTES: usize = 1_800;
+const MAX_FIX_WORKER_FINDINGS: usize = 8;
+const MAX_FIX_WORKER_FINDINGS_BYTES: usize = 6_000;
+const MAX_FIX_WORKER_FINDING_TITLE_BYTES: usize = 300;
+const MAX_FIX_WORKER_FINDING_BODY_BYTES: usize = 1_200;
+const MAX_FIX_WORKER_FINDING_LOCATION_BYTES: usize = 500;
 const TRIAGE_BASE_INSTRUCTIONS: &str =
     "You classify repository CI failures. Return strict JSON only. Do not suggest code edits.";
 
@@ -136,6 +141,22 @@ fn parse_status_paths(stdout: &[u8]) -> Vec<String> {
             }
             Some(String::from_utf8_lossy(&entry[3..]).to_string())
         })
+        .collect()
+}
+
+fn repo_ci_owned_changed_paths(
+    initial_snapshot: &WorktreeSnapshot,
+    current_snapshot: &WorktreeSnapshot,
+) -> Vec<String> {
+    let initial_paths = initial_snapshot
+        .changed_paths
+        .iter()
+        .collect::<BTreeSet<_>>();
+    current_snapshot
+        .changed_paths
+        .iter()
+        .filter(|path| !initial_paths.contains(path))
+        .cloned()
         .collect()
 }
 
@@ -809,13 +830,27 @@ pub(crate) async fn maybe_run_after_agent(
         }
     };
 
-    let remote_commit_decision = match prepare_remote_repo_ci_commit(sess, turn_context).await {
-        Ok(decision) => decision,
-        Err(_) => {
-            send_final_review_summary!();
-            return None;
-        }
-    };
+    let remote_commit_paths =
+        repo_ci_owned_changed_paths(&state.initial_snapshot, &current_snapshot);
+    let remote_commit_decision =
+        match prepare_remote_repo_ci_commit(sess, turn_context, &remote_commit_paths).await {
+            Ok(decision) => decision,
+            Err(err) => {
+                send_status(
+                    sess,
+                    turn_context,
+                    RepoCiPhase::Remote,
+                    RepoCiState::Failed,
+                    RepoCiScope::Remote,
+                    None,
+                    None,
+                    format!("Repo CI remote commit preparation failed: {err:#}"),
+                )
+                .await;
+                send_final_review_summary!();
+                return None;
+            }
+        };
 
     send_status(
         sess,
@@ -830,7 +865,15 @@ pub(crate) async fn maybe_run_after_agent(
     .await;
     let result = tokio::task::spawn_blocking({
         let cwd = turn_context.cwd.clone();
-        move || run_remote_repo_ci(&cwd, &workflow, remote_commit_decision.as_ref())
+        let remote_commit_paths = remote_commit_paths.clone();
+        move || {
+            run_remote_repo_ci(
+                &cwd,
+                &workflow,
+                remote_commit_decision.as_ref(),
+                &remote_commit_paths,
+            )
+        }
     })
     .await;
     let remote_outcome = match result {
@@ -1110,10 +1153,12 @@ async fn ensure_repo_ci_learned(
 async fn prepare_remote_repo_ci_commit(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    owned_paths: &[String],
 ) -> Result<Option<codex_repo_ci::RemoteCommitDecision>> {
     let context = tokio::task::spawn_blocking({
         let cwd = turn_context.cwd.clone();
-        move || codex_repo_ci::remote_commit_decision_context(&cwd)
+        let owned_paths = owned_paths.to_vec();
+        move || codex_repo_ci::remote_commit_decision_context(&cwd, &owned_paths)
     })
     .await
     .context("repo-ci remote commit inspection task failed")??;
@@ -1544,23 +1589,45 @@ fn review_fix_prompt(group: &RepoCiFixGroup) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     };
-    let findings = group
-        .findings
-        .iter()
-        .map(|finding| {
-            format!(
-                "- [{}] {}\n{}\nLocation: {}",
-                repo_ci_issue_type_slug(finding.issue_type),
-                finding.title,
-                finding.body,
-                finding.location()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    let findings = bounded_review_fix_findings(group);
     format!(
         "Fix the scoped repo CI review findings below.\n\nYou are not alone in the codebase. Do not revert edits made by others, and adjust to concurrent changes if needed.\nOnly edit the owned paths for this worker:\n```text\n{owned_paths}\n```\n\nFindings:\n{findings}\n\nRun only targeted checks; skip full test suites, which repo-ci runs afterward.\n\nAfter applying fixes, return strict JSON with a short summary and touchedFiles."
     )
+}
+
+fn bounded_review_fix_findings(group: &RepoCiFixGroup) -> String {
+    let mut output = String::new();
+    let mut omitted = group.findings.len().saturating_sub(MAX_FIX_WORKER_FINDINGS);
+    for finding in group.findings.iter().take(MAX_FIX_WORKER_FINDINGS) {
+        let location = finding.location();
+        let rendered = format!(
+            "- [{}] {}\n{}\nLocation: {}",
+            repo_ci_issue_type_slug(finding.issue_type),
+            truncate_middle(&finding.title, MAX_FIX_WORKER_FINDING_TITLE_BYTES),
+            truncate_middle(&finding.body, MAX_FIX_WORKER_FINDING_BODY_BYTES),
+            truncate_middle(&location, MAX_FIX_WORKER_FINDING_LOCATION_BYTES)
+        );
+        let separator_len = if output.is_empty() { 0 } else { 2 };
+        if output.len() + separator_len + rendered.len() > MAX_FIX_WORKER_FINDINGS_BYTES {
+            omitted += 1;
+            continue;
+        }
+        if !output.is_empty() {
+            output.push_str("\n\n");
+        }
+        output.push_str(&rendered);
+    }
+    if omitted > 0 {
+        if !output.is_empty() {
+            output.push_str("\n\n");
+        }
+        output.push_str(&format!("... omitted {omitted} additional finding(s) ..."));
+    }
+    if output.is_empty() {
+        "(no findings were included)".to_string()
+    } else {
+        output
+    }
 }
 
 fn review_output_schema() -> serde_json::Value {
@@ -1743,22 +1810,30 @@ fn effective_config(turn_context: &TurnContext) -> Option<EffectiveRepoCiConfig>
         .repo_ci_issue_types
         .clone()
         .or_else(|| turn_context.config.repo_ci_issue_types.clone())
-        .or_else(|| scoped_config.and_then(|scope| scope.review_issue_types.clone()))
+        .or_else(|| {
+            scoped_config
+                .as_ref()
+                .and_then(|scope| scope.review_issue_types.clone())
+        })
         .or_else(|| inferred_issue_types(turn_context))
         .unwrap_or_else(codex_repo_ci::default_issue_types);
     let review_rounds = turn_context
         .repo_ci_review_rounds
         .or(turn_context.config.repo_ci_review_rounds)
-        .or_else(|| scoped_config.and_then(|scope| scope.max_review_fix_rounds));
+        .or_else(|| {
+            scoped_config
+                .as_ref()
+                .and_then(|scope| scope.max_review_fix_rounds)
+        });
     let long_ci = turn_context
         .repo_ci_long_ci
         .or(turn_context.config.repo_ci_long_ci)
-        .or_else(|| scoped_config.and_then(|scope| scope.long_ci))
+        .or_else(|| scoped_config.as_ref().and_then(|scope| scope.long_ci))
         .unwrap_or(false);
     if let Some(mode) = turn_context.repo_ci_session_mode {
         return EffectiveRepoCiConfig::from_session_mode(
             mode,
-            scoped_config,
+            scoped_config.as_ref(),
             review_issue_types,
             review_rounds,
             long_ci,
@@ -1767,34 +1842,52 @@ fn effective_config(turn_context: &TurnContext) -> Option<EffectiveRepoCiConfig>
     if let Some(mode) = turn_context.config.repo_ci_session_mode {
         return EffectiveRepoCiConfig::from_session_mode(
             mode,
-            scoped_config,
+            scoped_config.as_ref(),
             review_issue_types,
             review_rounds,
             long_ci,
         );
     }
     scoped_config
+        .as_ref()
         .and_then(|scope| EffectiveRepoCiConfig::from_scope(scope, review_issue_types, long_ci))
 }
 
-fn scoped_repo_ci_config<'a>(
+fn scoped_repo_ci_config(
     cwd: &Path,
-    repo_ci: &'a codex_config::config_toml::RepoCiToml,
-) -> Option<&'a RepoCiScopeToml> {
-    if let Some(scope) = most_specific_directory_scope(cwd, &repo_ci.directories) {
-        return Some(scope);
+    repo_ci: &codex_config::config_toml::RepoCiToml,
+) -> Option<RepoCiScopeToml> {
+    let scope = most_specific_directory_scope(cwd, &repo_ci.directories)
+        .or_else(|| github_repo(cwd).and_then(|repo| repo_ci.github_repos.get(&repo)))
+        .or_else(|| github_org(cwd).and_then(|org| repo_ci.github_orgs.get(&org)));
+    match (repo_ci.defaults.as_ref(), scope) {
+        (Some(defaults), Some(scope)) => Some(merge_repo_ci_scope(defaults, scope)),
+        (None, Some(scope)) => Some(scope.clone()),
+        (Some(defaults), None) => Some(defaults.clone()),
+        (None, None) => None,
     }
-    if let Some(repo) = github_repo(cwd)
-        && let Some(scope) = repo_ci.github_repos.get(&repo)
-    {
-        return Some(scope);
+}
+
+fn merge_repo_ci_scope(defaults: &RepoCiScopeToml, scope: &RepoCiScopeToml) -> RepoCiScopeToml {
+    RepoCiScopeToml {
+        enabled: scope.enabled.or(defaults.enabled),
+        automation: scope.automation.or(defaults.automation),
+        local_test_time_budget_sec: scope
+            .local_test_time_budget_sec
+            .or(defaults.local_test_time_budget_sec),
+        long_ci: scope.long_ci.or(defaults.long_ci),
+        max_local_fix_rounds: scope.max_local_fix_rounds.or(defaults.max_local_fix_rounds),
+        max_remote_fix_rounds: scope
+            .max_remote_fix_rounds
+            .or(defaults.max_remote_fix_rounds),
+        review_issue_types: scope
+            .review_issue_types
+            .clone()
+            .or_else(|| defaults.review_issue_types.clone()),
+        max_review_fix_rounds: scope
+            .max_review_fix_rounds
+            .or(defaults.max_review_fix_rounds),
     }
-    if let Some(org) = github_org(cwd)
-        && let Some(scope) = repo_ci.github_orgs.get(&org)
-    {
-        return Some(scope);
-    }
-    repo_ci.defaults.as_ref()
 }
 
 fn session_mode_to_automation(mode: RepoCiSessionMode) -> RepoCiAutomationToml {
@@ -1933,11 +2026,13 @@ fn run_remote_repo_ci(
     cwd: &Path,
     workflow: &codex_repo_ci::RemoteRepoCiWorkflow,
     commit_decision: Option<&codex_repo_ci::RemoteCommitDecision>,
+    owned_paths: &[String],
 ) -> Result<RemoteRepoCiOutcome> {
     let run = codex_repo_ci::run_started_remote_workflow_with_commit_decision(
         cwd,
         workflow,
         commit_decision,
+        owned_paths,
     )?;
     match run.outcome {
         codex_repo_ci::RemoteRepoCiWorkflowOutcome::Skipped(reason) => {
@@ -2541,6 +2636,60 @@ mod tests {
     }
 
     #[test]
+    fn scoped_config_merges_missing_fields_from_defaults() {
+        let temp = TempDir::new().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        std::fs::create_dir(&repo_root).expect("create repo");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(&repo_root)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["remote", "add", "origin", "git@github.com:openai/codex.git"])
+            .current_dir(&repo_root)
+            .output()
+            .expect("git remote add");
+
+        let mut repo_ci = RepoCiToml {
+            defaults: Some(RepoCiScopeToml {
+                enabled: Some(true),
+                automation: Some(RepoCiAutomationToml::Remote),
+                max_local_fix_rounds: Some(7),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        repo_ci.github_repos.insert(
+            "openai/codex".to_string(),
+            RepoCiScopeToml {
+                review_issue_types: Some(vec![RepoCiIssueType::Security]),
+                ..Default::default()
+            },
+        );
+
+        let scope = scoped_repo_ci_config(&repo_root, &repo_ci).expect("scope");
+
+        assert_eq!(
+            scope,
+            RepoCiScopeToml {
+                enabled: Some(true),
+                automation: Some(RepoCiAutomationToml::Remote),
+                max_local_fix_rounds: Some(7),
+                review_issue_types: Some(vec![RepoCiIssueType::Security]),
+                ..Default::default()
+            }
+        );
+        let config = EffectiveRepoCiConfig::from_scope(
+            &scope,
+            scope.review_issue_types.clone().expect("issue types"),
+            false,
+        )
+        .expect("merged scope should be enabled");
+        assert_eq!(config.automation, RepoCiAutomationToml::Remote);
+    }
+
+    #[test]
     fn session_mode_overrides_disabled_scope() {
         let scope = RepoCiScopeToml {
             enabled: Some(false),
@@ -2705,6 +2854,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn review_fix_prompt_caps_findings() {
+        let group = RepoCiFixGroup {
+            key: "repo".to_string(),
+            owned_paths: vec![PathBuf::from("/tmp/repo/src/main.rs")],
+            findings: (0..20)
+                .map(|index| RepoCiReviewFinding {
+                    title: format!("finding {index}"),
+                    body: format!("body {index} {}", "x".repeat(2_000)),
+                    issue_type: RepoCiIssueType::Correctness,
+                    absolute_file_path: Some(PathBuf::from("/tmp/repo/src/main.rs")),
+                    location_hint: None,
+                })
+                .collect(),
+        };
+
+        let prompt = review_fix_prompt(&group);
+
+        assert!(prompt.len() < 8_000);
+        assert!(prompt.contains("omitted"));
+        assert!(prompt.contains("finding 0"));
+        assert!(!prompt.contains("finding 19"));
+    }
+
     fn disregarded_finding(
         title: &str,
         issue_type: RepoCiIssueType,
@@ -2863,6 +3036,25 @@ mod tests {
         assert_eq!(
             parse_status_paths(b" M src/lib.rs\0?? new file.txt\0"),
             vec!["src/lib.rs".to_string(), "new file.txt".to_string()]
+        );
+    }
+
+    #[test]
+    fn owned_changed_paths_excludes_preexisting_dirty_paths() {
+        let initial_snapshot = WorktreeSnapshot {
+            digest: "initial".to_string(),
+            changed_paths: vec!["preexisting.txt".to_string()],
+            diff_summary: String::new(),
+        };
+        let current_snapshot = WorktreeSnapshot {
+            digest: "current".to_string(),
+            changed_paths: vec!["preexisting.txt".to_string(), "owned.txt".to_string()],
+            diff_summary: String::new(),
+        };
+
+        assert_eq!(
+            repo_ci_owned_changed_paths(&initial_snapshot, &current_snapshot),
+            vec!["owned.txt".to_string()]
         );
     }
 

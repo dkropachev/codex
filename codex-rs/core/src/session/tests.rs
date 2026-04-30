@@ -2852,6 +2852,25 @@ async fn session_settings_model_router_override_updates_per_turn_config() {
     assert!(!inherited_model_router.enabled);
 }
 
+#[tokio::test]
+async fn model_router_enable_requires_configured_router() {
+    let session_configuration = make_session_configuration_for_tests().await;
+    let config = session_configuration.original_config_do_not_use;
+
+    assert_eq!(
+        handlers::model_router_session_config_error(&config, Some(true)),
+        Some("cannot enable model router for this session because no [model_router] is configured")
+    );
+    assert_eq!(
+        handlers::model_router_session_config_error(&config, Some(false)),
+        None
+    );
+    assert_eq!(
+        handlers::model_router_session_config_error(&config, None),
+        None
+    );
+}
+
 pub(crate) async fn make_session_configuration_for_tests() -> SessionConfiguration {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let config = build_test_config(codex_home.path()).await;

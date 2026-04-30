@@ -1725,12 +1725,18 @@ async fn run_repo_ci_command(
                         println!("{reason}");
                     }
                     codex_repo_ci::RemoteRepoCiWorkflowStart::Ready(workflow) => {
-                        let commit_decision =
-                            repo_ci_remote_commit_decision(root_config_overrides, &cwd).await?;
+                        let owned_paths = codex_repo_ci::remote_commit_changed_paths(&cwd)?;
+                        let commit_decision = repo_ci_remote_commit_decision(
+                            root_config_overrides,
+                            &cwd,
+                            &owned_paths,
+                        )
+                        .await?;
                         let run = codex_repo_ci::run_started_remote_workflow_with_commit_decision(
                             &cwd,
                             &workflow,
                             commit_decision.as_ref(),
+                            &owned_paths,
                         )?;
                         print_repo_ci_remote_commit_applied(run.prepared_commit.as_ref());
                         handle_remote_workflow_outcome(run.outcome)?;
@@ -1792,9 +1798,11 @@ async fn run_repo_ci_command(
 async fn repo_ci_remote_commit_decision(
     root_config_overrides: &CliConfigOverrides,
     cwd: &std::path::Path,
+    owned_paths: &[String],
 ) -> anyhow::Result<Option<codex_repo_ci::RemoteCommitDecision>> {
     let repo_root = codex_repo_ci::repo_root_for_cwd(cwd)?;
-    let Some(context) = codex_repo_ci::remote_commit_decision_context(&repo_root)? else {
+    let Some(context) = codex_repo_ci::remote_commit_decision_context(&repo_root, owned_paths)?
+    else {
         return Ok(None);
     };
     let prompt = codex_repo_ci::render_remote_commit_decision_prompt(&context);

@@ -1748,6 +1748,13 @@ impl AuthManager {
     /// can assume that some other instance already refreshed it. If the persisted
     /// token is the same as the cached, then ask the token authority to refresh.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
+        if let Some(account_pool) = self.account_pool.as_ref() {
+            return account_pool.refresh_active_token().await;
+        }
+        self.refresh_token_unpooled().await
+    }
+
+    pub(super) async fn refresh_token_unpooled(&self) -> Result<(), RefreshTokenError> {
         let _refresh_guard = self.refresh_lock.acquire().await.map_err(|_| {
             RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                 RefreshTokenFailedReason::Other,
