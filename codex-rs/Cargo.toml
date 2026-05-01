@@ -3,6 +3,7 @@ members = [
     "aws-auth",
     "analytics",
     "agent-identity",
+    "artifactory",
     "backend-client",
     "ansi-escape",
     "async-utils",
@@ -124,6 +125,7 @@ codex-app-server-client = { path = "app-server-client" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-app-server-test-client = { path = "app-server-test-client" }
 codex-apply-patch = { path = "apply-patch" }
+codex-artifactory = { path = "artifactory" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
@@ -312,6 +314,7 @@ regex = "1.12.3"
 regex-lite = "0.1.8"
 reqwest = { version = "0.12", features = ["cookies"] }
 rmcp = { version = "0.15.0", default-features = false }
+rusqlite = { version = "0.32.1", features = ["bundled"] }
 runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
 rustls = { version = "0.23", default-features = false, features = [
     "ring",

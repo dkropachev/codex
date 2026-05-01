@@ -505,6 +505,25 @@ pub(super) fn mcp_tool_name(
     Ok(None)
 }
 
+pub(super) fn repo_ci_tool_name(
+    kind: &str,
+    args: &RouterArgs,
+    index: &ToolRouterIndex,
+) -> Result<Option<ToolName>, FunctionCallError> {
+    let candidates = [
+        args.action.tool.as_deref(),
+        args.action.name.as_deref(),
+        kind.strip_prefix("repo_ci_"),
+        Some(kind),
+    ];
+    for candidate in candidates.into_iter().flatten() {
+        if let Some(tool_name) = index.find_exact(candidate, Some("repo_ci"))? {
+            return Ok(Some(tool_name));
+        }
+    }
+    Ok(None)
+}
+
 pub(super) fn agent_tool_name(kind: &str, index: &ToolRouterIndex) -> Option<ToolName> {
     let candidates: &[&str] = match kind {
         "spawn" | "spawn_agent" => &["spawn_agent"],
@@ -674,6 +693,14 @@ pub(super) fn is_agent_kind(where_kind: &str, kind: &str) -> bool {
 
 pub(super) fn is_mcp_kind(where_kind: &str, kind: &str) -> bool {
     matches!(where_kind, "mcp" | "app") || kind == "mcp"
+}
+
+pub(super) fn is_repo_ci_kind(where_kind: &str, kind: &str) -> bool {
+    where_kind == "repo_ci"
+        || matches!(
+            kind,
+            "repo_ci" | "repo_ci_status" | "repo_ci_learn" | "repo_ci_run" | "repo_ci_result"
+        )
 }
 
 pub(super) fn is_skill_kind(where_kind: &str, kind: &str) -> bool {

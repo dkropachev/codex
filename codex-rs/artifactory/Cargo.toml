@@ -1,12 +1,12 @@
 [package]
 edition.workspace = true
 license.workspace = true
-name = "codex-repo-ci"
+name = "codex-artifactory"
 version.workspace = true
 
 [lib]
 doctest = false
-name = "codex_repo_ci"
+name = "codex_artifactory"
 path = "src/lib.rs"
 
 [lints]
@@ -14,11 +14,9 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-codex-artifactory = { workspace = true }
-codex-protocol = { workspace = true }
+rusqlite = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
 sha2 = { workspace = true }
 
 [dev-dependencies]

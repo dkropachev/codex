@@ -543,11 +543,16 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let base_instructions = config
+        let mut base_instructions = config
             .base_instructions
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+        if config.features.enabled(Feature::RepoCi) && config.active_project.is_trusted() {
+            base_instructions.push_str(
+                "\n\n## Repo CI\nWhen repo-ci tools are available, do not run regular linting, formatting checks, compiling, building, testing, CI polling, or CI reruns directly through shell tools. Use repo_ci.status, repo_ci.learn, repo_ci.run, or repo_ci.result so Codex can manage discovery, hashing, caching, execution, polling, and log artifacts. Brief repo-ci failures include a compact error_output and artifact_id; request detailed repo-ci results only when full logs are needed.",
+            );
+        }
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.

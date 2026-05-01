@@ -4,8 +4,7 @@ use anyhow::anyhow;
 use codex_protocol::protocol::RepoCiIssueType;
 use serde::Deserialize;
 use serde::Serialize;
-use sha2::Digest;
-use sha2::Sha256;
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -18,14 +17,15 @@ use std::process::ExitStatus;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+mod artifactory;
 mod branch_diff;
+mod ci_artifacts;
 mod inference;
 mod learning_hints;
 mod remote_commit;
 mod remote_workflow;
 mod repo_ci_ai_learning;
 mod runner;
-mod storage;
 
 const MANIFEST_VERSION: u32 = 3;
 
@@ -47,15 +47,18 @@ impl AutomationMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RunMode {
+    Prepare,
     Fast,
     Full,
 }
 
 impl RunMode {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
+            Self::Prepare => "prepare",
             Self::Fast => "fast",
             Self::Full => "full",
         }
@@ -95,6 +98,17 @@ pub enum SourceKind {
     Tooling,
 }
 
+impl SourceKind {
+    fn artifactory_kind(&self) -> &'static str {
+        match self {
+            Self::CiWorkflow => "ci_workflow",
+            Self::BuildManifest => "build_manifest",
+            Self::Lockfile => "lockfile",
+            Self::Tooling => "tooling",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoCiStep {
     pub id: String,
@@ -130,6 +144,7 @@ pub struct RepoCiPaths {
 struct ResolvedRepoCiPaths {
     paths: RepoCiPaths,
     learning_sources: Vec<SourceHash>,
+    repo_key: String,
     source_key: String,
 }
 
@@ -147,6 +162,16 @@ pub struct LearnedPlan {
 }
 
 pub use branch_diff::BranchDiffSnapshot;
+pub use ci_artifacts::RepoCiRunArtifact;
+pub use ci_artifacts::RepoCiRunArtifactStatus;
+pub use ci_artifacts::RepoCiStepRunStatus;
+pub use ci_artifacts::RepoCiStepStatus;
+pub use ci_artifacts::lookup_cached_passing_run;
+pub use ci_artifacts::manifest_fingerprint;
+pub use ci_artifacts::read_run_artifact;
+pub use ci_artifacts::run_capture_persisted_with_cancellation;
+pub use ci_artifacts::store_captured_run_artifact;
+pub use ci_artifacts::worktree_fingerprint;
 pub use learning_hints::RepoCiLearningHints;
 pub use learning_hints::WorkflowRunHint;
 pub use remote_commit::RemoteCommitApplied;
@@ -222,7 +247,7 @@ pub enum CapturedStepEvent {
     Finished,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapturedExitStatus {
     pub code: Option<i32>,
     pub success: bool,
@@ -259,15 +284,31 @@ pub fn paths_for_repo(codex_home: &Path, cwd: &Path) -> Result<RepoCiPaths> {
     Ok(resolve_paths_for_repo(codex_home, cwd)?.paths)
 }
 
+fn artifact_sources(sources: &[SourceHash]) -> Vec<artifactory::ArtifactSource> {
+    sources
+        .iter()
+        .map(|source| {
+            artifactory::ArtifactSource::new(
+                source.path.clone(),
+                source.kind.artifactory_kind(),
+                source.sha256.clone(),
+            )
+        })
+        .collect()
+}
+
 fn resolve_paths_for_repo(codex_home: &Path, cwd: &Path) -> Result<ResolvedRepoCiPaths> {
     let repo_root = repo_root_for_cwd(cwd)?;
     let learning_sources = collect_sources(&repo_root)?;
-    let source_key = storage::source_key(&learning_sources);
-    let state_dir = storage::artifact_state_dir(codex_home, &repo_root, &learning_sources);
+    let artifactory_sources = artifact_sources(&learning_sources);
+    let repo_key = artifactory::repo_key(&repo_root);
+    let source_key = artifactory::source_key(&artifactory_sources);
+    let state_dir = artifactory::artifact_state_dir_for_keys(codex_home, &repo_key, &source_key);
     let paths = paths_from_state_dir(repo_root, state_dir);
     Ok(ResolvedRepoCiPaths {
         paths,
         learning_sources,
+        repo_key,
         source_key,
     })
 }
@@ -302,13 +343,13 @@ pub fn learn_with_plan(
     options: LearnOptions,
     plan: LearnedPlan,
 ) -> Result<LearnOutcome> {
-    storage::prune_stale_artifacts(codex_home);
+    artifactory::prune_stale_artifacts(codex_home)?;
     let resolved = resolve_paths_for_repo(codex_home, cwd)?;
     let paths = resolved.paths;
     fs::create_dir_all(&paths.state_dir)?;
     let mut manifest = RepoCiManifest {
         version: MANIFEST_VERSION,
-        repo_key: storage::repo_key(&paths.repo_root),
+        repo_key: resolved.repo_key,
         source_key: resolved.source_key,
         repo_root: paths.repo_root.clone(),
         automation: options.automation,
@@ -323,7 +364,7 @@ pub fn learn_with_plan(
     };
     write_runner(&paths.runner_path, &manifest)?;
     write_manifest(&paths.manifest_path, &manifest)?;
-    storage::record_artifact_hit(&paths.state_dir);
+    touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
 
     let prepare_run = capture_runner(
         &paths,
@@ -355,7 +396,7 @@ pub fn learn_with_plan(
         }
     };
     write_manifest(&paths.manifest_path, &manifest)?;
-    storage::record_artifact_hit(&paths.state_dir);
+    touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
 
     Ok(LearnOutcome {
         paths,
@@ -367,20 +408,20 @@ pub fn learn_with_plan(
 }
 
 pub fn prepare(codex_home: &Path, cwd: &Path) -> Result<std::process::ExitStatus> {
-    storage::prune_stale_artifacts(codex_home);
+    artifactory::prune_stale_artifacts(codex_home)?;
     let paths = paths_for_repo(codex_home, cwd)?;
     require_runner(&paths)?;
     let manifest = read_manifest(&paths.manifest_path)?;
-    storage::record_artifact_hit(&paths.state_dir);
+    touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
     run_runner(&paths, "prepare", manifest.local_test_time_budget_sec)
 }
 
 pub fn run(codex_home: &Path, cwd: &Path, mode: RunMode) -> Result<std::process::ExitStatus> {
-    storage::prune_stale_artifacts(codex_home);
+    artifactory::prune_stale_artifacts(codex_home)?;
     let paths = paths_for_repo(codex_home, cwd)?;
     require_runner(&paths)?;
     let manifest = read_manifest(&paths.manifest_path)?;
-    storage::record_artifact_hit(&paths.state_dir);
+    touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
     run_runner(&paths, mode.as_str(), manifest.local_test_time_budget_sec)
 }
 
@@ -394,11 +435,11 @@ pub fn run_capture_with_cancellation(
     mode: RunMode,
     cancellation: RepoCiCancellation,
 ) -> Result<CapturedRun> {
-    storage::prune_stale_artifacts(codex_home);
+    artifactory::prune_stale_artifacts(codex_home)?;
     let paths = paths_for_repo(codex_home, cwd)?;
     require_runner(&paths)?;
     let manifest = read_manifest(&paths.manifest_path)?;
-    storage::record_artifact_hit(&paths.state_dir);
+    touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
     capture_runner(
         &paths,
         mode.as_str(),
@@ -408,12 +449,12 @@ pub fn run_capture_with_cancellation(
 }
 
 pub fn status(codex_home: &Path, cwd: &Path) -> Result<StatusOutcome> {
-    storage::prune_stale_artifacts(codex_home);
+    artifactory::prune_stale_artifacts(codex_home)?;
     let resolved = resolve_paths_for_repo(codex_home, cwd)?;
     let paths = resolved.paths;
     if paths.manifest_path.exists() {
         let manifest = read_manifest(&paths.manifest_path)?;
-        storage::record_artifact_hit(&paths.state_dir);
+        touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
         let stale_sources = changed_sources(&manifest.learning_sources, &resolved.learning_sources);
         return Ok(StatusOutcome {
             paths,
@@ -422,22 +463,25 @@ pub fn status(codex_home: &Path, cwd: &Path) -> Result<StatusOutcome> {
         });
     }
 
-    let repo_key = storage::repo_key(&paths.repo_root);
-    let Some(state_dir) = storage::latest_artifact_state_dir(codex_home, &repo_key) else {
+    for state_dir in artifactory::latest_artifact_state_dirs(codex_home, &resolved.repo_key)? {
+        let paths = paths_from_state_dir(paths.repo_root.clone(), state_dir);
+        if !paths.manifest_path.exists() {
+            continue;
+        }
+        let manifest = read_manifest(&paths.manifest_path)?;
+        touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
+        let stale_sources = changed_sources(&manifest.learning_sources, &resolved.learning_sources);
         return Ok(StatusOutcome {
             paths,
-            manifest: None,
-            stale_sources: Vec::new(),
+            manifest: Some(manifest),
+            stale_sources,
         });
-    };
-    let paths = paths_from_state_dir(paths.repo_root, state_dir);
-    let manifest = read_manifest(&paths.manifest_path)?;
-    storage::record_artifact_hit(&paths.state_dir);
-    let stale_sources = changed_sources(&manifest.learning_sources, &resolved.learning_sources);
+    }
+
     Ok(StatusOutcome {
         paths,
-        manifest: Some(manifest),
-        stale_sources,
+        manifest: None,
+        stale_sources: Vec::new(),
     })
 }
 
@@ -466,6 +510,37 @@ fn read_manifest(path: &Path) -> Result<RepoCiManifest> {
     serde_json::from_slice(&data).with_context(|| format!("failed to parse {}", path.display()))
 }
 
+fn register_manifest_artifact_state(
+    codex_home: &Path,
+    paths: &RepoCiPaths,
+    manifest: &RepoCiManifest,
+) -> Result<()> {
+    artifactory::register_state(
+        codex_home,
+        &manifest.repo_key,
+        &manifest.source_key,
+        &paths.state_dir,
+        &artifact_sources(&manifest.learning_sources),
+        json!({
+            "repo_root": &manifest.repo_root,
+            "manifest_path": &paths.manifest_path,
+            "runner_path": &paths.runner_path,
+            "version": manifest.version,
+            "automation": manifest.automation,
+            "validation": &manifest.validation,
+        }),
+    )
+}
+
+fn touch_manifest_artifact_state(
+    codex_home: &Path,
+    paths: &RepoCiPaths,
+    manifest: &RepoCiManifest,
+) -> Result<()> {
+    register_manifest_artifact_state(codex_home, paths, manifest)?;
+    artifactory::record_artifact_hit(codex_home, &paths.state_dir)
+}
+
 fn changed_sources(
     learned_sources: &[SourceHash],
     current_sources: &[SourceHash],
@@ -478,21 +553,19 @@ fn changed_sources(
         .iter()
         .map(|source| (source.path.clone(), source))
         .collect::<BTreeMap<_, _>>();
-    let mut changed = Vec::new();
-    for learned in learned_sources {
-        match current_by_path.get(&learned.path) {
-            Some(current) if *current == learned => {}
-            Some(_) | None => changed.push(learned.clone()),
-        }
-    }
-    for current in current_sources {
-        if !learned_by_path.contains_key(&current.path) {
-            changed.push(current.clone());
-        }
-    }
-    changed.sort_by(|left, right| left.path.cmp(&right.path));
-    changed.dedup_by(|left, right| left.path == right.path);
-    changed
+    artifactory::changed_source_paths(
+        &artifact_sources(learned_sources),
+        &artifact_sources(current_sources),
+    )
+    .into_iter()
+    .filter_map(|path| {
+        learned_by_path
+            .get(&path)
+            .or_else(|| current_by_path.get(&path))
+            .copied()
+            .cloned()
+    })
+    .collect()
 }
 
 fn collect_sources(repo_root: &Path) -> Result<Vec<SourceHash>> {
@@ -761,10 +834,7 @@ pub(crate) fn has_file(repo_root: &Path, relative: &str) -> bool {
 }
 
 fn hash_file(path: &Path) -> Option<String> {
-    let data = fs::read(path).ok()?;
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    Some(format!("{:x}", hasher.finalize()))
+    codex_artifactory::file_sha256(path)
 }
 
 fn write_runner(path: &Path, manifest: &RepoCiManifest) -> Result<()> {
@@ -1060,12 +1130,13 @@ mod tests {
         fs::write(repo.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
         let paths = paths_for_repo(&codex_home, &repo).expect("paths");
         fs::create_dir_all(&paths.state_dir).expect("state dir");
-        storage::record_artifact_hit(&paths.state_dir);
         let manifest = RepoCiManifest {
             version: MANIFEST_VERSION,
             repo_root: repo.clone(),
-            repo_key: storage::repo_key(&repo),
-            source_key: storage::source_key(&collect_sources(&repo).expect("sources")),
+            repo_key: artifactory::repo_key(&repo),
+            source_key: artifactory::source_key(&artifact_sources(
+                &collect_sources(&repo).expect("sources"),
+            )),
             automation: AutomationMode::LocalAndRemote,
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
@@ -1077,6 +1148,7 @@ mod tests {
             validation: ValidationStatus::NotRun,
         };
         write_manifest(&paths.manifest_path, &manifest).expect("write manifest");
+        register_manifest_artifact_state(&codex_home, &paths, &manifest).expect("register state");
 
         fs::write(repo.join("Cargo.toml"), "[package]\nname = \"y\"\n").expect("update cargo");
 
@@ -1093,12 +1165,13 @@ mod tests {
         fs::write(repo.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
         let paths = paths_for_repo(&codex_home, &repo).expect("paths");
         fs::create_dir_all(&paths.state_dir).expect("state dir");
-        storage::record_artifact_hit(&paths.state_dir);
         let manifest = RepoCiManifest {
             version: MANIFEST_VERSION,
             repo_root: repo.clone(),
-            repo_key: storage::repo_key(&repo),
-            source_key: storage::source_key(&collect_sources(&repo).expect("sources")),
+            repo_key: artifactory::repo_key(&repo),
+            source_key: artifactory::source_key(&artifact_sources(
+                &collect_sources(&repo).expect("sources"),
+            )),
             automation: AutomationMode::LocalAndRemote,
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
@@ -1110,6 +1183,7 @@ mod tests {
             validation: ValidationStatus::NotRun,
         };
         write_manifest(&paths.manifest_path, &manifest).expect("write manifest");
+        register_manifest_artifact_state(&codex_home, &paths, &manifest).expect("register state");
 
         fs::write(repo.join("Cargo.lock"), "# lock\n").expect("write lockfile");
 
@@ -1132,13 +1206,12 @@ mod tests {
         fs::write(repo.join("Cargo.lock"), "# lock\n").expect("write lockfile");
         let paths = paths_for_repo(&codex_home, &repo).expect("paths");
         fs::create_dir_all(&paths.state_dir).expect("state dir");
-        storage::record_artifact_hit(&paths.state_dir);
         let learning_sources = collect_sources(&repo).expect("sources");
         let manifest = RepoCiManifest {
             version: MANIFEST_VERSION,
             repo_root: repo.clone(),
-            repo_key: storage::repo_key(&repo),
-            source_key: storage::source_key(&learning_sources),
+            repo_key: artifactory::repo_key(&repo),
+            source_key: artifactory::source_key(&artifact_sources(&learning_sources)),
             automation: AutomationMode::LocalAndRemote,
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
@@ -1150,6 +1223,7 @@ mod tests {
             validation: ValidationStatus::NotRun,
         };
         write_manifest(&paths.manifest_path, &manifest).expect("write manifest");
+        register_manifest_artifact_state(&codex_home, &paths, &manifest).expect("register state");
 
         fs::remove_file(repo.join("Cargo.lock")).expect("remove lockfile");
 
@@ -1175,8 +1249,8 @@ mod tests {
         let manifest = RepoCiManifest {
             version: MANIFEST_VERSION,
             repo_root: repo.clone(),
-            repo_key: storage::repo_key(&repo),
-            source_key: storage::source_key(&learning_sources),
+            repo_key: artifactory::repo_key(&repo),
+            source_key: artifactory::source_key(&artifact_sources(&learning_sources)),
             automation: AutomationMode::LocalAndRemote,
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
@@ -1188,14 +1262,22 @@ mod tests {
             validation: ValidationStatus::NotRun,
         };
         write_manifest(&paths.manifest_path, &manifest).expect("write manifest");
-        let last_hit_path = paths.state_dir.join(".last_hit_unix_sec");
-        assert!(!last_hit_path.exists());
+        register_manifest_artifact_state(&codex_home, &paths, &manifest).expect("register state");
+        assert_eq!(
+            artifactory::artifact_last_hit_unix_sec(&codex_home, &paths.state_dir)
+                .expect("last hit"),
+            None
+        );
 
         fs::write(repo.join("Cargo.toml"), "[package]\nname = \"y\"\n").expect("update cargo");
 
         let status = status(&codex_home, &repo).expect("status");
         assert!(status.manifest.is_some());
-        assert!(last_hit_path.exists());
+        assert!(
+            artifactory::artifact_last_hit_unix_sec(&codex_home, &paths.state_dir)
+                .expect("last hit")
+                .is_some()
+        );
     }
 
     #[test]
@@ -1205,8 +1287,8 @@ mod tests {
         let repo = temp.path().join("repo");
         fs::create_dir(&repo).expect("create repo");
         fs::write(repo.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
-        let repo_key = storage::repo_key(&repo);
-        let legacy_dir = storage::repo_artifacts_dir(&codex_home, &repo_key);
+        let repo_key = artifactory::repo_key(&repo);
+        let legacy_dir = artifactory::repo_artifacts_dir(&codex_home, &repo_key);
         fs::create_dir_all(&legacy_dir).expect("legacy dir");
         fs::write(legacy_dir.join("manifest.json"), "not json\n").expect("legacy manifest");
 
@@ -1224,11 +1306,14 @@ mod tests {
         fs::write(repo.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
         let paths = paths_for_repo(&codex_home, &repo).expect("paths");
         fs::create_dir_all(&paths.state_dir).expect("state dir");
-        let last_hit_path = paths.state_dir.join(".last_hit_unix_sec");
 
         let _ = paths_for_repo(&codex_home, &repo).expect("paths");
 
-        assert!(!last_hit_path.exists());
+        assert_eq!(
+            artifactory::artifact_last_hit_unix_sec(&codex_home, &paths.state_dir)
+                .expect("last hit"),
+            None
+        );
     }
 
     #[test]

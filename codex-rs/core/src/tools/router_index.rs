@@ -169,10 +169,21 @@ fn spec_tool_names(spec: &ToolSpec) -> Vec<(ToolName, bool)> {
 fn matches_candidate(tool_name: &ToolName, candidate: &str, namespace: Option<&str>) -> bool {
     if let Some(namespace) = namespace {
         return tool_name.namespace.as_deref() == Some(namespace)
-            && (tool_name.name == candidate || tool_name.display() == candidate);
+            && (tool_name.name == candidate
+                || tool_name.display() == candidate
+                || namespaced_dot_candidate(tool_name, candidate));
     }
 
-    tool_name.display() == candidate || tool_name.name == candidate
+    tool_name.display() == candidate
+        || tool_name.name == candidate
+        || namespaced_dot_candidate(tool_name, candidate)
+}
+
+fn namespaced_dot_candidate(tool_name: &ToolName, candidate: &str) -> bool {
+    tool_name
+        .namespace
+        .as_ref()
+        .is_some_and(|namespace| format!("{namespace}.{}", tool_name.name) == candidate)
 }
 
 fn fanout_safe_tool_name(name: &ToolName, parallel_mcp_server_names: &HashSet<String>) -> bool {
@@ -288,6 +299,19 @@ mod tests {
         assert_eq!(
             index.find_exact("missing_tool", None).expect("lookup"),
             None
+        );
+    }
+
+    #[test]
+    fn exact_lookup_accepts_dot_qualified_namespace_names() {
+        let tool_name = ToolName::namespaced("repo_ci", "run");
+        let registry =
+            ToolRegistry::with_handler_for_test(tool_name.clone(), Arc::new(TestHandler));
+        let index = ToolRouterIndex::build(&[], &registry, &HashSet::new());
+
+        assert_eq!(
+            index.find_exact("repo_ci.run", None).expect("lookup"),
+            Some(tool_name)
         );
     }
 

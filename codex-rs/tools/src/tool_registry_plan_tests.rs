@@ -2025,6 +2025,40 @@ fn build_specs_with_optional_tool_namespaces<'a>(
     (plan.specs, plan.handlers)
 }
 
+#[test]
+fn repo_ci_feature_registers_namespace_and_handlers() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::RepoCi);
+    let available_models = Vec::new();
+    let config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (tools, handlers) = build_specs(
+        &config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    let namespace_tool = find_tool(&tools, REPO_CI_NAMESPACE);
+    assert!(matches!(namespace_tool.spec, ToolSpec::Namespace(_)));
+    for tool_name in repo_ci_tool_names() {
+        assert!(handlers.contains(&ToolHandlerSpec {
+            name: ToolName::namespaced(REPO_CI_NAMESPACE, tool_name),
+            kind: ToolHandlerKind::RepoCi,
+        }));
+    }
+}
+
 fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> rmcp::model::Tool {
     rmcp::model::Tool {
         name: name.to_string().into(),

@@ -1,4 +1,5 @@
 use crate::CommandToolOptions;
+use crate::REPO_CI_NAMESPACE;
 use crate::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::ResponsesApiNamespace;
 use crate::ResponsesApiNamespaceTool;
@@ -37,6 +38,7 @@ use crate::create_list_mcp_resource_templates_tool;
 use crate::create_list_mcp_resources_tool;
 use crate::create_local_shell_tool;
 use crate::create_read_mcp_resource_tool;
+use crate::create_repo_ci_namespace_tool;
 use crate::create_report_agent_job_result_tool;
 use crate::create_request_permissions_tool;
 use crate::create_request_user_input_tool;
@@ -62,6 +64,7 @@ use crate::create_write_stdin_tool;
 use crate::default_namespace_description;
 use crate::dynamic_tool_to_loadable_tool_spec;
 use crate::mcp_tool_to_responses_api_tool;
+use crate::repo_ci_tool_names;
 use crate::request_permissions_tool_description;
 use crate::request_user_input_tool_description;
 use crate::tool_registry_plan_types::agent_type_description;
@@ -382,6 +385,20 @@ pub fn build_tool_registry_plan(
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
+    }
+
+    if config.has_environment && config.repo_ci {
+        plan.push_spec(
+            create_repo_ci_namespace_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        for tool_name in repo_ci_tool_names() {
+            plan.register_handler(
+                ToolName::namespaced(REPO_CI_NAMESPACE, tool_name),
+                ToolHandlerKind::RepoCi,
+            );
+        }
     }
 
     if config.has_environment {

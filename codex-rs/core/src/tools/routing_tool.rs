@@ -20,12 +20,14 @@ use crate::tools::routing_deterministic::is_apply_patch_kind;
 use crate::tools::routing_deterministic::is_image_view_kind;
 use crate::tools::routing_deterministic::is_list_dir_kind;
 use crate::tools::routing_deterministic::is_mcp_kind;
+use crate::tools::routing_deterministic::is_repo_ci_kind;
 use crate::tools::routing_deterministic::is_shell_kind;
 use crate::tools::routing_deterministic::is_skill_kind;
 use crate::tools::routing_deterministic::is_tool_search_kind;
 use crate::tools::routing_deterministic::is_write_stdin_kind;
 use crate::tools::routing_deterministic::mcp_tool_name;
 use crate::tools::routing_deterministic::normalize;
+use crate::tools::routing_deterministic::repo_ci_tool_name;
 use crate::tools::routing_model_router;
 use crate::tools::routing_shell::call_for_shell_like;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -228,6 +230,13 @@ pub(crate) async fn resolve_router_request(
 
     if is_mcp_kind(&where_kind, &kind)
         && let Some(tool_name) = mcp_tool_name(&args, index)?
+    {
+        let call = call_for_exact_tool(session, index, call_id, tool_name, &args).await?;
+        return Ok(tool_resolution(call));
+    }
+
+    if is_repo_ci_kind(&where_kind, &kind)
+        && let Some(tool_name) = repo_ci_tool_name(&kind, &args, index)?
     {
         let call = call_for_exact_tool(session, index, call_id, tool_name, &args).await?;
         return Ok(tool_resolution(call));

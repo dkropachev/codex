@@ -2002,13 +2002,17 @@ fn run_local_repo_ci(
     } else {
         "local fast runner"
     };
-    let run =
-        codex_repo_ci::run_capture_with_cancellation(codex_home, cwd, run_mode, cancellation)?;
-    if run.status.success {
+    let artifact = codex_repo_ci::run_capture_persisted_with_cancellation(
+        codex_home,
+        cwd,
+        run_mode,
+        cancellation,
+    )?;
+    if artifact.status == codex_repo_ci::RepoCiRunArtifactStatus::Passed {
         Ok(LocalRepoCiOutcome::Passed)
     } else {
         Ok(LocalRepoCiOutcome::Failed {
-            output: format_run_output(runner_label, &run.stdout, &run.stderr, &run.steps),
+            output: format_run_output(runner_label, &artifact),
         })
     }
 }
@@ -2100,19 +2104,36 @@ fn format_remote_checks(checks: &[codex_repo_ci::RemoteRepoCiCheck]) -> String {
         .join("\n")
 }
 
-fn format_run_output(
-    label: &str,
-    stdout: &str,
-    stderr: &str,
-    steps: &[codex_repo_ci::CapturedStep],
-) -> String {
-    let step_output = steps
+fn format_run_output(label: &str, artifact: &codex_repo_ci::RepoCiRunArtifact) -> String {
+    let step_output = artifact
+        .steps
         .iter()
-        .map(|step| format!("{} {:?} {:?}", step.id, step.event, step.exit_code))
+        .map(|step| format!("{} {:?} {:?}", step.id, step.status, step.exit_code))
         .collect::<Vec<_>>()
         .join("\n");
+    let failed_steps = artifact
+        .steps
+        .iter()
+        .filter(|step| step.status == codex_repo_ci::RepoCiStepRunStatus::Failed)
+        .map(|step| step.id.clone())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let error_output = if artifact.stderr.trim().is_empty() {
+        artifact.stdout.as_str()
+    } else {
+        artifact.stderr.as_str()
+    };
     truncate_middle(
-        &format!("{label}\n\nsteps:\n{step_output}\n\nstdout:\n{stdout}\n\nstderr:\n{stderr}"),
+        &format!(
+            "{label}\n\nartifact_id: {}\nfailed_steps: {}\n\nsteps:\n{step_output}\n\nerror_output:\n{}",
+            artifact.artifact_id,
+            if failed_steps.is_empty() {
+                "(unknown)"
+            } else {
+                failed_steps.as_str()
+            },
+            truncate_middle(error_output, MAX_FOLLOWUP_OUTPUT_BYTES),
+        ),
         MAX_OUTPUT_BYTES,
     )
 }

@@ -33,7 +33,7 @@ pub fn create_tool_router_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: TOOL_ROUTER_TOOL_NAME.to_string(),
-        description: "Route one structured request to the appropriate internal Codex tool. Use exact tool names when known; otherwise set where.kind and action.kind with the smallest sufficient payload. Prefer high-level actions such as exec_wait, batch, workspace inspect, git_snapshot, and process status when they avoid multiple follow-up tool calls."
+        description: "Route one structured request to the appropriate internal Codex tool. Use exact tool names when known; otherwise set where.kind and action.kind with the smallest sufficient payload. Prefer high-level actions such as exec_wait, batch, workspace inspect, git_snapshot, repo_ci status/learn/run/result, and process status when they avoid multiple follow-up tool calls. When repo-ci tools are available, do not route regular linting, formatting checks, compiling, building, testing, CI polling, or CI reruns to shell tools; use repo_ci tools."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -62,6 +62,7 @@ fn router_where_schema() -> JsonSchema {
                     json!("filesystem"),
                     json!("shell"),
                     json!("git"),
+                    json!("repo_ci"),
                     json!("process"),
                     json!("mcp"),
                     json!("app"),
@@ -133,7 +134,7 @@ fn router_action_schema() -> JsonSchema {
     let properties = BTreeMap::from([
         (
             "kind".to_string(),
-            JsonSchema::string(Some("Action kind, such as exec, exec_wait, batch, inspect, git_snapshot, status, git, apply_patch, write_stdin, mcp, spawn_agent, wait_agent, tool_search, view_image, or direct_tool.".to_string())),
+            JsonSchema::string(Some("Action kind, such as exec, exec_wait, batch, inspect, git_snapshot, repo_ci status/learn/run/result, status, git, apply_patch, write_stdin, mcp, spawn_agent, wait_agent, tool_search, view_image, or direct_tool.".to_string())),
         ),
         (
             "description".to_string(),

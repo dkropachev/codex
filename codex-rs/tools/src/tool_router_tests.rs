@@ -20,6 +20,7 @@ fn tool_router_schema_contains_required_route_fields() {
             "filesystem",
             "shell",
             "git",
+            "repo_ci",
             "process",
             "mcp",
             "app",
