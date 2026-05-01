@@ -7,7 +7,7 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
 use crate::model_router::ModelRouterSource;
 use crate::model_router::apply_model_router;
-use crate::model_router::available_model_presets;
+use crate::model_router::available_router_models;
 use crate::session::turn_context::TurnEnvironment;
 use codex_protocol::AgentPath;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -100,7 +100,7 @@ impl ToolHandler for Handler {
             && args.reasoning_effort.is_none()
             && let SessionSource::SubAgent(source) = spawn_source.clone()
         {
-            let available_models = available_model_presets(&session.services.models_manager);
+            let available_models = available_router_models(&session.services.models_manager);
             if let Err(err) = apply_model_router(
                 &mut config,
                 ModelRouterSource::SubAgent(source),

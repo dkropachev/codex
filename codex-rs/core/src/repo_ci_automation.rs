@@ -41,10 +41,11 @@ use crate::ResponseEvent;
 use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::context::ContextualUserFragment;
 use crate::context::RepoCiFollowup;
+use crate::model_router::AvailableRouterModel;
 use crate::model_router::ModelRouterSource;
 use crate::model_router::apply_model_router;
 use crate::model_router::auth_manager_for_config;
-use crate::model_router::available_model_presets;
+use crate::model_router::available_router_models;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 
@@ -1514,7 +1515,7 @@ fn repo_ci_phase_config(
     model_router_source: ModelRouterSource,
     prompt_bytes: usize,
 ) -> crate::config::Config {
-    let available_models = available_model_presets(&sess.services.models_manager);
+    let available_models = available_router_models(&sess.services.models_manager);
     repo_ci_phase_config_from_base(
         turn_context.config.as_ref().clone(),
         model_router_source,
@@ -1527,7 +1528,7 @@ fn repo_ci_phase_config_from_base(
     mut config: crate::config::Config,
     model_router_source: ModelRouterSource,
     prompt_bytes: usize,
-    available_models: &[codex_protocol::openai_models::ModelPreset],
+    available_models: &[AvailableRouterModel],
 ) -> crate::config::Config {
     if let Err(err) = apply_model_router(
         &mut config,

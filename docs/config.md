@@ -219,7 +219,10 @@ then scores that route alongside candidates for the current task class. A
 candidate may set `model`, `model_provider`, `service_tier`, `reasoning_effort`,
 `account_pool`, `account`, optional observed metrics such as
 `intelligence_score`, `success_rate`, and `median_latency_ms`, and optional
-token prices.
+token prices. When model discovery reports a context window for a candidate,
+the router excludes that candidate if the estimated request would not fit in the
+model's effective context window. Candidates with unknown context limits remain
+eligible.
 `reasoning_effort = "inherit"` keeps the reasoning level from the parent or
 default config. `account_pool` references an existing
 `[account_pool.pools.<name>]`; `account` routes to one account id under

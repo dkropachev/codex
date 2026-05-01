@@ -1,22 +1,23 @@
 use std::collections::BTreeSet;
 
 use codex_config::config_toml::ModelRouterCandidateToml;
-use codex_protocol::openai_models::ModelPreset;
 
 use crate::config::Config;
+
+use super::AvailableRouterModel;
 
 const SPARK_CANDIDATE_ID: &str = "spark";
 
 pub(crate) fn candidates_from_available_models(
     config: &Config,
-    available_models: &[ModelPreset],
+    available_models: &[AvailableRouterModel],
 ) -> Vec<ModelRouterCandidateToml> {
     let mut seen_models = configured_model_slugs(config);
     let mut seen_ids = configured_candidate_ids(config);
     let mut candidates = Vec::new();
 
-    for model in available_models.iter().filter_map(|preset| {
-        let model = preset.model.trim();
+    for model in available_models.iter().filter_map(|available_model| {
+        let model = available_model.model.trim();
         (!model.is_empty()).then_some(model)
     }) {
         if !seen_models.insert(model.to_string()) {

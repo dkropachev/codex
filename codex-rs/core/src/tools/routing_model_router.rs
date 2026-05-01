@@ -6,7 +6,7 @@ use crate::function_tool::FunctionCallError;
 use crate::model_router::ModelRouterSource;
 use crate::model_router::apply_model_router;
 use crate::model_router::auth_manager_for_config;
-use crate::model_router::available_model_presets;
+use crate::model_router::available_router_models;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::router::ToolCall;
@@ -162,7 +162,7 @@ pub(super) async fn resolve_with_model_router(
     }
 
     let prompt_text = model_router_user_prompt(args, index);
-    let available_models = available_model_presets(&session.services.models_manager);
+    let available_models = available_router_models(&session.services.models_manager);
     let mut routed_config = turn.config.as_ref().clone();
     apply_model_router(
         &mut routed_config,
