@@ -3242,9 +3242,10 @@ mod tests {
         let stale = codex_repo_ci::StatusOutcome {
             paths,
             manifest: Some(codex_repo_ci::RepoCiManifest {
-                version: 2,
+                version: 3,
                 repo_root: Path::new("/tmp/repo").to_path_buf(),
                 repo_key: "repo".to_string(),
+                source_key: "source".to_string(),
                 automation: codex_repo_ci::AutomationMode::Local,
                 local_test_time_budget_sec: 300,
                 learned_at_unix_sec: 1,

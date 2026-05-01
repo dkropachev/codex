@@ -83,12 +83,13 @@ Use `codex repo-ci enable --cwd` to enable it for the current repository, and
 `codex repo-ci learn --cwd` to discover CI files, write the generated runner
 script under Codex home, prepare the local environment, and validate the fast
 local checks. Learned artifacts are stored in a shared, hash-sharded repo-ci
-artifact store keyed by the repository remote and current commit hash, with a
-local path fallback when no remote commit is available. The learner uses AI to
+artifact store keyed by the repository identity and learned source-file hashes,
+with a local path fallback when no remote is available. Source-hash artifacts
+that are not hit for a week are pruned. The learner uses AI to
 inspect the repository, generate candidate local CI commands, run them, and
 iteratively repair the plan until the fast runner validates or the bounded
 retry budget is exhausted. The learner records the source files and SHA-256
-hashes it used;
+hashes it used, plus their combined source key;
 `codex repo-ci status --cwd` reports when those files changed and the repository
 should be learned again.
 

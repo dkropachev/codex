@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
 use sha2::Sha256;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
@@ -26,7 +27,7 @@ mod repo_ci_ai_learning;
 mod runner;
 mod storage;
 
-const MANIFEST_VERSION: u32 = 2;
+const MANIFEST_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -66,11 +67,11 @@ pub struct RepoCiManifest {
     pub version: u32,
     pub repo_root: PathBuf,
     pub repo_key: String,
+    pub source_key: String,
     pub automation: AutomationMode,
     pub local_test_time_budget_sec: u64,
     pub learned_at_unix_sec: u64,
     pub learning_sources: Vec<SourceHash>,
-    #[serde(default)]
     pub inferred_issue_types: Vec<RepoCiIssueType>,
     pub prepare_steps: Vec<RepoCiStep>,
     pub fast_steps: Vec<RepoCiStep>,
@@ -124,6 +125,12 @@ pub struct RepoCiPaths {
     pub state_dir: PathBuf,
     pub manifest_path: PathBuf,
     pub runner_path: PathBuf,
+}
+
+struct ResolvedRepoCiPaths {
+    paths: RepoCiPaths,
+    learning_sources: Vec<SourceHash>,
+    source_key: String,
 }
 
 #[derive(Debug, Clone)]
@@ -249,19 +256,34 @@ pub fn repo_root_for_cwd(cwd: &Path) -> Result<PathBuf> {
 }
 
 pub fn paths_for_repo(codex_home: &Path, cwd: &Path) -> Result<RepoCiPaths> {
+    Ok(resolve_paths_for_repo(codex_home, cwd)?.paths)
+}
+
+fn resolve_paths_for_repo(codex_home: &Path, cwd: &Path) -> Result<ResolvedRepoCiPaths> {
     let repo_root = repo_root_for_cwd(cwd)?;
-    let state_dir = storage::artifact_state_dir(codex_home, &repo_root);
-    Ok(RepoCiPaths {
+    let learning_sources = collect_sources(&repo_root)?;
+    let source_key = storage::source_key(&learning_sources);
+    let state_dir = storage::artifact_state_dir(codex_home, &repo_root, &learning_sources);
+    let paths = paths_from_state_dir(repo_root, state_dir);
+    Ok(ResolvedRepoCiPaths {
+        paths,
+        learning_sources,
+        source_key,
+    })
+}
+
+fn paths_from_state_dir(repo_root: PathBuf, state_dir: PathBuf) -> RepoCiPaths {
+    RepoCiPaths {
         repo_root,
         manifest_path: state_dir.join("manifest.json"),
         runner_path: state_dir.join("run_ci.sh"),
         state_dir,
-    })
+    }
 }
 
 pub fn learn(codex_home: &Path, cwd: &Path, options: LearnOptions) -> Result<LearnOutcome> {
-    let paths = paths_for_repo(codex_home, cwd)?;
-    let (prepare_steps, fast_steps, full_steps) = infer_steps(&paths.repo_root)?;
+    let repo_root = repo_root_for_cwd(cwd)?;
+    let (prepare_steps, fast_steps, full_steps) = infer_steps(&repo_root)?;
     learn_with_plan(
         codex_home,
         cwd,
@@ -280,16 +302,19 @@ pub fn learn_with_plan(
     options: LearnOptions,
     plan: LearnedPlan,
 ) -> Result<LearnOutcome> {
-    let paths = paths_for_repo(codex_home, cwd)?;
+    storage::prune_stale_artifacts(codex_home);
+    let resolved = resolve_paths_for_repo(codex_home, cwd)?;
+    let paths = resolved.paths;
     fs::create_dir_all(&paths.state_dir)?;
     let mut manifest = RepoCiManifest {
         version: MANIFEST_VERSION,
         repo_key: storage::repo_key(&paths.repo_root),
+        source_key: resolved.source_key,
         repo_root: paths.repo_root.clone(),
         automation: options.automation,
         local_test_time_budget_sec: options.local_test_time_budget_sec,
         learned_at_unix_sec: unix_now(),
-        learning_sources: collect_sources(&paths.repo_root)?,
+        learning_sources: resolved.learning_sources,
         inferred_issue_types: infer_issue_types(&paths.repo_root),
         prepare_steps: plan.prepare_steps,
         fast_steps: plan.fast_steps,
@@ -298,6 +323,7 @@ pub fn learn_with_plan(
     };
     write_runner(&paths.runner_path, &manifest)?;
     write_manifest(&paths.manifest_path, &manifest)?;
+    storage::record_artifact_hit(&paths.state_dir);
 
     let prepare_run = capture_runner(
         &paths,
@@ -329,6 +355,7 @@ pub fn learn_with_plan(
         }
     };
     write_manifest(&paths.manifest_path, &manifest)?;
+    storage::record_artifact_hit(&paths.state_dir);
 
     Ok(LearnOutcome {
         paths,
@@ -340,16 +367,20 @@ pub fn learn_with_plan(
 }
 
 pub fn prepare(codex_home: &Path, cwd: &Path) -> Result<std::process::ExitStatus> {
+    storage::prune_stale_artifacts(codex_home);
     let paths = paths_for_repo(codex_home, cwd)?;
     require_runner(&paths)?;
     let manifest = read_manifest(&paths.manifest_path)?;
+    storage::record_artifact_hit(&paths.state_dir);
     run_runner(&paths, "prepare", manifest.local_test_time_budget_sec)
 }
 
 pub fn run(codex_home: &Path, cwd: &Path, mode: RunMode) -> Result<std::process::ExitStatus> {
+    storage::prune_stale_artifacts(codex_home);
     let paths = paths_for_repo(codex_home, cwd)?;
     require_runner(&paths)?;
     let manifest = read_manifest(&paths.manifest_path)?;
+    storage::record_artifact_hit(&paths.state_dir);
     run_runner(&paths, mode.as_str(), manifest.local_test_time_budget_sec)
 }
 
@@ -363,9 +394,11 @@ pub fn run_capture_with_cancellation(
     mode: RunMode,
     cancellation: RepoCiCancellation,
 ) -> Result<CapturedRun> {
+    storage::prune_stale_artifacts(codex_home);
     let paths = paths_for_repo(codex_home, cwd)?;
     require_runner(&paths)?;
     let manifest = read_manifest(&paths.manifest_path)?;
+    storage::record_artifact_hit(&paths.state_dir);
     capture_runner(
         &paths,
         mode.as_str(),
@@ -375,24 +408,35 @@ pub fn run_capture_with_cancellation(
 }
 
 pub fn status(codex_home: &Path, cwd: &Path) -> Result<StatusOutcome> {
-    let paths = paths_for_repo(codex_home, cwd)?;
-    let manifest = if paths.manifest_path.exists() {
-        Some(read_manifest(&paths.manifest_path)?)
-    } else {
-        None
-    };
-    let mut stale_sources = Vec::new();
-    if let Some(manifest) = &manifest {
-        for source in &manifest.learning_sources {
-            let current = hash_file(&paths.repo_root.join(&source.path));
-            if current.as_deref() != Some(source.sha256.as_str()) {
-                stale_sources.push(source.clone());
-            }
-        }
+    storage::prune_stale_artifacts(codex_home);
+    let resolved = resolve_paths_for_repo(codex_home, cwd)?;
+    let paths = resolved.paths;
+    if paths.manifest_path.exists() {
+        let manifest = read_manifest(&paths.manifest_path)?;
+        storage::record_artifact_hit(&paths.state_dir);
+        let stale_sources = changed_sources(&manifest.learning_sources, &resolved.learning_sources);
+        return Ok(StatusOutcome {
+            paths,
+            manifest: Some(manifest),
+            stale_sources,
+        });
     }
+
+    let repo_key = storage::repo_key(&paths.repo_root);
+    let Some(state_dir) = storage::latest_artifact_state_dir(codex_home, &repo_key) else {
+        return Ok(StatusOutcome {
+            paths,
+            manifest: None,
+            stale_sources: Vec::new(),
+        });
+    };
+    let paths = paths_from_state_dir(paths.repo_root, state_dir);
+    let manifest = read_manifest(&paths.manifest_path)?;
+    storage::record_artifact_hit(&paths.state_dir);
+    let stale_sources = changed_sources(&manifest.learning_sources, &resolved.learning_sources);
     Ok(StatusOutcome {
         paths,
-        manifest,
+        manifest: Some(manifest),
         stale_sources,
     })
 }
@@ -420,6 +464,35 @@ fn write_manifest(path: &Path, manifest: &RepoCiManifest) -> Result<()> {
 fn read_manifest(path: &Path) -> Result<RepoCiManifest> {
     let data = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_slice(&data).with_context(|| format!("failed to parse {}", path.display()))
+}
+
+fn changed_sources(
+    learned_sources: &[SourceHash],
+    current_sources: &[SourceHash],
+) -> Vec<SourceHash> {
+    let learned_by_path = learned_sources
+        .iter()
+        .map(|source| (source.path.clone(), source))
+        .collect::<BTreeMap<_, _>>();
+    let current_by_path = current_sources
+        .iter()
+        .map(|source| (source.path.clone(), source))
+        .collect::<BTreeMap<_, _>>();
+    let mut changed = Vec::new();
+    for learned in learned_sources {
+        match current_by_path.get(&learned.path) {
+            Some(current) if *current == learned => {}
+            Some(_) | None => changed.push(learned.clone()),
+        }
+    }
+    for current in current_sources {
+        if !learned_by_path.contains_key(&current.path) {
+            changed.push(current.clone());
+        }
+    }
+    changed.sort_by(|left, right| left.path.cmp(&right.path));
+    changed.dedup_by(|left, right| left.path == right.path);
+    changed
 }
 
 fn collect_sources(repo_root: &Path) -> Result<Vec<SourceHash>> {
@@ -987,10 +1060,12 @@ mod tests {
         fs::write(repo.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
         let paths = paths_for_repo(&codex_home, &repo).expect("paths");
         fs::create_dir_all(&paths.state_dir).expect("state dir");
+        storage::record_artifact_hit(&paths.state_dir);
         let manifest = RepoCiManifest {
             version: MANIFEST_VERSION,
             repo_root: repo.clone(),
             repo_key: storage::repo_key(&repo),
+            source_key: storage::source_key(&collect_sources(&repo).expect("sources")),
             automation: AutomationMode::LocalAndRemote,
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
@@ -1010,6 +1085,153 @@ mod tests {
     }
 
     #[test]
+    fn tracks_added_source_hashes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).expect("create repo");
+        fs::write(repo.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
+        let paths = paths_for_repo(&codex_home, &repo).expect("paths");
+        fs::create_dir_all(&paths.state_dir).expect("state dir");
+        storage::record_artifact_hit(&paths.state_dir);
+        let manifest = RepoCiManifest {
+            version: MANIFEST_VERSION,
+            repo_root: repo.clone(),
+            repo_key: storage::repo_key(&repo),
+            source_key: storage::source_key(&collect_sources(&repo).expect("sources")),
+            automation: AutomationMode::LocalAndRemote,
+            local_test_time_budget_sec: 300,
+            learned_at_unix_sec: 1,
+            learning_sources: collect_sources(&repo).expect("sources"),
+            inferred_issue_types: default_issue_types(),
+            prepare_steps: vec![],
+            fast_steps: vec![],
+            full_steps: vec![],
+            validation: ValidationStatus::NotRun,
+        };
+        write_manifest(&paths.manifest_path, &manifest).expect("write manifest");
+
+        fs::write(repo.join("Cargo.lock"), "# lock\n").expect("write lockfile");
+
+        let status = status(&codex_home, &repo).expect("status");
+        let paths = status
+            .stale_sources
+            .into_iter()
+            .map(|source| source.path)
+            .collect::<Vec<_>>();
+        assert_eq!(paths, vec![PathBuf::from("Cargo.lock")]);
+    }
+
+    #[test]
+    fn tracks_removed_source_hashes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).expect("create repo");
+        fs::write(repo.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
+        fs::write(repo.join("Cargo.lock"), "# lock\n").expect("write lockfile");
+        let paths = paths_for_repo(&codex_home, &repo).expect("paths");
+        fs::create_dir_all(&paths.state_dir).expect("state dir");
+        storage::record_artifact_hit(&paths.state_dir);
+        let learning_sources = collect_sources(&repo).expect("sources");
+        let manifest = RepoCiManifest {
+            version: MANIFEST_VERSION,
+            repo_root: repo.clone(),
+            repo_key: storage::repo_key(&repo),
+            source_key: storage::source_key(&learning_sources),
+            automation: AutomationMode::LocalAndRemote,
+            local_test_time_budget_sec: 300,
+            learned_at_unix_sec: 1,
+            learning_sources,
+            inferred_issue_types: default_issue_types(),
+            prepare_steps: vec![],
+            fast_steps: vec![],
+            full_steps: vec![],
+            validation: ValidationStatus::NotRun,
+        };
+        write_manifest(&paths.manifest_path, &manifest).expect("write manifest");
+
+        fs::remove_file(repo.join("Cargo.lock")).expect("remove lockfile");
+
+        let status = status(&codex_home, &repo).expect("status");
+        let paths = status
+            .stale_sources
+            .into_iter()
+            .map(|source| source.path)
+            .collect::<Vec<_>>();
+        assert_eq!(paths, vec![PathBuf::from("Cargo.lock")]);
+    }
+
+    #[test]
+    fn status_updates_last_hit_when_using_stale_source_artifact() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).expect("create repo");
+        fs::write(repo.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
+        let paths = paths_for_repo(&codex_home, &repo).expect("paths");
+        fs::create_dir_all(&paths.state_dir).expect("state dir");
+        let learning_sources = collect_sources(&repo).expect("sources");
+        let manifest = RepoCiManifest {
+            version: MANIFEST_VERSION,
+            repo_root: repo.clone(),
+            repo_key: storage::repo_key(&repo),
+            source_key: storage::source_key(&learning_sources),
+            automation: AutomationMode::LocalAndRemote,
+            local_test_time_budget_sec: 300,
+            learned_at_unix_sec: 1,
+            learning_sources,
+            inferred_issue_types: default_issue_types(),
+            prepare_steps: vec![],
+            fast_steps: vec![],
+            full_steps: vec![],
+            validation: ValidationStatus::NotRun,
+        };
+        write_manifest(&paths.manifest_path, &manifest).expect("write manifest");
+        let last_hit_path = paths.state_dir.join(".last_hit_unix_sec");
+        assert!(!last_hit_path.exists());
+
+        fs::write(repo.join("Cargo.toml"), "[package]\nname = \"y\"\n").expect("update cargo");
+
+        let status = status(&codex_home, &repo).expect("status");
+        assert!(status.manifest.is_some());
+        assert!(last_hit_path.exists());
+    }
+
+    #[test]
+    fn status_ignores_legacy_commit_keyed_artifacts() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).expect("create repo");
+        fs::write(repo.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
+        let repo_key = storage::repo_key(&repo);
+        let legacy_dir = storage::repo_artifacts_dir(&codex_home, &repo_key);
+        fs::create_dir_all(&legacy_dir).expect("legacy dir");
+        fs::write(legacy_dir.join("manifest.json"), "not json\n").expect("legacy manifest");
+
+        let status = status(&codex_home, &repo).expect("status");
+
+        assert!(status.manifest.is_none());
+    }
+
+    #[test]
+    fn paths_for_repo_does_not_record_artifact_hits() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).expect("create repo");
+        fs::write(repo.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
+        let paths = paths_for_repo(&codex_home, &repo).expect("paths");
+        fs::create_dir_all(&paths.state_dir).expect("state dir");
+        let last_hit_path = paths.state_dir.join(".last_hit_unix_sec");
+
+        let _ = paths_for_repo(&codex_home, &repo).expect("paths");
+
+        assert!(!last_hit_path.exists());
+    }
+
+    #[test]
     fn capture_runner_records_step_jsonl() {
         let temp = tempfile::tempdir().expect("tempdir");
         let repo = temp.path().join("repo");
@@ -1026,6 +1248,7 @@ mod tests {
             version: MANIFEST_VERSION,
             repo_root: repo,
             repo_key: "repo".to_string(),
+            source_key: "source".to_string(),
             automation: AutomationMode::Local,
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
@@ -1085,6 +1308,7 @@ mod tests {
             version: MANIFEST_VERSION,
             repo_root: repo,
             repo_key: "repo".to_string(),
+            source_key: "source".to_string(),
             automation: AutomationMode::Local,
             local_test_time_budget_sec: 1,
             learned_at_unix_sec: 1,
@@ -1147,6 +1371,7 @@ mod tests {
             version: MANIFEST_VERSION,
             repo_root: repo,
             repo_key: "repo".to_string(),
+            source_key: "source".to_string(),
             automation: AutomationMode::Local,
             local_test_time_budget_sec: 1,
             learned_at_unix_sec: 1,
@@ -1195,6 +1420,7 @@ mod tests {
             version: MANIFEST_VERSION,
             repo_root: repo,
             repo_key: "repo".to_string(),
+            source_key: "source".to_string(),
             automation: AutomationMode::Local,
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
@@ -1263,6 +1489,7 @@ mod tests {
             version: MANIFEST_VERSION,
             repo_root: learned_repo,
             repo_key: "repo".to_string(),
+            source_key: "source".to_string(),
             automation: AutomationMode::Local,
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
@@ -1288,34 +1515,6 @@ mod tests {
             "stdout:\n{}\nstderr:\n{}",
             run.stdout, run.stderr
         );
-    }
-
-    #[test]
-    fn reads_legacy_manifest_without_inferred_issue_types() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let manifest_path = temp.path().join("manifest.json");
-        fs::write(
-            &manifest_path,
-            serde_json::json!({
-                "version": 1,
-                "repo_root": temp.path(),
-                "repo_key": "repo",
-                "automation": "local",
-                "local_test_time_budget_sec": 300,
-                "learned_at_unix_sec": 1,
-                "learning_sources": [],
-                "prepare_steps": [],
-                "fast_steps": [],
-                "full_steps": [],
-                "validation": "not_run"
-            })
-            .to_string(),
-        )
-        .expect("write manifest");
-
-        let manifest = read_manifest(&manifest_path).expect("read manifest");
-
-        assert_eq!(manifest.inferred_issue_types, Vec::<RepoCiIssueType>::new());
     }
 
     #[test]

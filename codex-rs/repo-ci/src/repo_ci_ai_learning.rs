@@ -488,9 +488,10 @@ mod tests {
                 runner_path: Path::new("/tmp/state/run_ci.sh").to_path_buf(),
             },
             manifest: crate::RepoCiManifest {
-                version: 2,
+                version: 3,
                 repo_root: Path::new("/tmp/repo").to_path_buf(),
                 repo_key: "repo".to_string(),
+                source_key: "source".to_string(),
                 automation: crate::AutomationMode::Local,
                 local_test_time_budget_sec: 120,
                 learned_at_unix_sec: 0,
