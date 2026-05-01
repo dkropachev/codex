@@ -139,6 +139,10 @@ enum Subcommand {
     /// Manage Codex plugins.
     Plugin(PluginCli),
 
+    /// Tune tool-router guidance.
+    #[clap(name = "tool-router")]
+    ToolRouter(ToolRouterCli),
+
     /// Start Codex as an MCP server (stdio).
     McpServer,
 
@@ -207,6 +211,50 @@ struct PluginCli {
 
     #[command(subcommand)]
     subcommand: PluginSubcommand,
+}
+
+#[derive(Debug, Parser)]
+#[command(bin_name = "codex tool-router")]
+struct ToolRouterCli {
+    #[command(subcommand)]
+    subcommand: ToolRouterSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ToolRouterSubcommand {
+    /// Analyze recent router telemetry and optionally persist passing guidance.
+    Tune(ToolRouterTuneCommand),
+}
+
+#[derive(Debug, Args)]
+struct ToolRouterTuneCommand {
+    /// Telemetry window to inspect, such as 7d, 24h, 30m, or all.
+    #[arg(long = "window", default_value = "7d")]
+    window: String,
+
+    /// Tune one model slug. Defaults to the configured model when --all-models is not set.
+    #[arg(long = "model", value_name = "SLUG", conflicts_with = "all_models")]
+    model: Option<String>,
+
+    /// Tune all models present in router telemetry.
+    #[arg(long = "all-models", default_value_t = false)]
+    all_models: bool,
+
+    /// Maximum total guidance tokens. The hard maximum is 1200.
+    #[arg(long = "max-guidance-tokens", default_value_t = 600)]
+    max_guidance_tokens: usize,
+
+    /// Optional model slug reserved for future introspection passes.
+    #[arg(long = "introspection-model", value_name = "SLUG")]
+    introspection_model: Option<String>,
+
+    /// Persist only optimizations whose deterministic tests pass.
+    #[arg(long = "apply", default_value_t = false)]
+    apply: bool,
+
+    /// Emit the report as JSON.
+    #[arg(long = "json", default_value_t = false)]
+    json: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -1116,6 +1164,18 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 PluginSubcommand::Marketplace(mut marketplace_cli) => {
                     prepend_config_flags(&mut marketplace_cli.config_overrides, config_overrides);
                     marketplace_cli.run().await?;
+                }
+            }
+        }
+        Some(Subcommand::ToolRouter(tool_router_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "tool-router",
+            )?;
+            match tool_router_cli.subcommand {
+                ToolRouterSubcommand::Tune(cmd) => {
+                    run_tool_router_tune_command(cmd, root_config_overrides).await?;
                 }
             }
         }
@@ -2361,6 +2421,104 @@ async fn run_debug_models_command(
     Ok(())
 }
 
+async fn run_tool_router_tune_command(
+    cmd: ToolRouterTuneCommand,
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let cli_overrides = root_config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let config = Config::load_with_cli_overrides(cli_overrides).await?;
+    let model_slug = if cmd.all_models {
+        None
+    } else {
+        cmd.model.clone().or_else(|| config.model.clone())
+    };
+    let state_db =
+        StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone()).await?;
+    let report = codex_core::tool_router_tune::tune_tool_router(
+        state_db.as_ref(),
+        codex_core::tool_router_tune::ToolRouterTuneOptions {
+            window: cmd.window,
+            model_slug,
+            max_guidance_tokens: cmd.max_guidance_tokens,
+            introspection_model: cmd.introspection_model,
+            apply: cmd.apply,
+        },
+    )
+    .await?;
+
+    if cmd.json {
+        serde_json::to_writer_pretty(std::io::stdout(), &report)?;
+        println!();
+    } else {
+        print_tool_router_tune_report(&report);
+    }
+
+    Ok(())
+}
+
+fn print_tool_router_tune_report(report: &codex_core::tool_router_tune::ToolRouterTuneReport) {
+    let mode = if report.apply { "apply" } else { "dry-run" };
+    println!("Tool router tune ({mode})");
+    println!("Window: {}", report.window);
+    println!(
+        "Introspection tokens: prompt {}, completion {}, total {}",
+        report.introspection_tokens.prompt_tokens,
+        report.introspection_tokens.completion_tokens,
+        report.introspection_tokens.total_tokens
+    );
+    println!(
+        "Schema/format tokens: visible router {}, hidden tools {}, format {}",
+        report.schema_format_tokens.visible_router_schema_tokens,
+        report.schema_format_tokens.hidden_tool_schema_tokens,
+        report.schema_format_tokens.format_description_tokens
+    );
+    if report.optimizations.is_empty() {
+        println!("No optimizations found.");
+        return;
+    }
+    println!("Optimizations:");
+    for optimization in &report.optimizations {
+        println!(
+            "- {} [{}]: calls {}, guidance {} -> {}, gross {}, net {}, persisted {}",
+            tool_router_optimization_name(optimization.optimization_type),
+            tool_router_test_status_name(optimization.test_status),
+            optimization.affected_call_count,
+            optimization.guidance_tokens_before,
+            optimization.guidance_tokens_after,
+            optimization.gross_savings_tokens,
+            optimization.net_savings_tokens,
+            optimization.persisted
+        );
+    }
+}
+
+fn tool_router_optimization_name(
+    optimization_type: codex_core::tool_router_tune::ToolRouterOptimizationType,
+) -> &'static str {
+    match optimization_type {
+        codex_core::tool_router_tune::ToolRouterOptimizationType::DropStaticGuidance => {
+            "drop-static-guidance"
+        }
+        codex_core::tool_router_tune::ToolRouterOptimizationType::DynamicGuidance => {
+            "dynamic-guidance"
+        }
+        codex_core::tool_router_tune::ToolRouterOptimizationType::FormatDescriptionRefresh => {
+            "format-description-refresh"
+        }
+    }
+}
+
+fn tool_router_test_status_name(
+    status: codex_core::tool_router_tune::ToolRouterOptimizationTestStatus,
+) -> &'static str {
+    match status {
+        codex_core::tool_router_tune::ToolRouterOptimizationTestStatus::Passing => "passing",
+        codex_core::tool_router_tune::ToolRouterOptimizationTestStatus::Failing => "failing",
+    }
+}
+
 async fn run_debug_clear_memories_command(
     root_config_overrides: &CliConfigOverrides,
     interactive: &TuiCli,
@@ -2895,6 +3053,55 @@ mod tests {
         };
 
         assert!(cmd.bundled);
+    }
+
+    #[test]
+    fn tool_router_tune_parses_flags() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "tool-router",
+            "tune",
+            "--window",
+            "24h",
+            "--model",
+            "gpt-test",
+            "--max-guidance-tokens",
+            "500",
+            "--introspection-model",
+            "gpt-introspect",
+            "--apply",
+            "--json",
+        ])
+        .expect("parse");
+
+        let Some(Subcommand::ToolRouter(ToolRouterCli {
+            subcommand: ToolRouterSubcommand::Tune(cmd),
+        })) = cli.subcommand
+        else {
+            panic!("expected tool-router tune subcommand");
+        };
+
+        assert_eq!(cmd.window, "24h");
+        assert_eq!(cmd.model.as_deref(), Some("gpt-test"));
+        assert_eq!(cmd.max_guidance_tokens, 500);
+        assert_eq!(cmd.introspection_model.as_deref(), Some("gpt-introspect"));
+        assert!(cmd.apply);
+        assert!(cmd.json);
+    }
+
+    #[test]
+    fn tool_router_tune_model_conflicts_with_all_models() {
+        let err = MultitoolCli::try_parse_from([
+            "codex",
+            "tool-router",
+            "tune",
+            "--model",
+            "gpt-test",
+            "--all-models",
+        ])
+        .expect_err("conflicting model selection flags should be rejected");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]

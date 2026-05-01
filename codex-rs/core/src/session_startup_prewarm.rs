@@ -215,12 +215,14 @@ async fn schedule_startup_prewarm_inner(
     .await?;
     let startup_prompt = build_prompt(
         Vec::new(),
+        session.as_ref(),
         startup_router.as_ref(),
         startup_turn_context.as_ref(),
         BaseInstructions {
             text: base_instructions,
         },
-    );
+    )
+    .await;
     let startup_turn_metadata_header = startup_turn_context
         .turn_metadata_state
         .current_header_value();

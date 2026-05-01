@@ -20,16 +20,24 @@ use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
+use codex_state::ToolRouterGuidanceKey;
 use codex_state::ToolRouterLedgerEntry;
 use codex_state::ToolRouterRulePruneOptions;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
 use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::TOOL_ROUTER_DEFAULT_GUIDANCE_TOKEN_CAP;
+use codex_tools::TOOL_ROUTER_DEFAULT_GUIDANCE_VERSION;
+use codex_tools::TOOL_ROUTER_SCHEMA_VERSION;
 use codex_tools::TOOL_ROUTER_TOOL_NAME;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
+use codex_tools::compose_tool_router_guidance;
 use codex_tools::create_tool_router_tool;
+use codex_tools::estimate_router_text_tokens;
+use codex_tools::tool_router_format_description;
+use codex_tools::toolset_hash_from_specs;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -56,6 +64,7 @@ pub struct ToolRouter {
     model_visible_specs: Vec<ToolSpec>,
     parallel_mcp_server_names: HashSet<String>,
     tool_router_token_estimates: Option<ToolRouterTokenEstimates>,
+    tool_router_prompt_info: Option<ToolRouterPromptInfo>,
 }
 
 pub(crate) struct ToolRouterParams<'a> {
@@ -71,6 +80,20 @@ pub(crate) struct ToolRouterParams<'a> {
 struct ToolRouterTokenEstimates {
     visible_router_schema_tokens: i64,
     hidden_tool_schema_tokens: i64,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ToolRouterPromptInfo {
+    pub(crate) format_description: String,
+    pub(crate) format_description_tokens: i64,
+    pub(crate) toolset_hash: String,
+    pub(crate) router_schema_version: i64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ToolRouterGuidanceTelemetry {
+    guidance_version: i64,
+    guidance_tokens: i64,
 }
 
 #[derive(Clone)]
@@ -119,20 +142,32 @@ impl ToolRouter {
                 .map(|configured_tool| configured_tool.spec.clone())
                 .collect()
         };
-        let (model_visible_specs, tool_router_token_estimates) = if config.tool_router {
-            let router_spec = create_tool_router_tool();
-            let token_estimates = ToolRouterTokenEstimates {
-                visible_router_schema_tokens: estimate_tool_schema_tokens(std::slice::from_ref(
-                    &router_spec,
-                )),
-                hidden_tool_schema_tokens: estimate_tool_schema_tokens(
-                    &unwrapped_model_visible_specs,
-                ),
+        let (model_visible_specs, tool_router_token_estimates, tool_router_prompt_info) =
+            if config.tool_router {
+                let router_spec = create_tool_router_tool();
+                let format_description =
+                    tool_router_format_description(&router_spec, &unwrapped_model_visible_specs);
+                let token_estimates = ToolRouterTokenEstimates {
+                    visible_router_schema_tokens: estimate_tool_schema_tokens(
+                        std::slice::from_ref(&router_spec),
+                    ),
+                    hidden_tool_schema_tokens: estimate_tool_schema_tokens(
+                        &unwrapped_model_visible_specs,
+                    ),
+                };
+                let prompt_info = ToolRouterPromptInfo {
+                    format_description_tokens: i64::try_from(estimate_router_text_tokens(
+                        &format_description,
+                    ))
+                    .unwrap_or(i64::MAX),
+                    format_description,
+                    toolset_hash: toolset_hash_from_specs(&unwrapped_model_visible_specs),
+                    router_schema_version: TOOL_ROUTER_SCHEMA_VERSION,
+                };
+                (vec![router_spec], Some(token_estimates), Some(prompt_info))
+            } else {
+                (unwrapped_model_visible_specs, None, None)
             };
-            (vec![router_spec], Some(token_estimates))
-        } else {
-            (unwrapped_model_visible_specs, None)
-        };
 
         Self {
             registry,
@@ -141,6 +176,7 @@ impl ToolRouter {
             model_visible_specs,
             parallel_mcp_server_names,
             tool_router_token_estimates,
+            tool_router_prompt_info,
         }
     }
 
@@ -153,6 +189,10 @@ impl ToolRouter {
 
     pub fn model_visible_specs(&self) -> Vec<ToolSpec> {
         self.model_visible_specs.clone()
+    }
+
+    pub(crate) fn tool_router_prompt_info(&self) -> Option<&ToolRouterPromptInfo> {
+        self.tool_router_prompt_info.as_ref()
     }
 
     pub(crate) fn learned_rule_tool_names(&self) -> BTreeSet<String> {
@@ -603,11 +643,26 @@ impl ToolRouter {
         let Some(state_db) = session.services.state_db.as_deref() else {
             return;
         };
+        let guidance = self.tool_router_guidance_telemetry(session, turn).await;
+        let prompt_info = self.tool_router_prompt_info.as_ref();
         if let Err(err) = state_db
             .record_tool_router_ledger_entry(ToolRouterLedgerEntry {
                 thread_id: session.conversation_id.to_string(),
                 turn_id: turn.sub_id.clone(),
                 call_id: call_id.to_string(),
+                model_slug: turn.model_info.slug.clone(),
+                model_provider: turn.config.model_provider_id.clone(),
+                toolset_hash: prompt_info
+                    .map(|info| info.toolset_hash.clone())
+                    .unwrap_or_default(),
+                router_schema_version: prompt_info
+                    .map(|info| info.router_schema_version)
+                    .unwrap_or_default(),
+                guidance_version: guidance.guidance_version,
+                guidance_tokens: guidance.guidance_tokens,
+                format_description_tokens: prompt_info
+                    .map(|info| info.format_description_tokens)
+                    .unwrap_or_default(),
                 route_kind: usage.route_kind.clone(),
                 selected_tools: usage.selected_tools.clone(),
                 visible_router_schema_tokens: tokens.visible_router_schema_tokens,
@@ -623,6 +678,50 @@ impl ToolRouter {
             .await
         {
             tracing::warn!("failed to record tool_router ledger entry: {err}");
+        }
+    }
+
+    async fn tool_router_guidance_telemetry(
+        &self,
+        session: &Session,
+        turn: &TurnContext,
+    ) -> ToolRouterGuidanceTelemetry {
+        let Some(prompt_info) = self.tool_router_prompt_info.as_ref() else {
+            return ToolRouterGuidanceTelemetry {
+                guidance_version: 0,
+                guidance_tokens: 0,
+            };
+        };
+        let Some(state_db) = session.services.state_db.as_deref() else {
+            return default_tool_router_guidance_telemetry();
+        };
+        let key = ToolRouterGuidanceKey {
+            model_slug: turn.model_info.slug.clone(),
+            model_provider: turn.config.model_provider_id.clone(),
+            toolset_hash: prompt_info.toolset_hash.clone(),
+            router_schema_version: prompt_info.router_schema_version,
+        };
+        let dynamic_guidance = match state_db.lookup_tool_router_guidance(&key).await {
+            Ok(record) => record,
+            Err(err) => {
+                tracing::warn!("failed to read tool_router guidance: {err}");
+                None
+            }
+        };
+        let dynamic_text = dynamic_guidance
+            .as_ref()
+            .map(|record| record.guidance_text.as_str());
+        let composed =
+            compose_tool_router_guidance(dynamic_text, TOOL_ROUTER_DEFAULT_GUIDANCE_TOKEN_CAP);
+        ToolRouterGuidanceTelemetry {
+            guidance_version: if composed.dynamic_guidance_accepted {
+                dynamic_guidance
+                    .map(|record| record.guidance_version)
+                    .unwrap_or(TOOL_ROUTER_DEFAULT_GUIDANCE_VERSION)
+            } else {
+                TOOL_ROUTER_DEFAULT_GUIDANCE_VERSION
+            },
+            guidance_tokens: i64::try_from(composed.tokens).unwrap_or(i64::MAX),
         }
     }
 
@@ -673,6 +772,17 @@ mod tests;
 fn estimate_tool_schema_tokens(tools: &[ToolSpec]) -> i64 {
     let serialized = serde_json::to_string(tools).unwrap_or_default();
     estimate_text_tokens(&serialized)
+}
+
+fn default_tool_router_guidance_telemetry() -> ToolRouterGuidanceTelemetry {
+    let composed = compose_tool_router_guidance(
+        /*dynamic_guidance*/ None,
+        TOOL_ROUTER_DEFAULT_GUIDANCE_TOKEN_CAP,
+    );
+    ToolRouterGuidanceTelemetry {
+        guidance_version: TOOL_ROUTER_DEFAULT_GUIDANCE_VERSION,
+        guidance_tokens: i64::try_from(composed.tokens).unwrap_or(i64::MAX),
+    }
 }
 
 fn estimate_text_tokens(text: &str) -> i64 {

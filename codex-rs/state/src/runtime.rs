@@ -79,10 +79,13 @@ pub use remote_control::RemoteControlEnrollmentRecord;
 pub use threads::ThreadFilterOptions;
 pub use tool_router::ToolRouterDiagnosticsSummary;
 pub use tool_router::ToolRouterDiagnosticsWindow;
+pub use tool_router::ToolRouterGuidanceKey;
+pub use tool_router::ToolRouterGuidanceRecord;
 pub use tool_router::ToolRouterLearnedRule;
 pub use tool_router::ToolRouterLedgerEntry;
 pub use tool_router::ToolRouterRulePruneOptions;
 pub use tool_router::ToolRouterRulePruneResult;
+pub use tool_router::ToolRouterTuneObservation;
 
 // "Partition" is the retained-log-content bucket we cap at 10 MiB:
 // - one bucket per non-null thread_id

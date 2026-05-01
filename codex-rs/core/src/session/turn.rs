@@ -959,12 +959,19 @@ fn connector_inserted_in_messages(
     connector_count == 1 && skill_count == 0 && mention_names_lower.contains(&mention_slug)
 }
 
-pub(crate) fn build_prompt(
+pub(crate) async fn build_prompt(
     input: Vec<ResponseItem>,
+    sess: &Session,
     router: &ToolRouter,
     turn_context: &TurnContext,
     base_instructions: BaseInstructions,
 ) -> Prompt {
+    let mut input = input;
+    if let Some(router_prompt_item) =
+        crate::tools::router_prompt::build_router_prompt_item(sess, router, turn_context).await
+    {
+        input.insert(0, router_prompt_item);
+    }
     let deferred_dynamic_tools = turn_context
         .dynamic_tools
         .iter()
@@ -980,6 +987,14 @@ pub(crate) fn build_prompt(
             .filter_map(|spec| filter_deferred_dynamic_tool_spec(spec, &deferred_dynamic_tools))
             .collect()
     };
+
+    let base_instructions = crate::tools::router_prompt::base_instructions_for_router_prompt(
+        base_instructions,
+        &turn_context
+            .model_info
+            .get_model_instructions(turn_context.personality),
+        router.tool_router_prompt_info().is_some(),
+    );
 
     Prompt {
         input,
@@ -1083,10 +1098,12 @@ async fn run_sampling_request(
         };
         let prompt = build_prompt(
             prompt_input,
+            sess.as_ref(),
             router.as_ref(),
             turn_context.as_ref(),
             base_instructions.clone(),
-        );
+        )
+        .await;
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),

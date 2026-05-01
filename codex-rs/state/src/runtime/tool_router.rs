@@ -11,6 +11,13 @@ pub struct ToolRouterLedgerEntry {
     pub thread_id: String,
     pub turn_id: String,
     pub call_id: String,
+    pub model_slug: String,
+    pub model_provider: String,
+    pub toolset_hash: String,
+    pub router_schema_version: i64,
+    pub guidance_version: i64,
+    pub guidance_tokens: i64,
+    pub format_description_tokens: i64,
     pub route_kind: String,
     pub selected_tools: Vec<String>,
     pub visible_router_schema_tokens: i64,
@@ -30,6 +37,40 @@ pub struct ToolRouterLearnedRule {
     pub route_json: String,
     pub source: String,
     pub hit_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolRouterGuidanceKey {
+    pub model_slug: String,
+    pub model_provider: String,
+    pub toolset_hash: String,
+    pub router_schema_version: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolRouterGuidanceRecord {
+    pub key: ToolRouterGuidanceKey,
+    pub guidance_version: i64,
+    pub guidance_text: String,
+    pub guidance_tokens: i64,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolRouterTuneObservation {
+    pub model_slug: String,
+    pub model_provider: String,
+    pub toolset_hash: String,
+    pub router_schema_version: i64,
+    pub affected_call_count: i64,
+    pub fallback_call_count: i64,
+    pub fallback_prompt_tokens: i64,
+    pub fallback_completion_tokens: i64,
+    pub invalid_route_errors: i64,
+    pub guidance_tokens: i64,
+    pub format_description_tokens: i64,
+    pub visible_router_schema_tokens: i64,
+    pub hidden_tool_schema_tokens: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +130,13 @@ impl StateRuntime {
                 thread_id,
                 turn_id,
                 call_id,
+                model_slug,
+                model_provider,
+                toolset_hash,
+                router_schema_version,
+                guidance_version,
+                guidance_tokens,
+                format_description_tokens,
                 route_kind,
                 selected_tools_json,
                 visible_router_schema_tokens,
@@ -101,13 +149,20 @@ impl StateRuntime {
                 truncated_output_tokens,
                 outcome
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(now_ms)
         .bind(entry.thread_id)
         .bind(entry.turn_id)
         .bind(entry.call_id)
+        .bind(entry.model_slug)
+        .bind(entry.model_provider)
+        .bind(entry.toolset_hash)
+        .bind(entry.router_schema_version)
+        .bind(entry.guidance_version)
+        .bind(entry.guidance_tokens)
+        .bind(entry.format_description_tokens)
         .bind(entry.route_kind)
         .bind(selected_tools_json)
         .bind(entry.visible_router_schema_tokens)
@@ -122,6 +177,142 @@ impl StateRuntime {
         .execute(self.pool.as_ref())
         .await?;
         Ok(())
+    }
+
+    pub async fn lookup_tool_router_guidance(
+        &self,
+        key: &ToolRouterGuidanceKey,
+    ) -> anyhow::Result<Option<ToolRouterGuidanceRecord>> {
+        let Some(row) = sqlx::query(
+            r#"
+            SELECT guidance_version, guidance_text, guidance_tokens, source
+            FROM tool_router_guidance
+            WHERE model_slug = ?
+              AND model_provider = ?
+              AND toolset_hash = ?
+              AND router_schema_version = ?
+            "#,
+        )
+        .bind(&key.model_slug)
+        .bind(&key.model_provider)
+        .bind(&key.toolset_hash)
+        .bind(key.router_schema_version)
+        .fetch_optional(self.pool.as_ref())
+        .await?
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(ToolRouterGuidanceRecord {
+            key: key.clone(),
+            guidance_version: row.try_get("guidance_version")?,
+            guidance_text: row.try_get("guidance_text")?,
+            guidance_tokens: row.try_get("guidance_tokens")?,
+            source: row.try_get("source")?,
+        }))
+    }
+
+    pub async fn upsert_tool_router_guidance(
+        &self,
+        record: ToolRouterGuidanceRecord,
+    ) -> anyhow::Result<()> {
+        let now_ms = Utc::now().timestamp_millis();
+        sqlx::query(
+            r#"
+            INSERT INTO tool_router_guidance (
+                created_at_ms,
+                updated_at_ms,
+                model_slug,
+                model_provider,
+                toolset_hash,
+                router_schema_version,
+                guidance_version,
+                guidance_text,
+                guidance_tokens,
+                source
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(model_slug, model_provider, toolset_hash, router_schema_version) DO UPDATE SET
+                updated_at_ms = excluded.updated_at_ms,
+                guidance_version = excluded.guidance_version,
+                guidance_text = excluded.guidance_text,
+                guidance_tokens = excluded.guidance_tokens,
+                source = excluded.source
+            "#,
+        )
+        .bind(now_ms)
+        .bind(now_ms)
+        .bind(record.key.model_slug)
+        .bind(record.key.model_provider)
+        .bind(record.key.toolset_hash)
+        .bind(record.key.router_schema_version)
+        .bind(record.guidance_version)
+        .bind(record.guidance_text)
+        .bind(record.guidance_tokens)
+        .bind(record.source)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
+    }
+
+    pub async fn tool_router_tune_observations(
+        &self,
+        window: ToolRouterDiagnosticsWindow,
+        model_slug: Option<&str>,
+    ) -> anyhow::Result<Vec<ToolRouterTuneObservation>> {
+        let since_created_at_ms = match window {
+            ToolRouterDiagnosticsWindow::AllTime => i64::MIN,
+            ToolRouterDiagnosticsWindow::SinceCreatedAtMs(value) => value,
+        };
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                model_slug,
+                model_provider,
+                toolset_hash,
+                router_schema_version,
+                COUNT(*) AS affected_call_count,
+                COALESCE(SUM(CASE WHEN route_kind IN ('model_router', 'model_router_script', 'spark', 'spark_script') THEN 1 ELSE 0 END), 0) AS fallback_call_count,
+                COALESCE(SUM(CASE WHEN route_kind IN ('model_router', 'model_router_script', 'spark', 'spark_script') THEN spark_prompt_tokens ELSE 0 END), 0) AS fallback_prompt_tokens,
+                COALESCE(SUM(CASE WHEN route_kind IN ('model_router', 'model_router_script', 'spark', 'spark_script') THEN spark_completion_tokens ELSE 0 END), 0) AS fallback_completion_tokens,
+                COALESCE(SUM(CASE WHEN route_kind = 'error' THEN 1 ELSE 0 END), 0) AS invalid_route_errors,
+                COALESCE(MAX(guidance_tokens), 0) AS guidance_tokens,
+                COALESCE(MAX(format_description_tokens), 0) AS format_description_tokens,
+                COALESCE(MAX(visible_router_schema_tokens), 0) AS visible_router_schema_tokens,
+                COALESCE(MAX(hidden_tool_schema_tokens), 0) AS hidden_tool_schema_tokens
+            FROM tool_router_ledger
+            WHERE created_at_ms >= ?
+              AND model_slug != ''
+              AND (? IS NULL OR model_slug = ?)
+            GROUP BY model_slug, model_provider, toolset_hash, router_schema_version
+            ORDER BY affected_call_count DESC, fallback_call_count DESC
+            "#,
+        )
+        .bind(since_created_at_ms)
+        .bind(model_slug)
+        .bind(model_slug)
+        .fetch_all(self.pool.as_ref())
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                Ok(ToolRouterTuneObservation {
+                    model_slug: row.try_get("model_slug")?,
+                    model_provider: row.try_get("model_provider")?,
+                    toolset_hash: row.try_get("toolset_hash")?,
+                    router_schema_version: row.try_get("router_schema_version")?,
+                    affected_call_count: row.try_get("affected_call_count")?,
+                    fallback_call_count: row.try_get("fallback_call_count")?,
+                    fallback_prompt_tokens: row.try_get("fallback_prompt_tokens")?,
+                    fallback_completion_tokens: row.try_get("fallback_completion_tokens")?,
+                    invalid_route_errors: row.try_get("invalid_route_errors")?,
+                    guidance_tokens: row.try_get("guidance_tokens")?,
+                    format_description_tokens: row.try_get("format_description_tokens")?,
+                    visible_router_schema_tokens: row.try_get("visible_router_schema_tokens")?,
+                    hidden_tool_schema_tokens: row.try_get("hidden_tool_schema_tokens")?,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()
     }
 
     pub async fn lookup_tool_router_rule(
@@ -219,8 +410,8 @@ impl StateRuntime {
                 COALESCE(SUM(CASE WHEN route_kind = 'error' THEN 1 ELSE 0 END), 0) AS invalid_route_errors,
                 COALESCE(SUM(CASE WHEN route_kind = 'deterministic' THEN 1 ELSE 0 END), 0) AS deterministic_routes,
                 COALESCE(SUM(CASE WHEN route_kind = 'learned_rule' THEN 1 ELSE 0 END), 0) AS learned_rule_routes,
-                COALESCE(SUM(CASE WHEN route_kind IN ('spark', 'spark_script') THEN 1 ELSE 0 END), 0) AS spark_routes,
-                COALESCE(SUM(CASE WHEN route_kind = 'spark_script' THEN 1 ELSE 0 END), 0) AS spark_script_fallbacks,
+                COALESCE(SUM(CASE WHEN route_kind IN ('spark', 'spark_script', 'model_router', 'model_router_script') THEN 1 ELSE 0 END), 0) AS spark_routes,
+                COALESCE(SUM(CASE WHEN route_kind IN ('spark_script', 'model_router_script') THEN 1 ELSE 0 END), 0) AS spark_script_fallbacks,
                 COALESCE(SUM(CASE WHEN fanout_call_count > 1 THEN 1 ELSE 0 END), 0) AS fanout_routes,
                 COALESCE(SUM(fanout_call_count), 0) AS total_fanout_calls,
                 COALESCE(SUM(visible_router_schema_tokens), 0) AS visible_router_schema_tokens,
@@ -444,6 +635,13 @@ mod tests {
                 thread_id: "thread".to_string(),
                 turn_id: "turn".to_string(),
                 call_id: "call".to_string(),
+                model_slug: "gpt-test".to_string(),
+                model_provider: "openai".to_string(),
+                toolset_hash: "abc123".to_string(),
+                router_schema_version: 1,
+                guidance_version: 1,
+                guidance_tokens: 9,
+                format_description_tokens: 20,
                 route_kind: "deterministic".to_string(),
                 selected_tools: vec!["exec_command".to_string()],
                 visible_router_schema_tokens: 10,
@@ -463,6 +661,13 @@ mod tests {
             r#"
             SELECT
                 selected_tools_json,
+                model_slug,
+                model_provider,
+                toolset_hash,
+                router_schema_version,
+                guidance_version,
+                guidance_tokens,
+                format_description_tokens,
                 visible_router_schema_tokens,
                 hidden_tool_schema_tokens,
                 spark_prompt_tokens,
@@ -477,12 +682,22 @@ mod tests {
         .expect("ledger row");
 
         assert_eq!(
-            row.try_get::<String, _>("selected_tools_json")
-                .expect("selected tools"),
-            r#"["exec_command"]"#
-        );
-        assert_eq!(
             (
+                row.try_get::<String, _>("selected_tools_json")
+                    .expect("selected tools"),
+                row.try_get::<String, _>("model_slug").expect("model slug"),
+                row.try_get::<String, _>("model_provider")
+                    .expect("model provider"),
+                row.try_get::<String, _>("toolset_hash")
+                    .expect("toolset hash"),
+                row.try_get::<i64, _>("router_schema_version")
+                    .expect("router schema version"),
+                row.try_get::<i64, _>("guidance_version")
+                    .expect("guidance version"),
+                row.try_get::<i64, _>("guidance_tokens")
+                    .expect("guidance tokens"),
+                row.try_get::<i64, _>("format_description_tokens")
+                    .expect("format description tokens"),
                 row.try_get::<i64, _>("visible_router_schema_tokens")
                     .expect("visible schema tokens"),
                 row.try_get::<i64, _>("hidden_tool_schema_tokens")
@@ -492,7 +707,20 @@ mod tests {
                 row.try_get::<i64, _>("spark_completion_tokens")
                     .expect("spark completion tokens"),
             ),
-            (10, 100, 11, 3)
+            (
+                r#"["exec_command"]"#.to_string(),
+                "gpt-test".to_string(),
+                "openai".to_string(),
+                "abc123".to_string(),
+                1,
+                1,
+                9,
+                20,
+                10,
+                100,
+                11,
+                3,
+            )
         );
     }
 
@@ -515,6 +743,10 @@ mod tests {
         assert!(columns.contains("hidden_tool_schema_tokens"));
         assert!(columns.contains("spark_prompt_tokens"));
         assert!(columns.contains("spark_completion_tokens"));
+        assert!(columns.contains("model_slug"));
+        assert!(columns.contains("toolset_hash"));
+        assert!(columns.contains("guidance_tokens"));
+        assert!(columns.contains("format_description_tokens"));
         assert!(!columns.contains("estimated_schema_tokens_saved"));
         assert!(!columns.contains("net_tokens_saved"));
     }
@@ -793,6 +1025,13 @@ mod tests {
             thread_id: "thread".to_string(),
             turn_id: "turn".to_string(),
             call_id: call_id.to_string(),
+            model_slug: "gpt-test".to_string(),
+            model_provider: "openai".to_string(),
+            toolset_hash: "abc123".to_string(),
+            router_schema_version: 1,
+            guidance_version: 1,
+            guidance_tokens: 9,
+            format_description_tokens: 20,
             route_kind: route_kind.to_string(),
             selected_tools: Vec::new(),
             visible_router_schema_tokens: 10,

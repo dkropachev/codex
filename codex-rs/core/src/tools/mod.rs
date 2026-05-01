@@ -10,6 +10,7 @@ pub(crate) mod parallel;
 pub(crate) mod registry;
 pub(crate) mod router;
 pub(crate) mod router_index;
+pub(crate) mod router_prompt;
 pub(crate) mod routing_deterministic;
 pub(crate) mod routing_model_router;
 pub(crate) mod routing_shell;
