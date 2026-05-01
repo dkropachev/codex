@@ -1,7 +1,7 @@
 use crate::function_tool::FunctionCallError;
 use crate::model_router::ModelRouterRouteExclusion;
 use crate::model_router::ModelRouterSource;
-use crate::model_router::apply_model_router_with_exclusions;
+use crate::model_router::apply_model_router_with_state_and_exclusions;
 use crate::model_router::available_router_models;
 use crate::model_router::model_router_failure_scope;
 use crate::session::session::Session;
@@ -31,13 +31,15 @@ pub(super) async fn routed_model_router_decision(
 
     loop {
         let mut routed_config = base_config.clone();
-        let route = apply_model_router_with_exclusions(
+        let route = apply_model_router_with_state_and_exclusions(
             &mut routed_config,
             ModelRouterSource::Module("tool_router.resolve"),
             prompt_text.len(),
             &available_models,
+            session.services.state_db.as_deref(),
             &exclusions,
         )
+        .await
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!(
                 "failed to apply tool_router model router config: {err}"

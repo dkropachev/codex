@@ -144,6 +144,10 @@ enum Subcommand {
     #[clap(name = "tool-router")]
     ToolRouter(ToolRouterCli),
 
+    /// Tune and apply model-router metrics.
+    #[clap(name = "model-router")]
+    ModelRouter(ModelRouterCli),
+
     /// Start Codex as an MCP server (stdio).
     McpServer,
 
@@ -219,6 +223,89 @@ struct PluginCli {
 struct ToolRouterCli {
     #[command(subcommand)]
     subcommand: ToolRouterSubcommand,
+}
+
+#[derive(Debug, Parser)]
+#[command(bin_name = "codex model-router")]
+struct ModelRouterCli {
+    #[command(subcommand)]
+    subcommand: ModelRouterSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ModelRouterSubcommand {
+    /// Replay historical completed turns and tune router metrics.
+    Tune(ModelRouterTuneCommand),
+
+    /// Show or apply a stored model-router tune report.
+    Report(ModelRouterReportCli),
+}
+
+#[derive(Debug, Parser)]
+#[command(bin_name = "codex model-router report")]
+struct ModelRouterReportCli {
+    #[command(subcommand)]
+    subcommand: ModelRouterReportSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ModelRouterReportSubcommand {
+    /// Print a stored report and show deltas from current state.
+    Show(ModelRouterReportShowCommand),
+
+    /// Apply passing recommendations from a stored report.
+    Apply(ModelRouterReportApplyCommand),
+}
+
+#[derive(Debug, Args)]
+struct ModelRouterTuneCommand {
+    /// Historical rollout window to inspect, such as 30d, 24h, 30m, or all.
+    #[arg(long = "window", default_value = "30d")]
+    window: String,
+
+    /// Maximum evaluation cost budget in USD.
+    #[arg(long = "cost-budget-usd", default_value_t = 10.0)]
+    cost_budget_usd: f64,
+
+    /// Maximum replay and judge token budget.
+    #[arg(long = "token-budget", default_value_t = 1_000_000)]
+    token_budget: i64,
+
+    /// Preview recommendations without writing metric overlays.
+    #[arg(long = "dry-run", default_value_t = false)]
+    dry_run: bool,
+
+    /// Write the JSON report to this path.
+    #[arg(long = "report-out", value_name = "PATH")]
+    report_out: Option<PathBuf>,
+
+    /// Emit the report as JSON.
+    #[arg(long = "json", default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct ModelRouterReportShowCommand {
+    /// Stored report path.
+    path: PathBuf,
+
+    /// Emit the report as JSON.
+    #[arg(long = "json", default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct ModelRouterReportApplyCommand {
+    /// Stored report path.
+    path: PathBuf,
+
+    /// Preview applicable recommendations without writing metric overlays.
+    #[arg(long = "dry-run", default_value_t = false)]
+    dry_run: bool,
+
+    /// Emit the apply outcome as JSON.
+    #[arg(long = "json", default_value_t = false)]
+    json: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -1179,6 +1266,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     run_tool_router_tune_command(cmd, root_config_overrides).await?;
                 }
             }
+        }
+        Some(Subcommand::ModelRouter(model_router_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "model-router",
+            )?;
+            run_model_router_command(model_router_cli, root_config_overrides).await?;
         }
         Some(Subcommand::AppServer(app_server_cli)) => {
             let AppServerCommand {
@@ -2482,6 +2577,229 @@ async fn run_tool_router_tune_command(
     Ok(())
 }
 
+async fn run_model_router_command(
+    cli: ModelRouterCli,
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<()> {
+    match cli.subcommand {
+        ModelRouterSubcommand::Tune(cmd) => {
+            run_model_router_tune_command(cmd, root_config_overrides).await
+        }
+        ModelRouterSubcommand::Report(report_cli) => match report_cli.subcommand {
+            ModelRouterReportSubcommand::Show(cmd) => {
+                run_model_router_report_show_command(cmd, root_config_overrides).await
+            }
+            ModelRouterReportSubcommand::Apply(cmd) => {
+                run_model_router_report_apply_command(cmd, root_config_overrides).await
+            }
+        },
+    }
+}
+
+async fn model_router_config_and_state(
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<(Config, std::sync::Arc<StateRuntime>)> {
+    let cli_overrides = root_config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let config = Config::load_with_cli_overrides(cli_overrides).await?;
+    let state_db =
+        StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone()).await?;
+    Ok((config, state_db))
+}
+
+async fn run_model_router_tune_command(
+    cmd: ModelRouterTuneCommand,
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let (config, state_db) = model_router_config_and_state(root_config_overrides).await?;
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true);
+    let models_manager = build_models_manager(
+        &config,
+        auth_manager.clone(),
+        CollaborationModesConfig::default(),
+    );
+    let tune_runtime =
+        codex_core::model_router_tune::ModelRouterTuneRuntime::new(auth_manager, models_manager);
+    let report = codex_core::model_router_tune::tune_model_router(
+        state_db.as_ref(),
+        &config,
+        codex_core::model_router_tune::ModelRouterTuneOptions {
+            window: cmd.window,
+            cost_budget_usd: cmd.cost_budget_usd,
+            token_budget: cmd.token_budget,
+            dry_run: cmd.dry_run,
+        },
+        Some(tune_runtime),
+    )
+    .await?;
+    if let Some(report_out) = cmd.report_out {
+        let json = serde_json::to_string_pretty(&report)?;
+        tokio::fs::write(report_out, format!("{json}\n")).await?;
+    }
+    if cmd.json {
+        serde_json::to_writer_pretty(std::io::stdout(), &report)?;
+        println!();
+    } else {
+        print_model_router_tune_report(&report);
+    }
+    Ok(())
+}
+
+async fn run_model_router_report_show_command(
+    cmd: ModelRouterReportShowCommand,
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let (config, state_db) = model_router_config_and_state(root_config_overrides).await?;
+    let mut report = read_model_router_report(&cmd.path).await?;
+    codex_core::model_router_tune::refresh_model_router_report_deltas(
+        state_db.as_ref(),
+        &config,
+        &mut report,
+    )
+    .await?;
+    if cmd.json {
+        serde_json::to_writer_pretty(std::io::stdout(), &report)?;
+        println!();
+    } else {
+        print_model_router_tune_report(&report);
+    }
+    Ok(())
+}
+
+async fn run_model_router_report_apply_command(
+    cmd: ModelRouterReportApplyCommand,
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let (config, state_db) = model_router_config_and_state(root_config_overrides).await?;
+    let report = read_model_router_report(&cmd.path).await?;
+    let outcome = codex_core::model_router_tune::apply_model_router_tune_report(
+        state_db.as_ref(),
+        &config,
+        report,
+        cmd.dry_run,
+    )
+    .await?;
+    if cmd.json {
+        serde_json::to_writer_pretty(std::io::stdout(), &outcome)?;
+        println!();
+    } else {
+        let mode = if outcome.dry_run { "dry-run" } else { "apply" };
+        println!(
+            "Model router report {mode}: {} recommendation(s)",
+            outcome.applied_recommendations
+        );
+        print_model_router_tune_report(&outcome.report);
+    }
+    Ok(())
+}
+
+async fn read_model_router_report(
+    path: &PathBuf,
+) -> anyhow::Result<codex_core::model_router_tune::ModelRouterTuneReport> {
+    let text = tokio::fs::read_to_string(path).await?;
+    Ok(serde_json::from_str(&text)?)
+}
+
+fn print_model_router_tune_report(report: &codex_core::model_router_tune::ModelRouterTuneReport) {
+    println!("Model router tune report");
+    println!("Run: {}", report.run_id);
+    println!("Generated: {}", report.generated_at);
+    println!("Window: {}", report.window);
+    println!(
+        "Budget: {} tokens, ${:.6} cost; used {} tokens, ${:.6}",
+        report.budget.token_budget,
+        report.budget.cost_budget_usd_micros as f64 / 1_000_000.0,
+        report.budget_used.tokens_used,
+        report.budget_used.cost_used_usd_micros as f64 / 1_000_000.0
+    );
+    println!(
+        "Cases: evaluated {}, skipped {}",
+        report.evaluated_count, report.skipped_count
+    );
+    if !report.apply_eligibility.eligible {
+        println!(
+            "Apply eligibility: refused ({})",
+            report
+                .apply_eligibility
+                .reason
+                .as_deref()
+                .unwrap_or("unknown reason")
+        );
+    }
+    if report.recommendations.is_empty() {
+        println!("No recommendations found.");
+        return;
+    }
+    println!("Recommendations:");
+    for recommendation in &report.recommendations {
+        println!(
+            "- {}: confidence {:.2}, passing {}, eligible {}, applied {}",
+            recommendation.candidate_identity_key,
+            recommendation.confidence,
+            recommendation.passing,
+            recommendation.apply_eligible,
+            recommendation.applied
+        );
+        for change in &recommendation.changes {
+            println!(
+                "  {}: {} {:?} -> {} ({:?}, eligible {})",
+                model_router_metric_name(change.metric),
+                model_router_metric_source(change.current_source),
+                change.current_value,
+                model_router_metric_value(change.proposed_value),
+                change.action,
+                change.apply_eligible
+            );
+        }
+    }
+}
+
+fn model_router_metric_name(
+    metric: codex_core::model_router_tune::ModelRouterMetricName,
+) -> &'static str {
+    match metric {
+        codex_core::model_router_tune::ModelRouterMetricName::IntelligenceScore => {
+            "intelligence_score"
+        }
+        codex_core::model_router_tune::ModelRouterMetricName::SuccessRate => "success_rate",
+        codex_core::model_router_tune::ModelRouterMetricName::MedianLatencyMs => {
+            "median_latency_ms"
+        }
+        codex_core::model_router_tune::ModelRouterMetricName::EstimatedCostUsdMicros => {
+            "estimated_cost_usd_micros"
+        }
+    }
+}
+
+fn model_router_metric_source(
+    source: codex_core::model_router_tune::ModelRouterMetricSource,
+) -> &'static str {
+    match source {
+        codex_core::model_router_tune::ModelRouterMetricSource::ExplicitToml => "explicit",
+        codex_core::model_router_tune::ModelRouterMetricSource::AppliedOverlay => "overlay",
+        codex_core::model_router_tune::ModelRouterMetricSource::Missing => "missing",
+    }
+}
+
+fn model_router_metric_value(
+    value: Option<codex_core::model_router_tune::ModelRouterMetricValue>,
+) -> String {
+    match value {
+        Some(codex_core::model_router_tune::ModelRouterMetricValue::Score(value)) => {
+            format!("{value:.3}")
+        }
+        Some(codex_core::model_router_tune::ModelRouterMetricValue::Millis(value)) => {
+            format!("{value}ms")
+        }
+        Some(codex_core::model_router_tune::ModelRouterMetricValue::UsdMicros(value)) => {
+            format!("${:.6}", value as f64 / 1_000_000.0)
+        }
+        None => "none".to_string(),
+    }
+}
+
 fn print_tool_router_tune_report(report: &codex_core::tool_router_tune::ToolRouterTuneReport) {
     print!("{}", format_tool_router_tune_report(report));
 }
@@ -3254,6 +3572,107 @@ mod tests {
         assert!(output.contains("fallbacks 2, errors 1"));
         assert!(output.contains("selected tools: exec_command=2"));
         assert!(output.contains("guidance: Prefer exact routes."));
+    }
+
+    #[test]
+    fn model_router_tune_parses_flags_and_defaults_to_apply() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "model-router",
+            "tune",
+            "--window",
+            "24h",
+            "--cost-budget-usd",
+            "7.50",
+            "--token-budget",
+            "12345",
+            "--report-out",
+            "/tmp/model-router-report.json",
+            "--json",
+        ])
+        .expect("parse");
+
+        let Some(Subcommand::ModelRouter(ModelRouterCli {
+            subcommand: ModelRouterSubcommand::Tune(cmd),
+        })) = cli.subcommand
+        else {
+            panic!("expected model-router tune subcommand");
+        };
+
+        assert_eq!(cmd.window, "24h");
+        assert_eq!(cmd.cost_budget_usd, 7.50);
+        assert_eq!(cmd.token_budget, 12345);
+        assert_eq!(
+            cmd.report_out,
+            Some(PathBuf::from("/tmp/model-router-report.json"))
+        );
+        assert!(!cmd.dry_run);
+        assert!(cmd.json);
+    }
+
+    #[test]
+    fn model_router_tune_dry_run_parses() {
+        let cli = MultitoolCli::try_parse_from(["codex", "model-router", "tune", "--dry-run"])
+            .expect("parse");
+
+        let Some(Subcommand::ModelRouter(ModelRouterCli {
+            subcommand: ModelRouterSubcommand::Tune(cmd),
+        })) = cli.subcommand
+        else {
+            panic!("expected model-router tune subcommand");
+        };
+
+        assert_eq!(cmd.window, "30d");
+        assert_eq!(cmd.cost_budget_usd, 10.0);
+        assert_eq!(cmd.token_budget, 1_000_000);
+        assert!(cmd.dry_run);
+    }
+
+    #[test]
+    fn model_router_report_show_and_apply_parse() {
+        let show = MultitoolCli::try_parse_from([
+            "codex",
+            "model-router",
+            "report",
+            "show",
+            "/tmp/report.json",
+            "--json",
+        ])
+        .expect("parse show");
+        let Some(Subcommand::ModelRouter(ModelRouterCli {
+            subcommand:
+                ModelRouterSubcommand::Report(ModelRouterReportCli {
+                    subcommand: ModelRouterReportSubcommand::Show(show),
+                }),
+        })) = show.subcommand
+        else {
+            panic!("expected model-router report show subcommand");
+        };
+        assert_eq!(show.path, PathBuf::from("/tmp/report.json"));
+        assert!(show.json);
+
+        let apply = MultitoolCli::try_parse_from([
+            "codex",
+            "model-router",
+            "report",
+            "apply",
+            "/tmp/report.json",
+            "--dry-run",
+            "--json",
+        ])
+        .expect("parse apply");
+        let Some(Subcommand::ModelRouter(ModelRouterCli {
+            subcommand:
+                ModelRouterSubcommand::Report(ModelRouterReportCli {
+                    subcommand: ModelRouterReportSubcommand::Apply(apply),
+                }),
+        })) = apply.subcommand
+        else {
+            panic!("expected model-router report apply subcommand");
+        };
+        assert_eq!(apply.path, PathBuf::from("/tmp/report.json"));
+        assert!(apply.dry_run);
+        assert!(apply.json);
     }
 
     #[test]

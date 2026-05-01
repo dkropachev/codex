@@ -7,7 +7,7 @@ use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
 use crate::model_router::ModelRouterSource;
-use crate::model_router::apply_model_router;
+use crate::model_router::apply_model_router_with_state;
 use crate::model_router::available_router_models;
 use crate::session::turn_context::TurnEnvironment;
 use codex_protocol::protocol::SessionSource;
@@ -96,12 +96,15 @@ impl ToolHandler for Handler {
             && let SessionSource::SubAgent(source) = spawn_source.clone()
         {
             let available_models = available_router_models(&session.services.models_manager);
-            if let Err(err) = apply_model_router(
+            if let Err(err) = apply_model_router_with_state(
                 &mut config,
                 ModelRouterSource::SubAgent(source),
                 prompt.len(),
                 &available_models,
-            ) {
+                session.services.state_db.as_deref(),
+            )
+            .await
+            {
                 tracing::warn!("failed to apply spawn_agent model router: {err}");
             }
         }

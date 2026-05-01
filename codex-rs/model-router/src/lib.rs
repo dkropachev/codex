@@ -195,6 +195,18 @@ pub struct CandidateRoute {
     pub metrics: CandidateMetrics,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRouterCandidateIdentity {
+    pub id: Option<String>,
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub service_tier: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub account_pool: Option<String>,
+    pub account: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 pub struct CandidateSelection {
     pub index: usize,

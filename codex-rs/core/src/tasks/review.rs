@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::config::Constrained;
 use crate::model_router::ModelRouterSource;
-use crate::model_router::apply_model_router;
+use crate::model_router::apply_model_router_with_state;
 use crate::model_router::available_router_models;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
@@ -129,12 +129,16 @@ async fn start_review_conversation(
         .sum::<usize>();
     let models_manager = session.models_manager();
     let available_models = available_router_models(&models_manager);
-    if let Err(err) = apply_model_router(
+    let state_db = session.clone_session().state_db();
+    if let Err(err) = apply_model_router_with_state(
         &mut sub_agent_config,
         ModelRouterSource::SubAgent(SubAgentSource::Review),
         prompt_bytes,
         &available_models,
-    ) {
+        state_db.as_deref(),
+    )
+    .await
+    {
         tracing::warn!("failed to apply review model router: {err}");
     }
     (run_codex_thread_one_shot(

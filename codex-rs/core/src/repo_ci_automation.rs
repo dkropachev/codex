@@ -38,9 +38,12 @@ use tracing::warn;
 use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::context::ContextualUserFragment;
 use crate::context::RepoCiFollowup;
+#[cfg(test)]
 use crate::model_router::AvailableRouterModel;
 use crate::model_router::ModelRouterSource;
+#[cfg(test)]
 use crate::model_router::apply_model_router;
+use crate::model_router::apply_model_router_with_state;
 use crate::model_router::available_router_models;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -1394,7 +1397,7 @@ where
     T: for<'de> Deserialize<'de>,
 {
     let mut sub_agent_config =
-        repo_ci_phase_config(sess, turn_context, model_router_source, prompt.len());
+        repo_ci_phase_config(sess, turn_context, model_router_source, prompt.len()).await;
     if let Err(err) = sub_agent_config
         .web_search_mode
         .set(WebSearchMode::Disabled)
@@ -1464,7 +1467,7 @@ where
     T: for<'de> Deserialize<'de>,
 {
     let mut sub_agent_config =
-        repo_ci_phase_config(sess, turn_context, model_router_source, prompt.len());
+        repo_ci_phase_config(sess, turn_context, model_router_source, prompt.len()).await;
     if let Err(err) = sub_agent_config
         .web_search_mode
         .set(WebSearchMode::Disabled)
@@ -1505,21 +1508,29 @@ where
     parse_json_payload(&text)
 }
 
-fn repo_ci_phase_config(
+async fn repo_ci_phase_config(
     sess: &Arc<Session>,
     turn_context: &TurnContext,
     model_router_source: ModelRouterSource,
     prompt_bytes: usize,
 ) -> crate::config::Config {
     let available_models = available_router_models(&sess.services.models_manager);
-    repo_ci_phase_config_from_base(
-        turn_context.config.as_ref().clone(),
+    let mut config = turn_context.config.as_ref().clone();
+    if let Err(err) = apply_model_router_with_state(
+        &mut config,
         model_router_source,
         prompt_bytes,
         &available_models,
+        sess.services.state_db.as_deref(),
     )
+    .await
+    {
+        warn!("failed to apply repo CI model router: {err}");
+    }
+    config
 }
 
+#[cfg(test)]
 fn repo_ci_phase_config_from_base(
     mut config: crate::config::Config,
     model_router_source: ModelRouterSource,

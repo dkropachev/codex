@@ -64,6 +64,7 @@ mod mcp_openai_file;
 mod mcp_tool_call;
 mod memories;
 mod model_router;
+pub mod model_router_tune;
 pub use memories::clear_memory_roots_contents;
 pub(crate) mod mention_syntax;
 pub(crate) mod message_history;

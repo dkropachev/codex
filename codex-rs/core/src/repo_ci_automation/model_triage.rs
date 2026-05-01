@@ -22,7 +22,7 @@ use crate::model_router::AvailableRouterModel;
 use crate::model_router::ModelRouterAppliedRoute;
 use crate::model_router::ModelRouterRouteExclusion;
 use crate::model_router::ModelRouterSource;
-use crate::model_router::apply_model_router_with_exclusions;
+use crate::model_router::apply_model_router_with_state_and_exclusions;
 use crate::model_router::auth_manager_for_config;
 use crate::model_router::available_router_models;
 use crate::model_router::model_router_failure_scope;
@@ -61,8 +61,10 @@ pub(super) async fn run_model_triage(
             ModelRouterSource::Module("repo_ci.triage"),
             triage_prompt.len(),
             &available_models,
+            sess.services.state_db.as_deref(),
             &exclusions,
-        );
+        )
+        .await;
         if route.is_none() && !exclusions.is_empty() {
             anyhow::bail!("repo CI model router has no eligible failover route");
         }
@@ -96,20 +98,24 @@ pub(super) async fn run_model_triage(
     }
 }
 
-fn repo_ci_phase_route_from_base(
+async fn repo_ci_phase_route_from_base(
     mut config: crate::config::Config,
     model_router_source: ModelRouterSource,
     prompt_bytes: usize,
     available_models: &[AvailableRouterModel],
+    state_db: Option<&codex_state::StateRuntime>,
     exclusions: &[ModelRouterRouteExclusion],
 ) -> (crate::config::Config, Option<ModelRouterAppliedRoute>) {
-    let route = match apply_model_router_with_exclusions(
+    let route = match apply_model_router_with_state_and_exclusions(
         &mut config,
         model_router_source,
         prompt_bytes,
         available_models,
+        state_db,
         exclusions,
-    ) {
+    )
+    .await
+    {
         Ok(route) => route,
         Err(err) => {
             warn!("failed to apply repo CI model router: {err}");
