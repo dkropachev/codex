@@ -29,6 +29,7 @@ pub struct ToolRouterLedgerEntry {
     pub original_output_tokens: i64,
     pub truncated_output_tokens: i64,
     pub outcome: Option<String>,
+    pub request_shape_json: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,9 +131,10 @@ impl StateRuntime {
                 returned_output_tokens,
                 original_output_tokens,
                 truncated_output_tokens,
-                outcome
+                outcome,
+                request_shape_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(now_ms)
@@ -157,6 +159,7 @@ impl StateRuntime {
         .bind(entry.original_output_tokens)
         .bind(entry.truncated_output_tokens)
         .bind(entry.outcome)
+        .bind(entry.request_shape_json)
         .execute(self.pool.as_ref())
         .await?;
         Ok(())
@@ -576,6 +579,7 @@ mod tests {
                 original_output_tokens: 9,
                 truncated_output_tokens: 7,
                 outcome: Some("ok".to_string()),
+                request_shape_json: None,
             })
             .await
             .expect("record ledger entry");
@@ -670,6 +674,7 @@ mod tests {
         assert!(columns.contains("toolset_hash"));
         assert!(columns.contains("guidance_tokens"));
         assert!(columns.contains("format_description_tokens"));
+        assert!(columns.contains("request_shape_json"));
         assert!(!columns.contains("estimated_schema_tokens_saved"));
         assert!(!columns.contains("net_tokens_saved"));
     }
@@ -966,6 +971,7 @@ mod tests {
             original_output_tokens: 7,
             truncated_output_tokens: 7,
             outcome: outcome.map(str::to_string),
+            request_shape_json: None,
         }
     }
 }

@@ -63,6 +63,8 @@ pub use runtime::ToolRouterGuidanceKey;
 pub use runtime::ToolRouterGuidanceRecord;
 pub use runtime::ToolRouterLearnedRule;
 pub use runtime::ToolRouterLedgerEntry;
+pub use runtime::ToolRouterRequestShape;
+pub use runtime::ToolRouterRequestShapeCluster;
 pub use runtime::ToolRouterRulePruneOptions;
 pub use runtime::ToolRouterRulePruneResult;
 pub use runtime::ToolRouterTuneCount;

@@ -417,13 +417,21 @@ impl ToolRouter {
             | ToolPayload::Custom { .. }
             | ToolPayload::LocalShell { .. }
             | ToolPayload::Mcp { .. } => {
-                self.record_tool_router_error(&session, &turn, &call_id, "invalid_payload")
-                    .await;
+                self.record_tool_router_error(
+                    &session,
+                    &turn,
+                    &call_id,
+                    "invalid_payload",
+                    /*request_shape_json*/ None,
+                )
+                .await;
                 return Err(FunctionCallError::RespondToModel(
                     "tool_router expects a function-call JSON payload".to_string(),
                 ));
             }
         };
+        let request_shape_json =
+            routing_tool::sanitized_request_shape_json_from_arguments(&arguments);
         let resolution = match routing_tool::resolve_router_request(
             session.as_ref(),
             turn.as_ref(),
@@ -435,8 +443,14 @@ impl ToolRouter {
         {
             Ok(resolution) => resolution,
             Err(err) => {
-                self.record_tool_router_error(&session, &turn, &call_id, "route_error")
-                    .await;
+                self.record_tool_router_error(
+                    &session,
+                    &turn,
+                    &call_id,
+                    "route_error",
+                    request_shape_json,
+                )
+                .await;
                 return Err(err);
             }
         };
@@ -674,6 +688,7 @@ impl ToolRouter {
                 original_output_tokens: returned_output_tokens,
                 truncated_output_tokens: returned_output_tokens,
                 outcome,
+                request_shape_json: usage.request_shape_json.clone(),
             })
             .await
         {
@@ -747,6 +762,7 @@ impl ToolRouter {
         turn: &TurnContext,
         call_id: &str,
         outcome: &str,
+        request_shape_json: Option<String>,
     ) {
         self.record_tool_router_usage(
             session,
@@ -758,6 +774,7 @@ impl ToolRouter {
                 model_router_prompt_tokens: 0,
                 model_router_completion_tokens: 0,
                 fanout_call_count: 0,
+                request_shape_json,
             },
             0,
             Some(outcome.to_string()),

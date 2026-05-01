@@ -86,6 +86,8 @@ pub use tool_router::ToolRouterLearnedRule;
 pub use tool_router::ToolRouterLedgerEntry;
 pub use tool_router::ToolRouterRulePruneOptions;
 pub use tool_router::ToolRouterRulePruneResult;
+pub use tool_router_tune::ToolRouterRequestShape;
+pub use tool_router_tune::ToolRouterRequestShapeCluster;
 pub use tool_router_tune::ToolRouterTuneCount;
 pub use tool_router_tune::ToolRouterTuneObservation;
 

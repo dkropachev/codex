@@ -33,6 +33,7 @@ use crate::tools::routing_shell::call_for_shell_like;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseInputItem;
+use codex_state::ToolRouterRequestShape;
 use codex_tools::ToolName;
 use serde::Deserialize;
 use serde::Serialize;
@@ -46,6 +47,7 @@ pub(crate) struct ToolRouterUsage {
     pub(crate) model_router_prompt_tokens: i64,
     pub(crate) model_router_completion_tokens: i64,
     pub(crate) fanout_call_count: i64,
+    pub(crate) request_shape_json: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -162,6 +164,7 @@ pub(crate) async fn resolve_router_request(
     let args: RouterArgs = serde_json::from_str(&arguments).map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to parse tool_router arguments: {err}"))
     })?;
+    let request_shape_json = sanitized_request_shape_json(&args);
     let kind = normalize(&args.action.kind);
     let where_kind = normalize(&args.where_.kind);
     let _ = (&args.request, &args.action.description, &args.verbosity);
@@ -289,13 +292,171 @@ pub(crate) async fn resolve_router_request(
         routing_model_router::resolve_with_model_router(session, turn, index, call_id, &args)
             .await?
     {
-        return Ok(resolution);
+        return Ok(resolution_with_request_shape(
+            resolution,
+            request_shape_json,
+        ));
     }
 
     Err(FunctionCallError::RespondToModel(
         "tool_router could not deterministically route this request, and model-router fallback is not available. Provide an exact internal tool name in action.tool or a concrete shell cmd."
             .to_string(),
     ))
+}
+
+pub(crate) fn sanitized_request_shape_json_from_arguments(arguments: &str) -> Option<String> {
+    serde_json::from_str::<RouterArgs>(arguments)
+        .ok()
+        .and_then(|args| sanitized_request_shape_json(&args))
+}
+
+fn sanitized_request_shape_json(args: &RouterArgs) -> Option<String> {
+    serde_json::to_string(&ToolRouterRequestShape {
+        where_kind: sanitize_known_kind(&args.where_.kind, ROUTER_WHERE_KINDS),
+        action_kind: sanitize_known_kind(&args.action.kind, ROUTER_ACTION_KINDS),
+        target_kinds: args
+            .targets
+            .iter()
+            .filter_map(|target| target.kind.as_deref())
+            .map(|kind| sanitize_known_kind(kind, ROUTER_TARGET_KINDS))
+            .filter(|kind| !kind.is_empty())
+            .collect(),
+        payload_fields: router_action_payload_fields(&args.action),
+    })
+    .ok()
+}
+
+const ROUTER_WHERE_KINDS: &[&str] = &[
+    "none",
+    "workspace",
+    "filesystem",
+    "shell",
+    "git",
+    "repo_ci",
+    "process",
+    "mcp",
+    "app",
+    "skill",
+    "web",
+    "image",
+    "agent",
+    "memory",
+    "config",
+];
+
+const ROUTER_TARGET_KINDS: &[&str] = &[
+    "tool",
+    "path",
+    "uri",
+    "agent",
+    "server",
+    "namespace",
+    "query",
+    "text",
+];
+
+const ROUTER_ACTION_KINDS: &[&str] = &[
+    "none",
+    "exec",
+    "exec_wait",
+    "batch",
+    "inspect",
+    "read",
+    "list",
+    "git_snapshot",
+    "repo_ci",
+    "status",
+    "git",
+    "apply_patch",
+    "write_stdin",
+    "mcp",
+    "spawn_agent",
+    "wait_agent",
+    "tool_search",
+    "view_image",
+    "direct_tool",
+    "shell",
+    "process_status",
+    "session_status",
+];
+
+fn sanitize_known_kind(value: &str, known_values: &[&str]) -> String {
+    let sanitized = sanitize_shape_value(value);
+    if known_values.contains(&sanitized.as_str()) {
+        sanitized
+    } else {
+        "other".to_string()
+    }
+}
+
+fn sanitize_shape_value(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .take(64)
+        .filter_map(|ch| match ch {
+            'a'..='z' | '0'..='9' | '_' | '-' | '.' => Some(ch),
+            'A'..='Z' => Some(ch.to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn router_action_payload_fields(action: &RouterAction) -> Vec<String> {
+    let mut fields = Vec::new();
+    macro_rules! push_if_some {
+        ($field:ident) => {
+            if action.$field.is_some() {
+                fields.push(stringify!($field).to_string());
+            }
+        };
+    }
+    push_if_some!(tool);
+    push_if_some!(name);
+    push_if_some!(cmd);
+    push_if_some!(command);
+    push_if_some!(commands);
+    push_if_some!(paths);
+    push_if_some!(patch);
+    push_if_some!(input);
+    push_if_some!(query);
+    push_if_some!(agent_task);
+    push_if_some!(mcp_args);
+    push_if_some!(target);
+    push_if_some!(targets);
+    push_if_some!(session_id);
+    push_if_some!(chars);
+    push_if_some!(workdir);
+    push_if_some!(timeout_ms);
+    push_if_some!(wait_until_exit);
+    push_if_some!(wait_timeout_ms);
+    push_if_some!(yield_time_ms);
+    push_if_some!(max_output_tokens);
+    push_if_some!(sandbox_permissions);
+    push_if_some!(justification);
+    push_if_some!(prefix_rule);
+    push_if_some!(detail);
+    push_if_some!(path);
+    push_if_some!(dir_path);
+    push_if_some!(offset);
+    push_if_some!(limit);
+    push_if_some!(depth);
+    fields
+}
+
+fn resolution_with_request_shape(
+    mut resolution: RouterResolution,
+    request_shape_json: Option<String>,
+) -> RouterResolution {
+    match &mut resolution {
+        RouterResolution::SingleTool { usage, .. }
+        | RouterResolution::FanOut { usage, .. }
+        | RouterResolution::ModelRouterScript { usage, .. } => {
+            usage.request_shape_json = request_shape_json;
+        }
+        RouterResolution::Noop { .. } | RouterResolution::InlineOutput { .. } => {}
+    }
+    resolution
 }
 
 fn is_process_status_kind(where_kind: &str, kind: &str) -> bool {
@@ -351,6 +512,7 @@ fn usage(route_kind: &str, selected_tools: Vec<String>, fanout_call_count: i64) 
         model_router_prompt_tokens: 0,
         model_router_completion_tokens: 0,
         fanout_call_count,
+        request_shape_json: None,
     }
 }
 
@@ -377,6 +539,7 @@ pub(super) fn route_resolution(
             model_router_prompt_tokens,
             model_router_completion_tokens,
             fanout_call_count: 1,
+            request_shape_json: None,
         },
     }
 }
@@ -395,6 +558,7 @@ pub(super) fn model_router_script_resolution(
             model_router_prompt_tokens,
             model_router_completion_tokens,
             fanout_call_count: 1,
+            request_shape_json: None,
         },
     }
 }
@@ -424,6 +588,7 @@ pub(super) fn model_router_fanout_resolution(
             model_router_prompt_tokens,
             model_router_completion_tokens,
             fanout_call_count: i64::try_from(calls.len()).unwrap_or(i64::MAX),
+            request_shape_json: None,
         },
         calls,
     }
@@ -461,5 +626,33 @@ mod tests {
 
         assert_eq!(args.action.description, "");
         assert!(matches!(args.verbosity, RouterVerbosity::Auto));
+    }
+
+    #[test]
+    fn sanitized_request_shape_omits_request_text_and_payload_values() {
+        let arguments = json!({
+            "request": "read the secret token from /tmp/private.txt",
+            "where": {"kind": "Shell"},
+            "targets": [{"kind": "path", "path": "/tmp/private.txt"}],
+            "action": {"kind": "exec", "cmd": "cat /tmp/private.txt", "workdir": "/tmp"}
+        })
+        .to_string();
+
+        let shape_json =
+            sanitized_request_shape_json_from_arguments(&arguments).expect("shape json");
+        let shape: ToolRouterRequestShape = serde_json::from_str(&shape_json).expect("shape");
+
+        assert_eq!(
+            shape,
+            ToolRouterRequestShape {
+                where_kind: "shell".to_string(),
+                action_kind: "exec".to_string(),
+                target_kinds: vec!["path".to_string()],
+                payload_fields: vec!["cmd".to_string(), "workdir".to_string()],
+            }
+        );
+        assert!(!shape_json.contains("secret"));
+        assert!(!shape_json.contains("private"));
+        assert!(!shape_json.contains("cat"));
     }
 }

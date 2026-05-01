@@ -39,6 +39,7 @@ use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::sync::Arc;
 use supports_color::Stream;
 
 mod account_usage;
@@ -2436,6 +2437,28 @@ async fn run_tool_router_tune_command(
     };
     let state_db =
         StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone()).await?;
+    let introspection_provider = if cmd.introspection_model.is_some() {
+        let auth_manager =
+            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true);
+        let models_manager = build_models_manager(
+            &config,
+            Arc::clone(&auth_manager),
+            CollaborationModesConfig::default(),
+        );
+        Some(Arc::new(
+            codex_core::tool_router_tune::ToolRouterModelIntrospectionProvider::new(
+                config.clone(),
+                auth_manager,
+                models_manager,
+            )
+            .await?,
+        )
+            as Arc<
+                dyn codex_core::tool_router_tune::ToolRouterIntrospectionProvider,
+            >)
+    } else {
+        None
+    };
     let report = codex_core::tool_router_tune::tune_tool_router(
         state_db.as_ref(),
         codex_core::tool_router_tune::ToolRouterTuneOptions {
@@ -2443,6 +2466,7 @@ async fn run_tool_router_tune_command(
             model_slug,
             max_guidance_tokens: cmd.max_guidance_tokens,
             introspection_model: cmd.introspection_model,
+            introspection_provider,
             apply: cmd.apply,
         },
     )
@@ -2459,29 +2483,41 @@ async fn run_tool_router_tune_command(
 }
 
 fn print_tool_router_tune_report(report: &codex_core::tool_router_tune::ToolRouterTuneReport) {
+    print!("{}", format_tool_router_tune_report(report));
+}
+
+fn format_tool_router_tune_report(
+    report: &codex_core::tool_router_tune::ToolRouterTuneReport,
+) -> String {
     let mode = if report.apply { "apply" } else { "dry-run" };
-    println!("Tool router tune ({mode})");
-    println!("Window: {}", report.window);
-    println!(
-        "Introspection tokens: prompt {}, completion {}, total {}",
-        report.introspection_tokens.prompt_tokens,
-        report.introspection_tokens.completion_tokens,
-        report.introspection_tokens.total_tokens
-    );
-    println!(
+    let mut output = String::new();
+    output.push_str(&format!("Tool router tune ({mode})\n"));
+    output.push_str(&format!("Window: {}\n", report.window));
+    if let Some(model) = &report.introspection_model {
+        output.push_str(&format!(
+            "Introspection: {model} (prompt {}, completion {}, total {})\n",
+            report.introspection_tokens.prompt_tokens,
+            report.introspection_tokens.completion_tokens,
+            report.introspection_tokens.total_tokens
+        ));
+    } else {
+        output.push_str("Introspection: disabled\n");
+    }
+    output.push_str(&format!(
         "Schema/format tokens: visible router {}, hidden tools {}, format {}",
         report.schema_format_tokens.visible_router_schema_tokens,
         report.schema_format_tokens.hidden_tool_schema_tokens,
         report.schema_format_tokens.format_description_tokens
-    );
+    ));
+    output.push('\n');
     if report.optimizations.is_empty() {
-        println!("No optimizations found.");
-        return;
+        output.push_str("No optimizations found.\n");
+        return output;
     }
-    println!("Optimizations:");
+    output.push_str("Optimizations:\n");
     for optimization in &report.optimizations {
-        println!(
-            "- {} [{}]: model {} provider {} toolset {} calls {}, fallback {}, invalid {}, guidance {} -> {}, gross {}, guidance-cost {}, net {}, persisted {}",
+        output.push_str(&format!(
+            "- {} [{}]: model {} via {}, toolset {}, calls {} (fallbacks {}, errors {}), guidance {} -> {}, gross {}, guidance-cost {}, net {}, persisted {}\n",
             tool_router_optimization_name(optimization.optimization_type),
             tool_router_test_status_name(optimization.test_status),
             optimization.model_slug,
@@ -2496,37 +2532,43 @@ fn print_tool_router_tune_report(report: &codex_core::tool_router_tune::ToolRout
             optimization.guidance_delta_cost_tokens,
             optimization.net_savings_tokens,
             optimization.persisted
-        );
-        if !optimization.route_kind_breakdown.is_empty() {
-            println!(
-                "  routes: {}",
-                tool_router_count_breakdown(&optimization.route_kind_breakdown, 5)
-            );
-        }
-        if !optimization.fallback_tool_breakdown.is_empty() {
-            println!(
-                "  fallback tools: {}",
-                tool_router_count_breakdown(&optimization.fallback_tool_breakdown, 5)
-            );
-        }
-        if !optimization.outcome_breakdown.is_empty() {
-            println!(
-                "  outcomes: {}",
-                tool_router_count_breakdown(&optimization.outcome_breakdown, 5)
-            );
-        }
-        println!("  note: {}", optimization.message);
+        ));
+        output.push_str(&format!(
+            "  route kinds: {}\n",
+            format_tool_router_counts(&optimization.route_kind_breakdown)
+        ));
+        output.push_str(&format!(
+            "  selected tools: {}\n",
+            format_tool_router_counts(&optimization.selected_tool_breakdown)
+        ));
+        output.push_str(&format!(
+            "  fallback tools: {}\n",
+            format_tool_router_counts(&optimization.fallback_tool_breakdown)
+        ));
+        output.push_str(&format!(
+            "  outcomes: {}\n",
+            format_tool_router_counts(&optimization.outcome_breakdown)
+        ));
+        output.push_str(&format!(
+            "  learned rule hits: {}\n",
+            optimization.learned_rule_hits
+        ));
+        output.push_str(&format!(
+            "  error outcomes: {}\n",
+            format_tool_router_counts(&optimization.error_outcome_breakdown)
+        ));
+        output.push_str(&format!("  guidance: {}\n", optimization.message));
     }
+    output
 }
 
-fn tool_router_count_breakdown(
-    entries: &[codex_state::ToolRouterTuneCount],
-    limit: usize,
-) -> String {
-    entries
+fn format_tool_router_counts(counts: &[codex_state::ToolRouterTuneCount]) -> String {
+    if counts.is_empty() {
+        return "none".to_string();
+    }
+    counts
         .iter()
-        .take(limit)
-        .map(|entry| format!("{}={}", entry.name, entry.count))
+        .map(|count| format!("{}={}", count.name, count.count))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -3139,6 +3181,79 @@ mod tests {
         .expect_err("conflicting model selection flags should be rejected");
 
         assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn tool_router_tune_text_report_includes_diagnostics() {
+        use codex_core::tool_router_tune::ToolRouterOptimizationReport;
+        use codex_core::tool_router_tune::ToolRouterOptimizationTestStatus;
+        use codex_core::tool_router_tune::ToolRouterOptimizationType;
+        use codex_core::tool_router_tune::ToolRouterSchemaFormatTokens;
+        use codex_core::tool_router_tune::ToolRouterTuneReport;
+        use codex_core::tool_router_tune::ToolRouterTuneTokenUsage;
+
+        let report = ToolRouterTuneReport {
+            window: "24h".to_string(),
+            apply: false,
+            introspection_model: None,
+            introspection_tokens: ToolRouterTuneTokenUsage::default(),
+            schema_format_tokens: ToolRouterSchemaFormatTokens {
+                visible_router_schema_tokens: 10,
+                hidden_tool_schema_tokens: 20,
+                format_description_tokens: 30,
+            },
+            optimizations: vec![ToolRouterOptimizationReport {
+                optimization_type: ToolRouterOptimizationType::DynamicGuidance,
+                model_slug: "gpt-test".to_string(),
+                model_provider: "openai".to_string(),
+                toolset_hash: "abc123".to_string(),
+                router_schema_version: 1,
+                guidance_version: 2,
+                guidance_tokens_before: 5,
+                guidance_tokens_after: 8,
+                fallback_call_count: 2,
+                invalid_route_errors: 1,
+                affected_call_count: 3,
+                route_kind_breakdown: vec![codex_state::ToolRouterTuneCount {
+                    name: "model_router".to_string(),
+                    count: 2,
+                }],
+                selected_tool_breakdown: vec![codex_state::ToolRouterTuneCount {
+                    name: "exec_command".to_string(),
+                    count: 2,
+                }],
+                fallback_tool_breakdown: vec![codex_state::ToolRouterTuneCount {
+                    name: "exec_command".to_string(),
+                    count: 2,
+                }],
+                outcome_breakdown: vec![codex_state::ToolRouterTuneCount {
+                    name: "route_error".to_string(),
+                    count: 1,
+                }],
+                error_outcome_breakdown: vec![codex_state::ToolRouterTuneCount {
+                    name: "route_error".to_string(),
+                    count: 1,
+                }],
+                learned_rule_hits: 0,
+                request_shape_clusters: Vec::new(),
+                per_call_estimated_savings_tokens: 12,
+                gross_savings_tokens: 24,
+                guidance_delta_cost_tokens: 9,
+                allocated_introspection_tokens: 0,
+                net_savings_tokens: 15,
+                test_status: ToolRouterOptimizationTestStatus::Passing,
+                persisted: false,
+                message: "Prefer exact routes.".to_string(),
+            }],
+        };
+
+        let output = format_tool_router_tune_report(&report);
+
+        assert!(output.contains("Introspection: disabled"));
+        assert!(output.contains("model gpt-test via openai, toolset abc123"));
+        assert!(output.contains("fallbacks 2, errors 1"));
+        assert!(output.contains("selected tools: exec_command=2"));
+        assert!(output.contains("guidance: Prefer exact routes."));
     }
 
     #[test]

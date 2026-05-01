@@ -579,14 +579,14 @@ fn key_part(value: &str) -> String {
 }
 
 fn model_router_instructions() -> String {
-    "You are Codex's internal tool router fallback. Return only JSON matching the provided schema. Prefer an existing tool route. Return script only when no existing tool can satisfy the request. Never choose tool_router. Put tool arguments in arguments_json as a JSON string, such as \"{\\\"cmd\\\":\\\"git status --short\\\"}\". Use \"{}\" when the selected tool does not need arguments. Set unused nullable fields to null.".to_string()
+    "You are Codex's internal tool router fallback. Return only JSON matching the provided schema. Prefer an existing tool route using the catalog descriptions and argument hints. Return script only when no existing tool route can satisfy the request. Never choose tool_router. Set persist_rule true only for stable reusable exact-tool or fanout routes; never persist scripts, generated shell commands, request-specific paths, URIs, IDs, patches, or one-off queries. Put tool arguments in arguments_json as a JSON string, such as \"{\\\"cmd\\\":\\\"git status --short\\\"}\". Use \"{}\" when the selected tool does not need arguments. Set unused nullable fields to null.".to_string()
 }
 
 fn model_router_user_prompt(args: &RouterArgs, index: &ToolRouterIndex) -> String {
     let request_json = serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string());
     let catalog = index.prompt_catalog().join("\n");
     format!(
-        "Route this tool_router request.\n\nAvailable tools:\n{catalog}\n\nRequest JSON:\n{request_json}"
+        "Route this tool_router request. Use the catalog descriptions and args hints to choose the smallest existing tool route before considering a script.\n\nAvailable tools:\n{catalog}\n\nRequest JSON:\n{request_json}"
     )
 }
 
@@ -823,6 +823,33 @@ mod tests {
         }
 
         assert_strict_objects(&model_router_output_schema());
+    }
+
+    #[test]
+    fn model_router_prompt_includes_persist_and_script_rules() {
+        let instructions = model_router_instructions();
+
+        assert!(instructions.contains("Return script only when no existing tool route"));
+        assert!(instructions.contains("Set persist_rule true only for stable reusable"));
+        assert!(instructions.contains("never persist scripts"));
+    }
+
+    #[test]
+    fn model_router_user_prompt_points_to_catalog_hints() {
+        let index = index_with_handler("exec_command");
+        let args = router_args_from_value(json!({
+            "request": "status",
+            "where": {"kind": "shell"},
+            "targets": [],
+            "action": {"kind": "exec", "cmd": "git status --short"},
+            "verbosity": "auto"
+        }))
+        .expect("args");
+
+        let prompt = model_router_user_prompt(&args, &index);
+
+        assert!(prompt.contains("args hints"));
+        assert!(prompt.contains("- `exec_command`"));
     }
 
     #[test]
