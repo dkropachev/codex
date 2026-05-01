@@ -1,12 +1,11 @@
+mod failover;
+
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
 use crate::function_tool::FunctionCallError;
-use crate::model_router::ModelRouterSource;
-use crate::model_router::apply_model_router;
 use crate::model_router::auth_manager_for_config;
-use crate::model_router::available_router_models;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::router::ToolCall;
@@ -162,22 +161,8 @@ pub(super) async fn resolve_with_model_router(
     }
 
     let prompt_text = model_router_user_prompt(args, index);
-    let available_models = available_router_models(&session.services.models_manager);
-    let mut routed_config = turn.config.as_ref().clone();
-    apply_model_router(
-        &mut routed_config,
-        ModelRouterSource::Module("tool_router.resolve"),
-        prompt_text.len(),
-        &available_models,
-    )
-    .map_err(|err| {
-        FunctionCallError::RespondToModel(format!(
-            "failed to apply tool_router model router config: {err}"
-        ))
-    })?;
-
     let (decision, usage) =
-        model_router_decision(session, turn, prompt_text, &routed_config).await?;
+        failover::routed_model_router_decision(session, turn, prompt_text).await?;
     let persist_route = match &decision {
         ModelRouterDecision::Route {
             tool,
@@ -259,7 +244,7 @@ async fn model_router_decision(
     turn: &TurnContext,
     prompt_text: String,
     config: &Config,
-) -> Result<(ModelRouterDecision, ModelRouterRouteUsage), FunctionCallError> {
+) -> Result<(ModelRouterDecision, ModelRouterRouteUsage), failover::ModelRouterDecisionError> {
     let model = config
         .model
         .clone()
@@ -316,20 +301,18 @@ async fn model_router_decision(
             &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "tool_router model-router fallback failed: {err}"
-            ))
+        .map_err(|err| failover::ModelRouterDecisionError::Codex {
+            context: "tool_router model-router fallback failed",
+            err,
         })?;
 
     let mut output_text = String::new();
     let mut delta_text = String::new();
     let mut usage = ModelRouterRouteUsage::default();
     while let Some(event) = stream.next().await {
-        match event.map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "tool_router model-router fallback stream failed: {err}"
-            ))
+        match event.map_err(|err| failover::ModelRouterDecisionError::Codex {
+            context: "tool_router model-router fallback stream failed",
+            err,
         })? {
             ResponseEvent::OutputItemDone(ResponseItem::Message { content, .. }) => {
                 output_text = message_text(&content);
@@ -359,7 +342,8 @@ async fn model_router_decision(
     if output_text.trim().is_empty() {
         output_text = delta_text;
     }
-    let decision = parse_model_router_decision(&output_text)?;
+    let decision = parse_model_router_decision(&output_text)
+        .map_err(failover::ModelRouterDecisionError::Function)?;
     Ok((decision, usage))
 }
 

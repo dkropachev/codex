@@ -6,12 +6,13 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 
+mod model_triage;
+
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::config_toml::RepoCiAutomationToml;
 use codex_config::config_toml::RepoCiScopeToml;
 use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
@@ -25,8 +26,6 @@ use codex_protocol::protocol::RepoCiStatusEvent;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
-use codex_rollout_trace::InferenceTraceContext;
-use futures::StreamExt;
 use futures::future::join_all;
 use serde::Deserialize;
 use serde::Serialize;
@@ -36,15 +35,12 @@ use sha2::Sha256;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::Prompt;
-use crate::ResponseEvent;
 use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::context::ContextualUserFragment;
 use crate::context::RepoCiFollowup;
 use crate::model_router::AvailableRouterModel;
 use crate::model_router::ModelRouterSource;
 use crate::model_router::apply_model_router;
-use crate::model_router::auth_manager_for_config;
 use crate::model_router::available_router_models;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -2249,7 +2245,7 @@ async fn triage_failure(
     )
     .await;
 
-    match run_model_triage(sess, turn_context, &input).await {
+    match model_triage::run_model_triage(sess, turn_context, &input).await {
         Ok(mut triage) => {
             if triage.classification == FailureClassification::WholeSuite
                 || input.deterministic_classification == FailureClassification::WholeSuite
@@ -2293,97 +2289,6 @@ async fn triage_failure(
         FailureClassification::Unknown => "no model triage result was available",
     };
     TriageResult::deterministic(input.deterministic_classification, summary)
-}
-
-async fn run_model_triage(
-    sess: &Arc<Session>,
-    turn_context: &TurnContext,
-    input: &TriageInput<'_>,
-) -> Result<TriageResult> {
-    let triage_prompt = triage_prompt_text(input);
-    let policy_config = repo_ci_phase_config(
-        sess,
-        turn_context,
-        ModelRouterSource::Module("repo_ci.triage"),
-        triage_prompt.len(),
-    );
-    let model = policy_config
-        .model
-        .clone()
-        .unwrap_or_else(|| turn_context.model_info.slug.clone());
-    let model_info = if policy_config.model.as_deref()
-        != Some(turn_context.model_info.slug.as_str())
-        || policy_config.model_provider_id != turn_context.config.model_provider_id
-    {
-        sess.services
-            .models_manager
-            .get_model_info(&model, &policy_config.to_models_manager_config())
-            .await
-    } else {
-        turn_context.model_info.clone()
-    };
-    let effort = policy_config
-        .model_reasoning_effort
-        .or(turn_context.reasoning_effort)
-        .or(model_info.default_reasoning_level);
-
-    let routed_auth_manager = auth_manager_for_config(&policy_config, &sess.services.auth_manager);
-    let routed_model_client = sess.services.model_client.with_provider_info(
-        policy_config.model_provider.clone(),
-        Some(routed_auth_manager),
-    );
-    let mut client_session = routed_model_client.new_session();
-    let prompt = Prompt {
-        input: vec![ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: triage_prompt,
-            }],
-            phase: None,
-        }],
-        base_instructions: BaseInstructions {
-            text: TRIAGE_BASE_INSTRUCTIONS.to_string(),
-        },
-        output_schema: Some(triage_output_schema()),
-        output_schema_strict: true,
-        ..Default::default()
-    };
-    let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
-    let mut stream = client_session
-        .stream(
-            &prompt,
-            &model_info,
-            &turn_context.session_telemetry,
-            effort,
-            turn_context.reasoning_summary,
-            policy_config.service_tier,
-            turn_metadata_header.as_deref(),
-            &InferenceTraceContext::disabled(),
-        )
-        .await?;
-    let mut output = String::new();
-    while let Some(event) = stream.next().await {
-        match event? {
-            ResponseEvent::OutputTextDelta(delta) => output.push_str(&delta),
-            ResponseEvent::OutputItemDone(item) => append_response_item_text(&mut output, &item),
-            ResponseEvent::Completed { .. } => break,
-            ResponseEvent::Created
-            | ResponseEvent::OutputItemAdded(_)
-            | ResponseEvent::ServerModel(_)
-            | ResponseEvent::ModelVerifications(_)
-            | ResponseEvent::ServerReasoningIncluded(_)
-            | ResponseEvent::ToolCallInputDelta { .. }
-            | ResponseEvent::ReasoningSummaryDelta { .. }
-            | ResponseEvent::ReasoningContentDelta { .. }
-            | ResponseEvent::ReasoningSummaryPartAdded { .. }
-            | ResponseEvent::RateLimits(_)
-            | ResponseEvent::ModelsEtag(_) => {}
-        }
-    }
-    let mut triage = parse_triage_result(&output)?;
-    triage.model_used = Some(model_info.slug);
-    Ok(triage)
 }
 
 fn triage_prompt_text(input: &TriageInput<'_>) -> String {

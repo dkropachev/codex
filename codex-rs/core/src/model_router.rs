@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 mod auto_candidates;
+mod failover;
 
 use codex_config::config_toml::AccountPoolDefinitionToml;
 use codex_config::config_toml::AccountPoolPolicyToml;
@@ -21,6 +22,13 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SubAgentSource;
 
 use crate::config::Config;
+
+pub(crate) use failover::ModelRouterAppliedRoute;
+pub(crate) use failover::ModelRouterFailureScope;
+pub(crate) use failover::ModelRouterRouteExclusion;
+pub(crate) use failover::ModelRouterRouteKey;
+pub(crate) use failover::model_router_failure_scope;
+use failover::selectable_routes;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ModelRouterSource {
@@ -55,11 +63,22 @@ pub(crate) fn apply_model_router(
     prompt_bytes: usize,
     available_models: &[AvailableRouterModel],
 ) -> Result<(), String> {
+    apply_model_router_with_exclusions(config, source, prompt_bytes, available_models, &[])?;
+    Ok(())
+}
+
+pub(crate) fn apply_model_router_with_exclusions(
+    config: &mut Config,
+    source: ModelRouterSource,
+    prompt_bytes: usize,
+    available_models: &[AvailableRouterModel],
+    exclusions: &[ModelRouterRouteExclusion],
+) -> Result<Option<ModelRouterAppliedRoute>, String> {
     let Some(model_router) = config.model_router.as_ref() else {
-        return Ok(());
+        return Ok(None);
     };
     if !model_router.enabled {
-        return Ok(());
+        return Ok(None);
     }
 
     let task_key = source.task_key();
@@ -71,29 +90,45 @@ pub(crate) fn apply_model_router(
         "evaluating model router"
     );
 
-    let Some(selection) = select_candidate(&task_key, prompt_bytes, &candidate_set.routes) else {
-        return Ok(());
+    let selectable_routes = selectable_routes(config, &candidate_set, exclusions);
+    let filtered_routes = selectable_routes
+        .iter()
+        .map(|route| route.route.clone())
+        .collect::<Vec<_>>();
+    let Some(selection) = select_candidate(&task_key, prompt_bytes, &filtered_routes) else {
+        return Ok(None);
     };
+    let selected_route = selectable_routes.get(selection.index).ok_or_else(|| {
+        format!(
+            "model_router selected missing filtered route index {}",
+            selection.index
+        )
+    })?;
+    let selected_index = selected_route.index;
     tracing::debug!(
         task_key = task_key,
-        selected_index = selection.index,
+        selected_index,
         score = selection.score,
         task_class = ?selection.task_class,
         "selected model router candidate"
     );
-    if selection.index == 0 {
-        return Ok(());
+    let applied_route = ModelRouterAppliedRoute {
+        task_key,
+        route: selected_route.key.clone(),
+    };
+    if selected_index == 0 {
+        return Ok(Some(applied_route));
     }
-    let Some(candidate) = candidate_set.candidates.get(selection.index - 1) else {
+    let Some(candidate) = candidate_set.candidates.get(selected_index - 1) else {
         return Err(format!(
             "model_router selected missing candidate index {}",
-            selection.index
+            selected_index
         ));
     };
     let mut router_config = config.clone();
     apply_candidate(&mut router_config, candidate)?;
     *config = router_config;
-    Ok(())
+    Ok(Some(applied_route))
 }
 
 pub(crate) fn auth_manager_for_config(
