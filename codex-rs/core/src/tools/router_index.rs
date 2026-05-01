@@ -129,35 +129,6 @@ impl ToolRouterIndex {
         }
     }
 
-    pub(crate) fn prompt_catalog(&self) -> Vec<String> {
-        self.entries
-            .iter()
-            .filter(|entry| entry.has_handler && entry.name.name != TOOL_ROUTER_TOOL_NAME)
-            .map(|entry| {
-                let fanout = if entry.fanout_safe {
-                    " fanout_safe"
-                } else {
-                    ""
-                };
-                let description = if entry.description.is_empty() {
-                    "no description".to_string()
-                } else {
-                    compact_description(entry.description.as_str())
-                };
-                let arguments = if entry.argument_hints.is_empty() {
-                    String::new()
-                } else {
-                    format!(" args: {}", entry.argument_hints.join(", "))
-                };
-                format!(
-                    "- `{}` ({:?}{fanout}): {description}{arguments}",
-                    entry.name.display(),
-                    entry.source
-                )
-            })
-            .collect()
-    }
-
     pub(crate) fn learned_rule_tool_names(&self) -> BTreeSet<String> {
         self.entries
             .iter()
@@ -238,16 +209,6 @@ fn argument_hints(schema: &JsonSchema) -> Vec<String> {
     properties.keys().take(8).cloned().collect()
 }
 
-fn compact_description(description: &str) -> String {
-    let first_line = description.lines().next().unwrap_or_default().trim();
-    if first_line.len() <= 160 {
-        first_line.to_string()
-    } else {
-        let truncated = first_line.chars().take(160).collect::<String>();
-        format!("{}...", truncated.trim_end())
-    }
-}
-
 fn matches_candidate(tool_name: &ToolName, candidate: &str, namespace: Option<&str>) -> bool {
     if let Some(namespace) = namespace {
         return tool_name.namespace.as_deref() == Some(namespace)
@@ -290,7 +251,6 @@ fn mcp_server_from_namespace(namespace: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     use crate::tools::context::FunctionToolOutput;
@@ -358,39 +318,6 @@ mod tests {
                 .expect_err("ambiguous bare name")
                 .to_string()
                 .contains("ambiguous")
-        );
-    }
-
-    #[test]
-    fn prompt_catalog_includes_descriptions_and_argument_hints() {
-        let tool_name = ToolName::plain("exec_command");
-        let spec = ToolSpec::Function(ResponsesApiTool {
-            name: "exec_command".to_string(),
-            description: "Run a command in the workspace.".to_string(),
-            strict: false,
-            defer_loading: None,
-            parameters: JsonSchema::object(
-                BTreeMap::from([
-                    ("cmd".to_string(), JsonSchema::string(None)),
-                    ("workdir".to_string(), JsonSchema::string(None)),
-                ]),
-                None,
-                Some(false.into()),
-            ),
-            output_schema: None,
-        });
-        let index = ToolRouterIndex::build(
-            &[ConfiguredToolSpec::new(spec, false)],
-            &ToolRegistry::with_handler_for_test(tool_name, Arc::new(TestHandler)),
-            &HashSet::new(),
-        );
-
-        assert_eq!(
-            index.prompt_catalog(),
-            vec![
-                "- `exec_command` (Spec): Run a command in the workspace. args: cmd, workdir"
-                    .to_string()
-            ]
         );
     }
 

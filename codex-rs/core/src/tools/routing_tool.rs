@@ -1,6 +1,5 @@
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
 use crate::tools::router::ToolCall;
 use crate::tools::router_index::ToolRouterIndex;
 use crate::tools::routing_deterministic::agent_tool_name;
@@ -28,7 +27,7 @@ use crate::tools::routing_deterministic::is_write_stdin_kind;
 use crate::tools::routing_deterministic::mcp_tool_name;
 use crate::tools::routing_deterministic::normalize;
 use crate::tools::routing_deterministic::repo_ci_tool_name;
-use crate::tools::routing_model_router;
+use crate::tools::routing_learned_rules;
 use crate::tools::routing_shell::call_for_shell_like;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -67,10 +66,6 @@ pub(crate) enum RouterResolution {
     InlineOutput {
         message: String,
         success: bool,
-        usage: ToolRouterUsage,
-    },
-    ModelRouterScript {
-        call: Box<ToolCall>,
         usage: ToolRouterUsage,
     },
 }
@@ -156,7 +151,6 @@ pub(super) enum RouterVerbosity {
 
 pub(crate) async fn resolve_router_request(
     session: &Session,
-    turn: &TurnContext,
     index: &ToolRouterIndex,
     call_id: String,
     arguments: String,
@@ -164,7 +158,6 @@ pub(crate) async fn resolve_router_request(
     let args: RouterArgs = serde_json::from_str(&arguments).map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to parse tool_router arguments: {err}"))
     })?;
-    let request_shape_json = sanitized_request_shape_json(&args);
     let kind = normalize(&args.action.kind);
     let where_kind = normalize(&args.where_.kind);
     let _ = (&args.request, &args.action.description, &args.verbosity);
@@ -283,23 +276,13 @@ pub(crate) async fn resolve_router_request(
     }
 
     if let Some(resolution) =
-        routing_model_router::resolve_learned_rule(session, index, call_id.clone(), &args).await?
+        routing_learned_rules::resolve_learned_rule(session, index, call_id.clone(), &args).await?
     {
         return Ok(resolution);
     }
 
-    if let Some(resolution) =
-        routing_model_router::resolve_with_model_router(session, turn, index, call_id, &args)
-            .await?
-    {
-        return Ok(resolution_with_request_shape(
-            resolution,
-            request_shape_json,
-        ));
-    }
-
     Err(FunctionCallError::RespondToModel(
-        "tool_router could not deterministically route this request, and model-router fallback is not available. Provide an exact internal tool name in action.tool or a concrete shell cmd."
+        "tool_router could not deterministically route this request. Provide an exact internal tool name in action.tool or a concrete shell cmd."
             .to_string(),
     ))
 }
@@ -444,21 +427,6 @@ fn router_action_payload_fields(action: &RouterAction) -> Vec<String> {
     fields
 }
 
-fn resolution_with_request_shape(
-    mut resolution: RouterResolution,
-    request_shape_json: Option<String>,
-) -> RouterResolution {
-    match &mut resolution {
-        RouterResolution::SingleTool { usage, .. }
-        | RouterResolution::FanOut { usage, .. }
-        | RouterResolution::ModelRouterScript { usage, .. } => {
-            usage.request_shape_json = request_shape_json;
-        }
-        RouterResolution::Noop { .. } | RouterResolution::InlineOutput { .. } => {}
-    }
-    resolution
-}
-
 fn is_process_status_kind(where_kind: &str, kind: &str) -> bool {
     where_kind == "process"
         || matches!(kind, "process_status" | "session_status")
@@ -544,25 +512,6 @@ pub(super) fn route_resolution(
     }
 }
 
-pub(super) fn model_router_script_resolution(
-    call: ToolCall,
-    model_router_prompt_tokens: i64,
-    model_router_completion_tokens: i64,
-) -> RouterResolution {
-    let selected_tool = call.tool_name.display();
-    RouterResolution::ModelRouterScript {
-        call: Box::new(call),
-        usage: ToolRouterUsage {
-            route_kind: "model_router_script".to_string(),
-            selected_tools: vec![selected_tool],
-            model_router_prompt_tokens,
-            model_router_completion_tokens,
-            fanout_call_count: 1,
-            request_shape_json: None,
-        },
-    }
-}
-
 pub(super) fn fanout_resolution(route_kind: &str, calls: Vec<ToolCall>) -> RouterResolution {
     let selected_tools = calls.iter().map(|call| call.tool_name.display()).collect();
     RouterResolution::FanOut {
@@ -571,25 +520,6 @@ pub(super) fn fanout_resolution(route_kind: &str, calls: Vec<ToolCall>) -> Route
             selected_tools,
             i64::try_from(calls.len()).unwrap_or(i64::MAX),
         ),
-        calls,
-    }
-}
-
-pub(super) fn model_router_fanout_resolution(
-    calls: Vec<ToolCall>,
-    model_router_prompt_tokens: i64,
-    model_router_completion_tokens: i64,
-) -> RouterResolution {
-    let selected_tools = calls.iter().map(|call| call.tool_name.display()).collect();
-    RouterResolution::FanOut {
-        usage: ToolRouterUsage {
-            route_kind: "model_router".to_string(),
-            selected_tools,
-            model_router_prompt_tokens,
-            model_router_completion_tokens,
-            fanout_call_count: i64::try_from(calls.len()).unwrap_or(i64::MAX),
-            request_shape_json: None,
-        },
         calls,
     }
 }

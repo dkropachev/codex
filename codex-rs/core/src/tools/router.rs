@@ -434,7 +434,6 @@ impl ToolRouter {
             routing_tool::sanitized_request_shape_json_from_arguments(&arguments);
         let resolution = match routing_tool::resolve_router_request(
             session.as_ref(),
-            turn.as_ref(),
             &self.index,
             call_id.clone(),
             arguments,
@@ -496,8 +495,7 @@ impl ToolRouter {
                     post_tool_use_payload: None,
                 })
             }
-            RouterResolution::SingleTool { call, usage }
-            | RouterResolution::ModelRouterScript { call, usage } => {
+            RouterResolution::SingleTool { call, usage } => {
                 let context = RoutedDispatchContext {
                     session,
                     turn,

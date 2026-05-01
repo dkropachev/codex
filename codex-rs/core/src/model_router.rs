@@ -594,28 +594,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tool_router_source_uses_model_router_to_select_available_spark() {
-        let mut config = config::test_config().await;
-        config.model = Some("gpt-5.4".to_string());
-        config.model_router = Some(ModelRouterToml {
-            enabled: true,
-            candidates: Vec::new(),
-            ..Default::default()
-        });
-        let available_models = vec![available_model("gpt-5.3-codex-spark")];
-
-        apply_model_router(
-            &mut config,
-            ModelRouterSource::Module("tool_router.resolve"),
-            80,
-            &available_models,
-        )
-        .expect("router should apply");
-
-        assert_eq!(config.model.as_deref(), Some("gpt-5.3-codex-spark"));
-    }
-
-    #[tokio::test]
     async fn latency_sensitive_task_applies_fast_candidate() {
         let mut config = config::test_config().await;
         config.model = Some("gpt-5.4".to_string());
