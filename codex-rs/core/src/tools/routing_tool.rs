@@ -26,8 +26,8 @@ use crate::tools::routing_deterministic::is_tool_search_kind;
 use crate::tools::routing_deterministic::is_write_stdin_kind;
 use crate::tools::routing_deterministic::mcp_tool_name;
 use crate::tools::routing_deterministic::normalize;
+use crate::tools::routing_model_router;
 use crate::tools::routing_shell::call_for_shell_like;
-use crate::tools::routing_spark;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -41,8 +41,8 @@ use serde_json::Value;
 pub(crate) struct ToolRouterUsage {
     pub(crate) route_kind: String,
     pub(crate) selected_tools: Vec<String>,
-    pub(crate) spark_prompt_tokens: i64,
-    pub(crate) spark_completion_tokens: i64,
+    pub(crate) model_router_prompt_tokens: i64,
+    pub(crate) model_router_completion_tokens: i64,
     pub(crate) fanout_call_count: i64,
 }
 
@@ -65,7 +65,7 @@ pub(crate) enum RouterResolution {
         success: bool,
         usage: ToolRouterUsage,
     },
-    SparkScript {
+    ModelRouterScript {
         call: Box<ToolCall>,
         usage: ToolRouterUsage,
     },
@@ -271,19 +271,20 @@ pub(crate) async fn resolve_router_request(
     }
 
     if let Some(resolution) =
-        routing_spark::resolve_learned_rule(session, index, call_id.clone(), &args).await?
+        routing_model_router::resolve_learned_rule(session, index, call_id.clone(), &args).await?
     {
         return Ok(resolution);
     }
 
     if let Some(resolution) =
-        routing_spark::resolve_with_spark(session, turn, index, call_id, &args).await?
+        routing_model_router::resolve_with_model_router(session, turn, index, call_id, &args)
+            .await?
     {
         return Ok(resolution);
     }
 
     Err(FunctionCallError::RespondToModel(
-        "tool_router could not deterministically route this request, and Spark fallback is not available in this build. Provide an exact internal tool name in action.tool or a concrete shell cmd."
+        "tool_router could not deterministically route this request, and model-router fallback is not available. Provide an exact internal tool name in action.tool or a concrete shell cmd."
             .to_string(),
     ))
 }
@@ -338,8 +339,8 @@ fn usage(route_kind: &str, selected_tools: Vec<String>, fanout_call_count: i64) 
     ToolRouterUsage {
         route_kind: route_kind.to_string(),
         selected_tools,
-        spark_prompt_tokens: 0,
-        spark_completion_tokens: 0,
+        model_router_prompt_tokens: 0,
+        model_router_completion_tokens: 0,
         fanout_call_count,
     }
 }
@@ -355,8 +356,8 @@ fn tool_resolution(call: ToolCall) -> RouterResolution {
 pub(super) fn route_resolution(
     route_kind: &str,
     call: ToolCall,
-    spark_prompt_tokens: i64,
-    spark_completion_tokens: i64,
+    model_router_prompt_tokens: i64,
+    model_router_completion_tokens: i64,
 ) -> RouterResolution {
     let selected_tool = call.tool_name.display();
     RouterResolution::SingleTool {
@@ -364,26 +365,26 @@ pub(super) fn route_resolution(
         usage: ToolRouterUsage {
             route_kind: route_kind.to_string(),
             selected_tools: vec![selected_tool],
-            spark_prompt_tokens,
-            spark_completion_tokens,
+            model_router_prompt_tokens,
+            model_router_completion_tokens,
             fanout_call_count: 1,
         },
     }
 }
 
-pub(super) fn spark_script_resolution(
+pub(super) fn model_router_script_resolution(
     call: ToolCall,
-    spark_prompt_tokens: i64,
-    spark_completion_tokens: i64,
+    model_router_prompt_tokens: i64,
+    model_router_completion_tokens: i64,
 ) -> RouterResolution {
     let selected_tool = call.tool_name.display();
-    RouterResolution::SparkScript {
+    RouterResolution::ModelRouterScript {
         call: Box::new(call),
         usage: ToolRouterUsage {
-            route_kind: "spark_script".to_string(),
+            route_kind: "model_router_script".to_string(),
             selected_tools: vec![selected_tool],
-            spark_prompt_tokens,
-            spark_completion_tokens,
+            model_router_prompt_tokens,
+            model_router_completion_tokens,
             fanout_call_count: 1,
         },
     }
@@ -401,18 +402,18 @@ pub(super) fn fanout_resolution(route_kind: &str, calls: Vec<ToolCall>) -> Route
     }
 }
 
-pub(super) fn spark_fanout_resolution(
+pub(super) fn model_router_fanout_resolution(
     calls: Vec<ToolCall>,
-    spark_prompt_tokens: i64,
-    spark_completion_tokens: i64,
+    model_router_prompt_tokens: i64,
+    model_router_completion_tokens: i64,
 ) -> RouterResolution {
     let selected_tools = calls.iter().map(|call| call.tool_name.display()).collect();
     RouterResolution::FanOut {
         usage: ToolRouterUsage {
-            route_kind: "spark".to_string(),
+            route_kind: "model_router".to_string(),
             selected_tools,
-            spark_prompt_tokens,
-            spark_completion_tokens,
+            model_router_prompt_tokens,
+            model_router_completion_tokens,
             fanout_call_count: i64::try_from(calls.len()).unwrap_or(i64::MAX),
         },
         calls,

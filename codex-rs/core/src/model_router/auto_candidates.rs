@@ -32,29 +32,6 @@ pub(crate) fn candidates_from_available_models(
     candidates
 }
 
-pub(crate) fn candidate_from_available_model_by_id(
-    config: &Config,
-    available_models: &[ModelPreset],
-    candidate_id: &str,
-) -> Option<ModelRouterCandidateToml> {
-    if let Some(model) = config.model.as_deref()
-        && (model == candidate_id || candidate_id == SPARK_CANDIDATE_ID && is_spark_model(model))
-    {
-        return Some(candidate_for_model(
-            config,
-            model,
-            Some(candidate_id.to_string()),
-        ));
-    }
-
-    candidates_from_available_models(config, available_models)
-        .into_iter()
-        .find(|candidate| {
-            candidate.id.as_deref() == Some(candidate_id)
-                || candidate.model.as_deref() == Some(candidate_id)
-        })
-}
-
 fn candidate_for_model(
     config: &Config,
     model: &str,

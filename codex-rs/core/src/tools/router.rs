@@ -443,7 +443,7 @@ impl ToolRouter {
                 })
             }
             RouterResolution::SingleTool { call, usage }
-            | RouterResolution::SparkScript { call, usage } => {
+            | RouterResolution::ModelRouterScript { call, usage } => {
                 let context = RoutedDispatchContext {
                     session,
                     turn,
@@ -612,8 +612,8 @@ impl ToolRouter {
                 selected_tools: usage.selected_tools.clone(),
                 visible_router_schema_tokens: tokens.visible_router_schema_tokens,
                 hidden_tool_schema_tokens: tokens.hidden_tool_schema_tokens,
-                spark_prompt_tokens: usage.spark_prompt_tokens,
-                spark_completion_tokens: usage.spark_completion_tokens,
+                spark_prompt_tokens: usage.model_router_prompt_tokens,
+                spark_completion_tokens: usage.model_router_completion_tokens,
                 fanout_call_count: usage.fanout_call_count,
                 returned_output_tokens,
                 original_output_tokens: returned_output_tokens,
@@ -656,8 +656,8 @@ impl ToolRouter {
             &routing_tool::ToolRouterUsage {
                 route_kind: "error".to_string(),
                 selected_tools: Vec::new(),
-                spark_prompt_tokens: 0,
-                spark_completion_tokens: 0,
+                model_router_prompt_tokens: 0,
+                model_router_completion_tokens: 0,
                 fanout_call_count: 0,
             },
             0,

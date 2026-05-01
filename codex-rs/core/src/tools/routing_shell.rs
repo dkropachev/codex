@@ -384,7 +384,7 @@ fn shell_quote(value: &str) -> String {
 }
 
 fn first_target_path(targets: &[RouterTarget]) -> Option<String> {
-    targets.iter().find_map(|target| target_path(target))
+    targets.iter().find_map(target_path)
 }
 
 fn target_path(target: &RouterTarget) -> Option<String> {
