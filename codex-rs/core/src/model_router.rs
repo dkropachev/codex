@@ -158,12 +158,10 @@ fn apply_model_router_with_overlays_and_exclusions(
     let Some(selection) = select_candidate(&task_key, prompt_bytes, &filtered_routes) else {
         return Ok(None);
     };
-    let selected_route = selectable_routes.get(selection.index).ok_or_else(|| {
-        format!(
-            "model_router selected missing filtered route index {}",
-            selection.index
-        )
-    })?;
+    let selected_route_index = selection.index;
+    let selected_route = selectable_routes
+        .get(selected_route_index)
+        .ok_or_else(|| format!("model_router selected missing filtered route index {selected_route_index}"))?;
     let selected_index = selected_route.index;
     tracing::debug!(
         task_key = task_key,
@@ -181,8 +179,7 @@ fn apply_model_router_with_overlays_and_exclusions(
     }
     let Some(candidate) = candidate_set.candidates.get(selected_index - 1) else {
         return Err(format!(
-            "model_router selected missing candidate index {}",
-            selected_index
+            "model_router selected missing candidate index {selected_index}"
         ));
     };
     let mut router_config = config.clone();
