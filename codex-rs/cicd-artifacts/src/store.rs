@@ -10,14 +10,13 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
-pub(crate) use codex_artifactory::ArtifactSource;
+pub use codex_artifactory::ArtifactSource;
 
-const NAMESPACE: &str = "repo-ci";
+const NAMESPACE: &str = "cicd-artifacts";
 const SOURCE_HASH_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
 const PRUNE_THROTTLE_SECS: i64 = 24 * 60 * 60;
 
-#[cfg(test)]
-pub(crate) fn artifact_state_dir(
+pub fn artifact_state_dir(
     codex_home: &Path,
     repo_root: &Path,
     sources: &[ArtifactSource],
@@ -27,31 +26,26 @@ pub(crate) fn artifact_state_dir(
     artifact_state_dir_for_keys(codex_home, &repo_key, &source_key)
 }
 
-pub(crate) fn artifact_state_dir_for_keys(
-    codex_home: &Path,
-    repo_key: &str,
-    source_key: &str,
-) -> PathBuf {
+pub fn artifact_state_dir_for_keys(codex_home: &Path, repo_key: &str, source_key: &str) -> PathBuf {
     codex_artifactory::sharded_state_dir(&artifact_root(codex_home), repo_key, source_key)
 }
 
-#[cfg(test)]
-pub(crate) fn repo_artifacts_dir(codex_home: &Path, repo_key: &str) -> PathBuf {
+pub fn repo_artifacts_dir(codex_home: &Path, repo_key: &str) -> PathBuf {
     codex_artifactory::scope_artifacts_dir(&artifact_root(codex_home), repo_key)
 }
 
-pub(crate) fn source_key(sources: &[ArtifactSource]) -> String {
+pub fn source_key(sources: &[ArtifactSource]) -> String {
     codex_artifactory::source_key(sources)
 }
 
-pub(crate) fn changed_source_paths(
+pub fn changed_source_paths(
     learned_sources: &[ArtifactSource],
     current_sources: &[ArtifactSource],
 ) -> Vec<PathBuf> {
     codex_artifactory::changed_source_paths(learned_sources, current_sources)
 }
 
-pub(crate) fn register_state(
+pub fn register_state(
     codex_home: &Path,
     repo_key: &str,
     source_key: &str,
@@ -71,23 +65,19 @@ pub(crate) fn register_state(
     Ok(())
 }
 
-pub(crate) fn record_artifact_hit(codex_home: &Path, state_dir: &Path) -> Result<()> {
+pub fn record_artifact_hit(codex_home: &Path, state_dir: &Path) -> Result<()> {
     let store = Artifactory::open(codex_home)?;
     store.record_state_hit_by_dir(NAMESPACE, state_dir)
 }
 
-#[cfg(test)]
-pub(crate) fn artifact_last_hit_unix_sec(
-    codex_home: &Path,
-    state_dir: &Path,
-) -> Result<Option<i64>> {
+pub fn artifact_last_hit_unix_sec(codex_home: &Path, state_dir: &Path) -> Result<Option<i64>> {
     let store = Artifactory::open(codex_home)?;
     Ok(store
         .state_by_dir(NAMESPACE, state_dir)?
         .and_then(|state| state.last_hit_at_unix_sec))
 }
 
-pub(crate) fn prune_stale_artifacts(codex_home: &Path) -> Result<()> {
+pub fn prune_stale_artifacts(codex_home: &Path) -> Result<()> {
     let store = Artifactory::open(codex_home)?;
     store.prune_stale_states(
         NAMESPACE,
@@ -96,10 +86,7 @@ pub(crate) fn prune_stale_artifacts(codex_home: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn latest_artifact_state_dirs(
-    codex_home: &Path,
-    repo_key: &str,
-) -> Result<Vec<PathBuf>> {
+pub fn latest_artifact_state_dirs(codex_home: &Path, repo_key: &str) -> Result<Vec<PathBuf>> {
     let store = Artifactory::open(codex_home)?;
     Ok(store
         .states_for_scope(NAMESPACE, repo_key)?
@@ -129,7 +116,7 @@ pub(crate) fn artifact_file_path(
     Ok(Some(state.state_dir.join(file.relative_path)))
 }
 
-pub(crate) fn put_cache_entry(
+pub fn put_cache_entry(
     codex_home: &Path,
     key: &str,
     artifact_id: &str,
@@ -146,17 +133,17 @@ pub(crate) fn put_cache_entry(
     )
 }
 
-pub(crate) fn cache_entry(codex_home: &Path, key: &str) -> Result<Option<CacheEntry>> {
+pub fn cache_entry(codex_home: &Path, key: &str) -> Result<Option<CacheEntry>> {
     let store = Artifactory::open(codex_home)?;
     store.cache_entry(NAMESPACE, key)
 }
 
-pub(crate) fn delete_cache_entry(codex_home: &Path, key: &str) -> Result<()> {
+pub fn delete_cache_entry(codex_home: &Path, key: &str) -> Result<()> {
     let store = Artifactory::open(codex_home)?;
     store.delete_cache_entry(NAMESPACE, key)
 }
 
-pub(crate) fn repo_key(repo_root: &Path) -> String {
+pub fn repo_key(repo_root: &Path) -> String {
     let remote_repo = git_output(repo_root, &["remote", "get-url", "origin"])
         .or_else(|| {
             let remotes = git_output(repo_root, &["remote"])?;
@@ -176,7 +163,7 @@ pub(crate) fn repo_key(repo_root: &Path) -> String {
 }
 
 fn artifact_root(codex_home: &Path) -> PathBuf {
-    codex_home.join("repo-ci").join("artifacts")
+    codex_home.join("cicd-artifacts")
 }
 
 fn git_output(repo_root: &Path, args: &[&str]) -> Option<String> {
@@ -260,7 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn artifact_location_is_sharded_under_repo_ci_artifacts() {
+    fn artifact_location_is_sharded_under_cicd_artifacts() {
         let codex_home = Path::new("/tmp/codex-home");
         let repo_root = Path::new("/tmp/repo");
         let sources = vec![ArtifactSource::new(
@@ -274,8 +261,7 @@ mod tests {
         assert_eq!(
             artifact_state_dir(codex_home, repo_root, &sources),
             codex_home
-                .join("repo-ci")
-                .join("artifacts")
+                .join("cicd-artifacts")
                 .join(&repo_key[..2])
                 .join(&repo_key[2..4])
                 .join(&repo_key)

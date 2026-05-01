@@ -5,6 +5,8 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_cicd_artifacts::RunArtifact;
+use codex_cicd_artifacts::RunMode;
 use codex_config::config_toml::RepoCiAutomationToml;
 use codex_features::Feature;
 use serde::Deserialize;
@@ -87,7 +89,7 @@ enum ToolRunMode {
     Full,
 }
 
-impl From<ToolRunMode> for codex_repo_ci::RunMode {
+impl From<ToolRunMode> for RunMode {
     fn from(value: ToolRunMode) -> Self {
         match value {
             ToolRunMode::Prepare => Self::Prepare,
@@ -234,8 +236,8 @@ async fn handle_status(
             object.insert(
                 "cache_summary".to_string(),
                 json!({
-                    "fast_cached_pass": cached_pass_available(turn, codex_repo_ci::RunMode::Fast),
-                    "full_cached_pass": cached_pass_available(turn, codex_repo_ci::RunMode::Full),
+                    "fast_cached_pass": cached_pass_available(turn, RunMode::Fast),
+                    "full_cached_pass": cached_pass_available(turn, RunMode::Full),
                 }),
             );
         }
@@ -261,8 +263,8 @@ async fn handle_learn(
                 FunctionCallError::RespondToModel(format!("repo_ci.learn failed: {err:#}"))
             })?;
     let mode = match outcome.validation_phase {
-        codex_repo_ci::ValidationPhase::Prepare => codex_repo_ci::RunMode::Prepare,
-        codex_repo_ci::ValidationPhase::Fast => codex_repo_ci::RunMode::Fast,
+        codex_repo_ci::ValidationPhase::Prepare => RunMode::Prepare,
+        codex_repo_ci::ValidationPhase::Fast => RunMode::Fast,
     };
     let artifact = codex_repo_ci::store_captured_run_artifact(
         &turn.config.codex_home,
@@ -291,7 +293,7 @@ async fn handle_run(
     args: RunArgs,
     cancellation_token: tokio_util::sync::CancellationToken,
 ) -> Result<String, FunctionCallError> {
-    let mode = codex_repo_ci::RunMode::from(args.mode);
+    let mode = RunMode::from(args.mode);
     let status = repo_ci_status(turn).await?;
     if repo_ci_needs_learning(&status) {
         if !args.learn_if_needed {
@@ -379,7 +381,7 @@ async fn handle_result(
     let codex_home = turn.config.codex_home.clone();
     let artifact_id = args.artifact_id.clone();
     let artifact = tokio::task::spawn_blocking(move || {
-        codex_repo_ci::read_run_artifact(&codex_home, &artifact_id)
+        codex_cicd_artifacts::read_run_artifact(&codex_home, &artifact_id)
     })
     .await
     .map_err(|err| FunctionCallError::RespondToModel(format!("repo_ci.result failed: {err}")))?
@@ -439,8 +441,8 @@ async fn repo_ci_status(
 
 async fn cached_pass(
     turn: &crate::session::turn_context::TurnContext,
-    mode: codex_repo_ci::RunMode,
-) -> Result<Option<codex_repo_ci::RepoCiRunArtifact>, FunctionCallError> {
+    mode: RunMode,
+) -> Result<Option<RunArtifact>, FunctionCallError> {
     let codex_home = turn.config.codex_home.clone();
     let cwd = turn.cwd.clone();
     tokio::task::spawn_blocking(move || {
@@ -455,10 +457,7 @@ async fn cached_pass(
     })
 }
 
-fn cached_pass_available(
-    turn: &crate::session::turn_context::TurnContext,
-    mode: codex_repo_ci::RunMode,
-) -> bool {
+fn cached_pass_available(turn: &crate::session::turn_context::TurnContext, mode: RunMode) -> bool {
     let codex_home = turn.config.codex_home.clone();
     let cwd = turn.cwd.clone();
     codex_repo_ci::lookup_cached_passing_run(&codex_home, &cwd, mode)

@@ -71,22 +71,22 @@ fn brief_cached_pass_omits_logs() {
     assert_eq!(response.get("error_output"), None);
 }
 
-fn failed_artifact(stdout: &str, stderr: &str) -> codex_repo_ci::RepoCiRunArtifact {
-    codex_repo_ci::RepoCiRunArtifact {
+fn failed_artifact(stdout: &str, stderr: &str) -> codex_cicd_artifacts::RunArtifact {
+    codex_cicd_artifacts::RunArtifact {
         artifact_id: "artifact".to_string(),
         repo_root: PathBuf::from("/repo"),
         repo_key: "repo".to_string(),
         state_dir: PathBuf::from("/state"),
-        mode: codex_repo_ci::RunMode::Fast,
-        status: codex_repo_ci::RepoCiRunArtifactStatus::Failed,
+        mode: codex_cicd_artifacts::RunMode::Fast,
+        status: codex_cicd_artifacts::RunArtifactStatus::Failed,
         exit_code: Some(1),
         duration_ms: 42,
         started_at_unix_sec: 123,
         manifest_fingerprint: "manifest".to_string(),
         worktree_fingerprint: "worktree".to_string(),
-        steps: vec![codex_repo_ci::RepoCiStepStatus {
+        steps: vec![codex_cicd_artifacts::StepStatus {
             id: "test".to_string(),
-            status: codex_repo_ci::RepoCiStepRunStatus::Failed,
+            status: codex_cicd_artifacts::StepRunStatus::Failed,
             exit_code: Some(1),
         }],
         stdout: stdout.to_string(),
@@ -94,9 +94,9 @@ fn failed_artifact(stdout: &str, stderr: &str) -> codex_repo_ci::RepoCiRunArtifa
     }
 }
 
-fn passed_artifact(stdout: &str, stderr: &str) -> codex_repo_ci::RepoCiRunArtifact {
-    codex_repo_ci::RepoCiRunArtifact {
-        status: codex_repo_ci::RepoCiRunArtifactStatus::Passed,
+fn passed_artifact(stdout: &str, stderr: &str) -> codex_cicd_artifacts::RunArtifact {
+    codex_cicd_artifacts::RunArtifact {
+        status: codex_cicd_artifacts::RunArtifactStatus::Passed,
         exit_code: Some(0),
         steps: Vec::new(),
         stdout: stdout.to_string(),

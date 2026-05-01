@@ -124,6 +124,9 @@ pub fn render_validation_feedback(outcome: &LearnOutcome) -> Result<String> {
 
 fn render_learning_hints(learning_hints: &RepoCiLearningHints) -> String {
     let mut prompt = String::from("\nStrong repo signals:\n");
+    prompt.push_str(&render_workflow_hint_section(
+        &learning_hints.workflow_run_hints,
+    ));
     prompt.push_str(&render_step_hint_section(
         "Inferred prepare-step candidates",
         &learning_hints.prepare_steps,
@@ -136,12 +139,15 @@ fn render_learning_hints(learning_hints: &RepoCiLearningHints) -> String {
         "Inferred full-step candidates",
         &learning_hints.full_steps,
     ));
-    prompt.push_str(&render_workflow_hint_section(
-        &learning_hints.workflow_run_hints,
-    ));
     prompt.push_str("\nPrompt rules for strong signals:\n");
     prompt.push_str(
-        "- Prefer repo-native entrypoints already present in Makefiles, workflows, package scripts, or checked-in repo scripts.\n",
+        "- Treat checked-in CI workflow files, such as `.github/workflows/*.yml`, as the highest-priority source of CI/CD truth.\n",
+    );
+    prompt.push_str(
+        "- If workflows conflict with AGENTS.md, AGENT.md, Makefiles, Justfiles, package scripts, docs, or checked-in repo scripts, follow the workflow commands and use the other files only to make those workflow commands runnable locally.\n",
+    );
+    prompt.push_str(
+        "- When separate workflow or repo-native commands exist, keep `test-unit` in fastSteps and fullSteps, and keep `test-integration` and `test-e2e` as separate fullSteps. Do not collapse them into one generic test step.\n",
     );
     if has_repo_native_hints(learning_hints) {
         prompt.push_str(
@@ -472,9 +478,18 @@ mod tests {
             render_repo_ci_learning_prompt(Path::new("/tmp/repo"), &hints, 120, 1, None, None);
 
         assert!(prompt.contains("Strong repo signals:"));
+        let workflow_index = prompt.find("Workflow run hints:").expect("workflow hints");
+        let inferred_index = prompt
+            .find("Inferred fast-step candidates:")
+            .expect("inferred hints");
+        assert!(workflow_index < inferred_index);
         assert!(prompt.contains("make lint"));
         assert!(prompt.contains("make test-unit"));
         assert!(prompt.contains("make build"));
+        assert!(prompt.contains("highest-priority source of CI/CD truth"));
+        assert!(prompt.contains("AGENTS.md"));
+        assert!(prompt.contains("test-integration"));
+        assert!(prompt.contains("test-e2e"));
         assert!(prompt.contains("Do not replace discovered repo-native lint/test/build commands with generic fallback checks like `git diff --check` unless validation proves the repo-native commands are unusable."));
     }
 

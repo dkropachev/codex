@@ -2105,6 +2105,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-cicd-artifacts"
+version = "0.125.0"
+dependencies = [
+ "anyhow",
+ "codex-artifactory",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "codex-cli"
 version = "0.125.0"
 dependencies = [
@@ -2376,6 +2389,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-async-utils",
+ "codex-cicd-artifacts",
  "codex-code-mode",
  "codex-config",
  "codex-connectors",
@@ -3169,7 +3183,7 @@ name = "codex-repo-ci"
 version = "0.125.0"
 dependencies = [
  "anyhow",
- "codex-artifactory",
+ "codex-cicd-artifacts",
  "codex-protocol",
  "pretty_assertions",
  "serde",

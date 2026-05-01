@@ -1,5 +1,8 @@
 use super::DetailLevel;
 use crate::function_tool::FunctionCallError;
+use codex_cicd_artifacts::RunArtifact;
+use codex_cicd_artifacts::RunArtifactStatus;
+use codex_cicd_artifacts::StepRunStatus;
 use serde::Serialize;
 use serde_json::json;
 
@@ -8,20 +11,20 @@ pub(super) const DETAILED_LOG_MAX_BYTES: usize = 64_000;
 
 pub(super) fn format_run_artifact_response(
     operation: &str,
-    artifact: &codex_repo_ci::RepoCiRunArtifact,
+    artifact: &RunArtifact,
     detail: DetailLevel,
     cache_hit: bool,
 ) -> serde_json::Value {
     let status = match artifact.status {
-        codex_repo_ci::RepoCiRunArtifactStatus::Passed => "passed",
-        codex_repo_ci::RepoCiRunArtifactStatus::Failed => "failed",
+        RunArtifactStatus::Passed => "passed",
+        RunArtifactStatus::Failed => "failed",
     };
     let mut output = artifact_metadata_json(artifact);
     if let Some(object) = output.as_object_mut() {
         object.insert("operation".to_string(), json!(operation));
         object.insert("status".to_string(), json!(status));
         object.insert("cache_hit".to_string(), json!(cache_hit));
-        if artifact.status == codex_repo_ci::RepoCiRunArtifactStatus::Failed {
+        if artifact.status == RunArtifactStatus::Failed {
             let error_output = compact_error_output(artifact);
             object.insert("error_output".to_string(), json!(&error_output.value));
             object.insert(
@@ -47,9 +50,7 @@ pub(super) fn format_run_artifact_response(
     output
 }
 
-pub(super) fn artifact_metadata_json(
-    artifact: &codex_repo_ci::RepoCiRunArtifact,
-) -> serde_json::Value {
+pub(super) fn artifact_metadata_json(artifact: &RunArtifact) -> serde_json::Value {
     json!({
         "artifact_id": &artifact.artifact_id,
         "repo_root": &artifact.repo_root,
@@ -69,7 +70,7 @@ pub(super) struct BoundedText {
     truncated: bool,
 }
 
-fn compact_error_output(artifact: &codex_repo_ci::RepoCiRunArtifact) -> BoundedText {
+fn compact_error_output(artifact: &RunArtifact) -> BoundedText {
     let candidate = if artifact.stderr.trim().is_empty() {
         artifact.stdout.as_str()
     } else {
@@ -107,11 +108,11 @@ pub(super) fn bounded_log(value: &str, tail_lines: Option<usize>, max_bytes: usi
     }
 }
 
-fn failed_step_ids(artifact: &codex_repo_ci::RepoCiRunArtifact) -> Vec<String> {
+fn failed_step_ids(artifact: &RunArtifact) -> Vec<String> {
     artifact
         .steps
         .iter()
-        .filter(|step| step.status == codex_repo_ci::RepoCiStepRunStatus::Failed)
+        .filter(|step| step.status == StepRunStatus::Failed)
         .map(|step| step.id.clone())
         .collect()
 }

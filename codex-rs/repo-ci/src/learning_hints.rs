@@ -42,7 +42,7 @@ pub fn collect_learning_hints(repo_root: &Path) -> Result<RepoCiLearningHints> {
     })
 }
 
-fn collect_workflow_run_hints(repo_root: &Path) -> Result<Vec<WorkflowRunHint>> {
+pub(crate) fn collect_workflow_run_hints(repo_root: &Path) -> Result<Vec<WorkflowRunHint>> {
     let workflow_dir = repo_root.join(".github/workflows");
     if !workflow_dir.is_dir() {
         return Ok(Vec::new());
@@ -262,13 +262,13 @@ jobs:
         assert_eq!(
             hints.fast_steps,
             vec![
-                crate::step("make-lint", "make lint", StepPhase::Lint),
-                crate::step("make-build", "make build", StepPhase::Build),
-                crate::step("make-test-unit", "make test-unit", StepPhase::Test),
+                crate::step("workflow-lint", "make lint", StepPhase::Lint),
+                crate::step("workflow-test-unit", "make test-unit", StepPhase::Test),
+                crate::step("workflow-build", "make build", StepPhase::Build),
             ]
         );
         assert!(hints.full_steps.contains(&crate::step(
-            "make-test-integration-scylla",
+            "workflow-test-integration",
             "make test-integration-scylla",
             StepPhase::Test,
         )));
