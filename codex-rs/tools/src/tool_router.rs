@@ -33,7 +33,7 @@ pub fn create_tool_router_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: TOOL_ROUTER_TOOL_NAME.to_string(),
-        description: "Route one structured request to the appropriate internal Codex tool. Use exact tool names when known; otherwise set where.kind and action.kind with the smallest sufficient payload."
+        description: "Route one structured request to the appropriate internal Codex tool. Use exact tool names when known; otherwise set where.kind and action.kind with the smallest sufficient payload. Prefer high-level actions such as exec_wait, batch, workspace inspect, git_snapshot, and process status when they avoid multiple follow-up tool calls."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -44,7 +44,6 @@ pub fn create_tool_router_tool() -> ToolSpec {
                 "where".to_string(),
                 "targets".to_string(),
                 "action".to_string(),
-                "verbosity".to_string(),
             ]),
             Some(false.into()),
         ),
@@ -63,6 +62,7 @@ fn router_where_schema() -> JsonSchema {
                     json!("filesystem"),
                     json!("shell"),
                     json!("git"),
+                    json!("process"),
                     json!("mcp"),
                     json!("app"),
                     json!("skill"),
@@ -127,21 +127,36 @@ fn router_action_schema() -> JsonSchema {
         ],
         None,
     );
+    let string_array = JsonSchema::array(JsonSchema::string(None), None);
     let free_object =
         JsonSchema::object(BTreeMap::new(), /*required*/ None, Some(true.into()));
     let properties = BTreeMap::from([
         (
             "kind".to_string(),
-            JsonSchema::string(Some("Action kind, such as exec, git, apply_patch, write_stdin, mcp, spawn_agent, wait_agent, tool_search, view_image, or direct_tool.".to_string())),
+            JsonSchema::string(Some("Action kind, such as exec, exec_wait, batch, inspect, git_snapshot, status, git, apply_patch, write_stdin, mcp, spawn_agent, wait_agent, tool_search, view_image, or direct_tool.".to_string())),
         ),
         (
             "description".to_string(),
-            JsonSchema::string(Some("Short human-readable action description.".to_string())),
+            JsonSchema::string(Some("Short human-readable action description. Optional; omitted descriptions default to the action kind.".to_string())),
         ),
         ("tool".to_string(), JsonSchema::string(Some("Exact internal tool name when known.".to_string()))),
         ("name".to_string(), JsonSchema::string(Some("Exact action or tool name when known.".to_string()))),
         ("cmd".to_string(), JsonSchema::string(Some("Shell command or script.".to_string()))),
         ("command".to_string(), string_or_string_array),
+        (
+            "commands".to_string(),
+            JsonSchema::array(
+                JsonSchema::string(None),
+                Some("Multiple independent shell commands for a single router batch call.".to_string()),
+            ),
+        ),
+        (
+            "paths".to_string(),
+            JsonSchema::array(
+                JsonSchema::string(None),
+                Some("Multiple filesystem/workspace paths for inspect/read batch actions.".to_string()),
+            ),
+        ),
         ("patch".to_string(), JsonSchema::string(Some("Full apply_patch patch body.".to_string()))),
         ("input".to_string(), free_object.clone()),
         ("query".to_string(), JsonSchema::string(None)),
@@ -156,20 +171,28 @@ fn router_action_schema() -> JsonSchema {
         ("chars".to_string(), JsonSchema::string(None)),
         ("workdir".to_string(), JsonSchema::string(None)),
         ("timeout_ms".to_string(), JsonSchema::integer(None)),
+        (
+            "wait_until_exit".to_string(),
+            JsonSchema::boolean(Some("For shell exec routes, keep the tool call open until the process exits or wait_timeout_ms expires.".to_string())),
+        ),
+        (
+            "wait_timeout_ms".to_string(),
+            JsonSchema::integer(Some("Maximum wait for wait_until_exit shell routes. Defaults to the unified exec background timeout.".to_string())),
+        ),
         ("yield_time_ms".to_string(), JsonSchema::integer(None)),
         ("max_output_tokens".to_string(), JsonSchema::integer(None)),
         ("sandbox_permissions".to_string(), JsonSchema::string(None)),
         ("justification".to_string(), JsonSchema::string(None)),
         (
             "prefix_rule".to_string(),
-            JsonSchema::array(JsonSchema::string(None), None),
+            string_array,
         ),
         ("detail".to_string(), JsonSchema::string(None)),
     ]);
 
     JsonSchema::object(
         properties,
-        Some(vec!["kind".to_string(), "description".to_string()]),
+        Some(vec!["kind".to_string()]),
         Some(AdditionalProperties::Boolean(true)),
     )
 }

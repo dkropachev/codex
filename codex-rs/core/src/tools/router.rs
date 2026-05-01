@@ -420,6 +420,28 @@ impl ToolRouter {
                     post_tool_use_payload: None,
                 })
             }
+            RouterResolution::InlineOutput {
+                message,
+                success,
+                usage,
+            } => {
+                let output = FunctionToolOutput::from_text(message.clone(), Some(success));
+                self.record_tool_router_usage(
+                    &session,
+                    &turn,
+                    &call_id,
+                    &usage,
+                    estimate_text_tokens(&message),
+                    Some(if success { "ok" } else { "failed" }.to_string()),
+                )
+                .await;
+                Ok(AnyToolResult {
+                    call_id,
+                    payload,
+                    result: Box::new(output),
+                    post_tool_use_payload: None,
+                })
+            }
             RouterResolution::SingleTool { call, usage }
             | RouterResolution::SparkScript { call, usage } => {
                 let context = RoutedDispatchContext {

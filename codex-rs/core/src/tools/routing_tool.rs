@@ -60,6 +60,11 @@ pub(crate) enum RouterResolution {
         message: String,
         usage: ToolRouterUsage,
     },
+    InlineOutput {
+        message: String,
+        success: bool,
+        usage: ToolRouterUsage,
+    },
     SparkScript {
         call: Box<ToolCall>,
         usage: ToolRouterUsage,
@@ -74,6 +79,7 @@ pub(super) struct RouterArgs {
     #[serde(default)]
     pub(super) targets: Vec<RouterTarget>,
     pub(super) action: RouterAction,
+    #[serde(default)]
     pub(super) verbosity: RouterVerbosity,
 }
 
@@ -97,11 +103,14 @@ pub(super) struct RouterTarget {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(super) struct RouterAction {
     pub(super) kind: String,
+    #[serde(default)]
     pub(super) description: String,
     pub(super) tool: Option<String>,
     pub(super) name: Option<String>,
     pub(super) cmd: Option<String>,
     pub(super) command: Option<Value>,
+    pub(super) commands: Option<Vec<String>>,
+    pub(super) paths: Option<Vec<String>>,
     pub(super) patch: Option<String>,
     pub(super) input: Option<Value>,
     pub(super) query: Option<String>,
@@ -113,6 +122,8 @@ pub(super) struct RouterAction {
     pub(super) chars: Option<String>,
     pub(super) workdir: Option<String>,
     pub(super) timeout_ms: Option<i64>,
+    pub(super) wait_until_exit: Option<bool>,
+    pub(super) wait_timeout_ms: Option<i64>,
     pub(super) yield_time_ms: Option<i64>,
     pub(super) max_output_tokens: Option<i64>,
     pub(super) sandbox_permissions: Option<String>,
@@ -130,7 +141,9 @@ pub(super) struct RouterAction {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub(super) enum RouterVerbosity {
+    #[default]
     Auto,
     Brief,
     Normal,
@@ -177,6 +190,22 @@ pub(crate) async fn resolve_router_request(
             let call = call_for_write_stdin(call_id, &args)?;
             return Ok(tool_resolution(call));
         }
+    }
+
+    if is_process_status_kind(&where_kind, &kind) {
+        let process_id = args
+            .action
+            .session_id
+            .and_then(|value| i32::try_from(value).ok());
+        return Ok(RouterResolution::InlineOutput {
+            message: session
+                .services
+                .unified_exec_manager
+                .process_status_summary(process_id)
+                .await,
+            success: true,
+            usage: usage("deterministic", vec!["process.status".to_string()], 0),
+        });
     }
 
     if is_tool_search_kind(&kind) {
@@ -228,7 +257,9 @@ pub(crate) async fn resolve_router_request(
 
     if (is_shell_kind(&where_kind, &kind)
         || args.action.cmd.is_some()
-        || args.action.command.is_some())
+        || args.action.command.is_some()
+        || args.action.commands.is_some()
+        || args.action.paths.is_some())
         && let Some(call) = call_for_shell_like(index, call_id.clone(), &args)?
     {
         return Ok(tool_resolution(call));
@@ -255,6 +286,12 @@ pub(crate) async fn resolve_router_request(
         "tool_router could not deterministically route this request, and Spark fallback is not available in this build. Provide an exact internal tool name in action.tool or a concrete shell cmd."
             .to_string(),
     ))
+}
+
+fn is_process_status_kind(where_kind: &str, kind: &str) -> bool {
+    where_kind == "process"
+        || matches!(kind, "process_status" | "session_status")
+        || (where_kind == "shell" && kind == "status")
 }
 
 pub(crate) fn response_to_content_items(
@@ -386,6 +423,7 @@ pub(super) fn spark_fanout_resolution(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     #[test]
     fn response_to_content_items_preserves_function_text() {
@@ -400,5 +438,18 @@ mod tests {
                 text: "ok".to_string()
             }]
         );
+    }
+
+    #[test]
+    fn router_args_default_optional_description_and_verbosity() {
+        let args: RouterArgs = serde_json::from_value(json!({
+            "request": "status",
+            "where": {"kind": "process"},
+            "action": {"kind": "status"}
+        }))
+        .expect("router args");
+
+        assert_eq!(args.action.description, "");
+        assert!(matches!(args.verbosity, RouterVerbosity::Auto));
     }
 }

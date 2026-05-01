@@ -27,6 +27,7 @@ use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolR
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
+use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::MAX_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::MAX_YIELD_TIME_MS;
@@ -290,7 +291,14 @@ impl UnifiedExecProcessManager {
             .await;
         }
 
-        let yield_time_ms = clamp_yield_time(request.yield_time_ms);
+        let yield_time_ms = if request.wait_until_exit {
+            request
+                .wait_timeout_ms
+                .unwrap_or(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS)
+                .max(MIN_YIELD_TIME_MS)
+        } else {
+            clamp_yield_time(request.yield_time_ms)
+        };
         // For the initial exec_command call, we both stream output to events
         // (via start_streaming_output above) and collect a snapshot here for
         // the tool response body.
@@ -522,6 +530,41 @@ impl UnifiedExecProcessManager {
         };
 
         Ok(response)
+    }
+
+    pub(crate) async fn process_status_summary(&self, process_id: Option<i32>) -> String {
+        let store = self.process_store.lock().await;
+        let entries = store
+            .processes
+            .iter()
+            .filter(|(id, _)| process_id.is_none_or(|requested| requested == **id))
+            .map(|(id, entry)| {
+                let status = if entry.process.has_exited() {
+                    match entry.process.exit_code() {
+                        Some(code) => format!("exited({code})"),
+                        None => "exited".to_string(),
+                    }
+                } else {
+                    "running".to_string()
+                };
+                format!(
+                    "session_id={id} status={status} tty={} idle_ms={} command={}",
+                    entry.tty,
+                    entry.last_used.elapsed().as_millis(),
+                    entry.hook_command
+                )
+            })
+            .collect::<Vec<_>>();
+
+        if entries.is_empty() {
+            if let Some(process_id) = process_id {
+                format!("No unified exec process with session_id={process_id}.")
+            } else {
+                "No unified exec processes are currently tracked.".to_string()
+            }
+        } else {
+            entries.join("\n")
+        }
     }
 
     async fn refresh_process_state(&self, process_id: i32) -> ProcessStatus {

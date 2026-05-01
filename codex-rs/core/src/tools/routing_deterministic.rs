@@ -452,6 +452,12 @@ fn action_payload_object(args: &RouterArgs) -> Map<String, Value> {
     if let Some(command) = args.action.command.as_ref() {
         object.insert("command".to_string(), command.clone());
     }
+    if let Some(commands) = args.action.commands.as_ref() {
+        object.insert("commands".to_string(), json!(commands));
+    }
+    if let Some(paths) = args.action.paths.as_ref() {
+        object.insert("paths".to_string(), json!(paths));
+    }
     insert_string(&mut object, "chars", args.action.chars.as_ref());
     insert_string(&mut object, "query", args.action.query.as_ref());
     insert_string(&mut object, "target", args.action.target.as_ref());
@@ -460,6 +466,8 @@ fn action_payload_object(args: &RouterArgs) -> Map<String, Value> {
     insert_string(&mut object, "detail", args.action.detail.as_ref());
     insert_i64(&mut object, "session_id", args.action.session_id);
     insert_i64(&mut object, "timeout_ms", args.action.timeout_ms);
+    insert_bool(&mut object, "wait_until_exit", args.action.wait_until_exit);
+    insert_i64(&mut object, "wait_timeout_ms", args.action.wait_timeout_ms);
     insert_i64(&mut object, "yield_time_ms", args.action.yield_time_ms);
     insert_i64(
         &mut object,
@@ -621,6 +629,12 @@ fn insert_i64(object: &mut Map<String, Value>, key: &str, value: Option<i64>) {
     }
 }
 
+fn insert_bool(object: &mut Map<String, Value>, key: &str, value: Option<bool>) {
+    if let Some(value) = value {
+        object.insert(key.to_string(), Value::Bool(value));
+    }
+}
+
 pub(super) fn normalize(value: &str) -> String {
     value.trim().to_ascii_lowercase().replace('-', "_")
 }
@@ -679,12 +693,19 @@ pub(super) fn is_shell_kind(where_kind: &str, kind: &str) -> bool {
         || matches!(
             kind,
             "exec"
+                | "exec_wait"
                 | "shell"
                 | "command"
+                | "batch"
                 | "git"
                 | "read"
+                | "read_many"
+                | "inspect"
+                | "read_context"
                 | "grep"
                 | "find"
+                | "git_snapshot"
+                | "snapshot"
                 | "status"
                 | "diff"
                 | "log"
