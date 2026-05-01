@@ -1,4 +1,6 @@
-use anyhow::Context;
+use crate::repo_ci_exec::repo_ci_exec_timeout;
+use crate::repo_ci_exec::run_repo_ci_exec_json;
+use crate::repo_ci_exec::truncate_for_feedback;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_repo_ci::AI_LEARN_MAX_ATTEMPTS;
@@ -6,14 +8,8 @@ use codex_repo_ci::LearnOptions;
 use codex_repo_ci::LearnOutcome;
 use codex_repo_ci::RepoCiAiLearnedPlan;
 use codex_utils_cli::CliConfigOverrides;
-use serde::Deserialize;
-use std::fs;
 use std::path::Path;
-use std::process::Stdio;
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
-
-const MAX_FEEDBACK_BYTES: usize = 16_000;
+use std::time::Duration;
 
 pub(crate) async fn learn_repo_ci_with_ai(
     root_config_overrides: &CliConfigOverrides,
@@ -23,10 +19,28 @@ pub(crate) async fn learn_repo_ci_with_ai(
 ) -> Result<LearnOutcome> {
     let repo_root = codex_repo_ci::repo_root_for_cwd(cwd)?;
     let learning_hints = codex_repo_ci::collect_learning_hints(&repo_root)?;
+    let exec_timeout = repo_ci_exec_timeout(options.local_test_time_budget_sec);
     let mut prior_plan = None;
     let mut failure_feedback = None;
 
+    eprintln!("repo-ci learn: repository {}", repo_root.display());
+    eprintln!(
+        "repo-ci learn: local validation budget {}s; AI discovery timeout {}s per attempt",
+        options.local_test_time_budget_sec,
+        exec_timeout.as_secs()
+    );
+    eprintln!(
+        "repo-ci learn: collected hints: {} prepare, {} fast, {} full, {} workflow run commands",
+        learning_hints.prepare_steps.len(),
+        learning_hints.fast_steps.len(),
+        learning_hints.full_steps.len(),
+        learning_hints.workflow_run_hints.len()
+    );
+
     for attempt in 1..=AI_LEARN_MAX_ATTEMPTS {
+        eprintln!(
+            "repo-ci learn: attempt {attempt}/{AI_LEARN_MAX_ATTEMPTS}: asking Codex to inspect the repo and generate a runner plan"
+        );
         let prompt = codex_repo_ci::render_repo_ci_learning_prompt(
             &repo_root,
             &learning_hints,
@@ -35,22 +49,40 @@ pub(crate) async fn learn_repo_ci_with_ai(
             prior_plan.as_ref(),
             failure_feedback.as_deref(),
         );
-        let plan = run_exec_for_plan(root_config_overrides, &repo_root, &prompt).await?;
+        let plan = run_exec_for_plan(
+            root_config_overrides,
+            &repo_root,
+            &prompt,
+            attempt,
+            exec_timeout,
+        )
+        .await?;
+        log_learned_plan(attempt, &plan);
+        eprintln!(
+            "repo-ci learn: attempt {attempt}/{AI_LEARN_MAX_ATTEMPTS}: writing runner and validating prepare/fast steps"
+        );
         let outcome = codex_repo_ci::learn_with_plan(
             codex_home,
             &repo_root,
             options.clone(),
             plan.clone().into_learned_plan()?,
         )?;
+        log_validation_outcome(attempt, &outcome);
         if matches!(
             outcome.manifest.validation,
             codex_repo_ci::ValidationStatus::Passed { .. }
         ) {
+            eprintln!("repo-ci learn: validation passed on attempt {attempt}");
             return Ok(outcome);
         }
 
         failure_feedback = Some(codex_repo_ci::render_validation_feedback(&outcome)?);
         prior_plan = Some(plan);
+        if attempt < AI_LEARN_MAX_ATTEMPTS {
+            eprintln!(
+                "repo-ci learn: attempt {attempt}/{AI_LEARN_MAX_ATTEMPTS} failed; retrying with validation feedback"
+            );
+        }
     }
 
     Err(anyhow!(
@@ -62,143 +94,111 @@ async fn run_exec_for_plan(
     root_config_overrides: &CliConfigOverrides,
     repo_root: &Path,
     prompt: &str,
+    attempt: usize,
+    timeout: Duration,
 ) -> Result<RepoCiAiLearnedPlan> {
+    let action = format!("repo-ci learner attempt {attempt}/{AI_LEARN_MAX_ATTEMPTS}");
     run_repo_ci_exec_json(
         root_config_overrides,
         repo_root,
         prompt,
         codex_repo_ci::repo_ci_ai_plan_schema(),
-        "repo-ci learner",
+        &action,
+        timeout,
     )
     .await
 }
 
-pub(crate) async fn run_repo_ci_exec_json<T>(
-    root_config_overrides: &CliConfigOverrides,
-    repo_root: &Path,
-    prompt: &str,
-    schema: serde_json::Value,
-    action: &str,
-) -> Result<T>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let tempdir =
-        tempfile::tempdir().with_context(|| format!("failed to create tempdir for {action}"))?;
-    let schema_path = tempdir.path().join("repo-ci-output.schema.json");
-    let output_path = tempdir.path().join("repo-ci-output.json");
-    fs::write(&schema_path, serde_json::to_vec_pretty(&schema)?)
-        .with_context(|| format!("failed to write {}", schema_path.display()))?;
-
-    let current_exe = std::env::current_exe().context("failed to locate current codex binary")?;
-    let mut command = Command::new(current_exe);
-    command
-        .arg("exec")
-        .arg("--ephemeral")
-        .arg("--skip-git-repo-check")
-        .arg("--sandbox")
-        .arg("read-only")
-        .arg("--output-schema")
-        .arg(&schema_path)
-        .arg("--output-last-message")
-        .arg(&output_path)
-        .arg("-C")
-        .arg(repo_root)
-        .arg("-")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
-    for raw_override in &root_config_overrides.raw_overrides {
-        command.arg("--config").arg(raw_override);
-    }
-    command.arg("--config").arg("approval_policy=never");
-
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("failed to spawn {action} for {}", repo_root.display()))?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| anyhow!("repo-ci learner stdin was not available"))?;
-    stdin
-        .write_all(prompt.as_bytes())
-        .await
-        .with_context(|| format!("failed to send prompt to {action}"))?;
-    drop(stdin);
-
-    let output = child
-        .wait_with_output()
-        .await
-        .with_context(|| format!("failed while waiting for {action}"))?;
-    if !output.status.success() {
-        return Err(anyhow!(
-            "{action} failed with {}: {}",
-            output.status,
-            truncate_for_feedback(&String::from_utf8_lossy(&output.stderr), MAX_FEEDBACK_BYTES),
-        ));
-    }
-
-    let text = fs::read_to_string(&output_path)
-        .with_context(|| format!("failed to read {}", output_path.display()))?;
-    parse_json_payload(&text)
+fn log_learned_plan(attempt: usize, plan: &RepoCiAiLearnedPlan) {
+    eprintln!(
+        "repo-ci learn: attempt {attempt}: plan summary: {}",
+        truncate_for_feedback(&plan.summary.replace('\n', " "), 240)
+    );
+    log_plan_steps("prepare", &plan.prepare_steps);
+    log_plan_steps("fast", &plan.fast_steps);
+    log_plan_steps("full", &plan.full_steps);
 }
 
-fn parse_json_payload<T>(text: &str) -> Result<T>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let trimmed = text.trim();
-    let json_text = trimmed
-        .strip_prefix("```json")
-        .and_then(|value| value.strip_suffix("```"))
-        .or_else(|| {
-            trimmed
-                .strip_prefix("```")
-                .and_then(|value| value.strip_suffix("```"))
-        })
-        .map(str::trim)
-        .unwrap_or(trimmed);
-    Ok(serde_json::from_str(json_text)?)
-}
-
-fn truncate_for_feedback(text: &str, max_bytes: usize) -> String {
-    if text.len() <= max_bytes {
-        return text.to_string();
-    }
-    let keep = max_bytes / 2;
-    let head_end = floor_char_boundary(text, keep);
-    let tail_start = ceil_char_boundary(text, text.len().saturating_sub(keep));
-    format!("{}\n...\n{}", &text[..head_end], &text[tail_start..])
-}
-
-fn floor_char_boundary(text: &str, mut index: usize) -> usize {
-    while index > 0 && !text.is_char_boundary(index) {
-        index -= 1;
-    }
-    index
-}
-
-fn ceil_char_boundary(text: &str, mut index: usize) -> usize {
-    while index < text.len() && !text.is_char_boundary(index) {
-        index += 1;
-    }
-    index
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn truncate_for_feedback_keeps_ends() {
-        let truncated = truncate_for_feedback("abcdefghij", 6);
-        assert_eq!(truncated, "abc\n...\nhij");
+fn log_plan_steps(label: &str, steps: &[codex_repo_ci::RepoCiStep]) {
+    if steps.is_empty() {
+        eprintln!("repo-ci learn:   {label}: (none)");
+        return;
     }
 
-    #[test]
-    fn truncate_for_feedback_handles_utf8_boundaries() {
-        let truncated = truncate_for_feedback("abé🙂xyz", 7);
-        assert_eq!(truncated, "ab\n...\nxyz");
+    eprintln!("repo-ci learn:   {label}:");
+    for step in steps {
+        eprintln!(
+            "repo-ci learn:     - {} [{}]: {}",
+            step.id,
+            step_phase_label(&step.phase),
+            step.command
+        );
+    }
+}
+
+fn log_validation_outcome(attempt: usize, outcome: &LearnOutcome) {
+    let status = if outcome.validation_run.status.success {
+        "passed"
+    } else {
+        "failed"
+    };
+    eprintln!(
+        "repo-ci learn: attempt {attempt}: validation {status} in {} phase (exit {:?})",
+        validation_phase_label(outcome.validation_phase),
+        outcome.validation_exit_code
+    );
+
+    if outcome.validation_run.steps.is_empty() {
+        eprintln!("repo-ci learn: attempt {attempt}: validation recorded no step events");
+    } else {
+        eprintln!("repo-ci learn: attempt {attempt}: validation step events:");
+        for step in &outcome.validation_run.steps {
+            eprintln!(
+                "repo-ci learn:   - {} {} exit {:?}",
+                step.id,
+                captured_step_event_label(&step.event),
+                step.exit_code
+            );
+        }
+    }
+
+    if !outcome.validation_run.status.success {
+        log_validation_output_excerpt(attempt, "stdout", &outcome.validation_run.stdout);
+        log_validation_output_excerpt(attempt, "stderr", &outcome.validation_run.stderr);
+    }
+}
+
+fn log_validation_output_excerpt(attempt: usize, stream_name: &str, text: &str) {
+    if text.trim().is_empty() {
+        eprintln!("repo-ci learn: attempt {attempt}: validation {stream_name}: (empty)");
+        return;
+    }
+
+    eprintln!(
+        "repo-ci learn: attempt {attempt}: validation {stream_name}:\n{}",
+        truncate_for_feedback(text, 4_000)
+    );
+}
+
+fn step_phase_label(phase: &codex_repo_ci::StepPhase) -> &'static str {
+    match phase {
+        codex_repo_ci::StepPhase::Prepare => "prepare",
+        codex_repo_ci::StepPhase::Lint => "lint",
+        codex_repo_ci::StepPhase::Build => "build",
+        codex_repo_ci::StepPhase::Test => "test",
+    }
+}
+
+fn validation_phase_label(phase: codex_repo_ci::ValidationPhase) -> &'static str {
+    match phase {
+        codex_repo_ci::ValidationPhase::Prepare => "prepare",
+        codex_repo_ci::ValidationPhase::Fast => "fast",
+    }
+}
+
+fn captured_step_event_label(event: &codex_repo_ci::CapturedStepEvent) -> &'static str {
+    match event {
+        codex_repo_ci::CapturedStepEvent::Started => "started",
+        codex_repo_ci::CapturedStepEvent::Finished => "finished",
     }
 }
