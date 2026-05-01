@@ -57,7 +57,7 @@ pub fn render_repo_ci_learning_prompt(
     failure_feedback: Option<&str>,
 ) -> String {
     let mut prompt = format!(
-        "Learn local CI commands for this repository.\n\nRepository root: {}\nFast-step time budget: about {} seconds.\n\nYou must inspect the repository yourself to discover relevant files and commands.\nUse local read-only exploration only.\nDo not edit any files.\nDo not use the web.\nReturn strict JSON only matching the schema.\n\nInspection rules:\n- Use only non-interactive repository inspection commands.\n- Never launch an editor, pager, REPL, fuzzy finder, or any other interactive terminal UI.\n- Never run commands such as `$EDITOR`, `$VISUAL`, `vim`, `nvim`, `vi`, `nano`, `emacs`, `less`, `more`, `most`, `bat --paging`, `fzf`, or `top`.\n- Prefer commands such as `rg`, `find`, `ls`, `sed -n`, `cat`, `git show`, and similar non-interactive readers.\n\nRequirements:\n- Produce prepareSteps, fastSteps, and fullSteps.\n- Every command must run from the repository root via `bash -lc`.\n- Prefer project-native entry points such as `just`, `make`, package scripts, cargo commands, pytest, tox, or repo scripts.\n- `prepareSteps` should set up dependencies or caches only when truly needed.\n- `fastSteps` should be the quickest representative local checks that CI expects to stay green.\n- `fullSteps` may be broader than `fastSteps`, but must still be valid local commands.\n- Use stable, descriptive step ids.\n- Keep commands realistic for this machine; if a tool is optional and likely absent, prefer a repo wrapper or a more portable command.\n- If no distinct full suite exists, reuse the fast steps.\n",
+        "Learn local CI commands for this repository.\n\nRepository root: {}\nFast-step time budget: about {} seconds.\n\nYou must inspect the repository yourself to discover relevant files and commands.\nUse local read-only exploration only.\nDo not edit any files.\nUse provided GitHub Actions history hints, and you may run read-only GitHub CLI metadata commands such as `gh run list`, `gh run view`, `gh workflow list`, `gh workflow view`, or read-only `gh api` GET requests.\nReturn strict JSON only matching the schema.\n\nInspection rules:\n- Use only non-interactive repository inspection commands.\n- Never launch an editor, pager, REPL, fuzzy finder, or any other interactive terminal UI.\n- Never run commands such as `$EDITOR`, `$VISUAL`, `vim`, `nvim`, `vi`, `nano`, `emacs`, `less`, `more`, `most`, `bat --paging`, `fzf`, or `top`.\n- During discovery, do not execute local test, build, install, package-manager, service, container, or cluster-starting commands. This includes commands such as `pytest`, `tox`, `nox`, `cargo test`, `make test`, `npm test`, `uv run pytest`, `pip install`, `uv sync`, `docker`, `docker compose`, `ccm`, and similar project runners.\n- Prefer commands such as `rg`, `find`, `ls`, `sed -n`, `cat`, `git show`, and similar non-interactive readers.\n\nRequirements:\n- Produce prepareSteps, fastSteps, and fullSteps.\n- Every command must run from the repository root via `bash -lc`.\n- Prefer project-native entry points such as `just`, `make`, package scripts, cargo commands, pytest, tox, or repo scripts.\n- `prepareSteps` should set up dependencies or caches only when truly needed.\n- `fastSteps` should be the quickest representative local checks that CI expects to stay green and fit within the fast-step budget.\n- Never put integration, end-to-end, stress, cluster, service-backed, wheel-building, packaging, or other long suites in fastSteps when GitHub Actions history shows they exceed the fast-step budget.\n- `fullSteps` may be broader than `fastSteps`, but must still be valid local commands; omit suites that are only practical in remote CI.\n- Use stable, descriptive step ids.\n- Keep commands realistic for this machine; if a tool is optional and likely absent, prefer a repo wrapper or a more portable command.\n- If no distinct full suite exists, reuse the fast steps.\n",
         repo_root.display(),
         local_test_time_budget_sec,
     );
@@ -139,6 +139,9 @@ fn render_learning_hints(learning_hints: &RepoCiLearningHints) -> String {
         "Inferred full-step candidates",
         &learning_hints.full_steps,
     ));
+    prompt.push_str(&render_workflow_history_hint_section(
+        &learning_hints.workflow_history_hints,
+    ));
     prompt.push_str("\nPrompt rules for strong signals:\n");
     prompt.push_str(
         "- Treat checked-in CI workflow files, such as `.github/workflows/*.yml`, as the highest-priority source of CI/CD truth.\n",
@@ -160,6 +163,11 @@ fn render_learning_hints(learning_hints: &RepoCiLearningHints) -> String {
     prompt.push_str(
         "- Use workflow-only matrix expansion mainly to shape fullSteps, not to bloat fastSteps.\n",
     );
+    if !learning_hints.workflow_history_hints.is_empty() {
+        prompt.push_str(
+            "- Treat GitHub Actions history as authoritative for runtime: workflows/jobs slower than the fast-step budget must be omitted from fastSteps, even if their commands appear in checked-in workflow files.\n",
+        );
+    }
     prompt
 }
 
@@ -190,6 +198,42 @@ fn render_workflow_hint_section(hints: &[crate::WorkflowRunHint]) -> String {
         rendered.push_str(&format!("- {} => {}\n", hint.origin, hint.command));
     }
     rendered
+}
+
+fn render_workflow_history_hint_section(hints: &[crate::WorkflowHistoryHint]) -> String {
+    let mut rendered = String::from("GitHub Actions history timing hints:\n");
+    if hints.is_empty() {
+        rendered.push_str("- (none)\n");
+        return rendered;
+    }
+    for hint in hints {
+        let url = hint
+            .url
+            .as_deref()
+            .map(|url| format!(" {url}"))
+            .unwrap_or_default();
+        rendered.push_str(&format!(
+            "- {} => {} over {} sample(s), conclusion {}{}\n",
+            hint.origin,
+            format_duration(hint.duration_seconds),
+            hint.sample_count,
+            hint.conclusion,
+            url,
+        ));
+    }
+    rendered
+}
+
+fn format_duration(seconds: u64) -> String {
+    let minutes = seconds / 60;
+    let seconds = seconds % 60;
+    if minutes == 0 {
+        format!("{seconds}s")
+    } else if seconds == 0 {
+        format!("{minutes}m")
+    } else {
+        format!("{minutes}m{seconds}s")
+    }
 }
 
 fn has_repo_native_hints(learning_hints: &RepoCiLearningHints) -> bool {
@@ -472,6 +516,13 @@ mod tests {
                 origin: ".github/workflows/tests.yml::lint (Lint)".to_string(),
                 command: "make lint".to_string(),
             }],
+            workflow_history_hints: vec![crate::WorkflowHistoryHint {
+                origin: "Integration tests".to_string(),
+                conclusion: "success".to_string(),
+                duration_seconds: 1_100,
+                sample_count: 3,
+                url: Some("https://github.com/owner/repo/actions/runs/1".to_string()),
+            }],
         };
 
         let prompt =
@@ -490,6 +541,9 @@ mod tests {
         assert!(prompt.contains("AGENTS.md"));
         assert!(prompt.contains("test-integration"));
         assert!(prompt.contains("test-e2e"));
+        assert!(prompt.contains("GitHub Actions history timing hints:"));
+        assert!(prompt.contains("Integration tests => 18m20s over 3 sample(s)"));
+        assert!(prompt.contains("do not execute local test, build, install"));
         assert!(prompt.contains("Do not replace discovered repo-native lint/test/build commands with generic fallback checks like `git diff --check` unless validation proves the repo-native commands are unusable."));
     }
 

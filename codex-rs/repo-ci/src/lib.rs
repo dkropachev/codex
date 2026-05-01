@@ -22,10 +22,12 @@ mod branch_diff;
 mod inference;
 mod learning_hints;
 mod persisted_runs;
+mod plan_guardrail;
 mod remote_commit;
 mod remote_workflow;
 mod repo_ci_ai_learning;
 mod runner;
+mod workflow_history;
 
 const MANIFEST_VERSION: u32 = 3;
 
@@ -157,6 +159,7 @@ pub use persisted_runs::manifest_fingerprint;
 pub use persisted_runs::run_capture_persisted_with_cancellation;
 pub use persisted_runs::store_captured_run_artifact;
 pub use persisted_runs::worktree_fingerprint;
+pub use plan_guardrail::render_plan_guardrail_feedback;
 pub use remote_commit::RemoteCommitApplied;
 pub use remote_commit::RemoteCommitChangeDetails;
 pub use remote_commit::RemoteCommitDecision;
@@ -185,6 +188,7 @@ pub use repo_ci_ai_learning::repo_ci_ai_plan_schema;
 pub use runner::RepoCiCancellation;
 use runner::capture_runner;
 use runner::run_runner;
+pub use workflow_history::WorkflowHistoryHint;
 
 #[derive(Debug, Clone)]
 pub struct LearnOutcome {

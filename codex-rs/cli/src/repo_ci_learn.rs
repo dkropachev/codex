@@ -30,11 +30,12 @@ pub(crate) async fn learn_repo_ci_with_ai(
         exec_timeout.as_secs()
     );
     eprintln!(
-        "repo-ci learn: collected hints: {} prepare, {} fast, {} full, {} workflow run commands",
+        "repo-ci learn: collected hints: {} prepare, {} fast, {} full, {} workflow run commands, {} GitHub Actions timing hints",
         learning_hints.prepare_steps.len(),
         learning_hints.fast_steps.len(),
         learning_hints.full_steps.len(),
-        learning_hints.workflow_run_hints.len()
+        learning_hints.workflow_run_hints.len(),
+        learning_hints.workflow_history_hints.len()
     );
 
     for attempt in 1..=AI_LEARN_MAX_ATTEMPTS {
@@ -58,6 +59,27 @@ pub(crate) async fn learn_repo_ci_with_ai(
         )
         .await?;
         log_learned_plan(attempt, &plan);
+        if let Some(guardrail_feedback) = codex_repo_ci::render_plan_guardrail_feedback(
+            &plan,
+            &learning_hints,
+            options.local_test_time_budget_sec,
+        ) {
+            eprintln!(
+                "repo-ci learn: attempt {attempt}: plan rejected before validation because it included a known-slow fast step"
+            );
+            eprintln!(
+                "repo-ci learn: attempt {attempt}: {}",
+                truncate_for_feedback(&guardrail_feedback.replace('\n', " "), 500)
+            );
+            failure_feedback = Some(guardrail_feedback);
+            prior_plan = Some(plan);
+            if attempt < AI_LEARN_MAX_ATTEMPTS {
+                eprintln!(
+                    "repo-ci learn: attempt {attempt}/{AI_LEARN_MAX_ATTEMPTS} failed; retrying with validation feedback"
+                );
+            }
+            continue;
+        }
         eprintln!(
             "repo-ci learn: attempt {attempt}/{AI_LEARN_MAX_ATTEMPTS}: writing runner and validating prepare/fast steps"
         );

@@ -8,7 +8,9 @@ use std::fs;
 use std::path::Path;
 
 use crate::RepoCiStep;
+use crate::WorkflowHistoryHint;
 use crate::inference;
+use crate::workflow_history::collect_workflow_history_hints;
 
 /// Prompt scaffolding for AI-based repo CI discovery.
 ///
@@ -21,6 +23,7 @@ pub struct RepoCiLearningHints {
     pub fast_steps: Vec<RepoCiStep>,
     pub full_steps: Vec<RepoCiStep>,
     pub workflow_run_hints: Vec<WorkflowRunHint>,
+    pub workflow_history_hints: Vec<WorkflowHistoryHint>,
 }
 
 /// A concise GitHub Actions `run:` command annotated with its workflow/job
@@ -39,6 +42,7 @@ pub fn collect_learning_hints(repo_root: &Path) -> Result<RepoCiLearningHints> {
         fast_steps,
         full_steps,
         workflow_run_hints: collect_workflow_run_hints(repo_root)?,
+        workflow_history_hints: collect_workflow_history_hints(repo_root),
     })
 }
 
@@ -281,6 +285,7 @@ jobs:
         assert!(hints.workflow_run_hints.iter().any(|hint| {
             hint.origin.contains("tests.yml::integration") && hint.command == "make build"
         }));
+        assert!(hints.workflow_history_hints.is_empty());
     }
 
     #[test]
