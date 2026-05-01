@@ -56,23 +56,6 @@ pub struct ToolRouterGuidanceRecord {
     pub source: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolRouterTuneObservation {
-    pub model_slug: String,
-    pub model_provider: String,
-    pub toolset_hash: String,
-    pub router_schema_version: i64,
-    pub affected_call_count: i64,
-    pub fallback_call_count: i64,
-    pub fallback_prompt_tokens: i64,
-    pub fallback_completion_tokens: i64,
-    pub invalid_route_errors: i64,
-    pub guidance_tokens: i64,
-    pub format_description_tokens: i64,
-    pub visible_router_schema_tokens: i64,
-    pub hidden_tool_schema_tokens: i64,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolRouterDiagnosticsWindow {
     AllTime,
@@ -253,66 +236,6 @@ impl StateRuntime {
         .execute(self.pool.as_ref())
         .await?;
         Ok(())
-    }
-
-    pub async fn tool_router_tune_observations(
-        &self,
-        window: ToolRouterDiagnosticsWindow,
-        model_slug: Option<&str>,
-    ) -> anyhow::Result<Vec<ToolRouterTuneObservation>> {
-        let since_created_at_ms = match window {
-            ToolRouterDiagnosticsWindow::AllTime => i64::MIN,
-            ToolRouterDiagnosticsWindow::SinceCreatedAtMs(value) => value,
-        };
-        let rows = sqlx::query(
-            r#"
-            SELECT
-                model_slug,
-                model_provider,
-                toolset_hash,
-                router_schema_version,
-                COUNT(*) AS affected_call_count,
-                COALESCE(SUM(CASE WHEN route_kind IN ('model_router', 'model_router_script', 'spark', 'spark_script') THEN 1 ELSE 0 END), 0) AS fallback_call_count,
-                COALESCE(SUM(CASE WHEN route_kind IN ('model_router', 'model_router_script', 'spark', 'spark_script') THEN spark_prompt_tokens ELSE 0 END), 0) AS fallback_prompt_tokens,
-                COALESCE(SUM(CASE WHEN route_kind IN ('model_router', 'model_router_script', 'spark', 'spark_script') THEN spark_completion_tokens ELSE 0 END), 0) AS fallback_completion_tokens,
-                COALESCE(SUM(CASE WHEN route_kind = 'error' THEN 1 ELSE 0 END), 0) AS invalid_route_errors,
-                COALESCE(MAX(guidance_tokens), 0) AS guidance_tokens,
-                COALESCE(MAX(format_description_tokens), 0) AS format_description_tokens,
-                COALESCE(MAX(visible_router_schema_tokens), 0) AS visible_router_schema_tokens,
-                COALESCE(MAX(hidden_tool_schema_tokens), 0) AS hidden_tool_schema_tokens
-            FROM tool_router_ledger
-            WHERE created_at_ms >= ?
-              AND model_slug != ''
-              AND (? IS NULL OR model_slug = ?)
-            GROUP BY model_slug, model_provider, toolset_hash, router_schema_version
-            ORDER BY affected_call_count DESC, fallback_call_count DESC
-            "#,
-        )
-        .bind(since_created_at_ms)
-        .bind(model_slug)
-        .bind(model_slug)
-        .fetch_all(self.pool.as_ref())
-        .await?;
-
-        rows.into_iter()
-            .map(|row| {
-                Ok(ToolRouterTuneObservation {
-                    model_slug: row.try_get("model_slug")?,
-                    model_provider: row.try_get("model_provider")?,
-                    toolset_hash: row.try_get("toolset_hash")?,
-                    router_schema_version: row.try_get("router_schema_version")?,
-                    affected_call_count: row.try_get("affected_call_count")?,
-                    fallback_call_count: row.try_get("fallback_call_count")?,
-                    fallback_prompt_tokens: row.try_get("fallback_prompt_tokens")?,
-                    fallback_completion_tokens: row.try_get("fallback_completion_tokens")?,
-                    invalid_route_errors: row.try_get("invalid_route_errors")?,
-                    guidance_tokens: row.try_get("guidance_tokens")?,
-                    format_description_tokens: row.try_get("format_description_tokens")?,
-                    visible_router_schema_tokens: row.try_get("visible_router_schema_tokens")?,
-                    hidden_tool_schema_tokens: row.try_get("hidden_tool_schema_tokens")?,
-                })
-            })
-            .collect::<anyhow::Result<Vec<_>>>()
     }
 
     pub async fn lookup_tool_router_rule(

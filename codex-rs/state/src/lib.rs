@@ -65,6 +65,7 @@ pub use runtime::ToolRouterLearnedRule;
 pub use runtime::ToolRouterLedgerEntry;
 pub use runtime::ToolRouterRulePruneOptions;
 pub use runtime::ToolRouterRulePruneResult;
+pub use runtime::ToolRouterTuneCount;
 pub use runtime::ToolRouterTuneObservation;
 pub use runtime::logs_db_filename;
 pub use runtime::logs_db_path;

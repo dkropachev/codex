@@ -3,13 +3,15 @@ use codex_state::StateRuntime;
 use codex_state::ToolRouterDiagnosticsWindow;
 use codex_state::ToolRouterGuidanceKey;
 use codex_state::ToolRouterGuidanceRecord;
+use codex_state::ToolRouterTuneCount;
 use codex_state::ToolRouterTuneObservation;
+use codex_tools::TOOL_ROUTER_DEFAULT_GUIDANCE_VERSION;
 use codex_tools::compose_tool_router_guidance;
 use codex_tools::tool_router_static_guidelines_tokens;
 use codex_tools::validate_tool_router_guidance_cap;
 use serde::Serialize;
 
-const DYNAMIC_GUIDANCE_VERSION: i64 = 2;
+const DYNAMIC_GUIDANCE_VERSION: i64 = 3;
 
 #[derive(Debug, Clone)]
 pub struct ToolRouterTuneOptions {
@@ -59,12 +61,19 @@ pub struct ToolRouterOptimizationReport {
     pub guidance_tokens_before: i64,
     pub guidance_tokens_after: i64,
     pub affected_call_count: i64,
+    pub fallback_call_count: i64,
+    pub invalid_route_errors: i64,
     pub per_call_estimated_savings_tokens: i64,
     pub gross_savings_tokens: i64,
+    pub guidance_delta_cost_tokens: i64,
     pub allocated_introspection_tokens: i64,
     pub net_savings_tokens: i64,
     pub test_status: ToolRouterOptimizationTestStatus,
     pub persisted: bool,
+    pub route_kind_breakdown: Vec<ToolRouterTuneCount>,
+    pub selected_tool_breakdown: Vec<ToolRouterTuneCount>,
+    pub fallback_tool_breakdown: Vec<ToolRouterTuneCount>,
+    pub outcome_breakdown: Vec<ToolRouterTuneCount>,
     pub message: String,
 }
 
@@ -129,6 +138,7 @@ fn optimizations_for_observation(
         guidance_tokens_after: observation.guidance_tokens,
         affected_call_count: observation.affected_call_count,
         per_call_estimated_savings_tokens: static_tokens,
+        gross_savings_tokens: observation.affected_call_count.saturating_mul(static_tokens),
         test_status: ToolRouterOptimizationTestStatus::Passing,
         message: "Static Tool Guidelines are removed from bundled base instructions only when tool_router is active.".to_string(),
     }));
@@ -163,6 +173,7 @@ fn optimizations_for_observation(
             guidance_tokens_after: dynamic_tokens,
             affected_call_count: affected_calls,
             per_call_estimated_savings_tokens: per_call_savings,
+            gross_savings_tokens: fallback_token_total,
             test_status,
             message: dynamic_guidance,
         }));
@@ -175,6 +186,7 @@ fn optimizations_for_observation(
         guidance_tokens_after: observation.guidance_tokens,
         affected_call_count: observation.affected_call_count,
         per_call_estimated_savings_tokens: 0,
+        gross_savings_tokens: 0,
         test_status: ToolRouterOptimizationTestStatus::Passing,
         message: "Router format description is regenerated from the current tool catalog and is not counted against the guidance cap.".to_string(),
     }));
@@ -188,6 +200,7 @@ struct OptimizationDraft<'a> {
     guidance_tokens_after: i64,
     affected_call_count: i64,
     per_call_estimated_savings_tokens: i64,
+    gross_savings_tokens: i64,
     test_status: ToolRouterOptimizationTestStatus,
     message: String,
 }
@@ -200,13 +213,15 @@ fn report(draft: OptimizationDraft<'_>) -> ToolRouterOptimizationReport {
         guidance_tokens_after,
         affected_call_count,
         per_call_estimated_savings_tokens,
+        gross_savings_tokens,
         test_status,
         message,
     } = draft;
-    let gross_savings_tokens = affected_call_count
+    let guidance_delta_cost_tokens = guidance_tokens_after
+        .saturating_sub(guidance_tokens_before)
         .max(0)
-        .saturating_mul(per_call_estimated_savings_tokens.max(0));
-    ToolRouterOptimizationReport {
+        .saturating_mul(observation.affected_call_count.max(0));
+    let mut report = ToolRouterOptimizationReport {
         optimization_type,
         model_slug: observation.model_slug.clone(),
         model_provider: observation.model_provider.clone(),
@@ -215,27 +230,68 @@ fn report(draft: OptimizationDraft<'_>) -> ToolRouterOptimizationReport {
         guidance_version: match optimization_type {
             ToolRouterOptimizationType::DynamicGuidance => DYNAMIC_GUIDANCE_VERSION,
             ToolRouterOptimizationType::DropStaticGuidance
-            | ToolRouterOptimizationType::FormatDescriptionRefresh => 1,
+            | ToolRouterOptimizationType::FormatDescriptionRefresh => {
+                TOOL_ROUTER_DEFAULT_GUIDANCE_VERSION
+            }
         },
         guidance_tokens_before,
         guidance_tokens_after,
         affected_call_count,
+        fallback_call_count: observation.fallback_call_count,
+        invalid_route_errors: observation.invalid_route_errors,
         per_call_estimated_savings_tokens,
         gross_savings_tokens,
+        guidance_delta_cost_tokens,
         allocated_introspection_tokens: 0,
-        net_savings_tokens: gross_savings_tokens,
+        net_savings_tokens: gross_savings_tokens.saturating_sub(guidance_delta_cost_tokens),
         test_status,
         persisted: false,
+        route_kind_breakdown: observation.route_kind_breakdown.clone(),
+        selected_tool_breakdown: observation.selected_tool_breakdown.clone(),
+        fallback_tool_breakdown: observation.fallback_tool_breakdown.clone(),
+        outcome_breakdown: observation.outcome_breakdown.clone(),
         message,
-    }
+    };
+    recompute_net_savings(&mut report);
+    report
+}
+
+fn recompute_net_savings(optimization: &mut ToolRouterOptimizationReport) {
+    optimization.net_savings_tokens = optimization
+        .gross_savings_tokens
+        .saturating_sub(optimization.guidance_delta_cost_tokens)
+        .saturating_sub(optimization.allocated_introspection_tokens);
 }
 
 fn dynamic_guidance_for_observation(observation: &ToolRouterTuneObservation) -> String {
+    let mut guidance = vec![
+        "For this model/toolset, avoid fallback routing by sending deterministic `tool_router` inputs."
+            .to_string(),
+    ];
     if observation.invalid_route_errors > 0 {
-        "Prefer deterministic router fields for this model/toolset: include `action.tool` for known tools, `action.cmd` for shell execution, and path/query targets when routing filesystem or search work.".to_string()
-    } else {
-        "For this model/toolset, avoid fallback routing by setting `action.tool` when the destination tool is known and by providing concrete `cmd`, `patch`, `query`, or `mcp_args` payloads.".to_string()
+        guidance.push("Invalid routes were observed; include required `request`, `where`, `targets`, and `action` fields, and use exact `action.tool` when a routed tool is known.".to_string());
     }
+    if !observation.fallback_tool_breakdown.is_empty() {
+        let tools = observation
+            .fallback_tool_breakdown
+            .iter()
+            .take(3)
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        guidance.push(format!(
+            "Fallbacks most often selected {tools}; prefer those exact tool names in `action.tool` when they are the intended destination."
+        ));
+    }
+    if observation
+        .route_kind_breakdown
+        .iter()
+        .any(|entry| matches!(entry.name.as_str(), "model_router_script" | "spark_script"))
+    {
+        guidance.push("Script fallbacks were observed; for shell work set `where.kind` to `shell` and provide concrete `action.cmd`, `action.command`, or `action.commands`.".to_string());
+    }
+    guidance.push("For filesystem, search, image, MCP, repo-ci, and process work, include the relevant path/query/namespace/session targets plus the smallest sufficient `action.kind`.".to_string());
+    guidance.join(" ")
 }
 
 fn allocate_introspection_tokens(
@@ -265,7 +321,7 @@ fn allocate_introspection_tokens(
         };
         allocated = allocated.saturating_add(share);
         optimization.allocated_introspection_tokens = share;
-        optimization.net_savings_tokens = optimization.gross_savings_tokens.saturating_sub(share);
+        recompute_net_savings(optimization);
     }
 }
 
@@ -276,6 +332,7 @@ async fn persist_passing_dynamic_guidance(
     for optimization in optimizations.iter_mut() {
         if optimization.optimization_type != ToolRouterOptimizationType::DynamicGuidance
             || optimization.test_status != ToolRouterOptimizationTestStatus::Passing
+            || optimization.net_savings_tokens <= 0
         {
             continue;
         }
@@ -352,6 +409,7 @@ mod tests {
     use tempfile::TempDir;
 
     use codex_state::ToolRouterLedgerEntry;
+    use codex_state::ToolRouterTuneCount;
 
     use super::*;
 
@@ -370,8 +428,28 @@ mod tests {
         assert!(report.optimizations.iter().any(|optimization| {
             optimization.optimization_type == ToolRouterOptimizationType::DynamicGuidance
                 && !optimization.persisted
-                && optimization.net_savings_tokens >= 0
         }));
+        let dynamic = report
+            .optimizations
+            .iter()
+            .find(|optimization| {
+                optimization.optimization_type == ToolRouterOptimizationType::DynamicGuidance
+            })
+            .expect("dynamic guidance optimization");
+        assert!(
+            dynamic
+                .message
+                .contains("Fallbacks most often selected list_dir")
+        );
+        assert_eq!(
+            dynamic.fallback_tool_breakdown,
+            vec![ToolRouterTuneCount {
+                name: "list_dir".to_string(),
+                count: 1,
+            }]
+        );
+        assert_eq!(dynamic.gross_savings_tokens, 30);
+        assert!(dynamic.guidance_delta_cost_tokens > 0);
         let key = guidance_key();
         assert_eq!(
             runtime
@@ -386,7 +464,7 @@ mod tests {
     async fn apply_persists_only_passing_dynamic_guidance() {
         let (_codex_home, runtime) = state_runtime().await;
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("model_router", 30, 6))
+            .record_tool_router_ledger_entry(ledger_entry("model_router", 300, 60))
             .await
             .expect("record ledger");
 

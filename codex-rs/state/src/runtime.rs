@@ -68,6 +68,7 @@ mod remote_control;
 mod test_support;
 mod threads;
 mod tool_router;
+mod tool_router_tune;
 
 pub use device_key::DeviceKeyBindingRecord;
 pub use goals::ThreadGoalAccountingMode;
@@ -85,7 +86,8 @@ pub use tool_router::ToolRouterLearnedRule;
 pub use tool_router::ToolRouterLedgerEntry;
 pub use tool_router::ToolRouterRulePruneOptions;
 pub use tool_router::ToolRouterRulePruneResult;
-pub use tool_router::ToolRouterTuneObservation;
+pub use tool_router_tune::ToolRouterTuneCount;
+pub use tool_router_tune::ToolRouterTuneObservation;
 
 // "Partition" is the retained-log-content bucket we cap at 10 MiB:
 // - one bucket per non-null thread_id

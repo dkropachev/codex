@@ -248,7 +248,7 @@ struct ToolRouterTuneCommand {
     #[arg(long = "introspection-model", value_name = "SLUG")]
     introspection_model: Option<String>,
 
-    /// Persist only optimizations whose deterministic tests pass.
+    /// Persist only passing dynamic guidance with positive estimated net savings.
     #[arg(long = "apply", default_value_t = false)]
     apply: bool,
 
@@ -2481,17 +2481,54 @@ fn print_tool_router_tune_report(report: &codex_core::tool_router_tune::ToolRout
     println!("Optimizations:");
     for optimization in &report.optimizations {
         println!(
-            "- {} [{}]: calls {}, guidance {} -> {}, gross {}, net {}, persisted {}",
+            "- {} [{}]: model {} provider {} toolset {} calls {}, fallback {}, invalid {}, guidance {} -> {}, gross {}, guidance-cost {}, net {}, persisted {}",
             tool_router_optimization_name(optimization.optimization_type),
             tool_router_test_status_name(optimization.test_status),
+            optimization.model_slug,
+            optimization.model_provider,
+            optimization.toolset_hash,
             optimization.affected_call_count,
+            optimization.fallback_call_count,
+            optimization.invalid_route_errors,
             optimization.guidance_tokens_before,
             optimization.guidance_tokens_after,
             optimization.gross_savings_tokens,
+            optimization.guidance_delta_cost_tokens,
             optimization.net_savings_tokens,
             optimization.persisted
         );
+        if !optimization.route_kind_breakdown.is_empty() {
+            println!(
+                "  routes: {}",
+                tool_router_count_breakdown(&optimization.route_kind_breakdown, 5)
+            );
+        }
+        if !optimization.fallback_tool_breakdown.is_empty() {
+            println!(
+                "  fallback tools: {}",
+                tool_router_count_breakdown(&optimization.fallback_tool_breakdown, 5)
+            );
+        }
+        if !optimization.outcome_breakdown.is_empty() {
+            println!(
+                "  outcomes: {}",
+                tool_router_count_breakdown(&optimization.outcome_breakdown, 5)
+            );
+        }
+        println!("  note: {}", optimization.message);
     }
+}
+
+fn tool_router_count_breakdown(
+    entries: &[codex_state::ToolRouterTuneCount],
+    limit: usize,
+) -> String {
+    entries
+        .iter()
+        .take(limit)
+        .map(|entry| format!("{}={}", entry.name, entry.count))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn tool_router_optimization_name(

@@ -3,14 +3,14 @@ use crate::TOOL_ROUTER_TOOL_NAME;
 use crate::ToolSpec;
 
 pub const TOOL_ROUTER_SCHEMA_VERSION: i64 = 1;
-pub const TOOL_ROUTER_DEFAULT_GUIDANCE_VERSION: i64 = 1;
+pub const TOOL_ROUTER_DEFAULT_GUIDANCE_VERSION: i64 = 2;
 pub const TOOL_ROUTER_DEFAULT_GUIDANCE_TOKEN_CAP: usize = 600;
 pub const TOOL_ROUTER_HARD_GUIDANCE_TOKEN_CAP: usize = 1200;
 
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 
-pub const TOOL_ROUTER_DEFAULT_GUIDANCE: &str = "Use `tool_router` for structured tool requests. Prefer `action.tool` when the exact internal tool is known, keep payloads minimal, and batch only independent read-only work.";
+pub const TOOL_ROUTER_DEFAULT_GUIDANCE: &str = "Use `tool_router` for structured tool requests. Prefer exact `action.tool`, or a deterministic `action.kind` with concrete `cmd`, `patch`, `query`, `session_id`, or `mcp_args` payloads. Keep payloads minimal; batch only independent read-only work.";
 
 pub fn estimate_router_text_tokens(text: &str) -> usize {
     let non_ws_chars = text.chars().filter(|ch| !ch.is_whitespace()).count();
