@@ -18,9 +18,10 @@ pub fn install_test_tracing(tracer_name: &str) -> TestTracingContext {
     let tracer = provider.tracer(tracer_name.to_string());
     let subscriber =
         tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+    let guard = subscriber.set_default();
 
     TestTracingContext {
         _provider: provider,
-        _guard: subscriber.set_default(),
+        _guard: guard,
     }
 }
