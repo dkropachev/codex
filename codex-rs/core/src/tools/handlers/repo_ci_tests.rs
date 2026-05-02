@@ -66,9 +66,25 @@ fn brief_cached_pass_omits_logs() {
 
     assert_eq!(response["status"], json!("passed"));
     assert_eq!(response["cache_hit"], json!(true));
+    assert_eq!(response["resource_usage"], json!(null));
     assert_eq!(response.get("stdout"), None);
     assert_eq!(response.get("stderr"), None);
     assert_eq!(response.get("error_output"), None);
+}
+
+#[test]
+fn brief_response_includes_resource_usage_when_present() {
+    let mut artifact = passed_artifact("", "");
+    artifact.resource_usage = Some(sample_resource_usage());
+
+    let response = format_run_artifact_response(
+        "run",
+        &artifact,
+        DetailLevel::Brief,
+        /*cache_hit*/ false,
+    );
+
+    assert_eq!(response["resource_usage"], json!(&artifact.resource_usage));
 }
 
 fn failed_artifact(stdout: &str, stderr: &str) -> codex_cicd_artifacts::RunArtifact {
@@ -89,6 +105,7 @@ fn failed_artifact(stdout: &str, stderr: &str) -> codex_cicd_artifacts::RunArtif
             status: codex_cicd_artifacts::StepRunStatus::Failed,
             exit_code: Some(1),
         }],
+        resource_usage: None,
         stdout: stdout.to_string(),
         stderr: stderr.to_string(),
     }
@@ -102,5 +119,32 @@ fn passed_artifact(stdout: &str, stderr: &str) -> codex_cicd_artifacts::RunArtif
         stdout: stdout.to_string(),
         stderr: stderr.to_string(),
         ..failed_artifact("", "")
+    }
+}
+
+fn sample_resource_usage() -> codex_cicd_artifacts::RunResourceUsage {
+    codex_cicd_artifacts::RunResourceUsage {
+        run_id: "run".to_string(),
+        host: codex_cicd_artifacts::HostResourceSnapshot {
+            cpu_count: Some(4),
+            memory_total_bytes: Some(8_000),
+            memory_available_bytes: Some(4_000),
+            memory_limit_bytes: Some(8_000),
+        },
+        process: codex_cicd_artifacts::ResourceUsageTotals {
+            cpu_time_ms: Some(25),
+            peak_memory_bytes: Some(1_024),
+        },
+        containers: Vec::new(),
+        totals: codex_cicd_artifacts::ResourceUsageTotals {
+            cpu_time_ms: Some(25),
+            peak_memory_bytes: Some(1_024),
+        },
+        feasibility: codex_cicd_artifacts::ResourceFeasibility {
+            status: codex_cicd_artifacts::ResourceFeasibilityStatus::LikelyRunnable,
+            reason: "fits".to_string(),
+            required_memory_bytes: Some(1_280),
+            memory_limit_bytes: Some(8_000),
+        },
     }
 }

@@ -26,6 +26,7 @@ mod plan_guardrail;
 mod remote_commit;
 mod remote_workflow;
 mod repo_ci_ai_learning;
+mod resource_monitor;
 mod runner;
 mod workflow_history;
 
@@ -223,6 +224,7 @@ pub struct CapturedRun {
     pub stdout: String,
     pub stderr: String,
     pub steps: Vec<CapturedStep>,
+    pub resource_usage: Option<cicd_artifacts::RunResourceUsage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1184,6 +1186,41 @@ jobs:
     }
 
     #[test]
+    fn workflow_inference_drops_shell_array_fragments() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(temp.path().join(".github/workflows")).expect("workflow dir");
+        fs::write(
+            temp.path().join(".github/workflows/ci.yml"),
+            r#"
+name: CI
+jobs:
+  test:
+    steps:
+      - run: |
+          bazel_test_args=(
+            test
+            --print-failed-test-logs
+          )
+          ./.github/scripts/run-bazel-ci.sh "${bazel_args[@]}" -- "${bazel_test_args[@]}"
+          cargo test -p codex-repo-ci
+"#,
+        )
+        .expect("write workflow");
+
+        let (_prepare, fast, full) = infer_steps(temp.path()).expect("infer steps");
+
+        assert_eq!(
+            fast,
+            vec![step(
+                "workflow-test",
+                "cargo test -p codex-repo-ci",
+                StepPhase::Test,
+            )]
+        );
+        assert_eq!(full, fast);
+    }
+
+    #[test]
     fn learns_makefile_steps_for_scala_repo() {
         let temp = tempfile::tempdir().expect("tempdir");
         fs::write(
@@ -1333,6 +1370,7 @@ jobs:
                 event: CapturedStepEvent::Finished,
                 exit_code: Some(0),
             }],
+            resource_usage: Some(sample_resource_usage()),
         };
 
         let artifact = store_captured_run_artifact(
@@ -1344,6 +1382,8 @@ jobs:
             std::time::Duration::from_millis(/*millis*/ 12),
         )
         .expect("store artifact");
+
+        assert_eq!(&artifact.resource_usage, &run.resource_usage);
 
         assert_eq!(
             read_run_artifact(&codex_home, &artifact.artifact_id).expect("read"),
@@ -1735,6 +1775,7 @@ jobs:
                 },
             ]
         );
+        assert!(run.resource_usage.is_some());
     }
 
     #[test]
@@ -1987,5 +2028,32 @@ jobs:
         assert!(issue_types.contains(&RepoCiIssueType::Scalability));
         assert!(issue_types.contains(&RepoCiIssueType::Observability));
         assert!(issue_types.contains(&RepoCiIssueType::Security));
+    }
+
+    fn sample_resource_usage() -> cicd_artifacts::RunResourceUsage {
+        cicd_artifacts::RunResourceUsage {
+            run_id: "run".to_string(),
+            host: cicd_artifacts::HostResourceSnapshot {
+                cpu_count: Some(8),
+                memory_total_bytes: Some(16_000),
+                memory_available_bytes: Some(8_000),
+                memory_limit_bytes: Some(16_000),
+            },
+            process: cicd_artifacts::ResourceUsageTotals {
+                cpu_time_ms: Some(10),
+                peak_memory_bytes: Some(1_000),
+            },
+            containers: Vec::new(),
+            totals: cicd_artifacts::ResourceUsageTotals {
+                cpu_time_ms: Some(10),
+                peak_memory_bytes: Some(1_000),
+            },
+            feasibility: cicd_artifacts::ResourceFeasibility {
+                status: cicd_artifacts::ResourceFeasibilityStatus::LikelyRunnable,
+                reason: "fits".to_string(),
+                required_memory_bytes: Some(1_250),
+                memory_limit_bytes: Some(16_000),
+            },
+        }
     }
 }

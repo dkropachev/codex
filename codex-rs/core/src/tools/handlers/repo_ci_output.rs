@@ -59,6 +59,7 @@ pub(super) fn artifact_metadata_json(artifact: &RunArtifact) -> serde_json::Valu
         "exit_code": artifact.exit_code,
         "duration_ms": artifact.duration_ms,
         "steps": &artifact.steps,
+        "resource_usage": &artifact.resource_usage,
         "manifest_fingerprint": &artifact.manifest_fingerprint,
         "worktree_fingerprint": &artifact.worktree_fingerprint,
     })

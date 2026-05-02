@@ -86,7 +86,7 @@ fn learn_tool() -> ResponsesApiTool {
 fn run_tool() -> ResponsesApiTool {
     ResponsesApiTool {
         name: REPO_CI_RUN_TOOL_NAME.to_string(),
-        description: "Run repo-ci verification using learned repository commands. Defaults to fast mode, learns stale or missing metadata by default, and reuses cached passing results by default. Brief failures return error_output and artifact_id; detailed output may include bounded stdout/stderr."
+        description: "Run repo-ci verification using learned repository commands. Defaults to fast mode, learns stale or missing metadata by default, reuses cached passing results by default, and records best-effort CPU/memory usage for the runner and attributed containers. Brief failures return error_output and artifact_id; detailed output may include bounded stdout/stderr."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -125,7 +125,7 @@ fn run_tool() -> ResponsesApiTool {
 fn result_tool() -> ResponsesApiTool {
     ResponsesApiTool {
         name: REPO_CI_RESULT_TOOL_NAME.to_string(),
-        description: "Read a stored repo-ci run artifact. Brief output returns metadata and step statuses; detailed output returns bounded logs for the run or selected step."
+        description: "Read a stored repo-ci run artifact. Brief output returns metadata, step statuses, and resource usage when available; detailed output returns bounded logs for the run or selected step."
             .to_string(),
         strict: false,
         defer_loading: None,

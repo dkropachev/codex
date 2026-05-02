@@ -6,6 +6,7 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::Digest;
 use sha2::Sha256;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -49,8 +50,78 @@ pub struct RunArtifact {
     pub manifest_fingerprint: String,
     pub worktree_fingerprint: String,
     pub steps: Vec<StepStatus>,
+    #[serde(default)]
+    pub resource_usage: Option<RunResourceUsage>,
     pub stdout: String,
     pub stderr: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunResourceUsage {
+    pub run_id: String,
+    pub host: HostResourceSnapshot,
+    pub process: ResourceUsageTotals,
+    pub containers: Vec<ContainerResourceUsage>,
+    pub totals: ResourceUsageTotals,
+    pub feasibility: ResourceFeasibility,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostResourceSnapshot {
+    pub cpu_count: Option<u64>,
+    pub memory_total_bytes: Option<u64>,
+    pub memory_available_bytes: Option<u64>,
+    pub memory_limit_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ResourceUsageTotals {
+    pub cpu_time_ms: Option<u64>,
+    pub peak_memory_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerResourceUsage {
+    pub runtime: ContainerRuntime,
+    pub id: String,
+    pub name: Option<String>,
+    pub image: Option<String>,
+    pub attribution: ContainerAttribution,
+    pub compose_project: Option<String>,
+    pub labels: BTreeMap<String, String>,
+    pub resources: ResourceUsageTotals,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContainerRuntime {
+    Docker,
+    Podman,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContainerAttribution {
+    Labeled,
+    ComposeProject,
+    CreatedDuringRun,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceFeasibility {
+    pub status: ResourceFeasibilityStatus,
+    pub reason: String,
+    pub required_memory_bytes: Option<u64>,
+    pub memory_limit_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceFeasibilityStatus {
+    LikelyRunnable,
+    Risky,
+    Insufficient,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -361,6 +432,51 @@ mod tests {
     }
 
     #[test]
+    fn legacy_run_artifact_without_resource_usage_reads_as_none() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let state_dir = temp.path().join("state");
+        let context = context();
+        register_state(&codex_home, &state_dir, &context);
+        let artifact = artifact_for(hex_id('b'), &state_dir, &context, RunArtifactStatus::Passed);
+
+        write_legacy_run_artifact(&codex_home, &state_dir, &artifact);
+
+        assert_eq!(
+            read_run_artifact(&codex_home, &artifact.artifact_id).expect("read"),
+            artifact
+        );
+    }
+
+    #[test]
+    fn legacy_cached_pass_without_resource_usage_is_not_evicted() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let state_dir = temp.path().join("state");
+        let context = context();
+        register_state(&codex_home, &state_dir, &context);
+        let artifact = artifact_for(hex_id('c'), &state_dir, &context, RunArtifactStatus::Passed);
+
+        write_legacy_run_artifact(&codex_home, &state_dir, &artifact);
+        write_sqlite_cache_entry(
+            &codex_home,
+            &context,
+            &artifact,
+            /*cached_at_unix_sec*/ 1,
+        );
+
+        assert_eq!(
+            lookup_cached_passing_run(&codex_home, &context).expect("lookup"),
+            Some(artifact)
+        );
+        assert!(
+            store::cache_entry(&codex_home, &cache_key(&context))
+                .expect("cache entry")
+                .is_some()
+        );
+    }
+
+    #[test]
     fn missing_sqlite_cached_artifact_is_evicted_and_misses() {
         let temp = tempfile::tempdir().expect("tempdir");
         let codex_home = temp.path().join("codex-home");
@@ -529,6 +645,7 @@ mod tests {
             manifest_fingerprint: context.manifest_fingerprint.clone(),
             worktree_fingerprint: context.worktree_fingerprint.clone(),
             steps: Vec::new(),
+            resource_usage: None,
             stdout: String::new(),
             stderr: String::new(),
         }
@@ -555,6 +672,24 @@ mod tests {
             }),
         )
         .expect("put cache")
+    }
+
+    fn write_legacy_run_artifact(codex_home: &Path, state_dir: &Path, artifact: &RunArtifact) {
+        let path = run_artifact_path(state_dir, &artifact.artifact_id);
+        fs::create_dir_all(path.parent().expect("artifact parent")).expect("artifact dir");
+        let mut value = serde_json::to_value(artifact).expect("artifact json");
+        value
+            .as_object_mut()
+            .expect("artifact object")
+            .remove("resource_usage");
+        fs::write(&path, serde_json::to_vec_pretty(&value).expect("artifact bytes"))
+            .expect("write artifact");
+        store::index_artifact_file(
+            codex_home,
+            state_dir,
+            &run_artifact_relative_path(&artifact.artifact_id),
+        )
+        .expect("index artifact");
     }
 
     fn hex_id(ch: char) -> String {

@@ -127,6 +127,15 @@ unavailable. Failing local checks are fed back into the same turn for repair
 until the configured local retry limit is reached. Progress is emitted as
 structured repo CI status events rather than generic warnings.
 
+Local repo-ci run artifacts also record best-effort resource usage. Codex polls
+the generated runner's process group for CPU time and peak RSS, records host CPU
+and memory limits, and watches Docker/Podman containers that appear during the
+run. Containers are attributed by a Codex run label when present, by a Compose
+project label matching the run's `COMPOSE_PROJECT_NAME`, or otherwise as
+created during the run. The artifact includes a memory headroom estimate so
+callers can decide whether the learned checks look too large for the current
+machine.
+
 When a failure occurs, Codex asks the model selected by `model_router` for the
 repo-ci phase to classify the failure as `related`, `unrelated`,
 `whole_suite`, or `unknown`. If no model result is available, Codex uses

@@ -2,10 +2,18 @@ mod run;
 mod store;
 
 pub use codex_artifactory::file_sha256;
+pub use run::ContainerAttribution;
+pub use run::ContainerResourceUsage;
+pub use run::ContainerRuntime;
+pub use run::HostResourceSnapshot;
+pub use run::ResourceFeasibility;
+pub use run::ResourceFeasibilityStatus;
+pub use run::ResourceUsageTotals;
 pub use run::RunArtifact;
 pub use run::RunArtifactStatus;
 pub use run::RunCacheContext;
 pub use run::RunMode;
+pub use run::RunResourceUsage;
 pub use run::StepRunStatus;
 pub use run::StepStatus;
 pub use run::artifact_id;

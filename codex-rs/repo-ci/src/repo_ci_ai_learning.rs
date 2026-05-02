@@ -285,9 +285,7 @@ fn normalize_steps(
         .enumerate()
         .filter_map(|(index, step)| {
             let command = step.command.trim().to_string();
-            let is_github_actions_only =
-                crate::learning_hints::is_github_actions_only_command(&command);
-            if command.is_empty() || is_github_actions_only {
+            if command.is_empty() || is_non_runnable_learned_command(&command) {
                 return None;
             }
 
@@ -313,6 +311,12 @@ fn normalize_steps(
             })
         })
         .collect()
+}
+
+fn is_non_runnable_learned_command(command: &str) -> bool {
+    crate::learning_hints::is_github_actions_only_command(command)
+        || crate::learning_hints::references_shell_context(command)
+        || crate::learning_hints::looks_like_shell_fragment(command)
 }
 
 fn unique_step_id(mut id: String, used_ids: &mut BTreeSet<String>) -> String {
@@ -516,6 +520,45 @@ mod tests {
     }
 
     #[test]
+    fn normalize_steps_drops_shell_fragments_and_context_dependent_commands() {
+        let steps = normalize_steps(
+            vec![
+                RepoCiStep {
+                    id: "flag-fragment".to_string(),
+                    command: "--print-failed-test-logs".to_string(),
+                    phase: StepPhase::Test,
+                },
+                RepoCiStep {
+                    id: "bare-test".to_string(),
+                    command: "test".to_string(),
+                    phase: StepPhase::Test,
+                },
+                RepoCiStep {
+                    id: "array-context".to_string(),
+                    command: "./run.sh \"${bazel_targets[@]}\"".to_string(),
+                    phase: StepPhase::Test,
+                },
+                RepoCiStep {
+                    id: "unit".to_string(),
+                    command: "cargo test -p codex-repo-ci".to_string(),
+                    phase: StepPhase::Test,
+                },
+            ],
+            StepPhase::Test,
+            "fast",
+        );
+
+        assert_eq!(
+            steps,
+            vec![RepoCiStep {
+                id: "unit".to_string(),
+                command: "cargo test -p codex-repo-ci".to_string(),
+                phase: StepPhase::Test,
+            }]
+        );
+    }
+
+    #[test]
     fn truncate_for_feedback_keeps_ends() {
         let truncated = truncate_for_feedback("abcdefghij", 6);
         assert_eq!(truncated, "abc\n...\nhij");
@@ -643,6 +686,7 @@ mod tests {
                         exit_code: Some(2),
                     },
                 ],
+                resource_usage: None,
             },
         };
 
