@@ -294,14 +294,14 @@ fn spawn_runner(
     jsonl_path: Option<&Path>,
     stdio: RunnerStdio,
 ) -> Result<ManagedRunner> {
-    let mut command = Command::new("bash");
+    let mut command = bash_command();
     command
-        .arg(&paths.runner_path)
+        .arg(path_for_bash(&paths.runner_path))
         .arg(arg)
-        .env(REPO_ROOT_ENV, &paths.repo_root)
+        .env(REPO_ROOT_ENV, path_for_bash(&paths.repo_root))
         .current_dir(&paths.repo_root);
     if let Some(jsonl_path) = jsonl_path {
-        command.env(JSONL_ENV, jsonl_path);
+        command.env(JSONL_ENV, path_for_bash(jsonl_path));
     }
     let kill_mode = match stdio {
         RunnerStdio::Inherit => RunnerKillMode::Process,
@@ -318,6 +318,42 @@ fn spawn_runner(
         command.process_group(0);
     }
     ManagedRunner::spawn(command, &paths.runner_path, kill_mode)
+}
+
+#[cfg(not(windows))]
+fn bash_command() -> Command {
+    Command::new("bash")
+}
+
+#[cfg(windows)]
+fn bash_command() -> Command {
+    git_bash_path().map_or_else(|| Command::new("bash"), Command::new)
+}
+
+#[cfg(windows)]
+fn git_bash_path() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(program_files) = std::env::var_os("ProgramFiles") {
+        let git = PathBuf::from(program_files).join("Git");
+        candidates.push(git.join("bin").join("bash.exe"));
+        candidates.push(git.join("usr").join("bin").join("bash.exe"));
+    }
+    if let Some(program_files) = std::env::var_os("ProgramFiles(x86)") {
+        let git = PathBuf::from(program_files).join("Git");
+        candidates.push(git.join("bin").join("bash.exe"));
+        candidates.push(git.join("usr").join("bin").join("bash.exe"));
+    }
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+#[cfg(not(windows))]
+fn path_for_bash(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+#[cfg(windows)]
+fn path_for_bash(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn wait_for_runner(

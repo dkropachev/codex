@@ -932,9 +932,13 @@ fn hash_file(path: &Path) -> Option<String> {
 }
 
 fn write_runner(path: &Path, manifest: &RepoCiManifest) -> Result<()> {
+    let repo_root = manifest.repo_root.to_string_lossy();
+    #[cfg(windows)]
+    let repo_root = repo_root.replace('\\', "/");
+
     let mut script =
         String::from("#!/usr/bin/env bash\nset -euo pipefail\n\nmode=\"${1:-fast}\"\nrepo_root=");
-    script.push_str(&shell_quote(&manifest.repo_root.to_string_lossy()));
+    script.push_str(&shell_quote(&repo_root));
     script.push_str("\nrepo_root=\"${CODEX_REPO_CI_REPO_ROOT:-$repo_root}\"");
     script.push_str("\ncd \"$repo_root\"\n\nrecord_step() {\n  if [[ -n \"${CODEX_REPO_CI_JSONL:-}\" ]]; then\n    local id_json=\"$1\"\n    id_json=\"${id_json//\\\\/\\\\\\\\}\"\n    id_json=\"${id_json//\\\"/\\\\\\\"}\"\n    printf '{\"id\":\"%s\",\"event\":\"%s\",\"exit_code\":%s}\\n' \"$id_json\" \"$2\" \"$3\" >> \"$CODEX_REPO_CI_JSONL\"\n  fi\n}\n\nrun_step() {\n  local id=\"$1\"\n  shift\n  echo \"==> ${id}\"\n  record_step \"$id\" started null\n  set +e\n  \"$@\"\n  local status=$?\n  set -e\n  record_step \"$id\" finished \"$status\"\n  return \"$status\"\n}\n\nprepare() {\n");
     if manifest.prepare_steps.is_empty() {

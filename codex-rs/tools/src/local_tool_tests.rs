@@ -265,8 +265,7 @@ fn shell_tool_with_request_permission_includes_additional_permissions() {
     ));
 
     let description = if cfg!(windows) {
-        format!(
-            r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
+        r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
 
 Examples of valid command strings:
 
@@ -275,11 +274,9 @@ Examples of valid command strings:
 - recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
 - ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object {{ $_.ProcessName -like '*python*' }}"]
 - setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
-- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]
-
-{}"#,
-            windows_shell_guidance()
-        )
+- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
+            .to_string()
+            + &windows_shell_guidance_description()
     } else {
         r#"Runs a shell command and returns its output.
 - The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
