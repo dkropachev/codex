@@ -45,6 +45,41 @@ fn function_payloads_remain_function_outputs() {
 }
 
 #[test]
+fn default_token_accounting_uses_returned_tokens_for_all_fields() {
+    let output = FunctionToolOutput::from_text("ok".to_string(), Some(true));
+
+    assert_eq!(
+        output.token_accounting(7),
+        ToolOutputTokenAccounting {
+            returned_output_tokens: 7,
+            original_output_tokens: 7,
+            truncated_output_tokens: 7,
+        }
+    );
+}
+
+#[test]
+fn exec_token_accounting_uses_original_and_truncated_output_tokens() {
+    let output = ExecCommandToolOutput {
+        event_call_id: "call".to_string(),
+        chunk_id: "chunk".to_string(),
+        wall_time: std::time::Duration::from_millis(10),
+        raw_output: "alpha beta gamma delta epsilon\n".repeat(200).into_bytes(),
+        max_output_tokens: Some(4),
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: Some(500),
+        hook_command: Some("printf".to_string()),
+    };
+
+    let accounting = output.token_accounting(17);
+
+    assert_eq!(accounting.returned_output_tokens, 17);
+    assert_eq!(accounting.original_output_tokens, 500);
+    assert!(accounting.truncated_output_tokens < accounting.original_output_tokens);
+}
+
+#[test]
 fn mcp_code_mode_result_serializes_full_call_tool_result() {
     let output = CallToolResult {
         content: vec![serde_json::json!({

@@ -1207,6 +1207,7 @@ mod tests {
             model_provider: "openai".to_string(),
             toolset_hash: "abc123".to_string(),
             router_schema_version: 1,
+            model_response_ordinal: 2,
             guidance_version: 1,
             guidance_tokens: 10,
             format_description_tokens: 40,

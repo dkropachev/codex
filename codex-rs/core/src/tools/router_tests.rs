@@ -11,6 +11,8 @@ use crate::tools::registry::ToolKind;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::router_index::ToolRouterIndex;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_state::ToolRouterDiagnosticsWindow;
+use codex_state::ToolRouterRequestShape;
 use codex_protocol::models::ResponseItem;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::JsonSchema;
@@ -24,6 +26,8 @@ use tokio_util::sync::CancellationToken;
 use super::ToolCall;
 use super::ToolRouter;
 use super::ToolRouterParams;
+use super::ToolRouterPromptInfo;
+use super::ToolRouterTokenEstimates;
 
 #[tokio::test]
 #[expect(
@@ -255,6 +259,88 @@ async fn routed_inner_dispatch_records_router_source() -> anyhow::Result<()> {
         Some(ToolCallSource::Routed {
             router_call_id: "router-call".to_string(),
         })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn route_errors_record_sanitized_request_shape() -> anyhow::Result<()> {
+    let (mut session, turn) = make_session_and_context().await;
+    let codex_home = tempfile::tempdir().expect("temp dir");
+    let state_db = codex_state::StateRuntime::init(
+        codex_home.path().to_path_buf(),
+        "openai".to_string(),
+    )
+    .await?;
+    session.services.state_db = Some(Arc::clone(&state_db));
+    turn.increment_model_response_ordinal();
+
+    let registry = ToolRegistry::empty_for_test();
+    let index = ToolRouterIndex::build(&[], &registry, &HashSet::new());
+    let router = ToolRouter {
+        registry,
+        specs: Vec::new(),
+        index,
+        model_visible_specs: Vec::new(),
+        parallel_mcp_server_names: HashSet::new(),
+        tool_router_token_estimates: Some(ToolRouterTokenEstimates {
+            visible_router_schema_tokens: 10,
+            hidden_tool_schema_tokens: 20,
+        }),
+        tool_router_prompt_info: Some(ToolRouterPromptInfo {
+            format_description: String::new(),
+            format_description_tokens: 5,
+            toolset_hash: "test-toolset".to_string(),
+            router_schema_version: 1,
+        }),
+    };
+    let call = ToolCall {
+        tool_name: ToolName::plain("tool_router"),
+        call_id: "router-call".to_string(),
+        payload: ToolPayload::Function {
+            arguments: json!({
+                "request": "track progress without a plan tool",
+                "where": {"kind": "none"},
+                "targets": [],
+                "action": {"kind": "update_plan", "input": {"plan": []}}
+            })
+            .to_string(),
+        },
+    };
+
+    let err = router
+        .dispatch_tool_call_with_code_mode_result(
+            Arc::new(session),
+            Arc::new(turn),
+            CancellationToken::new(),
+            Arc::new(Mutex::new(TurnDiffTracker::new())),
+            call,
+            ToolCallSource::Direct,
+        )
+        .await
+        .expect_err("route should fail");
+    assert!(err.to_string().contains("could not deterministically route"));
+
+    let observations = state_db
+        .tool_router_tune_observations(ToolRouterDiagnosticsWindow::AllTime, None)
+        .await?;
+
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].invalid_route_errors, 1);
+    assert_eq!(
+        observations[0].request_shape_clusters,
+        vec![codex_state::ToolRouterRequestShapeCluster {
+            shape: ToolRouterRequestShape {
+                where_kind: "none".to_string(),
+                action_kind: "update_plan".to_string(),
+                target_kinds: Vec::new(),
+                payload_fields: vec!["input".to_string()],
+            },
+            route_kind: "error".to_string(),
+            outcome: Some("route_error".to_string()),
+            count: 1,
+        }]
     );
 
     Ok(())

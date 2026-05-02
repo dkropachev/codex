@@ -18,6 +18,14 @@ fn format_description_includes_required_shape_and_catalog() {
 }
 
 #[test]
+fn format_description_stays_within_budget() {
+    let router = create_tool_router_tool();
+    let description = tool_router_format_description(&router, &[create_list_dir_tool()]);
+
+    assert!(estimate_router_text_tokens(&description) < 140);
+}
+
+#[test]
 fn guidance_cap_rejects_dynamic_guidance_without_dropping_default() {
     let dynamic = "Prefer a very specific route for this model and toolset.".repeat(80);
     let guidance = compose_tool_router_guidance(Some(&dynamic), 50);

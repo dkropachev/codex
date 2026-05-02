@@ -10,7 +10,7 @@ pub const TOOL_ROUTER_HARD_GUIDANCE_TOKEN_CAP: usize = 1200;
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 
-pub const TOOL_ROUTER_DEFAULT_GUIDANCE: &str = "Use `tool_router` for structured tool requests. Prefer exact `action.tool`, or a deterministic `action.kind` with concrete `cmd`, `patch`, `query`, `session_id`, or `mcp_args` payloads. Keep payloads minimal; batch only independent read-only work.";
+pub const TOOL_ROUTER_DEFAULT_GUIDANCE: &str = "Use `tool_router` for routed calls. Prefer exact `action.tool` or deterministic `action.kind` with concrete `cmd`, `patch`, `query`, `session_id`, or `mcp_args`. For independent read-only work, use `action.kind=batch` with `action.commands`/`action.paths`.";
 
 pub fn estimate_router_text_tokens(text: &str) -> usize {
     let non_ws_chars = text.chars().filter(|ch| !ch.is_whitespace()).count();
@@ -88,14 +88,10 @@ pub fn strip_tool_router_static_guidelines(instructions: &str) -> String {
 pub fn tool_router_format_description(router_spec: &ToolSpec, routed_tools: &[ToolSpec]) -> String {
     let mut lines = vec![
         "<tool_router_format>".to_string(),
-        "`tool_router` is the only model-visible tool for routed calls. Submit one JSON object with these required fields:".to_string(),
-        "- `request`: original user intent for this routed tool request.".to_string(),
-        "- `where.kind`: routing domain such as `shell`, `filesystem`, `git`, `mcp`, `app`, `skill`, `image`, `agent`, `memory`, or `config`.".to_string(),
-        "- `targets`: typed references for paths, tools, agents, servers, namespaces, queries, or text.".to_string(),
-        "- `action.kind`: smallest sufficient action; set `action.tool` to an exact internal tool name when known.".to_string(),
-        "Optional fields include `verbosity`, `where.namespace`, and action-specific payload fields such as `cmd`, `patch`, `query`, `session_id`, `mcp_args`, or `input`.".to_string(),
-        format!("Router schema version: {TOOL_ROUTER_SCHEMA_VERSION}."),
-        format!("Router tool: {}.", tool_summary(router_spec)),
+        "Submit one JSON object: `request`, `where.kind`, `targets`, and `action.kind` are required; use `action.tool` for an exact internal tool.".to_string(),
+        "Payload keys include `cmd`, `command`, `commands`, `paths`, `patch`, `query`, `session_id`, `mcp_args`, and `input`.".to_string(),
+        "For independent read-only work, use `action.kind=batch` with `action.commands` or `action.paths`.".to_string(),
+        format!("Schema version: {TOOL_ROUTER_SCHEMA_VERSION}; router: {}.", tool_summary(router_spec)),
         "Active routed tool catalog:".to_string(),
     ];
 
@@ -176,10 +172,10 @@ fn tool_summary(spec: &ToolSpec) -> String {
 
 fn compact_description(description: &str) -> String {
     let first_line = description.lines().next().unwrap_or_default().trim();
-    if first_line.len() <= 180 {
+    if first_line.len() <= 120 {
         first_line.to_string()
     } else {
-        let truncated = first_line.chars().take(180).collect::<String>();
+        let truncated = first_line.chars().take(120).collect::<String>();
         format!("{}...", truncated.trim_end())
     }
 }

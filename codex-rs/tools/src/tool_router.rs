@@ -33,7 +33,7 @@ pub fn create_tool_router_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: TOOL_ROUTER_TOOL_NAME.to_string(),
-        description: "Route one structured request to the appropriate internal Codex tool. Use exact tool names when known; otherwise set where.kind and action.kind with the smallest sufficient payload. Prefer high-level actions such as exec_wait, batch, workspace inspect, git_snapshot, repo_ci status/learn/run/result, and process status when they avoid multiple follow-up tool calls. When repo-ci tools are available, do not route regular linting, formatting checks, compiling, building, testing, CI polling, or CI reruns to shell tools; use repo_ci tools."
+        description: "Route one structured request to the appropriate internal Codex tool."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -136,29 +136,14 @@ fn router_action_schema() -> JsonSchema {
             "kind".to_string(),
             JsonSchema::string(Some("Action kind, such as exec, exec_wait, batch, inspect, git_snapshot, repo_ci status/learn/run/result, status, git, apply_patch, write_stdin, mcp, spawn_agent, wait_agent, tool_search, view_image, or direct_tool.".to_string())),
         ),
-        (
-            "description".to_string(),
-            JsonSchema::string(Some("Short human-readable action description. Optional; omitted descriptions default to the action kind.".to_string())),
-        ),
-        ("tool".to_string(), JsonSchema::string(Some("Exact internal tool name when known.".to_string()))),
-        ("name".to_string(), JsonSchema::string(Some("Exact action or tool name when known.".to_string()))),
-        ("cmd".to_string(), JsonSchema::string(Some("Shell command or script.".to_string()))),
+        ("description".to_string(), JsonSchema::string(None)),
+        ("tool".to_string(), JsonSchema::string(None)),
+        ("name".to_string(), JsonSchema::string(None)),
+        ("cmd".to_string(), JsonSchema::string(None)),
         ("command".to_string(), string_or_string_array),
-        (
-            "commands".to_string(),
-            JsonSchema::array(
-                JsonSchema::string(None),
-                Some("Multiple independent shell commands for a single router batch call.".to_string()),
-            ),
-        ),
-        (
-            "paths".to_string(),
-            JsonSchema::array(
-                JsonSchema::string(None),
-                Some("Multiple filesystem/workspace paths for inspect/read batch actions.".to_string()),
-            ),
-        ),
-        ("patch".to_string(), JsonSchema::string(Some("Full apply_patch patch body.".to_string()))),
+        ("commands".to_string(), JsonSchema::array(JsonSchema::string(None), None)),
+        ("paths".to_string(), JsonSchema::array(JsonSchema::string(None), None)),
+        ("patch".to_string(), JsonSchema::string(None)),
         ("input".to_string(), free_object.clone()),
         ("query".to_string(), JsonSchema::string(None)),
         ("agent_task".to_string(), JsonSchema::string(None)),
@@ -172,14 +157,8 @@ fn router_action_schema() -> JsonSchema {
         ("chars".to_string(), JsonSchema::string(None)),
         ("workdir".to_string(), JsonSchema::string(None)),
         ("timeout_ms".to_string(), JsonSchema::integer(None)),
-        (
-            "wait_until_exit".to_string(),
-            JsonSchema::boolean(Some("For shell exec routes, keep the tool call open until the process exits or wait_timeout_ms expires.".to_string())),
-        ),
-        (
-            "wait_timeout_ms".to_string(),
-            JsonSchema::integer(Some("Maximum wait for wait_until_exit shell routes. Defaults to the unified exec background timeout.".to_string())),
-        ),
+        ("wait_until_exit".to_string(), JsonSchema::boolean(None)),
+        ("wait_timeout_ms".to_string(), JsonSchema::integer(None)),
         ("yield_time_ms".to_string(), JsonSchema::integer(None)),
         ("max_output_tokens".to_string(), JsonSchema::integer(None)),
         ("sandbox_permissions".to_string(), JsonSchema::string(None)),

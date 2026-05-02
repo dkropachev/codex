@@ -264,8 +264,7 @@ impl ToolRouterTuneObservationBuilder {
             }
         }
 
-        if (is_fallback || row.route_kind == "error")
-            && let Some(request_shape_json) = row.request_shape_json.as_deref()
+        if let Some(request_shape_json) = row.request_shape_json.as_deref()
             && let Ok(shape) = serde_json::from_str::<ToolRouterRequestShape>(request_shape_json)
         {
             let key = ToolRouterRequestShapeClusterKey {
@@ -556,6 +555,63 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn tune_observations_include_deterministic_noop_and_error_request_shapes() {
+        let codex_home = TempDir::new().expect("temp dir");
+        let runtime = StateRuntime::init(codex_home.path().to_path_buf(), "test".to_string())
+            .await
+            .expect("state runtime");
+        let shape = ToolRouterRequestShape {
+            where_kind: "none".to_string(),
+            action_kind: "update_plan".to_string(),
+            target_kinds: Vec::new(),
+            payload_fields: vec!["input".to_string()],
+        };
+        let shape_json = serde_json::to_string(&shape).expect("shape json");
+
+        for (call_id, route_kind, outcome) in [
+            ("call-deterministic", "deterministic", Some("ok")),
+            ("call-noop", "none", Some("noop")),
+            ("call-error", "error", Some("route_error")),
+        ] {
+            let mut entry = ledger_entry(call_id, route_kind, 0, 0, 0, outcome);
+            entry.request_shape_json = Some(shape_json.clone());
+            runtime
+                .record_tool_router_ledger_entry(entry)
+                .await
+                .expect("record entry");
+        }
+
+        let observations = runtime
+            .tool_router_tune_observations(ToolRouterDiagnosticsWindow::AllTime, Some("gpt-test"))
+            .await
+            .expect("observations");
+
+        assert_eq!(
+            observations[0].request_shape_clusters,
+            vec![
+                ToolRouterRequestShapeCluster {
+                    shape: shape.clone(),
+                    route_kind: "deterministic".to_string(),
+                    outcome: Some("ok".to_string()),
+                    count: 1,
+                },
+                ToolRouterRequestShapeCluster {
+                    shape: shape.clone(),
+                    route_kind: "error".to_string(),
+                    outcome: Some("route_error".to_string()),
+                    count: 1,
+                },
+                ToolRouterRequestShapeCluster {
+                    shape,
+                    route_kind: "none".to_string(),
+                    outcome: Some("noop".to_string()),
+                    count: 1,
+                },
+            ]
+        );
+    }
+
     fn ledger_entry(
         call_id: &str,
         route_kind: &str,
@@ -572,6 +628,7 @@ mod tests {
             model_provider: "openai".to_string(),
             toolset_hash: "abc123".to_string(),
             router_schema_version: 1,
+            model_response_ordinal: 2,
             guidance_version: 1,
             guidance_tokens: 9,
             format_description_tokens: 20,

@@ -160,10 +160,20 @@ pub(crate) async fn resolve_router_request(
     })?;
     let kind = normalize(&args.action.kind);
     let where_kind = normalize(&args.where_.kind);
+    let request_shape_json = sanitized_request_shape_json(&args);
     let _ = (&args.request, &args.action.description, &args.verbosity);
 
-    if where_kind == "none" || kind == "none" {
-        return Ok(RouterResolution::Noop {
+    macro_rules! resolve {
+        ($resolution:expr) => {
+            return Ok(with_request_shape(
+                $resolution,
+                request_shape_json.clone(),
+            ));
+        };
+    }
+
+    if is_noop_request(&args, &kind, &where_kind) {
+        resolve!(RouterResolution::Noop {
             message: "No internal tool was executed for this routed request.".to_string(),
             usage: usage("none", Vec::new(), 0),
         });
@@ -173,7 +183,7 @@ pub(crate) async fn resolve_router_request(
         let tool_name = ToolName::plain("apply_patch");
         if index.has_handler(&tool_name) {
             let call = call_for_apply_patch(index, call_id, &args)?;
-            return Ok(tool_resolution(call));
+            resolve!(tool_resolution(call));
         }
     }
 
@@ -181,7 +191,7 @@ pub(crate) async fn resolve_router_request(
         let tool_name = ToolName::plain("write_stdin");
         if index.has_handler(&tool_name) {
             let call = call_for_write_stdin(call_id, &args)?;
-            return Ok(tool_resolution(call));
+            resolve!(tool_resolution(call));
         }
     }
 
@@ -190,7 +200,7 @@ pub(crate) async fn resolve_router_request(
             .action
             .session_id
             .and_then(|value| i32::try_from(value).ok());
-        return Ok(RouterResolution::InlineOutput {
+        resolve!(RouterResolution::InlineOutput {
             message: session
                 .services
                 .unified_exec_manager
@@ -205,10 +215,10 @@ pub(crate) async fn resolve_router_request(
         let tool_name = ToolName::plain("tool_search");
         if index.has_handler(&tool_name) {
             if let Some(calls) = fanout_for_tool_search(call_id.as_str(), &args) {
-                return Ok(fanout_resolution("deterministic", calls));
+                resolve!(fanout_resolution("deterministic", calls));
             }
             let call = call_for_tool_search(call_id, &args)?;
-            return Ok(tool_resolution(call));
+            resolve!(tool_resolution(call));
         }
     }
 
@@ -216,31 +226,31 @@ pub(crate) async fn resolve_router_request(
         && let Some(tool_name) = agent_tool_name(&kind, index)
     {
         let call = call_for_agent_tool(call_id, tool_name, &args)?;
-        return Ok(tool_resolution(call));
+        resolve!(tool_resolution(call));
     }
 
     if is_mcp_kind(&where_kind, &kind)
         && let Some(tool_name) = mcp_tool_name(&args, index)?
     {
         let call = call_for_exact_tool(session, index, call_id, tool_name, &args).await?;
-        return Ok(tool_resolution(call));
+        resolve!(tool_resolution(call));
     }
 
     if is_repo_ci_kind(&where_kind, &kind)
         && let Some(tool_name) = repo_ci_tool_name(&kind, &args, index)?
     {
         let call = call_for_exact_tool(session, index, call_id, tool_name, &args).await?;
-        return Ok(tool_resolution(call));
+        resolve!(tool_resolution(call));
     }
 
     if is_image_view_kind(&where_kind, &kind) {
         let tool_name = ToolName::plain("view_image");
         if index.has_handler(&tool_name) {
             if let Some(calls) = fanout_for_view_image(call_id.as_str(), &args)? {
-                return Ok(fanout_resolution("deterministic", calls));
+                resolve!(fanout_resolution("deterministic", calls));
             }
             let call = call_for_view_image(call_id, &args)?;
-            return Ok(tool_resolution(call));
+            resolve!(tool_resolution(call));
         }
     }
 
@@ -248,16 +258,11 @@ pub(crate) async fn resolve_router_request(
         let tool_name = ToolName::plain("list_dir");
         if index.has_handler(&tool_name) {
             if let Some(calls) = fanout_for_list_dir(call_id.as_str(), &args)? {
-                return Ok(fanout_resolution("deterministic", calls));
+                resolve!(fanout_resolution("deterministic", calls));
             }
             let call = call_for_list_dir(call_id, &args)?;
-            return Ok(tool_resolution(call));
+            resolve!(tool_resolution(call));
         }
-    }
-
-    if let Some(tool_name) = exact_tool_name(&args, index)? {
-        let call = call_for_exact_tool(session, index, call_id, tool_name, &args).await?;
-        return Ok(tool_resolution(call));
     }
 
     if (is_shell_kind(&where_kind, &kind)
@@ -267,18 +272,23 @@ pub(crate) async fn resolve_router_request(
         || args.action.paths.is_some())
         && let Some(call) = call_for_shell_like(index, call_id.clone(), &args)?
     {
-        return Ok(tool_resolution(call));
+        resolve!(tool_resolution(call));
+    }
+
+    if let Some(tool_name) = exact_tool_name(&args, index)? {
+        let call = call_for_exact_tool(session, index, call_id, tool_name, &args).await?;
+        resolve!(tool_resolution(call));
     }
 
     if is_skill_kind(&where_kind, &kind) && index.has_handler(&ToolName::plain("tool_search")) {
         let call = call_for_tool_search(call_id, &args)?;
-        return Ok(tool_resolution(call));
+        resolve!(tool_resolution(call));
     }
 
     if let Some(resolution) =
         routing_learned_rules::resolve_learned_rule(session, index, call_id.clone(), &args).await?
     {
-        return Ok(resolution);
+        resolve!(resolution);
     }
 
     Err(FunctionCallError::RespondToModel(
@@ -341,15 +351,26 @@ const ROUTER_TARGET_KINDS: &[&str] = &[
 const ROUTER_ACTION_KINDS: &[&str] = &[
     "none",
     "exec",
+    "exec_command",
     "exec_wait",
     "batch",
     "inspect",
     "read",
+    "read_many",
     "list",
     "git_snapshot",
     "repo_ci",
+    "repo_ci_status",
+    "repo_ci_learn",
+    "repo_ci_run",
+    "repo_ci_result",
     "status",
+    "diff",
+    "log",
+    "grep",
+    "find",
     "git",
+    "update_plan",
     "apply_patch",
     "write_stdin",
     "mcp",
@@ -362,6 +383,40 @@ const ROUTER_ACTION_KINDS: &[&str] = &[
     "process_status",
     "session_status",
 ];
+
+fn is_noop_request(args: &RouterArgs, kind: &str, where_kind: &str) -> bool {
+    (kind == "none" || (kind == "status" && where_kind == "none"))
+        && !has_exact_tool_request(args)
+        && !has_actionable_payload(args)
+}
+
+fn has_exact_tool_request(args: &RouterArgs) -> bool {
+    args.action.tool.is_some()
+        || args.action.name.is_some()
+        || args.targets.iter().any(|target| {
+            target.kind.as_deref().map(normalize).as_deref() == Some("tool")
+                && (target.name.is_some() || target.id.is_some() || target.value.is_some())
+        })
+}
+
+fn has_actionable_payload(args: &RouterArgs) -> bool {
+    let action = &args.action;
+    action.cmd.is_some()
+        || action.command.is_some()
+        || action.commands.is_some()
+        || action.paths.is_some()
+        || action.patch.is_some()
+        || action.input.is_some()
+        || action.query.is_some()
+        || action.agent_task.is_some()
+        || action.mcp_args.is_some()
+        || action.target.is_some()
+        || action.targets.is_some()
+        || action.session_id.is_some()
+        || action.chars.is_some()
+        || action.path.is_some()
+        || action.dir_path.is_some()
+}
 
 fn sanitize_known_kind(value: &str, known_values: &[&str]) -> String {
     let sanitized = sanitize_shape_value(value);
@@ -482,6 +537,21 @@ fn usage(route_kind: &str, selected_tools: Vec<String>, fanout_call_count: i64) 
         fanout_call_count,
         request_shape_json: None,
     }
+}
+
+fn with_request_shape(
+    mut resolution: RouterResolution,
+    request_shape_json: Option<String>,
+) -> RouterResolution {
+    match &mut resolution {
+        RouterResolution::SingleTool { usage, .. }
+        | RouterResolution::FanOut { usage, .. }
+        | RouterResolution::Noop { usage, .. }
+        | RouterResolution::InlineOutput { usage, .. } => {
+            usage.request_shape_json = request_shape_json;
+        }
+    }
+    resolution
 }
 
 fn tool_resolution(call: ToolCall) -> RouterResolution {
@@ -748,5 +818,154 @@ mod tests {
         assert_eq!(calls[0].tool_name, ToolName::plain("tool_search"));
         assert_eq!(calls[0].call_id, "router-call:fanout:0");
         assert_eq!(calls[1].call_id, "router-call:fanout:1");
+    }
+
+    #[tokio::test]
+    async fn none_where_update_plan_input_routes_exact_tool() {
+        let (session, _) = crate::session::tests::make_session_and_context().await;
+        let args = json!({
+            "request": "track progress",
+            "where": {"kind": "none"},
+            "targets": [],
+            "action": {
+                "kind": "update_plan",
+                "input": {"plan": [{"step": "inspect", "status": "in_progress"}]}
+            }
+        })
+        .to_string();
+
+        let resolution = resolve_router_request(
+            &session,
+            &index_with_tool("update_plan"),
+            "router-call".to_string(),
+            args,
+        )
+        .await
+        .expect("resolution");
+        let RouterResolution::SingleTool { call, usage } = resolution else {
+            panic!("expected single tool resolution")
+        };
+
+        assert_eq!(call.tool_name, ToolName::plain("update_plan"));
+        assert_eq!(
+            function_arguments(&call),
+            json!({"plan": [{"step": "inspect", "status": "in_progress"}]})
+        );
+        assert!(usage.request_shape_json.is_some());
+    }
+
+    #[tokio::test]
+    async fn none_where_exec_command_cmd_routes_shell() {
+        let (session, _) = crate::session::tests::make_session_and_context().await;
+        let args = json!({
+            "request": "print date",
+            "where": {"kind": "none"},
+            "targets": [],
+            "action": {"kind": "exec_command", "cmd": "date"}
+        })
+        .to_string();
+
+        let resolution = resolve_router_request(
+            &session,
+            &index_with_tool("exec_command"),
+            "router-call".to_string(),
+            args,
+        )
+        .await
+        .expect("resolution");
+        let RouterResolution::SingleTool { call, .. } = resolution else {
+            panic!("expected single tool resolution")
+        };
+
+        assert_eq!(call.tool_name, ToolName::plain("exec_command"));
+        assert_eq!(function_arguments(&call), json!({"cmd": "date"}));
+    }
+
+    #[tokio::test]
+    async fn filesystem_exec_command_cmd_routes_shell() {
+        let (session, _) = crate::session::tests::make_session_and_context().await;
+        let args = json!({
+            "request": "print cwd",
+            "where": {"kind": "filesystem"},
+            "targets": [],
+            "action": {"kind": "exec_command", "cmd": "pwd"}
+        })
+        .to_string();
+
+        let resolution = resolve_router_request(
+            &session,
+            &index_with_tool("exec_command"),
+            "router-call".to_string(),
+            args,
+        )
+        .await
+        .expect("resolution");
+        let RouterResolution::SingleTool { call, .. } = resolution else {
+            panic!("expected single tool resolution")
+        };
+
+        assert_eq!(call.tool_name, ToolName::plain("exec_command"));
+        assert_eq!(function_arguments(&call), json!({"cmd": "pwd"}));
+    }
+
+    #[tokio::test]
+    async fn action_kind_none_without_payload_returns_noop() {
+        let (session, _) = crate::session::tests::make_session_and_context().await;
+        let args = json!({
+            "request": "nothing to do",
+            "where": {"kind": "none"},
+            "targets": [],
+            "action": {"kind": "none"}
+        })
+        .to_string();
+
+        let resolution = resolve_router_request(
+            &session,
+            &index_with_tool("exec_command"),
+            "router-call".to_string(),
+            args,
+        )
+        .await
+        .expect("resolution");
+        let RouterResolution::Noop { usage, .. } = resolution else {
+            panic!("expected noop resolution")
+        };
+
+        assert_eq!(usage.route_kind, "none");
+        assert!(usage.request_shape_json.is_some());
+    }
+
+    #[tokio::test]
+    async fn multi_path_batch_routes_to_one_shell_call() {
+        let (session, _) = crate::session::tests::make_session_and_context().await;
+        let args = json!({
+            "request": "read files",
+            "where": {"kind": "filesystem"},
+            "targets": [
+                {"kind": "path", "path": "a.txt"},
+                {"kind": "path", "path": "b.txt"}
+            ],
+            "action": {"kind": "batch"}
+        })
+        .to_string();
+
+        let resolution = resolve_router_request(
+            &session,
+            &index_with_tool("exec_command"),
+            "router-call".to_string(),
+            args,
+        )
+        .await
+        .expect("resolution");
+        let RouterResolution::SingleTool { call, usage } = resolution else {
+            panic!("expected one shell call")
+        };
+
+        assert_eq!(call.tool_name, ToolName::plain("exec_command"));
+        let arguments = function_arguments(&call);
+        let command = arguments["cmd"].as_str().expect("cmd");
+        assert!(command.contains("## path a.txt"));
+        assert!(command.contains("## path b.txt"));
+        assert_eq!(usage.fanout_call_count, 1);
     }
 }

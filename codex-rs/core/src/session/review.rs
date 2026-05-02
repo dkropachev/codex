@@ -1,6 +1,7 @@
 use super::turn_context::image_generation_tool_auth_allowed;
 use super::*;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI64;
 
 /// Spawn a review thread using the given prompt.
 pub(super) async fn spawn_review_thread(
@@ -149,6 +150,7 @@ pub(super) async fn spawn_review_thread(
         turn_metadata_state,
         turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.outcome.clone()),
         turn_timing_state: Arc::new(TurnTimingState::default()),
+        model_response_ordinal: AtomicI64::new(0),
         server_model_warning_emitted: AtomicBool::new(false),
         model_verification_emitted: AtomicBool::new(false),
     };

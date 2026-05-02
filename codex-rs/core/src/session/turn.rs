@@ -2069,7 +2069,9 @@ async fn try_run_sampling_request(
         record_turn_ttft_metric(&turn_context, &event).await;
 
         match event {
-            ResponseEvent::Created => {}
+            ResponseEvent::Created => {
+                turn_context.increment_model_response_ordinal();
+            }
             ResponseEvent::OutputItemDone(item) => {
                 if response_item_starts_visible_output(&item) {
                     visible_output_started = true;

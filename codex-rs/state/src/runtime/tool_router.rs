@@ -15,6 +15,7 @@ pub struct ToolRouterLedgerEntry {
     pub model_provider: String,
     pub toolset_hash: String,
     pub router_schema_version: i64,
+    pub model_response_ordinal: i64,
     pub guidance_version: i64,
     pub guidance_tokens: i64,
     pub format_description_tokens: i64,
@@ -118,6 +119,7 @@ impl StateRuntime {
                 model_provider,
                 toolset_hash,
                 router_schema_version,
+                model_response_ordinal,
                 guidance_version,
                 guidance_tokens,
                 format_description_tokens,
@@ -134,7 +136,7 @@ impl StateRuntime {
                 outcome,
                 request_shape_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(now_ms)
@@ -145,6 +147,7 @@ impl StateRuntime {
         .bind(entry.model_provider)
         .bind(entry.toolset_hash)
         .bind(entry.router_schema_version)
+        .bind(entry.model_response_ordinal)
         .bind(entry.guidance_version)
         .bind(entry.guidance_tokens)
         .bind(entry.format_description_tokens)
@@ -565,6 +568,7 @@ mod tests {
                 model_provider: "openai".to_string(),
                 toolset_hash: "abc123".to_string(),
                 router_schema_version: 1,
+                model_response_ordinal: 2,
                 guidance_version: 1,
                 guidance_tokens: 9,
                 format_description_tokens: 20,
@@ -592,13 +596,17 @@ mod tests {
                 model_provider,
                 toolset_hash,
                 router_schema_version,
+                model_response_ordinal,
                 guidance_version,
                 guidance_tokens,
                 format_description_tokens,
                 visible_router_schema_tokens,
                 hidden_tool_schema_tokens,
                 spark_prompt_tokens,
-                spark_completion_tokens
+                spark_completion_tokens,
+                returned_output_tokens,
+                original_output_tokens,
+                truncated_output_tokens
             FROM tool_router_ledger
             WHERE call_id = ?
             "#,
@@ -619,6 +627,8 @@ mod tests {
                     .expect("toolset hash"),
                 row.try_get::<i64, _>("router_schema_version")
                     .expect("router schema version"),
+                row.try_get::<i64, _>("model_response_ordinal")
+                    .expect("model response ordinal"),
                 row.try_get::<i64, _>("guidance_version")
                     .expect("guidance version"),
                 row.try_get::<i64, _>("guidance_tokens")
@@ -633,6 +643,12 @@ mod tests {
                     .expect("spark prompt tokens"),
                 row.try_get::<i64, _>("spark_completion_tokens")
                     .expect("spark completion tokens"),
+                row.try_get::<i64, _>("returned_output_tokens")
+                    .expect("returned output tokens"),
+                row.try_get::<i64, _>("original_output_tokens")
+                    .expect("original output tokens"),
+                row.try_get::<i64, _>("truncated_output_tokens")
+                    .expect("truncated output tokens"),
             ),
             (
                 r#"["exec_command"]"#.to_string(),
@@ -640,6 +656,7 @@ mod tests {
                 "openai".to_string(),
                 "abc123".to_string(),
                 1,
+                2,
                 1,
                 9,
                 20,
@@ -647,6 +664,9 @@ mod tests {
                 100,
                 11,
                 3,
+                7,
+                9,
+                7,
             )
         );
     }
@@ -672,6 +692,7 @@ mod tests {
         assert!(columns.contains("spark_completion_tokens"));
         assert!(columns.contains("model_slug"));
         assert!(columns.contains("toolset_hash"));
+        assert!(columns.contains("model_response_ordinal"));
         assert!(columns.contains("guidance_tokens"));
         assert!(columns.contains("format_description_tokens"));
         assert!(columns.contains("request_shape_json"));
@@ -957,6 +978,7 @@ mod tests {
             model_provider: "openai".to_string(),
             toolset_hash: "abc123".to_string(),
             router_schema_version: 1,
+            model_response_ordinal: 2,
             guidance_version: 1,
             guidance_tokens: 9,
             format_description_tokens: 20,

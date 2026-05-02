@@ -1,6 +1,7 @@
 use pretty_assertions::assert_eq;
 
 use super::*;
+use crate::estimate_router_text_tokens;
 
 #[test]
 fn tool_router_schema_contains_required_route_fields() {
@@ -41,4 +42,11 @@ fn tool_router_schema_contains_required_route_fields() {
     assert!(action_properties.get("paths").is_some());
     assert!(action_properties.get("wait_until_exit").is_some());
     assert!(action_properties.get("wait_timeout_ms").is_some());
+}
+
+#[test]
+fn tool_router_schema_stays_within_budget() {
+    let serialized = serde_json::to_string(&create_tool_router_tool()).expect("serialize tool");
+
+    assert!(estimate_router_text_tokens(&serialized) < 950);
 }
