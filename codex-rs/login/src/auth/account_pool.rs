@@ -603,10 +603,15 @@ async fn member_auth(account_id: &str, manager: &AuthManager) -> Option<CodexAut
 }
 
 fn remaining_from_rate_limit(rate_limit: Option<&Value>) -> Option<u64> {
-    let used_percent = rate_limit?
-        .get("primary_window")?
-        .get("used_percent")
-        .and_then(Value::as_f64)?;
+    let rate_limit = rate_limit?;
+    ["primary_window", "secondary_window"]
+        .into_iter()
+        .filter_map(|window| remaining_from_window(rate_limit.get(window)))
+        .min()
+}
+
+fn remaining_from_window(window: Option<&Value>) -> Option<u64> {
+    let used_percent = window?.get("used_percent").and_then(Value::as_f64)?;
     Some((100.0 - used_percent).clamp(0.0, 100.0).round() as u64)
 }
 
@@ -914,6 +919,13 @@ mod tests {
                 "primary_window": { "used_percent": -7.0 }
             }))),
             Some(100)
+        );
+        assert_eq!(
+            remaining_from_rate_limit(Some(&json!({
+                "primary_window": { "used_percent": 0.0 },
+                "secondary_window": { "used_percent": 14.0 }
+            }))),
+            Some(86)
         );
         assert_eq!(remaining_from_rate_limit(Some(&json!({}))), None);
     }

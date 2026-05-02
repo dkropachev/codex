@@ -1422,6 +1422,22 @@ impl AuthManager {
         self.auth_unpooled_cached().await
     }
 
+    /// Returns auth selected from the requested account-pool bucket.
+    pub async fn auth_for_account_pool_bucket(
+        &self,
+        bucket: AccountPoolBucket,
+    ) -> Option<CodexAuth> {
+        let _ = self.take_next_account_pool_bucket();
+        if let Some(auth) = self.resolve_external_api_key_auth().await {
+            return Some(auth);
+        }
+        if let Some(account_pool) = self.account_pool.as_ref() {
+            return account_pool.auth_for_bucket(bucket).await;
+        }
+
+        self.auth_unpooled_cached().await
+    }
+
     pub(crate) async fn auth_unpooled_cached(&self) -> Option<CodexAuth> {
         let auth = self.auth_cached_unpooled()?;
         if Self::is_stale_for_proactive_refresh(&auth)
@@ -1623,6 +1639,24 @@ impl AuthManager {
     pub async fn refresh_account_pool_usage(&self, pool_id: Option<&str>) {
         if let Some(pool) = self.account_pool.as_ref() {
             pool.refresh_usage(pool_id).await;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_account_pool_usage_for_testing(
+        &self,
+        account_id: &str,
+        regular_remaining: Option<u64>,
+        spark_remaining: Option<u64>,
+        last_refreshed: std::time::Instant,
+    ) {
+        if let Some(pool) = self.account_pool.as_ref() {
+            pool.set_usage_for_testing(
+                account_id,
+                regular_remaining,
+                spark_remaining,
+                last_refreshed,
+            );
         }
     }
 

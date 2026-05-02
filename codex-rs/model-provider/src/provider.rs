@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
+use codex_login::AccountPoolBucket;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -71,20 +72,44 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the current provider-scoped auth value, if one is configured.
     async fn auth(&self) -> Option<CodexAuth>;
 
+    /// Returns auth for a specific model request.
+    ///
+    /// Implementations can use the model name to select a more precise account-pool bucket while
+    /// preserving provider-scoped auth behavior for non-pooled providers.
+    async fn auth_for_model(&self, model: Option<&str>) -> Option<CodexAuth> {
+        let _ = model;
+        self.auth().await
+    }
+
     /// Returns the current app-visible account state for this provider.
     fn account_state(&self) -> ProviderAccountResult;
 
     /// Returns provider configuration adapted for the API client.
     async fn api_provider(&self) -> codex_protocol::error::Result<Provider> {
         let auth = self.auth().await;
-        self.info()
-            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))
+        self.api_provider_for_auth(auth.as_ref()).await
     }
 
     /// Returns the auth provider used to attach request credentials.
     async fn api_auth(&self) -> codex_protocol::error::Result<SharedAuthProvider> {
         let auth = self.auth().await;
-        resolve_provider_auth(auth.as_ref(), self.info())
+        self.api_auth_for_auth(auth.as_ref()).await
+    }
+
+    /// Returns provider configuration adapted for an already-selected auth snapshot.
+    async fn api_provider_for_auth(
+        &self,
+        auth: Option<&CodexAuth>,
+    ) -> codex_protocol::error::Result<Provider> {
+        self.info().to_api_provider(auth.map(CodexAuth::auth_mode))
+    }
+
+    /// Returns request auth headers for an already-selected auth snapshot.
+    async fn api_auth_for_auth(
+        &self,
+        auth: Option<&CodexAuth>,
+    ) -> codex_protocol::error::Result<SharedAuthProvider> {
+        resolve_provider_auth(auth, self.info())
     }
 
     /// Creates the model manager implementation appropriate for this provider.
@@ -140,6 +165,18 @@ impl ModelProvider for ConfiguredModelProvider {
 
     async fn auth(&self) -> Option<CodexAuth> {
         match self.auth_manager.as_ref() {
+            Some(auth_manager) => auth_manager.auth().await,
+            None => None,
+        }
+    }
+
+    async fn auth_for_model(&self, model: Option<&str>) -> Option<CodexAuth> {
+        match self.auth_manager.as_ref() {
+            Some(auth_manager) if model.is_some_and(uses_spark_account_pool_bucket) => {
+                auth_manager
+                    .auth_for_account_pool_bucket(AccountPoolBucket::Spark)
+                    .await
+            }
             Some(auth_manager) => auth_manager.auth().await,
             None => None,
         }
@@ -232,6 +269,10 @@ impl ModelProvider for ConfiguredModelProvider {
     }
 }
 
+fn uses_spark_account_pool_bucket(model: &str) -> bool {
+    model.to_ascii_lowercase().contains("spark")
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
@@ -321,6 +362,13 @@ mod tests {
             "experimental_supported_tools": [],
         }))
         .expect("valid model")
+    }
+
+    #[test]
+    fn spark_models_use_spark_account_pool_bucket() {
+        assert!(uses_spark_account_pool_bucket("gpt-5.3-codex-spark"));
+        assert!(uses_spark_account_pool_bucket("GPT-5.3-CODEX-SPARK"));
+        assert!(!uses_spark_account_pool_bucket("gpt-5.5"));
     }
 
     #[test]

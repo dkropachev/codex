@@ -15,6 +15,7 @@ use serde::Serialize;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tempfile::TempDir;
 use tempfile::tempdir;
 
@@ -320,6 +321,8 @@ async fn pooled_refresh_token_refreshes_active_member_storage() {
     let manager = AuthManager::shared_from_config(
         &PooledAuthConfig {
             codex_home: codex_home.path().to_path_buf(),
+            accounts: vec!["work-pro".to_string()],
+            policy: codex_config::config_toml::AccountPoolPolicyToml::Drain,
         },
         /*enable_codex_api_key_env*/ false,
     );
@@ -346,6 +349,42 @@ async fn pooled_refresh_token_refreshes_active_member_storage() {
     let tokens = auth_dot_json.tokens.expect("tokens should be present");
     assert_eq!(tokens.access_token, "new-access-token");
     assert_eq!(tokens.refresh_token, "new-refresh-token");
+}
+
+#[tokio::test]
+async fn auth_for_account_pool_bucket_uses_requested_usage_bucket() {
+    let codex_home = tempdir().unwrap();
+    for account_id in ["regular-rich", "spark-rich"] {
+        let member_home = codex_home.path().join("accounts").join(account_id);
+        std::fs::create_dir_all(&member_home).expect("create member auth dir");
+        write_auth_file_with_tokens(
+            &member_home,
+            account_id,
+            &format!("{account_id}-access-token"),
+            &format!("{account_id}-refresh-token"),
+        )
+        .expect("write member auth");
+    }
+
+    let manager = AuthManager::shared_from_config(
+        &PooledAuthConfig {
+            codex_home: codex_home.path().to_path_buf(),
+            accounts: vec!["regular-rich".to_string(), "spark-rich".to_string()],
+            policy: codex_config::config_toml::AccountPoolPolicyToml::LoadBalance,
+        },
+        /*enable_codex_api_key_env*/ false,
+    );
+    manager.set_account_pool_usage_for_testing("regular-rich", Some(95), Some(5), Instant::now());
+    manager.set_account_pool_usage_for_testing("spark-rich", Some(5), Some(95), Instant::now());
+
+    let regular = manager.auth().await.expect("regular bucket auth");
+    assert_eq!(regular.get_account_id().as_deref(), Some("regular-rich"));
+
+    let spark = manager
+        .auth_for_account_pool_bucket(AccountPoolBucket::Spark)
+        .await
+        .expect("spark bucket auth");
+    assert_eq!(spark.get_account_id().as_deref(), Some("spark-rich"));
 }
 
 #[test]
@@ -668,6 +707,8 @@ async fn build_config(
 
 struct PooledAuthConfig {
     codex_home: PathBuf,
+    accounts: Vec<String>,
+    policy: codex_config::config_toml::AccountPoolPolicyToml,
 }
 
 impl AuthManagerConfig for PooledAuthConfig {
@@ -695,8 +736,8 @@ impl AuthManagerConfig for PooledAuthConfig {
                 "codex-pro".to_string(),
                 codex_config::config_toml::AccountPoolDefinitionToml {
                     provider: "openai".to_string(),
-                    policy: codex_config::config_toml::AccountPoolPolicyToml::Drain,
-                    accounts: vec!["work-pro".to_string()],
+                    policy: self.policy,
+                    accounts: self.accounts.clone(),
                 },
             )]
             .into(),
