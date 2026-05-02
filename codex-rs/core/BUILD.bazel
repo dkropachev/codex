@@ -47,10 +47,10 @@ codex_rust_crate(
     ],
     test_shard_counts = {
         "core-all-test": 16,
-        "core-unit-tests": 16,
+        "core-unit-tests": 128,
     },
     test_tags = ["no-sandbox"],
-    unit_test_timeout = "long",
+    unit_test_timeout = "moderate",
     extra_binaries = [
         "//codex-rs/linux-sandbox:codex-linux-sandbox",
         "//codex-rs/rmcp-client:test_stdio_server",
