@@ -616,58 +616,85 @@ mod tests {
         .await
         .expect("ledger row");
 
+        #[derive(Debug, PartialEq, Eq)]
+        struct LedgerRow {
+            selected_tools_json: String,
+            model_slug: String,
+            model_provider: String,
+            toolset_hash: String,
+            router_schema_version: i64,
+            model_response_ordinal: i64,
+            guidance_version: i64,
+            guidance_tokens: i64,
+            format_description_tokens: i64,
+            visible_router_schema_tokens: i64,
+            hidden_tool_schema_tokens: i64,
+            spark_prompt_tokens: i64,
+            spark_completion_tokens: i64,
+            returned_output_tokens: i64,
+            original_output_tokens: i64,
+            truncated_output_tokens: i64,
+        }
+
         assert_eq!(
-            (
-                row.try_get::<String, _>("selected_tools_json")
+            LedgerRow {
+                selected_tools_json: row
+                    .try_get("selected_tools_json")
                     .expect("selected tools"),
-                row.try_get::<String, _>("model_slug").expect("model slug"),
-                row.try_get::<String, _>("model_provider")
-                    .expect("model provider"),
-                row.try_get::<String, _>("toolset_hash")
-                    .expect("toolset hash"),
-                row.try_get::<i64, _>("router_schema_version")
+                model_slug: row.try_get("model_slug").expect("model slug"),
+                model_provider: row.try_get("model_provider").expect("model provider"),
+                toolset_hash: row.try_get("toolset_hash").expect("toolset hash"),
+                router_schema_version: row
+                    .try_get("router_schema_version")
                     .expect("router schema version"),
-                row.try_get::<i64, _>("model_response_ordinal")
+                model_response_ordinal: row
+                    .try_get("model_response_ordinal")
                     .expect("model response ordinal"),
-                row.try_get::<i64, _>("guidance_version")
-                    .expect("guidance version"),
-                row.try_get::<i64, _>("guidance_tokens")
-                    .expect("guidance tokens"),
-                row.try_get::<i64, _>("format_description_tokens")
+                guidance_version: row.try_get("guidance_version").expect("guidance version"),
+                guidance_tokens: row.try_get("guidance_tokens").expect("guidance tokens"),
+                format_description_tokens: row
+                    .try_get("format_description_tokens")
                     .expect("format description tokens"),
-                row.try_get::<i64, _>("visible_router_schema_tokens")
+                visible_router_schema_tokens: row
+                    .try_get("visible_router_schema_tokens")
                     .expect("visible schema tokens"),
-                row.try_get::<i64, _>("hidden_tool_schema_tokens")
+                hidden_tool_schema_tokens: row
+                    .try_get("hidden_tool_schema_tokens")
                     .expect("hidden schema tokens"),
-                row.try_get::<i64, _>("spark_prompt_tokens")
+                spark_prompt_tokens: row
+                    .try_get("spark_prompt_tokens")
                     .expect("spark prompt tokens"),
-                row.try_get::<i64, _>("spark_completion_tokens")
+                spark_completion_tokens: row
+                    .try_get("spark_completion_tokens")
                     .expect("spark completion tokens"),
-                row.try_get::<i64, _>("returned_output_tokens")
+                returned_output_tokens: row
+                    .try_get("returned_output_tokens")
                     .expect("returned output tokens"),
-                row.try_get::<i64, _>("original_output_tokens")
+                original_output_tokens: row
+                    .try_get("original_output_tokens")
                     .expect("original output tokens"),
-                row.try_get::<i64, _>("truncated_output_tokens")
+                truncated_output_tokens: row
+                    .try_get("truncated_output_tokens")
                     .expect("truncated output tokens"),
-            ),
-            (
-                r#"["exec_command"]"#.to_string(),
-                "gpt-test".to_string(),
-                "openai".to_string(),
-                "abc123".to_string(),
-                1,
-                2,
-                1,
-                9,
-                20,
-                10,
-                100,
-                11,
-                3,
-                7,
-                9,
-                7,
-            )
+            },
+            LedgerRow {
+                selected_tools_json: r#"["exec_command"]"#.to_string(),
+                model_slug: "gpt-test".to_string(),
+                model_provider: "openai".to_string(),
+                toolset_hash: "abc123".to_string(),
+                router_schema_version: 1,
+                model_response_ordinal: 2,
+                guidance_version: 1,
+                guidance_tokens: 9,
+                format_description_tokens: 20,
+                visible_router_schema_tokens: 10,
+                hidden_tool_schema_tokens: 100,
+                spark_prompt_tokens: 11,
+                spark_completion_tokens: 3,
+                returned_output_tokens: 7,
+                original_output_tokens: 9,
+                truncated_output_tokens: 7,
+            }
         );
     }
 

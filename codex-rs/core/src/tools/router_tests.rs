@@ -319,7 +319,8 @@ async fn route_errors_record_sanitized_request_shape() -> anyhow::Result<()> {
             ToolCallSource::Direct,
         )
         .await
-        .expect_err("route should fail");
+        .err()
+        .expect("route should fail");
     assert!(err.to_string().contains("could not deterministically route"));
 
     let observations = state_db
