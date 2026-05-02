@@ -337,6 +337,22 @@ pub fn learn_with_plan(
     options: LearnOptions,
     plan: LearnedPlan,
 ) -> Result<LearnOutcome> {
+    learn_with_plan_with_cancellation(
+        codex_home,
+        cwd,
+        options,
+        plan,
+        RepoCiCancellation::default(),
+    )
+}
+
+pub fn learn_with_plan_with_cancellation(
+    codex_home: &Path,
+    cwd: &Path,
+    options: LearnOptions,
+    plan: LearnedPlan,
+    cancellation: RepoCiCancellation,
+) -> Result<LearnOutcome> {
     cicd_artifacts::prune_stale_artifacts(codex_home)?;
     let resolved = resolve_paths_for_repo(codex_home, cwd)?;
     let paths = resolved.paths;
@@ -364,7 +380,7 @@ pub fn learn_with_plan(
         &paths,
         "prepare",
         options.local_test_time_budget_sec,
-        &RepoCiCancellation::default(),
+        &cancellation,
     )?;
     let (validation_phase, validation_run) = if prepare_run.status.success {
         (
@@ -373,7 +389,7 @@ pub fn learn_with_plan(
                 &paths,
                 "fast",
                 options.local_test_time_budget_sec,
-                &RepoCiCancellation::default(),
+                &cancellation,
             )?,
         )
     } else {

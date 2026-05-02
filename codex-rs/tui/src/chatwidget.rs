@@ -11512,9 +11512,13 @@ impl ChatWidget {
 
     /// Handles a Ctrl+C press at the chat-widget layer.
     ///
-    /// The first press arms a time-bounded quit shortcut and shows a footer hint via the bottom
-    /// pane. If cancellable work is active, Ctrl+C also submits `Op::Interrupt` after the shortcut
-    /// is armed.
+    /// When the double-press shortcut is enabled, the first press arms a time-bounded quit shortcut
+    /// and shows a footer hint via the bottom pane. If cancellable work is active, Ctrl+C also
+    /// submits `Op::Interrupt` after the shortcut is armed.
+    ///
+    /// When the shortcut is disabled, idle Ctrl+C exits immediately, but active work still gets a
+    /// short force-quit window: first Ctrl+C interrupts, and a second Ctrl+C before the window
+    /// expires requests shutdown.
     ///
     /// Active realtime conversations take precedence over bottom-pane Ctrl+C handling so the
     /// first press always stops live voice, even when the composer contains the recording meter.
@@ -11544,22 +11548,20 @@ impl ChatWidget {
             return;
         }
 
-        if !DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
-            if self.is_cancellable_work_active() {
-                self.quit_shortcut_expires_at = None;
-                self.quit_shortcut_key = None;
-                self.bottom_pane.clear_quit_shortcut_hint();
-                self.submit_op(AppCommand::interrupt());
-            } else {
-                self.request_quit_without_confirmation();
-            }
-            return;
-        }
-
         if self.quit_shortcut_active_for(key) {
             self.quit_shortcut_expires_at = None;
             self.quit_shortcut_key = None;
             self.request_quit_without_confirmation();
+            return;
+        }
+
+        if !DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
+            if self.is_cancellable_work_active() {
+                self.arm_quit_shortcut(key);
+                self.submit_op(AppCommand::interrupt());
+            } else {
+                self.request_quit_without_confirmation();
+            }
             return;
         }
 
@@ -11613,7 +11615,8 @@ impl ChatWidget {
     ///
     /// This keeps the state machine (`quit_shortcut_*`) in `ChatWidget`, since
     /// it is the component that interprets Ctrl+C vs Ctrl+D and decides whether
-    /// quitting is currently allowed, while delegating rendering to `BottomPane`.
+    /// quitting is currently allowed, while delegating rendering to `BottomPane`. This is also used
+    /// for the active-work force-quit window when idle double-press quit is disabled.
     fn arm_quit_shortcut(&mut self, key: KeyBinding) {
         self.quit_shortcut_expires_at = Instant::now()
             .checked_add(QUIT_SHORTCUT_TIMEOUT)

@@ -569,13 +569,8 @@ pub(crate) async fn maybe_run_after_agent(
             }
             state.review_fix_rounds = state.review_fix_rounds.saturating_add(1);
             let fix_attempt = state.review_fix_rounds;
-            let worker_result = run_review_fix_workers(
-                sess,
-                turn_context,
-                &review,
-                cancellation_token,
-            )
-            .await;
+            let worker_result =
+                run_review_fix_workers(sess, turn_context, &review, cancellation_token).await;
             let worker_outputs = match worker_result {
                 Ok(worker_outputs) => worker_outputs,
                 Err(err) => {
@@ -894,13 +889,9 @@ pub(crate) async fn maybe_run_after_agent(
 
     let remote_commit_paths =
         repo_ci_owned_changed_paths(&state.initial_snapshot, &current_snapshot);
-    let remote_commit_result = prepare_remote_repo_ci_commit(
-        sess,
-        turn_context,
-        &remote_commit_paths,
-        cancellation_token,
-    )
-    .await;
+    let remote_commit_result =
+        prepare_remote_repo_ci_commit(sess, turn_context, &remote_commit_paths, cancellation_token)
+            .await;
     let remote_commit_decision = match remote_commit_result {
         Ok(decision) => decision,
         Err(err) => {
@@ -1186,15 +1177,37 @@ async fn ensure_repo_ci_learned(
                 cancellation_token,
             )
             .await?;
-            let outcome = codex_repo_ci::learn_with_plan(
-                &turn_context.config.codex_home,
-                &repo_root,
-                codex_repo_ci::LearnOptions {
+            let learned_plan = plan.clone().into_learned_plan()?;
+            let repo_ci_cancellation = codex_repo_ci::RepoCiCancellation::default();
+            let cancellation_task = tokio::spawn({
+                let cancellation_token = cancellation_token.clone();
+                let repo_ci_cancellation = repo_ci_cancellation.clone();
+                async move {
+                    cancellation_token.cancelled().await;
+                    repo_ci_cancellation.cancel();
+                }
+            });
+            let outcome = tokio::task::spawn_blocking({
+                let codex_home = turn_context.config.codex_home.clone();
+                let repo_root = repo_root.clone();
+                let options = codex_repo_ci::LearnOptions {
                     automation: automation_to_repo_ci(config.automation),
                     local_test_time_budget_sec: config.local_test_time_budget_sec,
-                },
-                plan.clone().into_learned_plan()?,
-            )?;
+                };
+                move || {
+                    codex_repo_ci::learn_with_plan_with_cancellation(
+                        &codex_home,
+                        &repo_root,
+                        options,
+                        learned_plan,
+                        repo_ci_cancellation,
+                    )
+                }
+            })
+            .await;
+            cancellation_task.abort();
+            let outcome = outcome.context("repo-ci learning task failed")?;
+            let outcome = outcome?;
             if matches!(
                 outcome.manifest.validation,
                 codex_repo_ci::ValidationStatus::Passed { .. }
