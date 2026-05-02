@@ -127,6 +127,7 @@ enum RunnerCompletion {
 struct ManagedRunner {
     child: Child,
     completed: bool,
+    #[cfg(unix)]
     kill_mode: RunnerKillMode,
 }
 
@@ -141,9 +142,12 @@ impl ManagedRunner {
         let child = command
             .spawn()
             .with_context(|| format!("failed to run {}", runner_path.display()))?;
+        #[cfg(not(unix))]
+        let _ = kill_mode;
         Ok(Self {
             child,
             completed: false,
+            #[cfg(unix)]
             kill_mode,
         })
     }

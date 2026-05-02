@@ -32,9 +32,12 @@ use tokio::sync::Mutex;
 use tokio::time;
 use tokio::time::timeout;
 
+#[cfg(unix)]
 use super::BrokerClient;
 use super::ReusableServerIdentity;
+#[cfg(unix)]
 use super::SERVER_IDLE_GRACE;
+#[cfg(unix)]
 use super::control_socket_path;
 use super::protocol::ClientLine;
 use super::protocol::HelloParams;

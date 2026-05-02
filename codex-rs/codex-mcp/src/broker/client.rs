@@ -44,7 +44,7 @@ use super::protocol::BROKER_PROTOCOL_VERSION;
 use super::protocol::CallToolParams;
 use super::protocol::ClientLine;
 use super::protocol::ElicitationClientResponse;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use super::protocol::EmptyResponse;
 use super::protocol::HelloParams;
 use super::protocol::HelloResponse;
@@ -206,7 +206,7 @@ impl BrokerClient {
         .await
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) async fn release(&mut self) -> Result<()> {
         if self.lease_id.is_empty() {
             return Ok(());
