@@ -24,6 +24,7 @@ use codex_protocol::protocol::RepoCiSessionMode;
 use codex_protocol::protocol::RepoCiState;
 use codex_protocol::protocol::RepoCiStatusEvent;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use futures::stream::FuturesUnordered;
@@ -486,7 +487,7 @@ pub(crate) async fn maybe_run_after_agent(
     if current_snapshot == state.initial_snapshot {
         return None;
     }
-    if ensure_repo_ci_learned(sess, turn_context, &config)
+    if ensure_repo_ci_learned(sess, turn_context, &config, cancellation_token)
         .await
         .is_err()
     {
@@ -505,26 +506,33 @@ pub(crate) async fn maybe_run_after_agent(
         loop {
             let review_attempt = state.review_fix_rounds.saturating_add(1);
             let review_snapshot = codex_repo_ci::BranchDiffSnapshot::capture(&turn_context.cwd);
-            let review =
-                match run_targeted_review(sess, turn_context, &config, &review_snapshot).await {
-                    Ok(review) => review,
-                    Err(err) => {
-                        send_status(
-                            sess,
-                            turn_context,
-                            RepoCiPhase::Triage,
-                            RepoCiState::Failed,
-                            RepoCiScope::Local,
-                            Some(review_attempt),
-                            Some(config.max_review_fix_rounds),
-                            format!("Repo CI targeted review failed: {err:#}"),
-                        )
-                        .await;
-                        review_summary_state = RepoCiState::Failed;
-                        review_summary_attempt = Some(review_attempt);
-                        break;
-                    }
-                };
+            let review_result = run_targeted_review(
+                sess,
+                turn_context,
+                &config,
+                &review_snapshot,
+                cancellation_token,
+            )
+            .await;
+            let review = match review_result {
+                Ok(review) => review,
+                Err(err) => {
+                    send_status(
+                        sess,
+                        turn_context,
+                        RepoCiPhase::Triage,
+                        RepoCiState::Failed,
+                        RepoCiScope::Local,
+                        Some(review_attempt),
+                        Some(config.max_review_fix_rounds),
+                        format!("Repo CI targeted review failed: {err:#}"),
+                    )
+                    .await;
+                    review_summary_state = RepoCiState::Failed;
+                    review_summary_attempt = Some(review_attempt);
+                    break;
+                }
+            };
             review_tracker.record_review(&review, &config.review_issue_types);
             if review.findings.is_empty() {
                 state.review_fix_rounds = 0;
@@ -561,7 +569,14 @@ pub(crate) async fn maybe_run_after_agent(
             }
             state.review_fix_rounds = state.review_fix_rounds.saturating_add(1);
             let fix_attempt = state.review_fix_rounds;
-            let worker_outputs = match run_review_fix_workers(sess, turn_context, &review).await {
+            let worker_result = run_review_fix_workers(
+                sess,
+                turn_context,
+                &review,
+                cancellation_token,
+            )
+            .await;
+            let worker_outputs = match worker_result {
                 Ok(worker_outputs) => worker_outputs,
                 Err(err) => {
                     send_status(
@@ -879,25 +894,31 @@ pub(crate) async fn maybe_run_after_agent(
 
     let remote_commit_paths =
         repo_ci_owned_changed_paths(&state.initial_snapshot, &current_snapshot);
-    let remote_commit_decision =
-        match prepare_remote_repo_ci_commit(sess, turn_context, &remote_commit_paths).await {
-            Ok(decision) => decision,
-            Err(err) => {
-                send_status(
-                    sess,
-                    turn_context,
-                    RepoCiPhase::Remote,
-                    RepoCiState::Failed,
-                    RepoCiScope::Remote,
-                    None,
-                    None,
-                    format!("Repo CI remote commit preparation failed: {err:#}"),
-                )
-                .await;
-                send_final_review_summary!();
-                return None;
-            }
-        };
+    let remote_commit_result = prepare_remote_repo_ci_commit(
+        sess,
+        turn_context,
+        &remote_commit_paths,
+        cancellation_token,
+    )
+    .await;
+    let remote_commit_decision = match remote_commit_result {
+        Ok(decision) => decision,
+        Err(err) => {
+            send_status(
+                sess,
+                turn_context,
+                RepoCiPhase::Remote,
+                RepoCiState::Failed,
+                RepoCiScope::Remote,
+                None,
+                None,
+                format!("Repo CI remote commit preparation failed: {err:#}"),
+            )
+            .await;
+            send_final_review_summary!();
+            return None;
+        }
+    };
 
     send_status(
         sess,
@@ -1124,6 +1145,7 @@ async fn ensure_repo_ci_learned(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     config: &EffectiveRepoCiConfig,
+    cancellation_token: &CancellationToken,
 ) -> Result<()> {
     let status = codex_repo_ci::status(&turn_context.config.codex_home, &turn_context.cwd)?;
     let Some(requirement) = repo_ci_learning_requirement(&status) else {
@@ -1161,6 +1183,7 @@ async fn ensure_repo_ci_learned(
                 turn_context,
                 prompt,
                 codex_repo_ci::repo_ci_ai_plan_schema(),
+                cancellation_token,
             )
             .await?;
             let outcome = codex_repo_ci::learn_with_plan(
@@ -1235,6 +1258,7 @@ async fn prepare_remote_repo_ci_commit(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     owned_paths: &[String],
+    cancellation_token: &CancellationToken,
 ) -> Result<Option<codex_repo_ci::RemoteCommitDecision>> {
     let context = tokio::task::spawn_blocking({
         let cwd = turn_context.cwd.clone();
@@ -1270,11 +1294,15 @@ async fn prepare_remote_repo_ci_commit(
         SubAgentSource::Other("repo_ci_commit".to_string()),
         prompt,
         codex_repo_ci::remote_commit_decision_schema(),
+        cancellation_token,
     )
     .await
     {
         Ok(decision) => decision,
         Err(err) => {
+            if cancellation_token.is_cancelled() {
+                return Err(err);
+            }
             warn!("repo-ci commit decision agent failed; using separate commit fallback: {err:#}");
             send_status(
                 sess,
@@ -1359,6 +1387,7 @@ async fn run_targeted_review(
     turn_context: &Arc<TurnContext>,
     config: &EffectiveRepoCiConfig,
     snapshot: &codex_repo_ci::BranchDiffSnapshot,
+    cancellation_token: &CancellationToken,
 ) -> Result<RepoCiReviewOutput> {
     send_status(
         sess,
@@ -1388,6 +1417,7 @@ async fn run_targeted_review(
         SubAgentSource::Other("repo_ci_review".to_string()),
         prompt,
         review_output_schema(),
+        cancellation_token,
     )
     .await?;
     send_status(
@@ -1421,9 +1451,11 @@ async fn run_review_fix_workers(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     review: &RepoCiReviewOutput,
+    cancellation_token: &CancellationToken,
 ) -> Result<Vec<RepoCiFixWorkerOutput>> {
     let groups = group_review_findings(&review.findings);
     let total = groups.len();
+    let worker_cancel = cancellation_token.child_token();
     let mut tasks = FuturesUnordered::new();
     for (index, group) in groups.into_iter().enumerate() {
         let ordinal = index + 1;
@@ -1439,6 +1471,7 @@ async fn run_review_fix_workers(
             format!("Repo CI fix worker {ordinal}/{total} started: {target}"),
         )
         .await;
+        let worker_cancel_for_task = worker_cancel.clone();
         tasks.push(async move {
             let prompt = review_fix_prompt(&group);
             let output = run_repo_ci_subagent_json::<RepoCiFixWorkerOutput>(
@@ -1448,6 +1481,7 @@ async fn run_review_fix_workers(
                 SubAgentSource::Other(format!("repo_ci_fix_{index}")),
                 prompt,
                 review_fix_output_schema(),
+                &worker_cancel_for_task,
             )
             .await
             .with_context(|| format!("Repo CI fix worker {ordinal}/{total} failed"))?;
@@ -1457,7 +1491,13 @@ async fn run_review_fix_workers(
 
     let mut outputs = Vec::new();
     while let Some(result) = tasks.next().await {
-        let (index, output) = result?;
+        let (index, output) = match result {
+            Ok(output) => output,
+            Err(err) => {
+                worker_cancel.cancel();
+                return Err(err);
+            }
+        };
         let ordinal = index + 1;
         send_status(
             sess,
@@ -1507,6 +1547,7 @@ async fn run_repo_ci_subagent_json<T>(
     subagent_source: SubAgentSource,
     prompt: String,
     schema: serde_json::Value,
+    cancellation_token: &CancellationToken,
 ) -> Result<T>
 where
     T: for<'de> Deserialize<'de>,
@@ -1531,7 +1572,7 @@ where
         }],
         Arc::clone(sess),
         Arc::clone(turn_context),
-        CancellationToken::new(),
+        cancellation_token.child_token(),
         subagent_source.clone(),
         Some(schema),
         None,
@@ -1539,11 +1580,23 @@ where
     .await?;
     let subagent_label = repo_ci_subagent_label(&subagent_source);
     let mut final_text = None;
-    while let Ok(event) = codex.next_event().await {
+    loop {
+        let event = tokio::select! {
+            _ = cancellation_token.cancelled() => {
+                anyhow::bail!("repo-ci subagent was cancelled");
+            }
+            event = codex.next_event() => match event {
+                Ok(event) => event,
+                Err(_) => break,
+            },
+        };
         match event.msg {
             EventMsg::TurnComplete(turn_complete) => {
                 final_text = turn_complete.last_agent_message;
                 break;
+            }
+            EventMsg::TurnAborted(_) => {
+                anyhow::bail!("repo-ci subagent was aborted");
             }
             EventMsg::ExecCommandBegin(event) => {
                 send_status(
@@ -1633,6 +1686,7 @@ async fn run_repo_ci_learning_subagent_json<T>(
     turn_context: &Arc<TurnContext>,
     prompt: String,
     schema: serde_json::Value,
+    cancellation_token: &CancellationToken,
 ) -> Result<T>
 where
     T: for<'de> Deserialize<'de>,
@@ -1644,6 +1698,7 @@ where
         SubAgentSource::Other("repo_ci_learn".to_string()),
         prompt,
         schema,
+        cancellation_token,
     )
     .await
 }
@@ -1655,6 +1710,7 @@ async fn run_repo_ci_read_only_subagent_json<T>(
     subagent_source: SubAgentSource,
     prompt: String,
     schema: serde_json::Value,
+    cancellation_token: &CancellationToken,
 ) -> Result<T>
 where
     T: for<'de> Deserialize<'de>,
@@ -1682,17 +1738,32 @@ where
         }],
         Arc::clone(sess),
         Arc::clone(turn_context),
-        CancellationToken::new(),
+        cancellation_token.child_token(),
         subagent_source,
         Some(schema),
         None,
     )
     .await?;
     let mut final_text = None;
-    while let Ok(event) = codex.next_event().await {
-        if let EventMsg::TurnComplete(turn_complete) = event.msg {
-            final_text = turn_complete.last_agent_message;
-            break;
+    loop {
+        let event = tokio::select! {
+            _ = cancellation_token.cancelled() => {
+                anyhow::bail!("repo-ci read-only subagent was cancelled");
+            }
+            event = codex.next_event() => match event {
+                Ok(event) => event,
+                Err(_) => break,
+            },
+        };
+        match event.msg {
+            EventMsg::TurnComplete(turn_complete) => {
+                final_text = turn_complete.last_agent_message;
+                break;
+            }
+            EventMsg::TurnAborted(_) => {
+                anyhow::bail!("repo-ci read-only subagent was aborted");
+            }
+            _ => {}
         }
     }
     let Some(text) = final_text else {
@@ -2012,6 +2083,9 @@ fn repo_ci_issue_type_slug(issue_type: RepoCiIssueType) -> &'static str {
 }
 
 fn effective_config(turn_context: &TurnContext) -> Option<EffectiveRepoCiConfig> {
+    if repo_ci_suppressed_for_session_source(&turn_context.session_source) {
+        return None;
+    }
     if !turn_context
         .config
         .features
@@ -2070,6 +2144,29 @@ fn effective_config(turn_context: &TurnContext) -> Option<EffectiveRepoCiConfig>
     scoped_config
         .as_ref()
         .and_then(|scope| EffectiveRepoCiConfig::from_scope(scope, review_issue_types, long_ci))
+}
+
+fn repo_ci_suppressed_for_session_source(source: &SessionSource) -> bool {
+    match source {
+        SessionSource::SubAgent(subagent_source) => match subagent_source {
+            SubAgentSource::Other(label) => {
+                label == "repo_ci_review"
+                    || label == "repo_ci_learn"
+                    || label == "repo_ci_commit"
+                    || label.starts_with("repo_ci_fix_")
+            }
+            SubAgentSource::Review
+            | SubAgentSource::Compact
+            | SubAgentSource::ThreadSpawn { .. }
+            | SubAgentSource::MemoryConsolidation => false,
+        },
+        SessionSource::Cli
+        | SessionSource::VSCode
+        | SessionSource::Exec
+        | SessionSource::Mcp
+        | SessionSource::Custom(_)
+        | SessionSource::Unknown => false,
+    }
 }
 
 fn scoped_repo_ci_config(
@@ -2732,6 +2829,39 @@ mod tests {
     use codex_protocol::config_types::ServiceTier;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
+
+    #[test]
+    fn repo_ci_automation_is_suppressed_for_internal_subagents() {
+        for source in [
+            SubAgentSource::Other("repo_ci_review".to_string()),
+            SubAgentSource::Other("repo_ci_learn".to_string()),
+            SubAgentSource::Other("repo_ci_commit".to_string()),
+            SubAgentSource::Other("repo_ci_fix_0".to_string()),
+        ] {
+            assert!(repo_ci_suppressed_for_session_source(
+                &SessionSource::SubAgent(source)
+            ));
+        }
+    }
+
+    #[test]
+    fn repo_ci_automation_is_not_suppressed_for_user_sessions_or_other_subagents() {
+        for source in [
+            SessionSource::Cli,
+            SessionSource::VSCode,
+            SessionSource::Exec,
+            SessionSource::Mcp,
+            SessionSource::Custom("custom".to_string()),
+            SessionSource::Unknown,
+            SessionSource::SubAgent(SubAgentSource::Review),
+            SessionSource::SubAgent(SubAgentSource::Compact),
+            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation),
+            SessionSource::SubAgent(SubAgentSource::Other("repo_ci_fix".to_string())),
+            SessionSource::SubAgent(SubAgentSource::Other("other".to_string())),
+        ] {
+            assert!(!repo_ci_suppressed_for_session_source(&source));
+        }
+    }
 
     #[test]
     fn parses_github_org_from_common_remote_forms() {
