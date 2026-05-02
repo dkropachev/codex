@@ -613,6 +613,8 @@ fn remaining_from_rate_limit(rate_limit: Option<&Value>) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     use base64::Engine;
@@ -719,9 +721,12 @@ mod tests {
         write_chatgpt_auth(codex_home.path(), "personal-pro", "personal@example.com");
 
         let server = MockServer::start().await;
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let responder_request_count = Arc::clone(&request_count);
         Mock::given(method("GET"))
             .and(path("/api/codex/usage"))
-            .respond_with(
+            .respond_with(move |_request: &wiremock::Request| {
+                responder_request_count.fetch_add(1, Ordering::SeqCst);
                 ResponseTemplate::new(200)
                     .set_body_json(json!({
                         "rate_limit": {
@@ -730,8 +735,8 @@ mod tests {
                             }
                         }
                     }))
-                    .set_delay(Duration::from_millis(1000)),
-            )
+                    .set_delay(Duration::from_millis(/*millis*/ 2_000))
+            })
             .expect(2)
             .mount(&server)
             .await;
@@ -743,11 +748,17 @@ mod tests {
             Some(server.uri()),
         );
 
-        let started = Instant::now();
-        pool.refresh_usage(/*pool_id*/ None).await;
-        assert!(
-            started.elapsed() < Duration::from_millis(1500),
-            "usage refresh should run member requests in parallel"
+        let observed_request_count = Arc::clone(&request_count);
+        let ((), request_count_while_first_response_delayed) = tokio::join!(
+            pool.refresh_usage(/*pool_id*/ None),
+            async move {
+                tokio::time::sleep(Duration::from_millis(/*millis*/ 1_000)).await;
+                observed_request_count.load(Ordering::SeqCst)
+            }
+        );
+        assert_eq!(
+            request_count_while_first_response_delayed, 2,
+            "usage refresh should start all member requests before the first response returns"
         );
 
         assert_eq!(
