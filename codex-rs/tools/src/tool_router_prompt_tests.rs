@@ -52,6 +52,13 @@ fn strips_static_tool_guidelines_section() {
 }
 
 #[test]
+fn strips_static_tool_guidelines_section_with_crlf_line_endings() {
+    let input = "Keep this.\r\n# Tool Guidelines\r\n\r\n## Shell commands\r\n\r\nold guidance";
+
+    assert_eq!(strip_tool_router_static_guidelines(input), "Keep this.\n");
+}
+
+#[test]
 fn hard_guidance_cap_is_enforced() {
     assert!(validate_tool_router_guidance_cap(TOOL_ROUTER_HARD_GUIDANCE_TOKEN_CAP).is_ok());
     assert!(validate_tool_router_guidance_cap(TOOL_ROUTER_HARD_GUIDANCE_TOKEN_CAP + 1).is_err());

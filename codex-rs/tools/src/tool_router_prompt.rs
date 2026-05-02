@@ -74,7 +74,10 @@ pub fn tool_router_static_guidelines_tokens() -> usize {
 }
 
 pub fn strip_tool_router_static_guidelines(instructions: &str) -> String {
-    let Some(start) = instructions.find("\n# Tool Guidelines\n") else {
+    let Some(start) = instructions
+        .find("\n# Tool Guidelines\n")
+        .or_else(|| instructions.find("\n# Tool Guidelines\r\n"))
+    else {
         return instructions.to_string();
     };
     let mut stripped = instructions[..start].trim_end().to_string();
