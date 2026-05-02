@@ -139,10 +139,23 @@ fn workflow_job_origin(workflow_relative: &Path, job_id: &str, job: &Mapping) ->
 fn concise_run_commands(run: &str) -> Vec<String> {
     let mut commands = Vec::new();
     let mut pending = String::new();
+    let mut in_shell_array = false;
 
     for raw_line in run.lines() {
         let line = raw_line.trim();
         if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        if in_shell_array {
+            if line.starts_with(')') {
+                in_shell_array = false;
+            }
+            continue;
+        }
+
+        if starts_shell_array_assignment(line) {
+            in_shell_array = !line.contains(')');
             continue;
         }
 
@@ -171,6 +184,9 @@ fn concise_run_commands(run: &str) -> Vec<String> {
 fn is_concise_command_hint(command: &str) -> bool {
     let trimmed = command.trim();
     if trimmed.is_empty()
+        || is_github_actions_only_command(trimmed)
+        || references_shell_context(trimmed)
+        || looks_like_shell_fragment(trimmed)
         || trimmed.starts_with("if ")
         || trimmed == "then"
         || trimmed == "else"
@@ -206,6 +222,56 @@ fn is_concise_command_hint(command: &str) -> bool {
 
     let first_token = trimmed.split_whitespace().next().unwrap_or_default();
     !first_token.is_empty() && !looks_like_shell_assignment(first_token)
+}
+
+fn starts_shell_array_assignment(line: &str) -> bool {
+    let Some((left, right)) = line.split_once('=') else {
+        return false;
+    };
+    let left = left.trim_end_matches('+');
+    !left.is_empty()
+        && left
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        && right.trim_start().starts_with('(')
+}
+
+fn references_shell_context(command: &str) -> bool {
+    let mut chars = command.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '$' {
+            continue;
+        }
+        let Some(next) = chars.peek() else {
+            continue;
+        };
+        if next.is_ascii_alphabetic() || *next == '_' || matches!(next, '{' | '(' | '[') {
+            return true;
+        }
+    }
+    false
+}
+
+fn looks_like_shell_fragment(command: &str) -> bool {
+    command.starts_with('-') || matches!(command, "build" | "check" | "lint" | "test")
+}
+
+pub(crate) fn is_github_actions_only_command(command: &str) -> bool {
+    command.contains("${{")
+        || references_shell_variable(command, "ARTIFACT_TAR")
+        || references_shell_variable_prefix(command, "GITHUB_")
+        || references_shell_variable_prefix(command, "RUNNER_")
+        || references_shell_variable_prefix(command, "ACTIONS_")
+}
+
+fn references_shell_variable(command: &str, name: &str) -> bool {
+    command.contains(&format!("${name}")) || command.contains(&format!("${{{name}}}"))
+}
+
+fn references_shell_variable_prefix(command: &str, prefix: &str) -> bool {
+    let unbraced = format!("${prefix}");
+    let braced = format!("${{{prefix}");
+    command.contains(&unbraced) || command.contains(&braced)
 }
 
 fn looks_like_shell_assignment(token: &str) -> bool {
@@ -297,6 +363,10 @@ jobs:
               make lint
             fi
             VALUE=1
+            bazel_test_args=(
+              test
+              --print-failed-test-logs
+            )
             make test-unit \
               EXTRA=1
             echo done
@@ -309,6 +379,28 @@ jobs:
                 "make lint".to_string(),
                 "make test-unit EXTRA=1".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn concise_run_commands_filters_github_actions_only_commands() {
+        let commands = concise_run_commands(
+            r#"
+            make build
+            tar \
+              --dereference --hard-dereference \
+              --directory docs/_build/dirhtml/ \
+              -cvf "$ARTIFACT_TAR" \
+              .
+            make test-integration-cassandra CASSANDRA_VERSION=${{ matrix.version }}
+            echo "report" >> "$GITHUB_STEP_SUMMARY"
+            make lint
+        "#,
+        );
+
+        assert_eq!(
+            commands,
+            vec!["make build".to_string(), "make lint".to_string()]
         );
     }
 }

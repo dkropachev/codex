@@ -29,7 +29,7 @@ mod repo_ci_ai_learning;
 mod runner;
 mod workflow_history;
 
-const MANIFEST_VERSION: u32 = 3;
+const MANIFEST_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -463,6 +463,13 @@ pub fn status(codex_home: &Path, cwd: &Path) -> Result<StatusOutcome> {
     let paths = resolved.paths;
     if paths.manifest_path.exists() {
         let manifest = read_manifest(&paths.manifest_path)?;
+        if manifest.version != MANIFEST_VERSION {
+            return Ok(StatusOutcome {
+                paths,
+                manifest: None,
+                stale_sources: resolved.learning_sources,
+            });
+        }
         touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
         let stale_sources = changed_sources(&manifest.learning_sources, &resolved.learning_sources);
         return Ok(StatusOutcome {
@@ -478,6 +485,9 @@ pub fn status(codex_home: &Path, cwd: &Path) -> Result<StatusOutcome> {
             continue;
         }
         let manifest = read_manifest(&paths.manifest_path)?;
+        if manifest.version != MANIFEST_VERSION {
+            continue;
+        }
         touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
         let stale_sources = changed_sources(&manifest.learning_sources, &resolved.learning_sources);
         return Ok(StatusOutcome {
@@ -1610,6 +1620,42 @@ jobs:
         let status = status(&codex_home, &repo).expect("status");
 
         assert!(status.manifest.is_none());
+    }
+
+    #[test]
+    fn status_treats_old_manifest_version_as_needing_learning() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).expect("create repo");
+        fs::write(repo.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
+        let learning_sources = collect_sources(&repo).expect("sources");
+        let paths = paths_for_repo(&codex_home, &repo).expect("paths");
+        fs::create_dir_all(&paths.state_dir).expect("state dir");
+        let manifest = RepoCiManifest {
+            version: MANIFEST_VERSION - 1,
+            repo_root: repo.clone(),
+            repo_key: cicd_artifacts::repo_key(&repo),
+            source_key: cicd_artifacts::source_key(&artifact_sources(&learning_sources)),
+            automation: AutomationMode::Local,
+            local_test_time_budget_sec: 300,
+            learned_at_unix_sec: 1,
+            learning_sources: learning_sources.clone(),
+            inferred_issue_types: default_issue_types(),
+            prepare_steps: vec![],
+            fast_steps: vec![step("test", "cargo test", StepPhase::Test)],
+            full_steps: vec![],
+            validation: ValidationStatus::Passed {
+                validated_at_unix_sec: 1,
+            },
+        };
+        write_manifest(&paths.manifest_path, &manifest).expect("write manifest");
+        register_manifest_artifact_state(&codex_home, &paths, &manifest).expect("register state");
+
+        let status = status(&codex_home, &repo).expect("status");
+
+        assert_eq!(status.manifest, None);
+        assert_eq!(status.stale_sources, learning_sources);
     }
 
     #[test]
