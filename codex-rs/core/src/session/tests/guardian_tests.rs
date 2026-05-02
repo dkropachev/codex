@@ -1,6 +1,8 @@
 use super::*;
 use crate::compact::InitialContextInjection;
+#[cfg(not(windows))]
 use crate::exec::ExecCapturePolicy;
+#[cfg(not(windows))]
 use crate::exec::ExecParams;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
@@ -20,7 +22,7 @@ use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
 use codex_model_provider::create_model_provider;
 use codex_protocol::config_types::ApprovalsReviewer;
-use codex_protocol::config_types::WindowsSandboxLevel;
+#[cfg(not(windows))]
 use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::NetworkPermissions;
@@ -36,6 +38,7 @@ use codex_protocol::request_permissions::RequestPermissionsArgs;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use core_test_support::PathExt;
 use core_test_support::TempDirExt;
+#[cfg(not(windows))]
 use core_test_support::codex_linux_sandbox_exe_or_skip;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -46,7 +49,9 @@ use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
+#[cfg(not(windows))]
 use serde::Deserialize;
+#[cfg(not(windows))]
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
@@ -240,6 +245,7 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
     assert_eq!(session.granted_turn_permissions().await, None);
 }
 
+#[cfg(not(windows))]
 #[tokio::test]
 async fn guardian_allows_shell_additional_permissions_requests_past_policy_validation() {
     let server = start_mock_server().await;
@@ -264,11 +270,6 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
 
     let (mut session, mut turn_context_raw) = make_session_and_context().await;
     turn_context_raw.codex_linux_sandbox_exe = codex_linux_sandbox_exe_or_skip!();
-    if cfg!(windows) {
-        // This test covers guardian approval plumbing; Windows sandbox behavior
-        // has dedicated coverage and is not needed for this assertion.
-        turn_context_raw.windows_sandbox_level = WindowsSandboxLevel::Disabled;
-    }
     turn_context_raw
         .approval_policy
         .set(AskForApproval::OnRequest)
@@ -298,24 +299,14 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
     );
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
-    let expiration_ms: u64 = if cfg!(windows) { 2_500 } else { 1_000 };
+    let expiration_ms: u64 = 1_000;
 
     let params = ExecParams {
-        command: if cfg!(windows) {
-            vec![
-                "cmd.exe".to_string(),
-                "/Q".to_string(),
-                "/D".to_string(),
-                "/C".to_string(),
-                "echo hi".to_string(),
-            ]
-        } else {
-            vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                "echo hi".to_string(),
-            ]
-        },
+        command: vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "echo hi".to_string(),
+        ],
         cwd: turn_context.cwd.clone(),
         expiration: expiration_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,

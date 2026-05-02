@@ -229,10 +229,6 @@ async fn memories_startup_phase2_prunes_old_extension_resources_and_reports_them
     wait_for_phase2_success(db.as_ref(), thread_id).await?;
     wait_for_file_removed(&old_file).await?;
     assert!(
-        !tokio::fs::try_exists(&old_file).await?,
-        "old extension resource should be pruned"
-    );
-    assert!(
         tokio::fs::try_exists(&recent_file).await?,
         "recent extension resource should be retained"
     );
@@ -528,8 +524,11 @@ async fn wait_for_single_request(mock: &ResponseMock) -> ResponsesRequest {
 async fn wait_for_file_removed(path: &Path) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if !tokio::fs::try_exists(path).await? {
-            return Ok(());
+        match tokio::fs::try_exists(path).await {
+            Ok(false) => return Ok(()),
+            Ok(true) => {}
+            Err(err) if cfg!(windows) && err.kind() == std::io::ErrorKind::PermissionDenied => {}
+            Err(err) => return Err(err.into()),
         }
         assert!(
             Instant::now() < deadline,
