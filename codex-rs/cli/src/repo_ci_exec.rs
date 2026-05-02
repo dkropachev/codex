@@ -93,13 +93,20 @@ fn run_repo_ci_exec_json_blocking(
     fs::write(&schema_path, serde_json::to_vec_pretty(&schema)?)
         .with_context(|| format!("failed to write {}", schema_path.display()))?;
 
-    let current_exe = std::env::current_exe().context("failed to locate current codex binary")?;
+    let codex_exe = resolve_codex_exe(CodexExeResolutionInputs {
+        current_exe: std::env::current_exe().map_err(|err| err.to_string()),
+        argv0: std::env::args_os().next().map(PathBuf::from),
+        path_entries: std::env::var_os("PATH")
+            .map(|path| std::env::split_paths(&path).collect())
+            .unwrap_or_default(),
+    })?;
     eprintln!(
-        "{action}: starting nested `codex exec` in {} (timeout {}s)",
+        "{action}: starting nested `codex exec` in {} using {} (timeout {}s)",
         repo_root.display(),
+        codex_exe.display(),
         timeout.as_secs()
     );
-    let mut command = Command::new(current_exe);
+    let mut command = Command::new(&codex_exe);
     command
         .arg("exec")
         .arg("--ephemeral")
@@ -113,6 +120,7 @@ fn run_repo_ci_exec_json_blocking(
         .arg("-C")
         .arg(&repo_root)
         .arg("-")
+        .current_dir(&repo_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
@@ -123,9 +131,13 @@ fn run_repo_ci_exec_json_blocking(
     #[cfg(unix)]
     command.process_group(0);
 
-    let child = command
-        .spawn()
-        .with_context(|| format!("failed to spawn {action} for {}", repo_root.display()))?;
+    let child = command.spawn().with_context(|| {
+        format!(
+            "failed to spawn {action} with {} for {}",
+            codex_exe.display(),
+            repo_root.display()
+        )
+    })?;
     eprintln!(
         "{action}: spawned nested `codex exec` as pid {}",
         child.id()
@@ -170,6 +182,59 @@ fn run_repo_ci_exec_json_blocking(
 
     fs::read_to_string(&output_path)
         .with_context(|| format!("failed to read {}", output_path.display()))
+}
+
+#[derive(Debug)]
+struct CodexExeResolutionInputs {
+    current_exe: std::result::Result<PathBuf, String>,
+    argv0: Option<PathBuf>,
+    path_entries: Vec<PathBuf>,
+}
+
+fn resolve_codex_exe(inputs: CodexExeResolutionInputs) -> Result<PathBuf> {
+    if let Ok(path) = &inputs.current_exe
+        && path.is_file()
+    {
+        return Ok(path.clone());
+    }
+
+    let current_exe_description = match &inputs.current_exe {
+        Ok(path) => format!("`{}`", path.display()),
+        Err(err) => format!("unavailable ({err})"),
+    };
+    let argv0_path = inputs.argv0.ok_or_else(|| {
+        anyhow!(
+            "current executable path {current_exe_description} is not usable and process argv[0] is not available"
+        )
+    })?;
+    if argv0_path.is_absolute() || argv0_path.components().count() > 1 {
+        if argv0_path.is_file() {
+            return absolute_existing_file_path(argv0_path);
+        }
+        anyhow::bail!(
+            "current executable path {current_exe_description} is not usable and argv[0] `{}` is not a file",
+            argv0_path.display()
+        );
+    }
+
+    inputs
+        .path_entries
+        .into_iter()
+        .map(|dir| dir.join(&argv0_path))
+        .find(|candidate| candidate.is_file())
+        .map(absolute_existing_file_path)
+        .transpose()?
+        .ok_or_else(|| {
+            anyhow!(
+                "current executable path {current_exe_description} is not usable and argv[0] `{}` was not found on PATH",
+                argv0_path.display()
+            )
+        })
+}
+
+fn absolute_existing_file_path(path: PathBuf) -> Result<PathBuf> {
+    path.canonicalize()
+        .with_context(|| format!("failed to resolve executable path {}", path.display()))
 }
 
 enum RepoCiExecCompletion {
@@ -434,5 +499,83 @@ mod tests {
     #[test]
     fn repo_ci_exec_timeout_clamps_to_maximum() {
         assert_eq!(repo_ci_exec_timeout(1_200), REPO_CI_EXEC_MAX_TIMEOUT);
+    }
+
+    #[test]
+    fn resolve_codex_exe_prefers_existing_current_exe() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let current_exe = tempdir.path().join("current-codex");
+        let path_candidate_dir = tempdir.path().join("bin");
+        fs::create_dir(&path_candidate_dir)?;
+        let path_candidate = path_candidate_dir.join("codex");
+        write_file(&current_exe)?;
+        write_file(&path_candidate)?;
+
+        let resolved = resolve_codex_exe(CodexExeResolutionInputs {
+            current_exe: Ok(current_exe.clone()),
+            argv0: Some(PathBuf::from("codex")),
+            path_entries: vec![path_candidate_dir],
+        })?;
+
+        assert_eq!(resolved, current_exe);
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_codex_exe_falls_back_to_relative_argv0() -> Result<()> {
+        let cwd = std::env::current_dir()?;
+        let tempdir = tempfile::Builder::new()
+            .prefix("repo-ci-exe-test")
+            .tempdir_in(&cwd)?;
+        let exe = tempdir.path().join("codex");
+        write_file(&exe)?;
+        let relative_exe = exe.strip_prefix(&cwd)?.to_path_buf();
+
+        let resolved = resolve_codex_exe(CodexExeResolutionInputs {
+            current_exe: Ok(tempdir.path().join("deleted-codex")),
+            argv0: Some(relative_exe),
+            path_entries: Vec::new(),
+        })?;
+
+        assert_eq!(resolved, exe.canonicalize()?);
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_codex_exe_falls_back_to_path() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let path_candidate_dir = tempdir.path().join("bin");
+        fs::create_dir(&path_candidate_dir)?;
+        let path_candidate = path_candidate_dir.join("codex");
+        write_file(&path_candidate)?;
+
+        let resolved = resolve_codex_exe(CodexExeResolutionInputs {
+            current_exe: Err("current exe unavailable".to_string()),
+            argv0: Some(PathBuf::from("codex")),
+            path_entries: vec![path_candidate_dir],
+        })?;
+
+        assert_eq!(resolved, path_candidate.canonicalize()?);
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_codex_exe_reports_unusable_current_exe_and_missing_argv0() {
+        let err = resolve_codex_exe(CodexExeResolutionInputs {
+            current_exe: Ok(PathBuf::from("/missing/current-codex")),
+            argv0: None,
+            path_entries: Vec::new(),
+        })
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "current executable path `/missing/current-codex` is not usable and process argv[0] is not available"
+        );
+    }
+
+    fn write_file(path: &Path) -> Result<()> {
+        fs::write(path, b"codex")?;
+        Ok(())
     }
 }
