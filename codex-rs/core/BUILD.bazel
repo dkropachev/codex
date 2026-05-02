@@ -47,7 +47,7 @@ codex_rust_crate(
     ],
     test_shard_counts = {
         "core-all-test": 16,
-        "core-unit-tests": 8,
+        "core-unit-tests": 16,
     },
     test_tags = ["no-sandbox"],
     unit_test_timeout = "long",

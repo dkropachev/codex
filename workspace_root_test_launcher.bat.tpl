@@ -73,8 +73,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference = 'Stop';" ^
   "$testBin = $env:test_bin;" ^
   "$tests = @(Get-Content -LiteralPath $env:TEMP_SHARD_LIST);" ^
-  "$failed = $false; $limit = 7000; $batch = @(); $batchChars = $testBin.Length + 8;" ^
-  "function Invoke-TestBatch { if ($script:batch.Count -eq 0) { return }; & $script:testBin @script:batch '--exact'; if ($LASTEXITCODE -ne 0) { $script:failed = $true }; $script:batch = @(); $script:batchChars = $script:testBin.Length + 8 }" ^
+  "Write-Host ('workspace_root_test shard {0} of {1}: {2} test(s)' -f $env:SHARD_INDEX, $env:TOTAL_SHARDS, $tests.Count);" ^
+  "$failed = $false; $limit = 7000; $batchNumber = 0; $batch = @(); $batchChars = $testBin.Length + 8;" ^
+  "function Invoke-TestBatch { if ($script:batch.Count -eq 0) { return }; $script:batchNumber += 1; Write-Host ('workspace_root_test batch {0}: {1} test(s)' -f $script:batchNumber, $script:batch.Count); foreach ($test in $script:batch) { Write-Host ('  ' + $test) }; & $script:testBin @script:batch '--exact'; if ($LASTEXITCODE -ne 0) { $script:failed = $true }; $script:batch = @(); $script:batchChars = $script:testBin.Length + 8 }" ^
   "foreach ($test in $tests) { $argChars = $test.Length + 3; if (($batch.Count -gt 0) -and ($batchChars + $argChars -gt $limit)) { Invoke-TestBatch }; $batch += $test; $batchChars += $argChars }" ^
   "Invoke-TestBatch; if ($failed) { exit 1 }"
 set "TEST_EXIT=%ERRORLEVEL%"
