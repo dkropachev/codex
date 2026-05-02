@@ -317,7 +317,7 @@ impl ContainerMonitor {
             runtimes: commands
                 .iter()
                 .filter_map(|(runtime, command)| {
-                    ContainerRuntimeMonitor::new(*runtime, *command, run_id, compose_project_name)
+                    ContainerRuntimeMonitor::new(*runtime, command, run_id, compose_project_name)
                 })
                 .collect(),
         }
@@ -788,7 +788,7 @@ fn parse_runtime_event(line: &str) -> Option<RuntimeEventRecord> {
         container_id,
         name,
         image,
-        labels: attributes,
+        labels: filtered_labels(&attributes),
     })
 }
 
@@ -1073,11 +1073,7 @@ mod tests {
                 container_id: "def456".to_string(),
                 name: Some("svc-1".to_string()),
                 image: Some("redis:7".to_string()),
-                labels: BTreeMap::from([
-                    ("container_name".to_string(), "svc-1".to_string()),
-                    ("image".to_string(), "redis:7".to_string()),
-                    (COMPOSE_PROJECT_LABEL.to_string(), "project-2".to_string()),
-                ]),
+                labels: BTreeMap::from([(COMPOSE_PROJECT_LABEL.to_string(), "project-2".to_string())]),
             })
         );
         assert_eq!(

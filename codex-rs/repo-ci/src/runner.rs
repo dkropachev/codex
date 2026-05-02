@@ -344,7 +344,7 @@ fn spawn_runner(
     if let Some(run_id) = run_id {
         command.env("CODEX_REPO_CI_RUN_ID", run_id);
         if let Some(compose_project_name) = compose_project_name
-            && !std::env::var_os("COMPOSE_PROJECT_NAME").is_some_and(|value| !value.is_empty())
+            && std::env::var_os("COMPOSE_PROJECT_NAME").is_none_or(|value| value.is_empty())
         {
             command.env("COMPOSE_PROJECT_NAME", compose_project_name);
         }
