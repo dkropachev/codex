@@ -306,10 +306,7 @@ impl ToolRouterTuneObservationBuilder {
 }
 
 fn tool_router_route_kind_is_fallback(route_kind: &str) -> bool {
-    matches!(
-        route_kind,
-        "model_router" | "model_router_script" | "spark" | "spark_script"
-    )
+    matches!(route_kind, "spark" | "spark_script")
 }
 
 fn top_counts(counts: BTreeMap<String, i64>, limit: usize) -> Vec<ToolRouterTuneCount> {
@@ -367,7 +364,7 @@ mod tests {
             .await
             .expect("state runtime");
 
-        let mut fallback = ledger_entry("call-1", "model_router_script", 1, 11, 4, Some("failed"));
+        let mut fallback = ledger_entry("call-1", "spark_script", 1, 11, 4, Some("failed"));
         fallback.selected_tools = vec!["exec_command".to_string()];
         runtime
             .record_tool_router_ledger_entry(fallback)
@@ -408,7 +405,7 @@ mod tests {
                         count: 1,
                     },
                     ToolRouterTuneCount {
-                        name: "model_router_script".to_string(),
+                        name: "spark_script".to_string(),
                         count: 1,
                     },
                 ],
@@ -457,7 +454,7 @@ mod tests {
         };
         let shape_json = serde_json::to_string(&shape).expect("shape json");
 
-        let mut fallback = ledger_entry("call-fallback", "model_router", 1, 12, 3, Some("ok"));
+        let mut fallback = ledger_entry("call-fallback", "spark", 1, 12, 3, Some("ok"));
         fallback.selected_tools = vec!["exec_command".to_string()];
         fallback.request_shape_json = Some(shape_json.clone());
         runtime
@@ -474,7 +471,7 @@ mod tests {
             .upsert_tool_router_rule(
                 "v1|where=shell|action=exec",
                 r#"{"type":"route","tool":"exec_command","arguments":{}}"#,
-                "model_router",
+                "tool_router_tune",
             )
             .await
             .expect("upsert rule");
@@ -510,7 +507,7 @@ mod tests {
                         count: 1,
                     },
                     ToolRouterTuneCount {
-                        name: "model_router".to_string(),
+                        name: "spark".to_string(),
                         count: 1,
                     },
                 ],
@@ -546,7 +543,7 @@ mod tests {
                     },
                     ToolRouterRequestShapeCluster {
                         shape,
-                        route_kind: "model_router".to_string(),
+                        route_kind: "spark".to_string(),
                         outcome: Some("ok".to_string()),
                         count: 1,
                     },

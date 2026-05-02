@@ -43,8 +43,8 @@ use serde_json::Value;
 pub(crate) struct ToolRouterUsage {
     pub(crate) route_kind: String,
     pub(crate) selected_tools: Vec<String>,
-    pub(crate) model_router_prompt_tokens: i64,
-    pub(crate) model_router_completion_tokens: i64,
+    pub(crate) fallback_prompt_tokens: i64,
+    pub(crate) fallback_completion_tokens: i64,
     pub(crate) fanout_call_count: i64,
     pub(crate) request_shape_json: Option<String>,
 }
@@ -532,8 +532,8 @@ fn usage(route_kind: &str, selected_tools: Vec<String>, fanout_call_count: i64) 
     ToolRouterUsage {
         route_kind: route_kind.to_string(),
         selected_tools,
-        model_router_prompt_tokens: 0,
-        model_router_completion_tokens: 0,
+        fallback_prompt_tokens: 0,
+        fallback_completion_tokens: 0,
         fanout_call_count,
         request_shape_json: None,
     }
@@ -565,8 +565,8 @@ fn tool_resolution(call: ToolCall) -> RouterResolution {
 pub(super) fn route_resolution(
     route_kind: &str,
     call: ToolCall,
-    model_router_prompt_tokens: i64,
-    model_router_completion_tokens: i64,
+    fallback_prompt_tokens: i64,
+    fallback_completion_tokens: i64,
 ) -> RouterResolution {
     let selected_tool = call.tool_name.display();
     RouterResolution::SingleTool {
@@ -574,8 +574,8 @@ pub(super) fn route_resolution(
         usage: ToolRouterUsage {
             route_kind: route_kind.to_string(),
             selected_tools: vec![selected_tool],
-            model_router_prompt_tokens,
-            model_router_completion_tokens,
+            fallback_prompt_tokens,
+            fallback_completion_tokens,
             fanout_call_count: 1,
             request_shape_json: None,
         },

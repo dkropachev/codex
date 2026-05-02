@@ -3,7 +3,6 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
 use crate::installation_id::resolve_installation_id;
-use crate::model_router::auth_manager_for_config;
 use chrono::Utc;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -113,7 +112,7 @@ impl ToolRouterIntrospectionProvider for ToolRouterModelIntrospectionProvider {
             .models_manager
             .get_model_info(&request.model, &self.config.to_models_manager_config())
             .await;
-        let auth_manager = Some(auth_manager_for_config(&self.config, &self.auth_manager));
+        let auth_manager = Some(Arc::clone(&self.auth_manager));
         let thread_id = ThreadId::new();
         let client = ModelClient::new(
             auth_manager,
@@ -689,7 +688,7 @@ fn dynamic_guidance_for_observation(observation: &ToolRouterTuneObservation) -> 
     if observation
         .route_kind_breakdown
         .iter()
-        .any(|entry| matches!(entry.name.as_str(), "model_router_script" | "spark_script"))
+        .any(|entry| entry.name == "spark_script")
     {
         guidance.push("Script fallbacks were observed; for shell work set `where.kind` to `shell` and provide concrete `action.cmd`, `action.command`, or `action.commands`.".to_string());
     }
@@ -820,7 +819,7 @@ mod tests {
     async fn dry_run_reports_optimizations_without_persisting() {
         let (_codex_home, runtime) = state_runtime().await;
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("model_router", 25, 5))
+            .record_tool_router_ledger_entry(ledger_entry("spark", 25, 5))
             .await
             .expect("record ledger");
 
@@ -867,7 +866,7 @@ mod tests {
     async fn apply_persists_only_passing_dynamic_guidance() {
         let (_codex_home, runtime) = state_runtime().await;
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("model_router", 300, 60))
+            .record_tool_router_ledger_entry(ledger_entry("spark", 300, 60))
             .await
             .expect("record ledger");
 
@@ -891,7 +890,7 @@ mod tests {
     async fn over_cap_dynamic_guidance_is_not_persisted() {
         let (_codex_home, runtime) = state_runtime().await;
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("model_router", 30, 6))
+            .record_tool_router_ledger_entry(ledger_entry("spark", 30, 6))
             .await
             .expect("record ledger");
 
@@ -917,7 +916,7 @@ mod tests {
     async fn dynamic_guidance_savings_count_only_fallback_tokens() {
         let (_codex_home, runtime) = state_runtime().await;
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("model_router", 30, 6))
+            .record_tool_router_ledger_entry(ledger_entry("spark", 30, 6))
             .await
             .expect("record fallback");
         runtime
@@ -959,7 +958,7 @@ mod tests {
     async fn introspection_guidance_persists_when_valid_and_applied() {
         let (_codex_home, runtime) = state_runtime().await;
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("model_router", 30, 6))
+            .record_tool_router_ledger_entry(ledger_entry("spark", 30, 6))
             .await
             .expect("record ledger");
         let guidance = "For this shell-heavy toolset, route known shell execution directly with `action.tool` and `action.cmd`.";
@@ -991,7 +990,7 @@ mod tests {
     async fn introspection_over_cap_guidance_is_not_persisted() {
         let (_codex_home, runtime) = state_runtime().await;
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("model_router", 30, 6))
+            .record_tool_router_ledger_entry(ledger_entry("spark", 30, 6))
             .await
             .expect("record ledger");
 
@@ -1026,7 +1025,7 @@ mod tests {
     async fn malformed_introspection_output_is_not_persisted() {
         let (_codex_home, runtime) = state_runtime().await;
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("model_router", 30, 6))
+            .record_tool_router_ledger_entry(ledger_entry("spark", 30, 6))
             .await
             .expect("record ledger");
 
@@ -1087,7 +1086,7 @@ mod tests {
             visible_router_schema_tokens: 12,
             hidden_tool_schema_tokens: 120,
             route_kind_breakdown: vec![ToolRouterTuneCount {
-                name: "model_router".to_string(),
+                name: "spark".to_string(),
                 count: 1,
             }],
             selected_tool_breakdown: vec![ToolRouterTuneCount {

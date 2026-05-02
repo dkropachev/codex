@@ -3533,7 +3533,7 @@ mod tests {
                 invalid_route_errors: 1,
                 affected_call_count: 3,
                 route_kind_breakdown: vec![codex_state::ToolRouterTuneCount {
-                    name: "model_router".to_string(),
+                    name: "spark".to_string(),
                     count: 2,
                 }],
                 selected_tool_breakdown: vec![codex_state::ToolRouterTuneCount {
