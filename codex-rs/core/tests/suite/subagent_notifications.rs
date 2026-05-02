@@ -4,6 +4,7 @@ use codex_core::config::AgentRoleConfig;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AgentStatus;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -228,8 +229,25 @@ async fn setup_turn_one_with_custom_spawned_child(
     }));
     let test = builder.build(server).await?;
     test.submit_turn(TURN_1_PROMPT).await?;
+    let spawned_id = wait_for_spawned_thread_id(&test).await?;
     if child_response_delay.is_none() && wait_for_parent_notification {
         let _ = wait_for_requests(&child_request_log).await?;
+        let spawned_thread_id = ThreadId::from_string(&spawned_id)?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let thread = test.thread_manager.get_thread(spawned_thread_id).await?;
+            let status = thread.agent_status().await;
+            if !matches!(
+                status,
+                AgentStatus::PendingInit | AgentStatus::Running | AgentStatus::Interrupted
+            ) {
+                break;
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!("timed out waiting for spawned thread {spawned_id} to finish");
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
         let rollout_path = test
             .codex
             .rollout_path()
@@ -250,7 +268,6 @@ async fn setup_turn_one_with_custom_spawned_child(
             sleep(Duration::from_millis(10)).await;
         }
     }
-    let spawned_id = wait_for_spawned_thread_id(&test).await?;
 
     Ok((test, spawned_id))
 }
