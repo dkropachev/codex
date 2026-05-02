@@ -5,6 +5,7 @@ use crate::remote_commit::apply_remote_commit_decision;
 use crate::remote_commit::fallback_remote_commit_decision;
 use crate::remote_commit::git_status_short;
 use crate::remote_commit::remote_commit_changed_paths;
+use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use serde::Deserialize;
@@ -12,13 +13,18 @@ use std::path::Path;
 use std::process::Command;
 use std::process::ExitStatus;
 use std::process::Output;
+use std::process::Stdio;
+use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
+use std::time::Instant;
 
 const GITHUB_RETRY_ATTEMPTS: usize = 3;
 const GITHUB_RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
 const MAX_COMMAND_OUTPUT_BYTES: usize = 12_000;
 const MAX_STATUS_LINES: usize = 12;
+const REMOTE_CHECK_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const REMOTE_WATCH_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,6 +74,32 @@ pub struct RemoteRepoCiWorkflow {
     pr: GhPr,
 }
 
+#[derive(Clone, Default)]
+pub struct RemoteRepoCiProgress {
+    on_checks: Option<Arc<dyn Fn(Vec<RemoteRepoCiCheck>) + Send + Sync + 'static>>,
+}
+
+impl RemoteRepoCiProgress {
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    pub fn on_checks<F>(on_checks: F) -> Self
+    where
+        F: Fn(Vec<RemoteRepoCiCheck>) + Send + Sync + 'static,
+    {
+        Self {
+            on_checks: Some(Arc::new(on_checks)),
+        }
+    }
+
+    fn emit_checks(&self, checks: Vec<RemoteRepoCiCheck>) {
+        if let Some(on_checks) = &self.on_checks {
+            on_checks(checks);
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteRepoCiWorkflowStart {
     Skipped(String),
@@ -114,6 +146,22 @@ pub fn run_started_remote_workflow_with_commit_decision(
     commit_decision: Option<&RemoteCommitDecision>,
     owned_paths: &[String],
 ) -> Result<RemoteRepoCiWorkflowRun> {
+    run_started_remote_workflow_with_commit_decision_and_progress(
+        cwd,
+        workflow,
+        commit_decision,
+        owned_paths,
+        RemoteRepoCiProgress::none(),
+    )
+}
+
+pub fn run_started_remote_workflow_with_commit_decision_and_progress(
+    cwd: &Path,
+    workflow: &RemoteRepoCiWorkflow,
+    commit_decision: Option<&RemoteCommitDecision>,
+    owned_paths: &[String],
+    progress: RemoteRepoCiProgress,
+) -> Result<RemoteRepoCiWorkflowRun> {
     let prepared_commit = prepare_remote_commit(cwd, commit_decision, owned_paths)?;
     ensure_clean_worktree(cwd)?;
     let pushed_head = local_head(cwd)?;
@@ -123,11 +171,7 @@ pub fn run_started_remote_workflow_with_commit_decision(
         PushMode::for_prepared_commit(&prepared_commit),
     )?;
     ensure_remote_ref_matches_head(cwd, &workflow.pr, &pushed_head)?;
-    let watch_output = run_gh_output_with_retry(
-        cwd,
-        &["pr", "checks", "--watch", "--fail-fast"],
-        "watch GitHub PR checks",
-    )?;
+    let watch_output = run_gh_watch_with_progress(cwd, progress)?;
     if watch_output.status.success() {
         ensure_clean_worktree(cwd)?;
         ensure_local_head_matches(cwd, &pushed_head)?;
@@ -423,6 +467,45 @@ fn pr_checks(cwd: &Path) -> Result<Vec<RemoteRepoCiCheck>> {
         "load GitHub PR checks",
     )?;
     Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+fn run_gh_watch_with_progress(cwd: &Path, progress: RemoteRepoCiProgress) -> Result<Output> {
+    let args = ["pr", "checks", "--watch", "--fail-fast"];
+    let command_display = format!("gh {}", args.join(" "));
+    let mut child = Command::new("gh")
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| {
+            anyhow!("watch GitHub PR checks failed: could not run `{command_display}`: {err}")
+        })?;
+
+    let mut last_poll = Instant::now()
+        .checked_sub(REMOTE_CHECK_POLL_INTERVAL)
+        .unwrap_or_else(Instant::now);
+    loop {
+        if last_poll.elapsed() >= REMOTE_CHECK_POLL_INTERVAL {
+            if let Ok(checks) = pr_checks(cwd) {
+                progress.emit_checks(checks);
+            }
+            last_poll = Instant::now();
+        }
+
+        if child
+            .try_wait()
+            .context("failed to wait for GitHub PR checks")?
+            .is_some()
+        {
+            return child
+                .wait_with_output()
+                .with_context(|| format!("failed to collect `{command_display}` output"));
+        }
+
+        sleep(REMOTE_WATCH_POLL_INTERVAL);
+    }
 }
 
 fn ensure_clean_worktree(cwd: &Path) -> Result<()> {

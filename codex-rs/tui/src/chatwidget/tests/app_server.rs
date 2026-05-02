@@ -318,6 +318,38 @@ async fn live_app_server_repo_ci_terminal_status_is_preserved_in_history() {
 }
 
 #[tokio::test]
+async fn live_app_server_repo_ci_fix_worker_milestone_is_preserved_in_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::RepoCiStatus(RepoCiStatusNotification {
+            thread_id: "thread-1".to_string(),
+            phase: "triage".to_string(),
+            state: "retrying".to_string(),
+            scope: "local".to_string(),
+            attempt: Some(1),
+            max_attempts: Some(2),
+            message: "Repo CI fix workers applied 2 grouped fix(es) touching 2 file(s): updated config | adjusted tests".to_string(),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(
+        status.header(),
+        "Repo CI fix workers applied 2 grouped fix(es) touching 2 file(s): updated config | adjusted tests"
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one repo CI history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert_chatwidget_snapshot!("repo_ci_fix_worker_milestone_history", rendered);
+}
+
+#[tokio::test]
 async fn live_app_server_config_warning_prefixes_summary() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

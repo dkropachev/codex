@@ -26,13 +26,15 @@ use codex_protocol::protocol::RepoCiStatusEvent;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
-use futures::future::join_all;
+use futures::stream::FuturesUnordered;
+use futures::stream::StreamExt;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
 use sha2::Digest;
 use sha2::Sha256;
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 use tracing::warn;
 
 use crate::codex_delegate::run_codex_thread_one_shot;
@@ -239,6 +241,22 @@ impl EffectiveRepoCiConfig {
 
     fn review_enabled(&self) -> bool {
         !self.review_issue_types.is_empty() && self.max_review_fix_rounds > 0
+    }
+
+    fn local_run_mode(&self) -> codex_repo_ci::RunMode {
+        if self.long_ci {
+            codex_repo_ci::RunMode::Full
+        } else {
+            codex_repo_ci::RunMode::Fast
+        }
+    }
+
+    fn local_runner_label(&self) -> &'static str {
+        if self.long_ci {
+            "local full runner"
+        } else {
+            "local fast runner"
+        }
     }
 }
 
@@ -620,15 +638,43 @@ pub(crate) async fn maybe_run_after_agent(
             repo_ci_cancellation.cancel();
         }
     });
+    let local_runner_label = config.local_runner_label().to_string();
+    let (local_progress_tx, mut local_progress_rx) = tokio::sync::mpsc::unbounded_channel();
+    let local_progress_task = tokio::spawn({
+        let sess = Arc::clone(sess);
+        let turn_context = Arc::clone(turn_context);
+        let local_runner_label = local_runner_label.clone();
+        async move {
+            while let Some(step) = local_progress_rx.recv().await {
+                send_status(
+                    &sess,
+                    &turn_context,
+                    RepoCiPhase::Local,
+                    RepoCiState::Started,
+                    RepoCiScope::Local,
+                    None,
+                    None,
+                    format_local_step_progress(&local_runner_label, &step),
+                )
+                .await;
+            }
+        }
+    });
     let result = tokio::task::spawn_blocking({
         let codex_home = turn_context.config.codex_home.clone();
         let cwd = turn_context.cwd.clone();
         let config = config.clone();
         let repo_ci_cancellation = repo_ci_cancellation.clone();
-        move || run_local_repo_ci(&codex_home, &cwd, &config, repo_ci_cancellation)
+        move || {
+            let progress = codex_repo_ci::RepoCiProgress::on_step(move |step| {
+                let _ = local_progress_tx.send(step);
+            });
+            run_local_repo_ci(&codex_home, &cwd, &config, repo_ci_cancellation, progress)
+        }
     })
     .await;
     cancellation_task.abort();
+    let _ = local_progress_task.await;
     let local_outcome = match result {
         Ok(Ok(outcome)) => outcome,
         Ok(Err(err)) => {
@@ -864,19 +910,53 @@ pub(crate) async fn maybe_run_after_agent(
         "Repo CI remote checks started.".to_string(),
     )
     .await;
+    let (remote_progress_tx, mut remote_progress_rx) =
+        tokio::sync::mpsc::unbounded_channel::<Vec<codex_repo_ci::RemoteRepoCiCheck>>();
+    let remote_progress_task = tokio::spawn({
+        let sess = Arc::clone(sess);
+        let turn_context = Arc::clone(turn_context);
+        async move {
+            let mut last_message = None;
+            while let Some(checks) = remote_progress_rx.recv().await {
+                let Some(message) = format_remote_check_progress(&checks) else {
+                    continue;
+                };
+                if last_message.as_deref() == Some(message.as_str()) {
+                    continue;
+                }
+                last_message = Some(message.clone());
+                send_status(
+                    &sess,
+                    &turn_context,
+                    RepoCiPhase::Remote,
+                    RepoCiState::Started,
+                    RepoCiScope::Remote,
+                    None,
+                    None,
+                    message,
+                )
+                .await;
+            }
+        }
+    });
     let result = tokio::task::spawn_blocking({
         let cwd = turn_context.cwd.clone();
         let remote_commit_paths = remote_commit_paths.clone();
         move || {
+            let progress = codex_repo_ci::RemoteRepoCiProgress::on_checks(move |checks| {
+                let _ = remote_progress_tx.send(checks);
+            });
             run_remote_repo_ci(
                 &cwd,
                 &workflow,
                 remote_commit_decision.as_ref(),
                 &remote_commit_paths,
+                progress,
             )
         }
     })
     .await;
+    let _ = remote_progress_task.await;
     let remote_outcome = match result {
         Ok(Ok(outcome)) => outcome,
         Ok(Err(err)) => {
@@ -1289,7 +1369,7 @@ async fn run_targeted_review(
         None,
         None,
         format!(
-            "Repo CI targeted review started for {}.",
+            "Repo CI review: inspecting the branch\n\nScope: {}",
             config
                 .review_issue_types
                 .iter()
@@ -1324,10 +1404,12 @@ async fn run_targeted_review(
         None,
         if output.findings.is_empty() {
             "Repo CI targeted review found no scoped issues.".to_string()
+        } else if output.findings.len() == 1 {
+            "Repo CI targeted review found 1 scoped issue.".to_string()
         } else {
             format!(
-                "Repo CI targeted review found {} issue group(s).",
-                group_review_findings(&output.findings).len()
+                "Repo CI targeted review found {} scoped issues.",
+                output.findings.len()
             )
         },
     )
@@ -1341,12 +1423,25 @@ async fn run_review_fix_workers(
     review: &RepoCiReviewOutput,
 ) -> Result<Vec<RepoCiFixWorkerOutput>> {
     let groups = group_review_findings(&review.findings);
-    let tasks = groups
-        .into_iter()
-        .enumerate()
-        .map(|(index, group)| async move {
+    let total = groups.len();
+    let mut tasks = FuturesUnordered::new();
+    for (index, group) in groups.into_iter().enumerate() {
+        let ordinal = index + 1;
+        let target = truncate_middle(&group.key, 160);
+        send_status(
+            sess,
+            turn_context,
+            RepoCiPhase::Triage,
+            RepoCiState::Started,
+            RepoCiScope::Local,
+            None,
+            None,
+            format!("Repo CI fix worker {ordinal}/{total} started: {target}"),
+        )
+        .await;
+        tasks.push(async move {
             let prompt = review_fix_prompt(&group);
-            run_repo_ci_subagent_json::<RepoCiFixWorkerOutput>(
+            let output = run_repo_ci_subagent_json::<RepoCiFixWorkerOutput>(
                 sess,
                 turn_context,
                 ModelRouterSource::Module("repo_ci.fix"),
@@ -1355,13 +1450,33 @@ async fn run_review_fix_workers(
                 review_fix_output_schema(),
             )
             .await
+            .with_context(|| format!("Repo CI fix worker {ordinal}/{total} failed"))?;
+            Ok::<_, anyhow::Error>((index, output))
         });
-    let results = join_all(tasks).await;
-    let mut outputs = Vec::new();
-    for result in results {
-        outputs.push(result?);
     }
-    Ok(outputs)
+
+    let mut outputs = Vec::new();
+    while let Some(result) = tasks.next().await {
+        let (index, output) = result?;
+        let ordinal = index + 1;
+        send_status(
+            sess,
+            turn_context,
+            RepoCiPhase::Triage,
+            RepoCiState::Retrying,
+            RepoCiScope::Local,
+            None,
+            None,
+            format!(
+                "Repo CI fix worker {ordinal}/{total} completed: {}",
+                truncate_middle(&output.summary, 180)
+            ),
+        )
+        .await;
+        outputs.push((index, output));
+    }
+    outputs.sort_by_key(|(index, _)| *index);
+    Ok(outputs.into_iter().map(|(_, output)| output).collect())
 }
 
 fn group_review_findings(findings: &[RepoCiReviewFinding]) -> Vec<RepoCiFixGroup> {
@@ -1417,16 +1532,94 @@ where
         Arc::clone(sess),
         Arc::clone(turn_context),
         CancellationToken::new(),
-        subagent_source,
+        subagent_source.clone(),
         Some(schema),
         None,
     )
     .await?;
+    let subagent_label = repo_ci_subagent_label(&subagent_source);
     let mut final_text = None;
     while let Ok(event) = codex.next_event().await {
-        if let EventMsg::TurnComplete(turn_complete) = event.msg {
-            final_text = turn_complete.last_agent_message;
-            break;
+        match event.msg {
+            EventMsg::TurnComplete(turn_complete) => {
+                final_text = turn_complete.last_agent_message;
+                break;
+            }
+            EventMsg::ExecCommandBegin(event) => {
+                send_status(
+                    sess,
+                    turn_context,
+                    RepoCiPhase::Triage,
+                    RepoCiState::Started,
+                    RepoCiScope::Local,
+                    None,
+                    None,
+                    format!(
+                        "Repo CI {subagent_label}: running `{}`",
+                        truncate_middle(&event.command.join(" "), 180)
+                    ),
+                )
+                .await;
+            }
+            EventMsg::ExecCommandEnd(event) => {
+                let status = if event.exit_code == 0 {
+                    "passed".to_string()
+                } else {
+                    format!("failed with exit code {}", event.exit_code)
+                };
+                send_status(
+                    sess,
+                    turn_context,
+                    RepoCiPhase::Triage,
+                    RepoCiState::Started,
+                    RepoCiScope::Local,
+                    None,
+                    None,
+                    format!(
+                        "Repo CI {subagent_label}: command {status}: `{}`",
+                        truncate_middle(&event.command.join(" "), 160)
+                    ),
+                )
+                .await;
+            }
+            EventMsg::McpToolCallBegin(event) => {
+                send_status(
+                    sess,
+                    turn_context,
+                    RepoCiPhase::Triage,
+                    RepoCiState::Started,
+                    RepoCiScope::Local,
+                    None,
+                    None,
+                    format!(
+                        "Repo CI {subagent_label}: calling {}.{}",
+                        event.invocation.server, event.invocation.tool
+                    ),
+                )
+                .await;
+            }
+            EventMsg::McpToolCallEnd(event) => {
+                let status = if event.result.is_ok() {
+                    "completed"
+                } else {
+                    "failed"
+                };
+                send_status(
+                    sess,
+                    turn_context,
+                    RepoCiPhase::Triage,
+                    RepoCiState::Started,
+                    RepoCiScope::Local,
+                    None,
+                    None,
+                    format!(
+                        "Repo CI {subagent_label}: MCP tool {status}: {}.{}",
+                        event.invocation.server, event.invocation.tool
+                    ),
+                )
+                .await;
+            }
+            _ => {}
         }
     }
     let Some(text) = final_text else {
@@ -1564,6 +1757,14 @@ where
         .map(str::trim)
         .unwrap_or(trimmed);
     Ok(serde_json::from_str(json_text)?)
+}
+
+fn repo_ci_subagent_label(source: &SubAgentSource) -> &'static str {
+    match source {
+        SubAgentSource::Other(label) if label == "repo_ci_review" => "review",
+        SubAgentSource::Other(label) if label.starts_with("repo_ci_fix_") => "fix worker",
+        _ => "subagent",
+    }
 }
 
 fn targeted_review_prompt(
@@ -1995,33 +2196,37 @@ fn run_local_repo_ci(
     cwd: &Path,
     config: &EffectiveRepoCiConfig,
     cancellation: codex_repo_ci::RepoCiCancellation,
+    progress: codex_repo_ci::RepoCiProgress,
 ) -> Result<LocalRepoCiOutcome> {
     if !config.local_enabled() {
         return Ok(LocalRepoCiOutcome::Skipped);
     }
-    let run_mode = if config.long_ci {
-        codex_repo_ci::RunMode::Full
-    } else {
-        codex_repo_ci::RunMode::Fast
-    };
-    let runner_label = if config.long_ci {
-        "local full runner"
-    } else {
-        "local fast runner"
-    };
-    let artifact = codex_repo_ci::run_capture_persisted_with_cancellation(
+    let artifact = codex_repo_ci::run_capture_persisted_with_cancellation_and_progress(
         codex_home,
         cwd,
-        run_mode,
+        config.local_run_mode(),
         cancellation,
+        progress,
     )?;
     if artifact.status == codex_repo_ci::RepoCiRunArtifactStatus::Passed {
         Ok(LocalRepoCiOutcome::Passed)
     } else {
         Ok(LocalRepoCiOutcome::Failed {
-            output: format_run_output(runner_label, &artifact),
+            output: format_run_output(config.local_runner_label(), &artifact),
         })
     }
+}
+
+fn format_local_step_progress(label: &str, step: &codex_repo_ci::CapturedStep) -> String {
+    let status = match step.event {
+        codex_repo_ci::CapturedStepEvent::Started => "started".to_string(),
+        codex_repo_ci::CapturedStepEvent::Finished => match step.exit_code {
+            Some(0) => "passed".to_string(),
+            Some(code) => format!("failed with exit code {code}"),
+            None => "failed".to_string(),
+        },
+    };
+    format!("Repo CI {label}: {} {status}", step.id)
 }
 
 fn automation_to_repo_ci(automation: RepoCiAutomationToml) -> codex_repo_ci::AutomationMode {
@@ -2049,12 +2254,14 @@ fn run_remote_repo_ci(
     workflow: &codex_repo_ci::RemoteRepoCiWorkflow,
     commit_decision: Option<&codex_repo_ci::RemoteCommitDecision>,
     owned_paths: &[String],
+    progress: codex_repo_ci::RemoteRepoCiProgress,
 ) -> Result<RemoteRepoCiOutcome> {
-    let run = codex_repo_ci::run_started_remote_workflow_with_commit_decision(
+    let run = codex_repo_ci::run_started_remote_workflow_with_commit_decision_and_progress(
         cwd,
         workflow,
         commit_decision,
         owned_paths,
+        progress,
     )?;
     match run.outcome {
         codex_repo_ci::RemoteRepoCiWorkflowOutcome::Skipped(reason) => {
@@ -2077,7 +2284,7 @@ fn run_remote_repo_ci(
             }
             let failed = checks
                 .iter()
-                .filter(|check| check.bucket.as_deref() == Some("fail") || check.state == "FAILURE")
+                .filter(|check| remote_check_failed(check))
                 .collect::<Vec<_>>();
             if failed.is_empty() {
                 return Ok(RemoteRepoCiOutcome::Passed {
@@ -2094,6 +2301,47 @@ fn run_remote_repo_ci(
             })
         }
     }
+}
+
+fn format_remote_check_progress(checks: &[codex_repo_ci::RemoteRepoCiCheck]) -> Option<String> {
+    if checks.is_empty() {
+        return None;
+    }
+    let total = checks.len();
+    let passed = checks
+        .iter()
+        .filter(|check| remote_check_passed(check))
+        .count();
+    let failed = checks
+        .iter()
+        .filter(|check| remote_check_failed(check))
+        .count();
+    let pending = total.saturating_sub(passed + failed);
+    let mut message = format!(
+        "Repo CI remote checks: {total} total, {pending} pending, {passed} passed, {failed} failed."
+    );
+    if failed > 0 {
+        let failed_names = checks
+            .iter()
+            .filter(|check| remote_check_failed(check))
+            .take(3)
+            .map(|check| format!("- {}", check.name))
+            .collect::<Vec<_>>();
+        message.push_str("\n\nFailed checks:\n");
+        message.push_str(&failed_names.join("\n"));
+        if failed > failed_names.len() {
+            message.push_str(&format!("\n... and {} more", failed - failed_names.len()));
+        }
+    }
+    Some(message)
+}
+
+fn remote_check_failed(check: &codex_repo_ci::RemoteRepoCiCheck) -> bool {
+    check.bucket.as_deref() == Some("fail") || check.state == "FAILURE"
+}
+
+fn remote_check_passed(check: &codex_repo_ci::RemoteRepoCiCheck) -> bool {
+    check.bucket.as_deref() == Some("pass") || check.state == "SUCCESS"
 }
 
 fn format_remote_checks(checks: &[codex_repo_ci::RemoteRepoCiCheck]) -> String {
@@ -2455,7 +2703,11 @@ async fn send_status(
     max_attempts: Option<u8>,
     message: String,
 ) {
-    warn!("{message}");
+    if matches!(state, RepoCiState::Failed | RepoCiState::Exhausted) {
+        warn!("{message}");
+    } else {
+        info!("{message}");
+    }
     sess.send_event(
         turn_context,
         EventMsg::RepoCiStatus(RepoCiStatusEvent {
@@ -3228,6 +3480,7 @@ mod tests {
                 max_review_fix_rounds: 0,
             },
             codex_repo_ci::RepoCiCancellation::default(),
+            codex_repo_ci::RepoCiProgress::none(),
         )
         .expect_err("missing runner should fail");
 

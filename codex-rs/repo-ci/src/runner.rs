@@ -6,6 +6,7 @@ use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Child;
 use std::process::Command;
 use std::process::ExitStatus;
@@ -44,6 +45,32 @@ impl RepoCiCancellation {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct RepoCiProgress {
+    on_step: Option<Arc<dyn Fn(CapturedStep) + Send + Sync + 'static>>,
+}
+
+impl RepoCiProgress {
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    pub fn on_step<F>(on_step: F) -> Self
+    where
+        F: Fn(CapturedStep) + Send + Sync + 'static,
+    {
+        Self {
+            on_step: Some(Arc::new(on_step)),
+        }
+    }
+
+    fn emit_step(&self, step: CapturedStep) {
+        if let Some(on_step) = &self.on_step {
+            on_step(step);
+        }
+    }
+}
+
 pub(crate) fn run_runner(
     paths: &RepoCiPaths,
     arg: &str,
@@ -55,6 +82,7 @@ pub(crate) fn run_runner(
         arg,
         local_test_time_budget_sec,
         &RepoCiCancellation::default(),
+        || Ok(()),
     )? {
         RunnerCompletion::Finished(status) => Ok(status),
         RunnerCompletion::Stopped { message } => Err(anyhow!(message)),
@@ -66,6 +94,22 @@ pub(crate) fn capture_runner(
     arg: &str,
     local_test_time_budget_sec: u64,
     cancellation: &RepoCiCancellation,
+) -> Result<CapturedRun> {
+    capture_runner_with_progress(
+        paths,
+        arg,
+        local_test_time_budget_sec,
+        cancellation,
+        RepoCiProgress::none(),
+    )
+}
+
+pub(crate) fn capture_runner_with_progress(
+    paths: &RepoCiPaths,
+    arg: &str,
+    local_test_time_budget_sec: u64,
+    cancellation: &RepoCiCancellation,
+    progress: RepoCiProgress,
 ) -> Result<CapturedRun> {
     let run_dir = paths.state_dir.join("runs");
     fs::create_dir_all(&run_dir)?;
@@ -86,7 +130,15 @@ pub(crate) fn capture_runner(
         .context("repo CI stderr pipe was not available")?;
     let stdout_reader = spawn_pipe_reader(stdout);
     let stderr_reader = spawn_pipe_reader(stderr);
-    let completion = wait_for_runner(&mut runner, arg, local_test_time_budget_sec, cancellation)?;
+    let mut step_reader = StepJsonlReader::new(jsonl_path.clone(), progress);
+    let completion = wait_for_runner(
+        &mut runner,
+        arg,
+        local_test_time_budget_sec,
+        cancellation,
+        || step_reader.read_available(),
+    )?;
+    step_reader.read_to_end()?;
     let stdout = join_pipe_reader(stdout_reader, "stdout")?;
     let mut stderr = join_pipe_reader(stderr_reader, "stderr")?;
     let status = match completion {
@@ -273,11 +325,14 @@ fn wait_for_runner(
     arg: &str,
     local_test_time_budget_sec: u64,
     cancellation: &RepoCiCancellation,
+    mut on_poll: impl FnMut() -> Result<()>,
 ) -> Result<RunnerCompletion> {
     let timeout = Duration::from_secs(local_test_time_budget_sec.max(1));
     let deadline = Instant::now() + timeout;
     loop {
+        on_poll()?;
         if let Some(status) = runner.try_wait()? {
+            on_poll()?;
             return Ok(RunnerCompletion::Finished(status));
         }
 
@@ -299,6 +354,63 @@ fn wait_for_runner(
             });
         }
         sleep_until_next_poll(remaining);
+    }
+}
+
+struct StepJsonlReader {
+    path: PathBuf,
+    emitted_lines: usize,
+    progress: RepoCiProgress,
+}
+
+enum StepJsonlReadMode {
+    CompleteLinesOnly,
+    IncludeTrailingLine,
+}
+
+impl StepJsonlReader {
+    fn new(path: PathBuf, progress: RepoCiProgress) -> Self {
+        Self {
+            path,
+            emitted_lines: 0,
+            progress,
+        }
+    }
+
+    fn read_available(&mut self) -> Result<()> {
+        self.read_lines(StepJsonlReadMode::CompleteLinesOnly)
+    }
+
+    fn read_to_end(&mut self) -> Result<()> {
+        self.read_lines(StepJsonlReadMode::IncludeTrailingLine)
+    }
+
+    fn read_lines(&mut self, mode: StepJsonlReadMode) -> Result<()> {
+        let Ok(data) = fs::read_to_string(&self.path) else {
+            return Ok(());
+        };
+        let lines = data.lines().collect::<Vec<_>>();
+        let complete_lines = match mode {
+            StepJsonlReadMode::CompleteLinesOnly if !data.ends_with('\n') => {
+                lines.len().saturating_sub(1)
+            }
+            StepJsonlReadMode::CompleteLinesOnly | StepJsonlReadMode::IncludeTrailingLine => {
+                lines.len()
+            }
+        };
+        for line in lines
+            .into_iter()
+            .take(complete_lines)
+            .skip(self.emitted_lines)
+        {
+            self.emitted_lines += 1;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let step = serde_json::from_str(line).context("failed to parse repo CI step JSONL")?;
+            self.progress.emit_step(step);
+        }
+        Ok(())
     }
 }
 

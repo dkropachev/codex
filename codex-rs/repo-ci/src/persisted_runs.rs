@@ -14,6 +14,7 @@ use crate::CapturedStep;
 use crate::CapturedStepEvent;
 use crate::RepoCiManifest;
 use crate::RepoCiPaths;
+use crate::RepoCiProgress;
 use crate::RepoCiRunArtifact;
 use crate::RepoCiRunArtifactStatus;
 use crate::RepoCiStep;
@@ -30,7 +31,7 @@ use crate::register_manifest_artifact_state;
 use crate::repo_root_for_cwd;
 use crate::require_runner;
 use crate::runner::RepoCiCancellation;
-use crate::runner::capture_runner;
+use crate::runner::capture_runner_with_progress;
 use crate::touch_manifest_artifact_state;
 
 pub fn run_capture_persisted_with_cancellation(
@@ -39,17 +40,34 @@ pub fn run_capture_persisted_with_cancellation(
     mode: RunMode,
     cancellation: RepoCiCancellation,
 ) -> Result<RepoCiRunArtifact> {
+    run_capture_persisted_with_cancellation_and_progress(
+        codex_home,
+        cwd,
+        mode,
+        cancellation,
+        RepoCiProgress::none(),
+    )
+}
+
+pub fn run_capture_persisted_with_cancellation_and_progress(
+    codex_home: &Path,
+    cwd: &Path,
+    mode: RunMode,
+    cancellation: RepoCiCancellation,
+    progress: RepoCiProgress,
+) -> Result<RepoCiRunArtifact> {
     cicd_artifacts::prune_stale_artifacts(codex_home)?;
     let paths = paths_for_repo(codex_home, cwd)?;
     require_runner(&paths)?;
     let manifest = read_manifest(&paths.manifest_path)?;
     touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
     let started = Instant::now();
-    let run = capture_runner(
+    let run = capture_runner_with_progress(
         &paths,
         mode.as_str(),
         manifest.local_test_time_budget_sec,
         &cancellation,
+        progress,
     )?;
     store_captured_run_artifact(codex_home, &paths, &manifest, mode, &run, started.elapsed())
 }
