@@ -43,6 +43,7 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions<'_>) -> ToolSpe
             return_value_description,
             options.include_usage_hint,
             options.usage_hint_text,
+            options.max_concurrent_threads_per_session,
         ),
         strict: false,
         defer_loading: None,
@@ -589,13 +590,16 @@ fn spawn_agent_tool_description(
     return_value_description: &str,
     include_usage_hint: bool,
     usage_hint_text: Option<String>,
+    max_concurrent_threads_per_session: Option<usize>,
 ) -> String {
     let agent_role_guidance = available_models_description.unwrap_or_default();
+    let concurrency_guidance = spawn_agent_concurrency_guidance(max_concurrent_threads_per_session);
 
     let tool_description = format!(
         r#"
         {agent_role_guidance}
-        Spawn a sub-agent for a well-scoped task. {return_value_description} {SPAWN_AGENT_INHERITED_MODEL_GUIDANCE}"#
+        Spawn a sub-agent for a well-scoped task. {return_value_description} {SPAWN_AGENT_INHERITED_MODEL_GUIDANCE}
+{concurrency_guidance}"#
     );
 
     if !include_usage_hint {
@@ -660,13 +664,7 @@ fn spawn_agent_tool_description_v2(
     max_concurrent_threads_per_session: Option<usize>,
 ) -> String {
     let agent_role_guidance = available_models_description.unwrap_or_default();
-    let concurrency_guidance = max_concurrent_threads_per_session
-        .map(|limit| {
-            format!(
-                "This session is configured with `max_concurrent_threads_per_session = {limit}` for concurrently open agent threads."
-            )
-        })
-        .unwrap_or_default();
+    let concurrency_guidance = spawn_agent_concurrency_guidance(max_concurrent_threads_per_session);
 
     let tool_description = format!(
         r#"
@@ -691,6 +689,16 @@ The new agent's canonical task name will be provided to it along with the messag
         );
     }
     tool_description
+}
+
+fn spawn_agent_concurrency_guidance(max_concurrent_threads_per_session: Option<usize>) -> String {
+    max_concurrent_threads_per_session
+        .map(|limit| {
+            format!(
+                "This session is configured with `max_concurrent_threads_per_session = {limit}` for concurrently open agent threads."
+            )
+        })
+        .unwrap_or_default()
 }
 
 fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
