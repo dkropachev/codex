@@ -169,11 +169,6 @@ pub(crate) async fn resolve_router_request(
         });
     }
 
-    if let Some(tool_name) = exact_tool_name(&args, index)? {
-        let call = call_for_exact_tool(session, index, call_id, tool_name, &args).await?;
-        return Ok(tool_resolution(call));
-    }
-
     if is_apply_patch_kind(&kind) {
         let tool_name = ToolName::plain("apply_patch");
         if index.has_handler(&tool_name) {
@@ -258,6 +253,11 @@ pub(crate) async fn resolve_router_request(
             let call = call_for_list_dir(call_id, &args)?;
             return Ok(tool_resolution(call));
         }
+    }
+
+    if let Some(tool_name) = exact_tool_name(&args, index)? {
+        let call = call_for_exact_tool(session, index, call_id, tool_name, &args).await?;
+        return Ok(tool_resolution(call));
     }
 
     if (is_shell_kind(&where_kind, &kind)
@@ -527,8 +527,46 @@ pub(super) fn fanout_resolution(route_kind: &str, calls: Vec<ToolCall>) -> Route
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::context::FunctionToolOutput;
+    use crate::tools::context::ToolInvocation;
+    use crate::tools::context::ToolPayload;
+    use crate::tools::registry::ToolHandler;
+    use crate::tools::registry::ToolKind;
+    use crate::tools::registry::ToolRegistry;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    struct TestHandler;
+
+    impl ToolHandler for TestHandler {
+        type Output = FunctionToolOutput;
+
+        fn kind(&self) -> ToolKind {
+            ToolKind::Function
+        }
+
+        async fn handle(
+            &self,
+            _invocation: ToolInvocation,
+        ) -> Result<FunctionToolOutput, FunctionCallError> {
+            Ok(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
+        }
+    }
+
+    fn index_with_tool(name: &str) -> ToolRouterIndex {
+        let registry =
+            ToolRegistry::with_handler_for_test(ToolName::plain(name), Arc::new(TestHandler));
+        ToolRouterIndex::build(&[], &registry, &HashSet::new())
+    }
+
+    fn function_arguments(call: &ToolCall) -> Value {
+        let ToolPayload::Function { arguments } = &call.payload else {
+            panic!("expected function payload")
+        };
+        serde_json::from_str(arguments).expect("function arguments")
+    }
 
     #[test]
     fn response_to_content_items_preserves_function_text() {
@@ -584,5 +622,131 @@ mod tests {
         assert!(!shape_json.contains("secret"));
         assert!(!shape_json.contains("private"));
         assert!(!shape_json.contains("cat"));
+    }
+
+    #[tokio::test]
+    async fn exact_spawn_agent_uses_agent_adapter_for_message() {
+        let (session, _) = crate::session::tests::make_session_and_context().await;
+        let args = json!({
+            "request": "delegate",
+            "where": {"kind": "agent"},
+            "targets": [],
+            "action": {
+                "kind": "spawn_agent",
+                "tool": "spawn_agent",
+                "agent_task": "inspect routing"
+            }
+        })
+        .to_string();
+
+        let resolution = resolve_router_request(
+            &session,
+            &index_with_tool("spawn_agent"),
+            "router-call".to_string(),
+            args,
+        )
+        .await
+        .expect("resolution");
+        let RouterResolution::SingleTool { call, .. } = resolution else {
+            panic!("expected single tool resolution")
+        };
+
+        assert_eq!(call.tool_name, ToolName::plain("spawn_agent"));
+        assert_eq!(
+            function_arguments(&call),
+            json!({"message": "inspect routing"})
+        );
+    }
+
+    #[tokio::test]
+    async fn exact_list_dir_uses_adapter_for_path_target() {
+        let (session, _) = crate::session::tests::make_session_and_context().await;
+        let args = json!({
+            "request": "list workspace",
+            "where": {"kind": "workspace"},
+            "targets": [{"kind": "path", "path": "codex-rs/core"}],
+            "action": {"kind": "list", "tool": "list_dir", "limit": 20}
+        })
+        .to_string();
+
+        let resolution = resolve_router_request(
+            &session,
+            &index_with_tool("list_dir"),
+            "router-call".to_string(),
+            args,
+        )
+        .await
+        .expect("resolution");
+        let RouterResolution::SingleTool { call, .. } = resolution else {
+            panic!("expected single tool resolution")
+        };
+
+        assert_eq!(call.tool_name, ToolName::plain("list_dir"));
+        assert_eq!(
+            function_arguments(&call),
+            json!({"dir_path": "codex-rs/core", "limit": 20})
+        );
+    }
+
+    #[tokio::test]
+    async fn exact_view_image_uses_adapter_for_path_target() {
+        let (session, _) = crate::session::tests::make_session_and_context().await;
+        let args = json!({
+            "request": "view image",
+            "where": {"kind": "image"},
+            "targets": [{"kind": "path", "path": "screenshot.png"}],
+            "action": {"kind": "view_image", "tool": "view_image", "detail": "original"}
+        })
+        .to_string();
+
+        let resolution = resolve_router_request(
+            &session,
+            &index_with_tool("view_image"),
+            "router-call".to_string(),
+            args,
+        )
+        .await
+        .expect("resolution");
+        let RouterResolution::SingleTool { call, .. } = resolution else {
+            panic!("expected single tool resolution")
+        };
+
+        assert_eq!(call.tool_name, ToolName::plain("view_image"));
+        assert_eq!(
+            function_arguments(&call),
+            json!({"path": "screenshot.png", "detail": "original"})
+        );
+    }
+
+    #[tokio::test]
+    async fn exact_tool_search_uses_adapter_for_fanout() {
+        let (session, _) = crate::session::tests::make_session_and_context().await;
+        let args = json!({
+            "request": "find tools",
+            "where": {"kind": "skill"},
+            "targets": [
+                {"kind": "query", "value": "calendar"},
+                {"kind": "query", "value": "email"}
+            ],
+            "action": {"kind": "tool_search", "tool": "tool_search", "limit": 3}
+        })
+        .to_string();
+
+        let resolution = resolve_router_request(
+            &session,
+            &index_with_tool("tool_search"),
+            "router-call".to_string(),
+            args,
+        )
+        .await
+        .expect("resolution");
+        let RouterResolution::FanOut { calls, .. } = resolution else {
+            panic!("expected fanout resolution")
+        };
+
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].tool_name, ToolName::plain("tool_search"));
+        assert_eq!(calls[0].call_id, "router-call:fanout:0");
+        assert_eq!(calls[1].call_id, "router-call:fanout:1");
     }
 }
