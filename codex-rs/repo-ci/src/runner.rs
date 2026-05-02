@@ -254,14 +254,18 @@ impl ManagedRunner {
     fn request_termination(&mut self) {
         #[cfg(unix)]
         signal_runner(self.child.id(), self.kill_mode, "TERM");
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        terminate_windows_process_tree(self.child.id(), /*force*/ false);
+        #[cfg(all(not(unix), not(windows)))]
         let _ = self.child.kill();
     }
 
     fn force_kill(&mut self) {
         #[cfg(unix)]
         signal_runner(self.child.id(), self.kill_mode, "KILL");
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        terminate_windows_process_tree(self.child.id(), /*force*/ true);
+        #[cfg(all(not(unix), not(windows)))]
         let _ = self.child.kill();
     }
 }
@@ -355,6 +359,21 @@ fn git_bash_path() -> Option<PathBuf> {
         r"C:\Program Files (x86)\Git\usr\bin\bash.exe",
     ));
     candidates.into_iter().find(|path| path.is_file())
+}
+
+#[cfg(windows)]
+fn terminate_windows_process_tree(pid: u32, force: bool) {
+    let mut command = Command::new("taskkill");
+    command
+        .arg("/PID")
+        .arg(pid.to_string())
+        .arg("/T")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if force {
+        command.arg("/F");
+    }
+    let _ = command.status();
 }
 
 #[cfg(not(windows))]
