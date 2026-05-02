@@ -159,7 +159,6 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::info_span;
-use tracing::instrument::WithSubscriber;
 use tracing::instrument;
 use tracing::warn;
 use uuid::Uuid;
@@ -670,14 +669,11 @@ impl Codex {
 
         // This task will run until Op::Shutdown is received.
         let session_for_loop = Arc::clone(&session);
-        let session_loop_handle = tokio::spawn(
-            async move {
-                submission_loop(session_for_loop, config, rx_sub)
-                    .instrument(info_span!("session_loop", thread_id = %thread_id))
-                    .await;
-            }
-            .with_current_subscriber(),
-        );
+        let session_loop_handle = tokio::spawn(async move {
+            submission_loop(session_for_loop, config, rx_sub)
+                .instrument(info_span!("session_loop", thread_id = %thread_id))
+                .await;
+        });
         let codex = Codex {
             tx_sub,
             rx_event,

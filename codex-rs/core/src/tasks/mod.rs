@@ -15,7 +15,6 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
-use tracing::instrument::WithSubscriber;
 use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
@@ -41,8 +40,6 @@ use codex_otel::TURN_MEMORY_METRIC;
 use codex_otel::TURN_NETWORK_PROXY_METRIC;
 use codex_otel::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::TURN_TOOL_CALL_METRIC;
-use codex_otel::current_span_w3c_trace_context;
-use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -357,7 +354,6 @@ impl Session {
         let task_cancellation_token = cancellation_token.child_token();
         // Task-owned turn spans keep a core-owned span open for the
         // full task lifecycle after the submission dispatch span ends.
-        let task_parent_trace = current_span_w3c_trace_context();
         let task_span = info_span!(
             "turn",
             otel.name = span_name,
@@ -365,9 +361,6 @@ impl Session {
             turn.id = %turn_context.sub_id,
             model = %turn_context.model_info.slug,
         );
-        if let Some(task_parent_trace) = task_parent_trace {
-            set_parent_from_w3c_trace_context(&task_span, &task_parent_trace);
-        }
         let handle = tokio::spawn(
             async move {
                 let ctx_for_finish = Arc::clone(&ctx);
@@ -399,8 +392,7 @@ impl Session {
                 }
                 done_clone.notify_waiters();
             }
-            .instrument(task_span)
-            .with_current_subscriber(),
+            .instrument(task_span),
         );
         let timer = turn_context
             .session_telemetry
