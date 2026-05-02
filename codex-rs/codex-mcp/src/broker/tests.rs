@@ -2,9 +2,12 @@ use std::io::ErrorKind;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(unix)]
 use std::sync::atomic::AtomicUsize;
+#[cfg(unix)]
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -12,19 +15,30 @@ use anyhow::Result;
 use anyhow::anyhow;
 use codex_config::McpServerTransportConfig;
 use codex_exec_server::Environment;
+#[cfg(unix)]
 use codex_rmcp_client::ElicitationAction;
+#[cfg(unix)]
 use codex_rmcp_client::ElicitationResponse;
+#[cfg(unix)]
 use codex_rmcp_client::SendElicitation;
 use codex_uds::UnixListener;
 use codex_uds::UnixStream;
+#[cfg(unix)]
 use futures::FutureExt;
 use pretty_assertions::assert_eq;
+#[cfg(unix)]
 use rmcp::model::ClientCapabilities;
+#[cfg(unix)]
 use rmcp::model::ElicitationCapability;
+#[cfg(unix)]
 use rmcp::model::FormElicitationCapability;
+#[cfg(unix)]
 use rmcp::model::Implementation;
+#[cfg(unix)]
 use rmcp::model::InitializeRequestParams;
+#[cfg(unix)]
 use rmcp::model::ProtocolVersion;
+#[cfg(unix)]
 use serde_json::json;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
@@ -81,6 +95,7 @@ fn identity_for(transport: &McpServerTransportConfig, cwd: &Path) -> ReusableSer
         .0
 }
 
+#[cfg(unix)]
 fn initialize_params() -> InitializeRequestParams {
     InitializeRequestParams {
         meta: None,
@@ -109,6 +124,7 @@ fn initialize_params() -> InitializeRequestParams {
     }
 }
 
+#[cfg(unix)]
 fn cancel_elicitation_sender() -> SendElicitation {
     Box::new(|_, _| {
         async {
@@ -122,6 +138,7 @@ fn cancel_elicitation_sender() -> SendElicitation {
     })
 }
 
+#[cfg(unix)]
 fn counting_elicitation_sender(count: Arc<AtomicUsize>) -> SendElicitation {
     Box::new(move |_, _| {
         let count = Arc::clone(&count);
@@ -137,6 +154,7 @@ fn counting_elicitation_sender(count: Arc<AtomicUsize>) -> SendElicitation {
     })
 }
 
+#[cfg(unix)]
 fn startup_log_entries(path: &Path) -> Result<Vec<String>> {
     if !path.exists() {
         return Ok(Vec::new());
@@ -147,6 +165,7 @@ fn startup_log_entries(path: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
+#[cfg(unix)]
 fn stdio_test_server_transport(command: PathBuf, startup_log: &Path) -> McpServerTransportConfig {
     McpServerTransportConfig::Stdio {
         command: command.to_string_lossy().to_string(),
