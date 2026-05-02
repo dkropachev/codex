@@ -272,7 +272,7 @@ Examples of valid command strings:
 - ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
 - recursive find by name: ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.py"]
 - recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
-- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object {{ $_.ProcessName -like '*python*' }}"]
+- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
 - setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
 - running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
             .to_string()

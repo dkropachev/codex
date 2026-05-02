@@ -338,11 +338,22 @@ fn git_bash_path() -> Option<PathBuf> {
         candidates.push(git.join("bin").join("bash.exe"));
         candidates.push(git.join("usr").join("bin").join("bash.exe"));
     }
+    if let Some(program_files) = std::env::var_os("ProgramW6432") {
+        let git = PathBuf::from(program_files).join("Git");
+        candidates.push(git.join("bin").join("bash.exe"));
+        candidates.push(git.join("usr").join("bin").join("bash.exe"));
+    }
     if let Some(program_files) = std::env::var_os("ProgramFiles(x86)") {
         let git = PathBuf::from(program_files).join("Git");
         candidates.push(git.join("bin").join("bash.exe"));
         candidates.push(git.join("usr").join("bin").join("bash.exe"));
     }
+    candidates.push(PathBuf::from(r"C:\Program Files\Git\bin\bash.exe"));
+    candidates.push(PathBuf::from(r"C:\Program Files\Git\usr\bin\bash.exe"));
+    candidates.push(PathBuf::from(r"C:\Program Files (x86)\Git\bin\bash.exe"));
+    candidates.push(PathBuf::from(
+        r"C:\Program Files (x86)\Git\usr\bin\bash.exe",
+    ));
     candidates.into_iter().find(|path| path.is_file())
 }
 
