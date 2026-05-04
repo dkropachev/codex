@@ -72,6 +72,29 @@ Likewise, when reviewing code, do not hesitate to push back on PRs that would un
 
 See `codex-rs/tui/styles.md`.
 
+## `/codex` guide maintenance
+
+The `/codex` command is expected to load a concise guide for humans and future agents from
+`codex-rs/tui/codex_guide.md`, unless the `/codex` implementation in the same change chooses a
+different embedded guide path.
+
+- Update the guide whenever changing user-facing behavior or maintenance workflows for plugins,
+  skills, MCP/apps, memories, repo-ci, the model router, the tool router, slash commands,
+  config/debug surfaces, or token usage reporting.
+- Each guide entry should cover what the feature does, how to configure it, how to tune it, concrete
+  investigation or debugging recipes, source entrypoints to inspect first, and token/efficiency
+  implications when they matter.
+- If the feature writes to, reads from, or diagnoses SQLite-backed state, the guide must include
+  read-only SQL recipes for the relevant records. Include the DB location or config path, table
+  names, schema or migration entrypoints, and safe inspection notes such as using `sqlite3
+  -readonly` or copying WAL files together. Keep examples focused on practical investigations such
+  as regular sessions, token usage, plugin activity, memories, router ledgers, and logs.
+- Before editing the guide, verify the current behavior against the source files. Keep recipes
+  executable and specific, avoid stale speculation, and prefer concise pointers over duplicating
+  large docs.
+- If the guide is embedded with `include_str!` or a similar compile-time file read, keep the file
+  available to Bazel through the relevant `compile_data`, `build_script_data`, or test data entry.
+
 ## TUI code conventions
 
 - Use concise styling helpers from ratatui’s Stylize trait.

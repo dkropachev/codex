@@ -437,6 +437,9 @@ impl ChatWidget {
                     );
                 }
             }
+            SlashCommand::Codex => {
+                self.add_to_history(crate::codex_guide::new_codex_guide_output(&self.config.cwd));
+            }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
             }
@@ -993,6 +996,7 @@ impl ChatWidget {
             | SlashCommand::Goal
             | SlashCommand::Status
             | SlashCommand::Limits
+            | SlashCommand::Codex
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop
