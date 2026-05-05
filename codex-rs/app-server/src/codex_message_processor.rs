@@ -423,7 +423,6 @@ mod apps_list_helpers;
 mod plugin_app_helpers;
 mod plugin_mcp_oauth;
 mod plugins;
-mod repo_ci_learning_instruction;
 mod token_usage_replay;
 
 use crate::filters::compute_source_filters;

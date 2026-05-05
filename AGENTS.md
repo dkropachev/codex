@@ -87,7 +87,7 @@ different embedded guide path.
 - If the feature writes to, reads from, or diagnoses SQLite-backed state, the guide must include
   read-only SQL recipes for the relevant records. Include the DB location or config path, table
   names, schema or migration entrypoints, and safe inspection notes such as using `sqlite3
-  -readonly` or copying WAL files together. Keep examples focused on practical investigations such
+-readonly` or copying WAL files together. Keep examples focused on practical investigations such
   as regular sessions, token usage, plugin activity, memories, router ledgers, and logs.
 - Before editing the guide, verify the current behavior against the source files. Keep recipes
   executable and specific, avoid stale speculation, and prefer concise pointers over duplicating
