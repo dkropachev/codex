@@ -364,6 +364,7 @@ const ROUTER_ACTION_KINDS: &[&str] = &[
     "repo_ci_learn",
     "repo_ci_run",
     "repo_ci_result",
+    "repo_ci_instruction",
     "status",
     "diff",
     "log",

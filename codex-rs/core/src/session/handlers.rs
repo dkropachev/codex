@@ -31,6 +31,10 @@ use crate::tasks::CompactTask;
 use crate::tasks::UndoTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
+use crate::tasks::codex_config_intent_input;
+use crate::tasks::codex_config_permission_profile;
+use crate::tasks::codex_config_sandbox_policy;
+use crate::tasks::codex_config_workspace_for_target;
 use crate::tasks::execute_user_shell_command;
 use codex_mcp::collect_mcp_snapshot_from_manager;
 use codex_mcp::compute_auth_statuses;
@@ -179,6 +183,9 @@ pub(super) async fn user_input_or_turn_inner(
                     repo_ci_issue_types: None,
                     repo_ci_review_rounds: None,
                     repo_ci_long_ci: None,
+                    implement_enabled: None,
+                    implement_mode: None,
+                    implement_max_cycles: None,
                     repo_ci_turn_overrides: None,
                 },
                 None,
@@ -236,6 +243,9 @@ pub(super) async fn user_input_or_turn_inner(
                     repo_ci_issue_types: None,
                     repo_ci_review_rounds: None,
                     repo_ci_long_ci: None,
+                    implement_enabled: None,
+                    implement_mode: None,
+                    implement_max_cycles: None,
                     repo_ci_turn_overrides: repo_ci,
                 },
                 responsesapi_client_metadata,
@@ -540,6 +550,70 @@ pub async fn refresh_mcp_servers(sess: &Arc<Session>, refresh_config: McpServerR
 
 pub async fn reload_user_config(sess: &Arc<Session>) {
     sess.reload_user_config_layer().await;
+}
+
+pub async fn codex_config_intent(
+    sess: &Arc<Session>,
+    sub_id: String,
+    intent: String,
+    context: Option<String>,
+) {
+    let has_active_turn = { sess.active_turn.lock().await.is_some() };
+    if has_active_turn {
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::Error(ErrorEvent {
+                message: "Cannot configure Codex while a task is in progress.".to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            }),
+        })
+        .await;
+        return;
+    }
+
+    let (target_cwd, current_mode) = {
+        let state = sess.state.lock().await;
+        (
+            state.session_configuration.cwd.to_path_buf(),
+            state.session_configuration.collaboration_mode.clone(),
+        )
+    };
+    let workspace = codex_config_workspace_for_target(&target_cwd);
+    let sandbox_policy = codex_config_sandbox_policy();
+    let codex_mode = CollaborationMode {
+        mode: ModeKind::Codex,
+        settings: Settings {
+            model: current_mode.model().to_string(),
+            reasoning_effort: current_mode.reasoning_effort(),
+            developer_instructions: Some(format!(
+                "You are handling a one-shot Codex configuration request. The target workspace `{}` is read-only; the active cwd is a writable scratch workspace. Ask for clarification before changing configuration when the target is ambiguous.",
+                target_cwd.display()
+            )),
+        },
+    };
+    let turn_context = match sess
+        .new_turn_with_sub_id(
+            sub_id.clone(),
+            SessionSettingsUpdate {
+                cwd: Some(workspace.clone()),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile: Some(codex_config_permission_profile()),
+                collaboration_mode: Some(codex_mode),
+                ..Default::default()
+            },
+        )
+        .await
+    {
+        Ok(turn_context) => turn_context,
+        Err(_) => return,
+    };
+    let input = codex_config_intent_input(intent, context, &target_cwd, &workspace).await;
+    sess.spawn_task(
+        Arc::clone(&turn_context),
+        vec![input],
+        crate::tasks::RegularTask::new(),
+    )
+    .await;
 }
 
 #[expect(
@@ -1182,11 +1256,18 @@ pub(super) async fn submission_loop(
                     reload_user_config(&sess).await;
                     false
                 }
+                Op::CodexConfigIntent { intent, context } => {
+                    codex_config_intent(&sess, sub.id.clone(), intent, context).await;
+                    false
+                }
                 Op::SetRepoCiSessionConfig {
                     mode,
                     issue_types,
                     review_rounds,
                     long_ci,
+                    implement_enabled,
+                    implement_mode,
+                    implement_max_cycles,
                 } => {
                     override_turn_context(
                         &sess,
@@ -1196,6 +1277,9 @@ pub(super) async fn submission_loop(
                             repo_ci_issue_types: issue_types,
                             repo_ci_review_rounds: review_rounds,
                             repo_ci_long_ci: long_ci,
+                            implement_enabled,
+                            implement_mode,
+                            implement_max_cycles,
                             ..Default::default()
                         },
                     )

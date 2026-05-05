@@ -23,4 +23,13 @@ fn repo_ci_namespace_contains_expected_tools() {
         serialized["tools"][3]["parameters"]["required"],
         serde_json::json!(["artifact_id"])
     );
+    assert_eq!(serialized["tools"][4]["name"], "instruction");
+    assert_eq!(
+        serialized["tools"][4]["parameters"]["properties"]["action"]["enum"],
+        serde_json::json!(["show", "set", "clear"])
+    );
+    assert_eq!(
+        serialized["tools"][4]["parameters"]["required"],
+        serde_json::json!(["action", "scope"])
+    );
 }

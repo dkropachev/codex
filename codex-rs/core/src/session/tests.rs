@@ -2299,6 +2299,9 @@ async fn set_rate_limits_retains_previous_credits() {
         repo_ci_issue_types: None,
         repo_ci_review_rounds: None,
         repo_ci_long_ci: None,
+        implement_enabled: None,
+        implement_mode: None,
+        implement_max_cycles: None,
     };
 
     let mut state = SessionState::new(session_configuration);
@@ -2409,6 +2412,9 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         repo_ci_issue_types: None,
         repo_ci_review_rounds: None,
         repo_ci_long_ci: None,
+        implement_enabled: None,
+        implement_mode: None,
+        implement_max_cycles: None,
     };
 
     let mut state = SessionState::new(session_configuration);
@@ -2926,6 +2932,9 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         repo_ci_issue_types: None,
         repo_ci_review_rounds: None,
         repo_ci_long_ci: None,
+        implement_enabled: None,
+        implement_mode: None,
+        implement_max_cycles: None,
     }
 }
 
@@ -3392,6 +3401,9 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         repo_ci_issue_types: None,
         repo_ci_review_rounds: None,
         repo_ci_long_ci: None,
+        implement_enabled: None,
+        implement_mode: None,
+        implement_max_cycles: None,
     };
 
     let (tx_event, _rx_event) = async_channel::unbounded();
@@ -3504,6 +3516,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         repo_ci_issue_types: None,
         repo_ci_review_rounds: None,
         repo_ci_long_ci: None,
+        implement_enabled: None,
+        implement_mode: None,
+        implement_max_cycles: None,
     };
     let per_turn_config = Session::build_per_turn_config(
         &session_configuration,
@@ -3627,6 +3642,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         session_configuration.cwd.clone(),
         "turn_id".to_string(),
         skills_outcome,
+        /*implement_requested*/ false,
     );
 
     let (mailbox, mailbox_rx) = crate::agent::Mailbox::new();
@@ -3726,6 +3742,9 @@ async fn make_session_with_config_and_rx(
         repo_ci_issue_types: None,
         repo_ci_review_rounds: None,
         repo_ci_long_ci: None,
+        implement_enabled: None,
+        implement_mode: None,
+        implement_max_cycles: None,
     };
 
     let (tx_event, rx_event) = async_channel::unbounded();
@@ -4783,6 +4802,9 @@ where
         repo_ci_issue_types: None,
         repo_ci_review_rounds: None,
         repo_ci_long_ci: None,
+        implement_enabled: None,
+        implement_mode: None,
+        implement_max_cycles: None,
     };
     let per_turn_config = Session::build_per_turn_config(
         &session_configuration,
@@ -4906,6 +4928,7 @@ where
         session_configuration.cwd.clone(),
         "turn_id".to_string(),
         skills_outcome,
+        /*implement_requested*/ false,
     ));
 
     let (mailbox, mailbox_rx) = crate::agent::Mailbox::new();

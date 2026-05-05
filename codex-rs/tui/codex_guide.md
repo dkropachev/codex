@@ -6,18 +6,20 @@ This guide is a source map for user-facing Codex surfaces. Before changing an en
 
 - Use `/status` to inspect the active model, reasoning, context usage, rate limits, and instruction sources.
 - Use `/debug-config` to inspect merged config, requirement sources, and config-layer provenance.
-- Use `/mcp verbose`, `/skills`, `/plugins`, `/apps`, `/repo-ci`, and `/model-router` to inspect the matching feature from the TUI.
+- Use `/mcp verbose`, `/skills`, `/plugins`, `/apps`, `/repo-ci`, `/implement`, and `/model-router` to inspect the matching feature from the TUI.
 - Use `codex tool-router tune` and `codex model-router tune` for CLI-only internal routing diagnostics.
-- When a guide section changes, update this file and the `/codex` snapshot in `codex-rs/tui/src/chatwidget/snapshots/`.
+- When a guide section changes, update this file and the `/codex` config-mode snapshots in `codex-rs/tui/src/chatwidget/snapshots/`.
 
 ## Slash Commands
 
-- Description: slash commands are parsed by the bottom-pane composer and dispatched by `ChatWidget` without involving the model unless the command explicitly submits a user turn.
+- Description: slash commands are parsed by the bottom-pane composer and dispatched by `ChatWidget` without involving the model unless the command explicitly submits a user turn or switches collaboration mode.
 - Configuration: visibility is mostly feature-gated by `BuiltinCommandFlags`; side conversations and task-running state apply additional dispatch checks.
 - Tuning: add names in `SlashCommand`, keep enum order intentional for popup ranking, add descriptions, and only mark `supports_inline_args` when arguments are parsed locally.
 - Debug recipe: check `SlashCommand::from_str`, `builtins_for_input`, and `find_builtin_command`; then dispatch from a focused chatwidget test and assert history or app events.
 - Source entrypoints: `codex-rs/tui/src/slash_command.rs`, `codex-rs/tui/src/bottom_pane/slash_commands.rs`, `codex-rs/tui/src/bottom_pane/chat_composer.rs`, `codex-rs/tui/src/chatwidget/slash_dispatch.rs`.
-- Token impact: local commands like `/codex`, `/status`, and `/debug-config` add no model context by themselves; commands such as `/init`, `/compact`, `/review`, `/plan <prompt>`, and `/repo-ci <task>` can submit model-visible input.
+- Codex config mode: bare `/codex` switches the current thread into Codex config mode. The mode embeds this guide, generated slash-command registry context, and current `codex --help` output as developer instructions. Normal user messages in this mode run from a scratch workspace under the system temp directory; the target workspace is model-readable but must not be written. The model should use supported tools, app-server APIs, and CLI commands before direct config-file edits, ask for clarification when the target is ambiguous, and put `<codex_config_done>` on its own line when the TUI should ask whether to leave config mode. Users can leave with `/codex off`, `/codex disable`, or `/codex cancel`.
+- One-shot config requests: `/codex <request>` submits a single AI-backed config turn with the same guide, slash-command registry context, and `codex --help` context. It does not enter persistent config mode; ambiguous targets should be resolved through the normal user-input request flow before writing config.
+- Token impact: local commands like `/status` and `/debug-config` add no model context by themselves; bare `/codex` adds Codex config-mode developer instructions to subsequent turns, and commands such as `/codex <instruction>`, `/init`, `/compact`, `/review`, `/plan <prompt>`, and `/repo-ci <task>` can submit model-visible input.
 
 ## Plugins
 
@@ -42,7 +44,8 @@ This guide is a source map for user-facing Codex surfaces. Before changing an en
 
 - `model-router`: routes internal model calls for subagents and modules. User surfaces are `/model-router enable|disable|inherit`, `codex model-router tune`, and `codex model-router report show|apply`.
 - `tool-router`: exposes one structured model-visible `tool_router` function that routes to internal tools. User-facing maintenance is mostly `codex tool-router tune` plus telemetry and state inspection.
-- `repo-ci`: owns repo validation tools, shell-command guarding, local/remote workflow learning, and targeted review/fix rounds. User surfaces are `/repo-ci`, `codex repo-ci`, and the `repo_ci.*` tools.
+- `repo-ci`: owns repo validation tools, shell-command guarding, and local/remote workflow learning. User surfaces are `/repo-ci`, `codex repo-ci`, and the `repo_ci.*` tools.
+- `implement`: owns targeted review/fix cycles after agent edits. User surfaces are `/implement enable|disable|inherit|implicit --max-cycles=N [task]` and `codex implement enable|disable|implicit --max-cycles=N`.
 - `skills`: owns bundled and local `SKILL.md` discovery, plugin-provided skills, enablement rules, and the model-visible `<skills_instructions>` block.
 - `mcp/apps`: owns configured MCP servers, connector-backed apps, plugin-provided `.mcp.json` and `.app.json` files, OAuth/auth status, and model-visible tool schemas.
 - `memories`: owns memory instructions, thread memory mode, idle-thread extraction, consolidation, and `/memories` settings.
@@ -203,13 +206,23 @@ The temporary marketplace snapshot under `$CODEX_HOME/.tmp/plugins/plugins/` con
 
 ## Repo CI
 
-- Description: repo-ci is the internal validation subsystem. It learns repository commands, runs cached local checks, can push remote CI workflows, guards duplicate shell CI commands, and can ask subagents to triage or fix scoped findings.
-- User surfaces: `/repo-ci setup|learn|retry`, `/repo-ci <options> [task]`, `codex repo-ci enable|learn|workflow`, and routed tools `repo_ci.status`, `repo_ci.learn`, `repo_ci.run`, and `repo_ci.result`.
-- Configuration: `features.repo_ci` gates the feature. `[repo_ci.defaults]`, `[repo_ci.directories]`, `[repo_ci.github_repos]`, and `[repo_ci.github_orgs]` accept `enabled`, `automation`, `local_test_time_budget_sec`, `long_ci`, local/remote fix rounds, `review_issue_types`, and `max_review_fix_rounds`.
-- Tuning: use slash-command session overrides for thread-local mode, issue types, rounds, and long-CI behavior. Use CLI learning when the manifest/runner is missing or stale, and prefer artifact IDs over pasted logs when handing failures back to the model.
+- Description: repo-ci is the internal validation subsystem. It learns repository commands, runs cached local checks, can push remote CI workflows, and guards duplicate shell CI commands.
+- User surfaces: `/repo-ci setup|learn|retry`, `/repo-ci instruction show|set|clear|edit`, `/repo-ci <options> [task]`, `/codex <config-request>`, `codex repo-ci enable|learn|workflow`, `codex repo-ci instruction show|set|clear|edit`, and routed tools `repo_ci.status`, `repo_ci.learn`, `repo_ci.run`, `repo_ci.result`, and `repo_ci.instruction`.
+- Configuration: `features.repo_ci` gates the feature. `[repo_ci.defaults]`, `[repo_ci.directories]`, `[repo_ci.github_repos]`, and `[repo_ci.github_orgs]` accept `enabled`, `automation`, `local_test_time_budget_sec`, `long_ci`, local/remote fix rounds, `learning_instruction`, `review_issue_types`, and legacy `max_review_fix_rounds` fallback values for implement. Legacy `learning_instructions` arrays are read and collapsed into the singular blob.
+- Tuning: use slash-command session overrides for thread-local mode, issue types, legacy rounds, and long-CI behavior. Use `/codex` or `/codex <config-request>` as the generic AI-backed config path: Codex receives this guide, generated slash-command registry context, current `codex --help` output, and scratch-workspace guidance, then chooses the relevant module/API/CLI from runtime context. It should ask a clarifying question for ambiguous targets and complete the requested config change end to end. Use `codex repo-ci instruction set --cwd --instruction <text>` for direct non-interactive repo-ci learner-instruction writes. Use CLI learning when the manifest/runner is missing or stale, and prefer artifact IDs over pasted logs when handing failures back to the model.
 - Debug recipe: start with `repo_ci.status`, then inspect the learned manifest, runner artifact, cache key, failing step ID, and compact `error_output`. For TUI issues, trace `/repo-ci` parsing in `slash_dispatch.rs` and app-server session config events.
 - Source entrypoints: `codex-rs/repo-ci/src/`, `codex-rs/core/src/repo_ci_automation.rs`, `codex-rs/core/src/tools/handlers/repo_ci.rs`, `codex-rs/core/src/tools/ci_command_guard.rs`, `codex-rs/cli/src/repo_ci_learn.rs`, `codex-rs/cli/src/repo_ci_exec.rs`, `codex-rs/tui/src/chatwidget/slash_dispatch.rs`.
 - Token impact: repo-ci logs can be large. Keep model input to brief failures, step IDs, and artifact IDs; request detailed artifacts only when the compact output is insufficient.
+
+## Implement
+
+- Description: implement runs targeted review/fix cycles after a regular agent turn changes files. It uses the repo-ci diff snapshot and issue-type selection, groups findings by owned file or module, and applies bounded worker fixes before the turn finishes.
+- User surfaces: `/implement enable|disable|inherit|implicit --max-cycles=N` changes the current thread. `/implement [--max-cycles=N] <task>` submits one turn with implement review/fix forced on. `codex implement enable|disable|implicit --max-cycles=N` persists user config under `[implement]`.
+- Configuration: `[implement] enabled = true|false` controls the loop independently from repo-ci checks. `[implement] mode = "auto"` runs after normal agent edits; `mode = "implicit"` runs only for `/implement <task>` turns. `[implement] max_cycles = N` sets the review/fix cycle budget. Legacy repo-ci `max_review_fix_rounds` values remain a fallback when implement settings are absent.
+- Tuning: use `/implement disable` when validation should still run but review/fix should not. Use `/implement implicit --max-cycles=N` when review/fix should be opt-in per turn. Use `/implement enable --max-cycles=N` for automatic thread-local iteration budgets. Keep `review_issue_types` narrow for noisy repositories; `review_issue_types = []` disables review regardless of implement enablement.
+- Debug recipe: trace `effective_config` in `repo_ci_automation.rs`, then inspect targeted review status events, subagent labels beginning with `repo_ci_fix_`, and `thread/repoCiSessionConfig/set` fields `implementEnabled`, `implementMode`, and `implementMaxCycles` for app-server clients.
+- Source entrypoints: `codex-rs/core/src/repo_ci_automation.rs`, `codex-rs/config/src/config_toml.rs`, `codex-rs/cli/src/main.rs`, `codex-rs/tui/src/chatwidget/slash_dispatch.rs`, `codex-rs/app-server-protocol/src/protocol/v2.rs`.
+- Token impact: review prompts include diff context and selected findings. Lower `max_cycles` or narrow `review_issue_types` when the loop consumes too much context.
 
 ## Model Router
 
@@ -356,4 +369,4 @@ ORDER BY kind, job_key;
 
 - Update this file when user-facing behavior changes for plugins, skills, MCP/apps, memories, repo-ci, model router, tool router, slash commands, config/debug surfaces, or token usage reporting.
 - Verify behavior from source before editing, keep recipes executable, and link to source entrypoints instead of copying large docs.
-- If the embedded guide path changes from `codex-rs/tui/codex_guide.md`, ensure the TUI Bazel target still includes it in `compile_data`.
+- If the bare `/codex` human guide path changes from `codex-rs/tui/codex_guide.md`, ensure the TUI Bazel target still includes it in `compile_data`.

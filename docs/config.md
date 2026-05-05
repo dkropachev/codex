@@ -75,7 +75,13 @@ max_remote_fix_rounds = 2
 review_issue_types = ["correctness", "reliability", "maintainability"]
 max_review_fix_rounds = 2
 
+[implement]
+enabled = true
+mode = "auto"
+max_cycles = 2
+
 [repo_ci.github_repos."openai/codex"]
+learning_instruction = "Do not run integration tests while validating /implement."
 review_issue_types = ["correctness", "security", "compatibility", "ux-config-cli"]
 ```
 
@@ -92,6 +98,19 @@ retry budget is exhausted. The learner records the source files and SHA-256
 hashes it used, plus their combined source key;
 `codex repo-ci status --cwd` reports when those files changed and the repository
 should be learned again.
+
+Use `/codex`, `/codex <instruction>`, or
+`codex repo-ci instruction set --cwd --instruction "<instruction>"` to replace
+the repository-specific learner directive and immediately relearn. The
+CLI stores the supplied text as one whitespace-normalized `learning_instruction`
+blob on the current GitHub-repo scope when possible, or the current repository
+directory scope otherwise. The blob should be concise, non-contradictory,
+specific to repo-ci learning, and include every detail the learner needs to
+apply it. Use this for repo-specific learner preferences, such as skipping
+integration tests, using a specific Docker image, or ignoring a misleading
+Makefile. Use
+`codex repo-ci instruction show --cwd`, `clear --cwd`, or `edit --cwd` to inspect
+or change the blob without rerunning a full workflow.
 
 For one interactive session, override the configured behavior with
 `codex --repo-ci off|local|remote|local-and-remote` at startup or
@@ -114,18 +133,32 @@ not been learned yet, or the learned runner is stale, Codex learns and validates
 the runner inside that turn before running repo CI.
 
 When repo CI is enabled for a trusted repository, Codex compares the worktree at
-the start and end of each regular turn. If the turn changed files, Codex first
-runs a targeted review phase for the configured `review_issue_types`, groups any
-findings by owned file/module, applies bounded worker fixes, and then runs the
-learned fast local runner before completing the turn. Set
-`review_issue_types = []` to skip the targeted review phase entirely. Scope
+the start and end of each regular turn. If the turn changed files, repo CI runs
+the learned fast local runner before completing the turn. Failing local checks
+are fed back into the same turn for repair until the configured local retry
+limit is reached. Progress is emitted as structured repo CI status events rather
+than generic warnings.
+
+The review/fix loop is configured separately by the implement surface. Set
+`[implement] enabled = true`, `mode = "auto"`, and `max_cycles = N`, use
+`codex implement enable --max-cycles=N`, or run
+`/implement enable --max-cycles=N` in the TUI to run targeted review/fix cycles
+after normal agent edits. Use `mode = "implicit"`,
+`codex implement implicit --max-cycles=N`, or
+`/implement implicit --max-cycles=N` to make review/fix run only for turns
+submitted with `/implement <task>`. Use `codex implement disable` or
+`/implement disable` to turn off those review/fix cycles while leaving repo CI
+validation available. `/implement inherit` clears thread-local overrides. When
+implement is enabled without repo CI checks for the current scope, Codex can run
+the review/fix loop by itself and skip local/remote CI execution. Set
+`review_issue_types = []` to skip targeted review entirely. The legacy repo-ci
+`max_review_fix_rounds` value is still honored as a fallback when implement
+settings are absent. Scope
 resolution prefers session overrides, then `directories`, `github_repos`,
 `github_orgs`, and finally `defaults`. If no scope config sets issue types,
 Codex falls back to repo-ci's inferred defaults for the repository, or to
 `correctness`, `reliability`, and `maintainability` when inference is
-unavailable. Failing local checks are fed back into the same turn for repair
-until the configured local retry limit is reached. Progress is emitted as
-structured repo CI status events rather than generic warnings.
+unavailable.
 
 Local repo-ci run artifacts also record best-effort resource usage. Codex polls
 the generated runner's process group for CPU time and peak RSS, records host CPU

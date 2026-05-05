@@ -24,6 +24,7 @@ use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigToml;
+use codex_config::config_toml::ImplementToml;
 use codex_config::config_toml::ModelRouterToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
@@ -700,6 +701,9 @@ pub struct Config {
 
     /// Repository CI learning and validation settings.
     pub repo_ci: Option<RepoCiToml>,
+
+    /// Review/fix implementation loop settings.
+    pub implement: Option<ImplementToml>,
 
     /// Session-only repo CI behavior override.
     pub repo_ci_session_mode: Option<RepoCiSessionMode>,
@@ -2644,6 +2648,7 @@ impl Config {
             background_terminal_max_timeout,
             ghost_snapshot,
             repo_ci: cfg.repo_ci,
+            implement: cfg.implement,
             repo_ci_session_mode,
             repo_ci_issue_types,
             repo_ci_review_rounds,

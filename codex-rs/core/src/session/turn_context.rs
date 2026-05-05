@@ -1,4 +1,5 @@
 use super::*;
+use codex_config::config_toml::ImplementToml;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -88,6 +89,7 @@ pub(crate) struct TurnContext {
     pub(crate) repo_ci_issue_types: Option<Vec<RepoCiIssueType>>,
     pub(crate) repo_ci_review_rounds: Option<u8>,
     pub(crate) repo_ci_long_ci: Option<bool>,
+    pub(crate) implement_requested: bool,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_self_exe: Option<PathBuf>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
@@ -249,6 +251,7 @@ impl TurnContext {
             repo_ci_issue_types: self.repo_ci_issue_types.clone(),
             repo_ci_review_rounds: self.repo_ci_review_rounds,
             repo_ci_long_ci: self.repo_ci_long_ci,
+            implement_requested: self.implement_requested,
             final_output_json_schema: self.final_output_json_schema.clone(),
             codex_self_exe: self.codex_self_exe.clone(),
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
@@ -444,6 +447,32 @@ impl Session {
         per_turn_config.repo_ci_issue_types = repo_ci_issue_types;
         per_turn_config.repo_ci_review_rounds = repo_ci_review_rounds;
         per_turn_config.repo_ci_long_ci = repo_ci_long_ci;
+        let implement_enabled = repo_ci_turn_overrides
+            .and_then(|overrides| overrides.implement_enabled)
+            .or_else(|| session_configuration.implement_enabled.map(Some));
+        let implement_mode = repo_ci_turn_overrides
+            .and_then(|overrides| overrides.implement_mode)
+            .or_else(|| session_configuration.implement_mode.map(Some));
+        let implement_max_cycles = repo_ci_turn_overrides
+            .and_then(|overrides| overrides.implement_max_cycles)
+            .or_else(|| session_configuration.implement_max_cycles.map(Some));
+        if matches!(implement_enabled, Some(Some(_)))
+            || matches!(implement_mode, Some(Some(_)))
+            || matches!(implement_max_cycles, Some(Some(_)))
+        {
+            let implement = per_turn_config
+                .implement
+                .get_or_insert_with(ImplementToml::default);
+            if let Some(Some(enabled)) = implement_enabled {
+                implement.enabled = Some(enabled);
+            }
+            if let Some(Some(mode)) = implement_mode {
+                implement.mode = Some(mode);
+            }
+            if let Some(Some(max_cycles)) = implement_max_cycles {
+                implement.max_cycles = Some(max_cycles);
+            }
+        }
         let resolved_web_search_mode = resolve_web_search_mode_for_turn(
             &per_turn_config.web_search_mode,
             session_configuration.sandbox_policy.get(),
@@ -483,6 +512,7 @@ impl Session {
         cwd: AbsolutePathBuf,
         sub_id: String,
         skills_outcome: Arc<SkillLoadOutcome>,
+        implement_requested: bool,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration
@@ -573,6 +603,7 @@ impl Session {
             repo_ci_issue_types: per_turn_config.repo_ci_issue_types.clone(),
             repo_ci_review_rounds: per_turn_config.repo_ci_review_rounds,
             repo_ci_long_ci: per_turn_config.repo_ci_long_ci,
+            implement_requested,
             final_output_json_schema: None,
             codex_self_exe: per_turn_config.codex_self_exe.clone(),
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
@@ -715,6 +746,10 @@ impl Session {
             cwd.clone(),
             repo_ci_turn_overrides.as_ref(),
         );
+        let implement_requested = repo_ci_turn_overrides
+            .as_ref()
+            .and_then(|overrides| overrides.implement_enabled)
+            == Some(Some(true));
         {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
             mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);
@@ -772,6 +807,7 @@ impl Session {
             cwd,
             sub_id,
             skills_outcome,
+            implement_requested,
         );
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 

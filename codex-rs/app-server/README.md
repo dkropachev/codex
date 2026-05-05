@@ -151,7 +151,10 @@ Example with notification opt-out:
 - `thread/turns/list` — page through a stored thread’s turn history without resuming it; supports cursor-based pagination with `sortDirection`, `nextCursor`, and `backwardsCursor`.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
-- `thread/repoCiSessionConfig/set` - set or clear the loaded thread’s repo CI session overrides. Pass `mode`, `issueTypes`, `reviewRounds`, and/or `longCi`; use `null` for any field you want to return to repo/user config. `issueTypes: []` disables the targeted repo-ci review phase for the session. Returns `{}` when accepted.
+- `thread/repoCiSessionConfig/set` - set or clear the loaded thread’s repo CI and implement session overrides. Pass `mode`, `issueTypes`, `reviewRounds`, `longCi`, `implementEnabled`, `implementMode`, and/or `implementMaxCycles`; use `null` for any field you want to return to repo/user config. `issueTypes: []` disables the targeted review phase for the session. `implementMode: "implicit"` runs review/fix only for turns that set `repoCi.implementEnabled: true`. Returns `{}` when accepted.
+- `thread/codexConfigIntent/submit` - submit a `/codex <request>` style AI-backed config intent for a loaded thread. Clients may pass `context` with source-of-truth command/module details such as generated slash-command registry output. Codex supplements that with the embedded Codex guide, current `codex --help` output, and a writable scratch workspace while treating the target workspace as read-only. The model can inspect runtime tools, CLI help, source, and supported APIs before choosing the relevant config surface; ambiguous targets should be resolved through the normal user-input request flow before writing config. Returns `{}` when the turn is accepted for execution.
+- `repoCiLearningInstruction/read` - read the repo-scoped repo CI learner instruction blob. Pass `scope: { "cwd": true }` to resolve the current repository, preferring a GitHub repo scope when available, or `scope: { "githubRepo": "org/repo" }` to read an explicit GitHub repo scope. Returns the resolved scope label and `instruction: null` when not configured.
+- `repoCiLearningInstruction/write` - fully replace or clear the repo-scoped learner instruction blob using the same scope payload. Pass `instruction: "..."` to store one concise, non-contradictory repo-ci-learning-specific blob, or an empty string to clear it. Returns the resolved scope plus old and new instruction values.
 - `thread/modelRouterSessionConfig/set` - set or clear the loaded thread’s model-router enablement override. Pass `enabled: true|false`; use `null` to return to repo/user config. Enabling requires an existing `[model_router]` configuration. Returns `{}` when accepted.
 - `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite while preserving existing thread memory modes; returns `{}` on success.
 - `thread/goal/set` — create, replace, or update the single persisted goal for a materialized thread; returns the current goal and emits `thread/goal/updated`. Supplying a new `objective` replaces the goal and resets usage accounting. Supplying the current non-terminal objective or omitting `objective` updates the existing goal’s status and/or token budget while preserving usage.
@@ -641,11 +644,14 @@ You can optionally specify config overrides on the new turn. If specified, these
     "effort": "medium",
     "summary": "concise",
     "personality": "friendly",
-    // Experimental: repo CI settings for this turn only.
+    // Experimental: repo CI and implement settings for this turn only.
     "repoCi": {
         "mode": "local",
         "issueTypes": ["correctness", "testability"],
-        "reviewRounds": 2
+        "reviewRounds": 2,
+        "implementEnabled": true,
+        "implementMode": "implicit",
+        "implementMaxCycles": 1
     },
     // Optional JSON Schema to constrain the final assistant message for this turn.
     "outputSchema": {

@@ -10,6 +10,10 @@ use crate::history_cell::PlainHistoryCell;
 
 const CODEX_GUIDE: &str = include_str!("../codex_guide.md");
 
+pub(crate) fn codex_guide_markdown() -> &'static str {
+    CODEX_GUIDE
+}
+
 #[derive(Debug)]
 struct CodexGuideCell {
     cwd: PathBuf,

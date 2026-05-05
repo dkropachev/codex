@@ -1,4 +1,7 @@
+use crate::config::edit::ConfigEditsBuilder;
 use crate::function_tool::FunctionCallError;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -7,10 +10,13 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_cicd_artifacts::RunArtifact;
 use codex_cicd_artifacts::RunMode;
+use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::RepoCiAutomationToml;
 use codex_features::Feature;
 use serde::Deserialize;
 use serde_json::json;
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 #[path = "repo_ci_output.rs"]
@@ -56,6 +62,7 @@ struct LearnArgs {
     detail: DetailLevel,
     automation: Option<String>,
     local_test_time_budget_sec: Option<u64>,
+    instruction: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -78,6 +85,28 @@ struct ResultArgs {
     step_id: Option<String>,
     tail_lines: Option<usize>,
     max_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct InstructionArgs {
+    action: InstructionAction,
+    scope: InstructionScope,
+    instruction: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum InstructionAction {
+    Show,
+    Set,
+    Clear,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct InstructionScope {
+    #[serde(default)]
+    cwd: bool,
+    github_repo: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -107,12 +136,21 @@ impl ToolHandler for RepoCiHandler {
     }
 
     async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        !matches!(invocation.tool_name.name.as_str(), "status" | "result")
+        if matches!(invocation.tool_name.name.as_str(), "status" | "result") {
+            return false;
+        }
+        if invocation.tool_name.name.as_str() == "instruction"
+            && let ToolPayload::Function { arguments } = &invocation.payload
+            && let Ok(args) = serde_json::from_str::<InstructionArgs>(arguments)
+        {
+            return args.action != InstructionAction::Show;
+        }
+        true
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
-            session: _,
+            session,
             turn,
             cancellation_token,
             tool_name,
@@ -132,12 +170,19 @@ impl ToolHandler for RepoCiHandler {
             "status" => handle_status(turn.as_ref(), parse_arguments(&arguments)?).await,
             "learn" => {
                 ensure_repo_ci_tool_allowed(turn.as_ref())?;
-                handle_learn(turn.as_ref(), parse_arguments(&arguments)?).await
+                handle_learn(
+                    &session,
+                    &turn,
+                    parse_arguments(&arguments)?,
+                    cancellation_token,
+                )
+                .await
             }
             "run" => {
                 ensure_repo_ci_tool_allowed(turn.as_ref())?;
                 handle_run(
-                    turn.as_ref(),
+                    &session,
+                    &turn,
                     parse_arguments(&arguments)?,
                     cancellation_token,
                 )
@@ -146,6 +191,10 @@ impl ToolHandler for RepoCiHandler {
             "result" => {
                 ensure_repo_ci_tool_allowed(turn.as_ref())?;
                 handle_result(turn.as_ref(), parse_arguments(&arguments)?).await
+            }
+            "instruction" => {
+                ensure_repo_ci_tool_allowed(turn.as_ref())?;
+                handle_instruction(turn.as_ref(), parse_arguments(&arguments)?).await
             }
             name => Err(FunctionCallError::RespondToModel(format!(
                 "unknown repo_ci tool `{name}`"
@@ -222,6 +271,10 @@ async fn handle_status(
             );
             object.insert("automation".to_string(), json!(manifest.automation));
             object.insert(
+                "learning_instruction".to_string(),
+                json!(manifest.learning_instruction),
+            );
+            object.insert(
                 "manifest_fingerprint".to_string(),
                 json!(codex_repo_ci::manifest_fingerprint(manifest)),
             );
@@ -247,10 +300,41 @@ async fn handle_status(
 }
 
 async fn handle_learn(
-    turn: &crate::session::turn_context::TurnContext,
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
     args: LearnArgs,
+    cancellation_token: tokio_util::sync::CancellationToken,
 ) -> Result<String, FunctionCallError> {
-    let options = learn_options(turn, &args)?;
+    let mut options = learn_options(turn.as_ref(), &args)?;
+    if let Some(instruction) = args.instruction.as_deref() {
+        let normalized_instruction =
+            crate::repo_ci_automation::validate_repo_ci_learning_instruction(
+                session,
+                turn,
+                instruction,
+                &cancellation_token,
+            )
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "repo_ci.learn rejected instruction: {err:#}"
+                ))
+            })?;
+        if options.learning_instruction.as_deref() != Some(normalized_instruction.as_str()) {
+            options.learning_instruction = Some(normalized_instruction.clone());
+            persist_repo_ci_learning_instruction(
+                &turn.config.codex_home,
+                &turn.cwd,
+                Some(&normalized_instruction),
+            )
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "repo_ci.learn failed to save instruction: {err:#}"
+                ))
+            })?;
+        }
+    }
     let codex_home = turn.config.codex_home.clone();
     let cwd = turn.cwd.clone();
     let outcome =
@@ -289,17 +373,25 @@ async fn handle_learn(
 }
 
 async fn handle_run(
-    turn: &crate::session::turn_context::TurnContext,
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
     args: RunArgs,
     cancellation_token: tokio_util::sync::CancellationToken,
 ) -> Result<String, FunctionCallError> {
     let mode = RunMode::from(args.mode);
-    let status = repo_ci_status(turn).await?;
-    if repo_ci_needs_learning(&status) {
+    let status = repo_ci_status(turn.as_ref()).await?;
+    let learning_instruction =
+        crate::repo_ci_automation::effective_repo_ci_learning_instruction(turn.as_ref());
+    let learning_instruction_changed = status
+        .manifest
+        .as_ref()
+        .is_some_and(|manifest| manifest.learning_instruction != learning_instruction);
+    if repo_ci_needs_learning(&status, learning_instruction.as_deref()) {
         if !args.learn_if_needed {
             return json_output(json!({
                 "status": "needs_learning",
                 "mode": mode,
+                "learning_instruction_changed": learning_instruction_changed,
                 "stale_sources": status.stale_sources.iter().map(source_json).collect::<Vec<_>>(),
             }));
         }
@@ -307,8 +399,10 @@ async fn handle_run(
             detail: DetailLevel::Brief,
             automation: None,
             local_test_time_budget_sec: None,
+            instruction: None,
         };
-        let learn_output = handle_learn(turn, learn_args).await?;
+        let learn_output =
+            handle_learn(session, turn, learn_args, cancellation_token.clone()).await?;
         let learn_value =
             serde_json::from_str::<serde_json::Value>(&learn_output).map_err(|err| {
                 FunctionCallError::RespondToModel(format!(
@@ -329,7 +423,7 @@ async fn handle_run(
     }
 
     if args.reuse == ReuseMode::Auto
-        && let Some(artifact) = cached_pass(turn, mode).await?
+        && let Some(artifact) = cached_pass(turn.as_ref(), mode).await?
     {
         return json_output(format_run_artifact_response(
             "run",
@@ -407,6 +501,251 @@ async fn handle_result(
     json_output(output)
 }
 
+#[derive(Debug)]
+struct ResolvedInstructionScope {
+    label: String,
+    segments: Vec<String>,
+    local_repo_root: Option<std::path::PathBuf>,
+}
+
+async fn handle_instruction(
+    turn: &crate::session::turn_context::TurnContext,
+    args: InstructionArgs,
+) -> Result<String, FunctionCallError> {
+    let resolved = resolve_instruction_scope(turn, &args.scope)?;
+    let old = configured_repo_ci_learning_instruction(&turn.config.codex_home, &resolved.segments)
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "repo_ci.instruction failed to read config: {err:#}"
+            ))
+        })?;
+    match args.action {
+        InstructionAction::Show => {
+            let configured = old.is_some();
+            json_output(json!({
+                "scope": resolved.label,
+                "instruction": old,
+                "configured": configured,
+            }))
+        }
+        InstructionAction::Set => {
+            let instruction = args.instruction.as_deref().ok_or_else(|| {
+                FunctionCallError::RespondToModel(
+                    "repo_ci.instruction set requires instruction".to_string(),
+                )
+            })?;
+            let new = normalize_learning_instruction(instruction);
+            persist_repo_ci_learning_instruction_for_segments(
+                &turn.config.codex_home,
+                &resolved.segments,
+                new.as_deref(),
+            )
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "repo_ci.instruction failed to save config: {err:#}"
+                ))
+            })?;
+            let relearned =
+                relearn_after_instruction_change(turn, &resolved, old.as_ref(), new.as_ref())
+                    .await?;
+            json_output(json!({
+                "scope": resolved.label,
+                "old_instruction": old,
+                "new_instruction": new,
+                "relearned": relearned,
+            }))
+        }
+        InstructionAction::Clear => {
+            persist_repo_ci_learning_instruction_for_segments(
+                &turn.config.codex_home,
+                &resolved.segments,
+                None,
+            )
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "repo_ci.instruction failed to save config: {err:#}"
+                ))
+            })?;
+            let relearned =
+                relearn_after_instruction_change(turn, &resolved, old.as_ref(), None).await?;
+            json_output(json!({
+                "scope": resolved.label,
+                "old_instruction": old,
+                "new_instruction": null,
+                "relearned": relearned,
+            }))
+        }
+    }
+}
+
+fn resolve_instruction_scope(
+    turn: &crate::session::turn_context::TurnContext,
+    scope: &InstructionScope,
+) -> Result<ResolvedInstructionScope, FunctionCallError> {
+    let specified = (scope.cwd as usize) + (scope.github_repo.is_some() as usize);
+    if specified != 1 {
+        return Err(FunctionCallError::RespondToModel(
+            "repo_ci.instruction scope requires exactly one of cwd or github_repo".to_string(),
+        ));
+    }
+    if scope.cwd {
+        let repo_root = codex_repo_ci::repo_root_for_cwd(&turn.cwd).map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "repo_ci.instruction failed to resolve cwd repo: {err:#}"
+            ))
+        })?;
+        let label = instruction_scope_label(&repo_root);
+        return Ok(ResolvedInstructionScope {
+            label,
+            segments: repo_ci_current_repo_scope_segments(&repo_root),
+            local_repo_root: Some(repo_root),
+        });
+    }
+    let Some(repo) = scope.github_repo.as_ref() else {
+        return Err(FunctionCallError::RespondToModel(
+            "repo_ci.instruction scope requires exactly one of cwd or github_repo".to_string(),
+        ));
+    };
+    validate_github_repo_scope(repo)?;
+    Ok(ResolvedInstructionScope {
+        label: format!("github_repo:{repo}"),
+        segments: vec![
+            "repo_ci".to_string(),
+            "github_repos".to_string(),
+            repo.clone(),
+        ],
+        local_repo_root: current_repo_root_if_github_repo(&turn.cwd, repo),
+    })
+}
+
+fn validate_github_repo_scope(repo: &str) -> Result<(), FunctionCallError> {
+    let mut parts = repo.split('/');
+    let valid = parts.next().is_some_and(|part| !part.is_empty())
+        && parts.next().is_some_and(|part| !part.is_empty())
+        && parts.next().is_none();
+    if !valid {
+        return Err(FunctionCallError::RespondToModel(
+            "repo_ci.instruction github_repo scope must be `org/repo`".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn current_repo_root_if_github_repo(cwd: &Path, repo: &str) -> Option<std::path::PathBuf> {
+    let repo_root = codex_repo_ci::repo_root_for_cwd(cwd).ok()?;
+    (codex_repo_ci::github_repo_slug(&repo_root).as_deref() == Some(repo)).then_some(repo_root)
+}
+
+fn instruction_scope_label(repo_root: &Path) -> String {
+    codex_repo_ci::github_repo_slug(repo_root)
+        .map(|repo| format!("github_repo:{repo}"))
+        .unwrap_or_else(|| format!("directory:{}", repo_root.display()))
+}
+
+async fn relearn_after_instruction_change(
+    turn: &crate::session::turn_context::TurnContext,
+    resolved: &ResolvedInstructionScope,
+    old: Option<&String>,
+    new: Option<&String>,
+) -> Result<bool, FunctionCallError> {
+    if old == new {
+        return Ok(false);
+    }
+    let Some(repo_root) = resolved.local_repo_root.clone() else {
+        return Ok(false);
+    };
+    let codex_home = turn.config.codex_home.clone();
+    let status = tokio::task::spawn_blocking({
+        let codex_home = codex_home.clone();
+        let repo_root = repo_root.clone();
+        move || codex_repo_ci::status(&codex_home, &repo_root)
+    })
+    .await
+    .map_err(|err| FunctionCallError::RespondToModel(format!("repo_ci.status failed: {err}")))?
+    .map_err(|err| FunctionCallError::RespondToModel(format!("repo_ci.status failed: {err:#}")))?;
+    let automation = status
+        .manifest
+        .as_ref()
+        .map(|manifest| manifest.automation)
+        .unwrap_or(codex_repo_ci::AutomationMode::LocalAndRemote);
+    let local_test_time_budget_sec = status
+        .manifest
+        .as_ref()
+        .map(|manifest| manifest.local_test_time_budget_sec)
+        .unwrap_or(DEFAULT_LOCAL_TEST_TIME_BUDGET_SEC);
+    let options = codex_repo_ci::LearnOptions {
+        automation,
+        local_test_time_budget_sec,
+        learning_instruction: new.cloned(),
+    };
+    tokio::task::spawn_blocking(move || codex_repo_ci::learn(&codex_home, &repo_root, options))
+        .await
+        .map_err(|err| FunctionCallError::RespondToModel(format!("repo_ci.learn failed: {err}")))?
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!("repo_ci.learn failed: {err:#}"))
+        })?;
+    Ok(true)
+}
+
+fn configured_repo_ci_learning_instruction(
+    codex_home: &Path,
+    segments: &[String],
+) -> anyhow::Result<Option<String>> {
+    let singular_segments = append_segment(segments, "learning_instruction");
+    if let Some(item) = repo_ci_config_item(codex_home, &singular_segments)?
+        && let Some(instruction) = repo_ci_learning_instruction_from_item(&item)
+    {
+        return Ok(Some(instruction));
+    }
+    let legacy_segments = append_segment(segments, "learning_instructions");
+    let Some(item) = repo_ci_config_item(codex_home, &legacy_segments)? else {
+        return Ok(None);
+    };
+    Ok(repo_ci_learning_instruction_from_item(&item))
+}
+
+fn repo_ci_config_item(
+    codex_home: &Path,
+    segments: &[String],
+) -> anyhow::Result<Option<toml_edit::Item>> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    if !config_path.exists() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(config_path)?;
+    let doc = raw.parse::<toml_edit::DocumentMut>()?;
+    let mut item = doc.as_item();
+    for segment in segments {
+        let Some(next) = item.get(segment) else {
+            return Ok(None);
+        };
+        item = next;
+    }
+    Ok(Some(item.clone()))
+}
+
+fn repo_ci_learning_instruction_from_item(item: &toml_edit::Item) -> Option<String> {
+    if let Some(value) = item.as_str() {
+        return normalize_learning_instruction(value);
+    }
+    item.as_array().and_then(|array| {
+        normalize_learning_instruction(
+            &array
+                .iter()
+                .filter_map(|value| value.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+    })
+}
+
+fn normalize_learning_instruction(value: &str) -> Option<String> {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!normalized.is_empty()).then_some(normalized)
+}
+
 fn ensure_repo_ci_tool_allowed(
     turn: &crate::session::turn_context::TurnContext,
 ) -> Result<(), FunctionCallError> {
@@ -466,12 +805,19 @@ fn cached_pass_available(turn: &crate::session::turn_context::TurnContext, mode:
         .is_some()
 }
 
-fn repo_ci_needs_learning(status: &codex_repo_ci::StatusOutcome) -> bool {
-    status.manifest.is_none() || !status.stale_sources.is_empty()
+fn repo_ci_needs_learning(
+    status: &codex_repo_ci::StatusOutcome,
+    learning_instruction: Option<&str>,
+) -> bool {
+    status
+        .manifest
+        .as_ref()
+        .is_none_or(|manifest| manifest.learning_instruction.as_deref() != learning_instruction)
+        || !status.stale_sources.is_empty()
 }
 
 fn learn_options(
-    turn: &crate::session::turn_context::TurnContext,
+    turn: &TurnContext,
     args: &LearnArgs,
 ) -> Result<codex_repo_ci::LearnOptions, FunctionCallError> {
     let automation = args
@@ -501,7 +847,60 @@ fn learn_options(
                 .and_then(|defaults| defaults.local_test_time_budget_sec)
                 .unwrap_or(DEFAULT_LOCAL_TEST_TIME_BUDGET_SEC)
         }),
+        learning_instruction: crate::repo_ci_automation::effective_repo_ci_learning_instruction(
+            turn,
+        ),
     })
+}
+
+async fn persist_repo_ci_learning_instruction(
+    codex_home: &Path,
+    cwd: &Path,
+    instruction: Option<&str>,
+) -> anyhow::Result<()> {
+    let repo_root = codex_repo_ci::repo_root_for_cwd(cwd)?;
+    persist_repo_ci_learning_instruction_for_segments(
+        codex_home,
+        &repo_ci_current_repo_scope_segments(&repo_root),
+        instruction,
+    )
+    .await
+}
+
+async fn persist_repo_ci_learning_instruction_for_segments(
+    codex_home: &Path,
+    segments: &[String],
+    instruction: Option<&str>,
+) -> anyhow::Result<()> {
+    let instruction = instruction.and_then(normalize_learning_instruction);
+    let builder = ConfigEditsBuilder::new(codex_home)
+        .clear_path(append_segment(segments, "learning_instructions"));
+    let builder = if let Some(instruction) = instruction {
+        builder.set_path_value(
+            append_segment(segments, "learning_instruction"),
+            toml_edit::value(instruction),
+        )
+    } else {
+        builder.clear_path(append_segment(segments, "learning_instruction"))
+    };
+    builder.apply().await
+}
+
+fn repo_ci_current_repo_scope_segments(repo_root: &Path) -> Vec<String> {
+    if let Some(repo) = codex_repo_ci::github_repo_slug(repo_root) {
+        return vec!["repo_ci".to_string(), "github_repos".to_string(), repo];
+    }
+    vec![
+        "repo_ci".to_string(),
+        "directories".to_string(),
+        repo_root.to_string_lossy().to_string(),
+    ]
+}
+
+fn append_segment(segments: &[String], segment: &str) -> Vec<String> {
+    let mut updated = segments.to_vec();
+    updated.push(segment.to_string());
+    updated
 }
 
 fn parse_automation(value: &str) -> Result<RepoCiAutomationToml, FunctionCallError> {

@@ -58,6 +58,8 @@ use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginUninstallParams;
+use codex_app_server_protocol::RepoCiLearningInstructionReadParams;
+use codex_app_server_protocol::RepoCiLearningInstructionWriteParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
@@ -676,6 +678,26 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/repoCiSessionConfig/set", params)
+            .await
+    }
+
+    /// Send a `repoCiLearningInstruction/read` JSON-RPC request (v2).
+    pub async fn send_repo_ci_learning_instruction_read_request(
+        &mut self,
+        params: RepoCiLearningInstructionReadParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("repoCiLearningInstruction/read", params)
+            .await
+    }
+
+    /// Send a `repoCiLearningInstruction/write` JSON-RPC request (v2).
+    pub async fn send_repo_ci_learning_instruction_write_request(
+        &mut self,
+        params: RepoCiLearningInstructionWriteParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("repoCiLearningInstruction/write", params)
             .await
     }
 

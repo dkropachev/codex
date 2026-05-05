@@ -47,6 +47,9 @@ async fn thread_repo_ci_session_config_set_accepts_loaded_thread() -> Result<()>
             ])),
             review_rounds: Some(Some(3)),
             long_ci: Some(Some(true)),
+            implement_enabled: Some(Some(true)),
+            implement_mode: Some(Some(codex_app_server_protocol::ImplementMode::Implicit)),
+            implement_max_cycles: Some(Some(4)),
         })
         .await?;
     let set_resp: JSONRPCResponse = timeout(

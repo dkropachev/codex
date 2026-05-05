@@ -22,6 +22,7 @@ pub enum SlashCommand {
     SandboxReadRoot,
     Experimental,
     ModelRouter,
+    Implement,
     RepoCi,
     Memories,
     Skills,
@@ -95,7 +96,7 @@ impl SlashCommand {
             SlashCommand::Goal => "set or inspect the current thread goal",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Limits => "show current ChatGPT usage limits",
-            SlashCommand::Codex => "show the Codex feature and debugging guide",
+            SlashCommand::Codex => "show guide, or use AI to configure Codex with args",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
@@ -125,6 +126,7 @@ impl SlashCommand {
             SlashCommand::ModelRouter => {
                 "temporarily enable or disable model router for this session"
             }
+            SlashCommand::Implement => "configure implement review/fix cycles",
             SlashCommand::RepoCi => "configure repo CI or run one task with repo CI",
             SlashCommand::Memories => "configure memory use and generation",
             SlashCommand::Mcp => "list configured MCP tools; use /mcp verbose for details",
@@ -155,7 +157,9 @@ impl SlashCommand {
                 | SlashCommand::Side
                 | SlashCommand::Resume
                 | SlashCommand::ModelRouter
+                | SlashCommand::Implement
                 | SlashCommand::RepoCi
+                | SlashCommand::Codex
                 | SlashCommand::SandboxReadRoot
         )
     }
@@ -191,6 +195,7 @@ impl SlashCommand {
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
             | SlashCommand::ModelRouter
+            | SlashCommand::Implement
             | SlashCommand::RepoCi
             | SlashCommand::Memories
             | SlashCommand::Goal

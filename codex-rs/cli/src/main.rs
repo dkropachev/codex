@@ -38,6 +38,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
+use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use supports_color::Stream;
@@ -59,6 +61,7 @@ use crate::mcp_cmd::McpCli;
 use crate::repo_ci_exec::repo_ci_exec_timeout;
 use crate::repo_ci_exec::run_repo_ci_exec_json;
 use crate::repo_ci_learn::learn_repo_ci_with_ai;
+use crate::repo_ci_learn::normalize_repo_ci_learning_instruction_with_ai;
 
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::LoaderOverrides;
@@ -206,6 +209,9 @@ enum Subcommand {
     /// Learn and run repository CI checks.
     #[clap(name = "repo-ci")]
     RepoCi(RepoCiCli),
+
+    /// Configure implement review/fix cycles.
+    Implement(ImplementCli),
 }
 
 #[derive(Debug, Parser)]
@@ -216,6 +222,39 @@ struct PluginCli {
 
     #[command(subcommand)]
     subcommand: PluginSubcommand,
+}
+
+#[derive(Debug, Parser)]
+#[command(bin_name = "codex implement")]
+struct ImplementCli {
+    #[command(subcommand)]
+    command: ImplementCommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ImplementCommand {
+    /// Enable automatic implement review/fix cycles.
+    Enable(ImplementActionArgs),
+
+    /// Disable implement review/fix cycles.
+    Disable(ImplementActionArgs),
+
+    /// Enable implement review/fix cycles only for explicit /implement turns.
+    Implicit(ImplementActionArgs),
+}
+
+#[derive(Debug, Args)]
+struct ImplementActionArgs {
+    /// Maximum number of review/fix cycles before surfacing remaining findings.
+    #[arg(long = "max-cycles")]
+    max_cycles: Option<u8>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ImplementConfigMode {
+    Auto,
+    Disabled,
+    Implicit,
 }
 
 #[derive(Debug, Parser)]
@@ -952,6 +991,8 @@ enum RepoCiSubcommand {
     /// Configure whether repo CI runs long local checks.
     #[clap(name = "long-ci")]
     LongCi(RepoCiLongCiCli),
+    /// Configure the repo CI learner instruction blob.
+    Instruction(RepoCiInstructionCli),
 }
 
 #[derive(Debug, Args)]
@@ -986,6 +1027,8 @@ struct RepoCiLearnArgs {
     automation: RepoCiAutomationArg,
     #[arg(long = "local-test-time-budget-sec", default_value_t = 300)]
     local_test_time_budget_sec: u64,
+    #[arg(long = "instruction")]
+    instruction: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1062,6 +1105,37 @@ struct RepoCiLongCiSetArgs {
     scope: RepoCiScopeArgs,
     #[arg(value_enum, default_value_t = RepoCiLongCiArg::On)]
     value: RepoCiLongCiArg,
+}
+
+#[derive(Debug, Parser)]
+#[command(bin_name = "codex repo-ci instruction")]
+struct RepoCiInstructionCli {
+    #[command(subcommand)]
+    sub: RepoCiInstructionSubcommand,
+}
+
+#[derive(Debug, Parser)]
+enum RepoCiInstructionSubcommand {
+    Show(RepoCiInstructionScopeArgs),
+    Set(RepoCiInstructionSetArgs),
+    Clear(RepoCiInstructionScopeArgs),
+    Edit(RepoCiInstructionScopeArgs),
+}
+
+#[derive(Debug, Args)]
+struct RepoCiInstructionScopeArgs {
+    #[arg(long)]
+    cwd: bool,
+    #[arg(value_name = "ORG/REPO")]
+    github_repo: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct RepoCiInstructionSetArgs {
+    #[command(flatten)]
+    scope: RepoCiInstructionScopeArgs,
+    #[arg(long = "instruction")]
+    instruction: String,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -1739,6 +1813,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )?;
             run_repo_ci_command(sub, &root_config_overrides).await?;
         }
+        Some(Subcommand::Implement(args)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "implement",
+            )?;
+            run_implement_command(args).await?;
+        }
     }
 
     Ok(())
@@ -1786,6 +1868,75 @@ async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyho
     Ok(())
 }
 
+async fn run_implement_command(args: ImplementCli) -> anyhow::Result<()> {
+    let codex_home = find_codex_home()?;
+    let mut edits = ConfigEditsBuilder::new(&codex_home);
+    let (mode, max_cycles) = match args.command {
+        ImplementCommand::Enable(action_args) => {
+            (ImplementConfigMode::Auto, action_args.max_cycles)
+        }
+        ImplementCommand::Disable(action_args) => {
+            (ImplementConfigMode::Disabled, action_args.max_cycles)
+        }
+        ImplementCommand::Implicit(action_args) => {
+            (ImplementConfigMode::Implicit, action_args.max_cycles)
+        }
+    };
+    match mode {
+        ImplementConfigMode::Auto => {
+            edits = edits.set_path_value(
+                vec!["implement".to_string(), "enabled".to_string()],
+                toml_edit::value(true),
+            );
+            edits = edits.set_path_value(
+                vec!["implement".to_string(), "mode".to_string()],
+                toml_edit::value("auto"),
+            );
+        }
+        ImplementConfigMode::Disabled => {
+            edits = edits.set_path_value(
+                vec!["implement".to_string(), "enabled".to_string()],
+                toml_edit::value(false),
+            );
+        }
+        ImplementConfigMode::Implicit => {
+            edits = edits.set_path_value(
+                vec!["implement".to_string(), "enabled".to_string()],
+                toml_edit::value(true),
+            );
+            edits = edits.set_path_value(
+                vec!["implement".to_string(), "mode".to_string()],
+                toml_edit::value("implicit"),
+            );
+        }
+    }
+    if let Some(max_cycles) = max_cycles {
+        edits = edits.set_path_value(
+            vec!["implement".to_string(), "max_cycles".to_string()],
+            toml_edit::Item::Value(i64::from(max_cycles).into()),
+        );
+    }
+    edits.apply().await?;
+
+    match (mode, max_cycles) {
+        (ImplementConfigMode::Disabled, Some(max_cycles)) => {
+            println!("Disabled implement review/fix cycles and set max_cycles={max_cycles}.");
+        }
+        (ImplementConfigMode::Disabled, None) => println!("Disabled implement review/fix cycles."),
+        (ImplementConfigMode::Implicit, Some(max_cycles)) => {
+            println!("Enabled implicit implement review/fix cycles with max_cycles={max_cycles}.");
+        }
+        (ImplementConfigMode::Implicit, None) => {
+            println!("Enabled implicit implement review/fix cycles.");
+        }
+        (ImplementConfigMode::Auto, Some(max_cycles)) => {
+            println!("Enabled implement review/fix cycles with max_cycles={max_cycles}.");
+        }
+        (ImplementConfigMode::Auto, None) => println!("Enabled implement review/fix cycles."),
+    }
+    Ok(())
+}
+
 async fn run_repo_ci_command(
     sub: RepoCiSubcommand,
     root_config_overrides: &CliConfigOverrides,
@@ -1807,13 +1958,42 @@ async fn run_repo_ci_command(
         RepoCiSubcommand::Learn(args) => {
             let codex_home = find_codex_home()?;
             let cwd = std::env::current_dir()?;
+            let repo_root = codex_repo_ci::repo_root_for_cwd(&cwd)?;
+            let mut learning_instruction = configured_repo_ci_learning_instruction(
+                &codex_home,
+                &repo_ci_current_repo_scope_segments(&repo_root),
+            )?;
+            if let Some(instruction) = args.instruction.as_deref() {
+                let normalized_instruction = normalize_repo_ci_learning_instruction_with_ai(
+                    root_config_overrides,
+                    &repo_root,
+                    instruction,
+                    repo_ci_exec_timeout(args.local_test_time_budget_sec),
+                )
+                .await?;
+                if learning_instruction.as_deref() != Some(normalized_instruction.as_str()) {
+                    persist_repo_ci_learning_instruction(
+                        &codex_home,
+                        &repo_ci_current_repo_scope_segments(&repo_root),
+                        Some(&normalized_instruction),
+                    )
+                    .await?;
+                    learning_instruction = Some(normalized_instruction.clone());
+                    println!("Saved repo CI learner instruction: {normalized_instruction}");
+                } else {
+                    println!(
+                        "Repo CI learner instruction already configured: {normalized_instruction}"
+                    );
+                }
+            }
             let outcome = learn_repo_ci_with_ai(
                 root_config_overrides,
                 &codex_home,
-                &cwd,
+                &repo_root,
                 LearnOptions {
                     automation: args.automation.into(),
                     local_test_time_budget_sec: args.local_test_time_budget_sec,
+                    learning_instruction,
                 },
             )
             .await?;
@@ -1852,13 +2032,19 @@ async fn run_repo_ci_command(
                 .unwrap_or(300);
 
             if status.manifest.is_none() || !status.stale_sources.is_empty() {
+                let repo_root = codex_repo_ci::repo_root_for_cwd(&cwd)?;
+                let learning_instruction = configured_repo_ci_learning_instruction(
+                    &codex_home,
+                    &repo_ci_current_repo_scope_segments(&repo_root),
+                )?;
                 let outcome = learn_repo_ci_with_ai(
                     root_config_overrides,
                     &codex_home,
-                    &cwd,
+                    &repo_root,
                     LearnOptions {
                         automation,
                         local_test_time_budget_sec,
+                        learning_instruction,
                     },
                 )
                 .await?;
@@ -1968,6 +2154,9 @@ async fn run_repo_ci_command(
         RepoCiSubcommand::IssueTypes(issue_types) => repo_ci_issue_types(issue_types).await,
         RepoCiSubcommand::ReviewRounds(review_rounds) => repo_ci_review_rounds(review_rounds).await,
         RepoCiSubcommand::LongCi(long_ci) => repo_ci_long_ci(long_ci).await,
+        RepoCiSubcommand::Instruction(instruction) => {
+            repo_ci_instruction(instruction, root_config_overrides).await
+        }
     }
 }
 
@@ -2291,6 +2480,330 @@ fn repo_ci_config_item(
         item = next;
     }
     Ok(Some(item.clone()))
+}
+
+fn repo_ci_current_repo_scope_segments(repo_root: &std::path::Path) -> Vec<String> {
+    if let Some(repo) = codex_repo_ci::github_repo_slug(repo_root) {
+        return vec!["repo_ci".to_string(), "github_repos".to_string(), repo];
+    }
+    vec![
+        "repo_ci".to_string(),
+        "directories".to_string(),
+        repo_root.to_string_lossy().to_string(),
+    ]
+}
+
+fn configured_repo_ci_learning_instruction(
+    codex_home: &Path,
+    scope_segments: &[String],
+) -> anyhow::Result<Option<String>> {
+    let singular_segments = append_segment(scope_segments, "learning_instruction");
+    if let Some(item) = repo_ci_config_item(codex_home, &singular_segments)?
+        && let Some(instruction) = repo_ci_learning_instruction_from_item(&item)
+    {
+        return Ok(Some(instruction));
+    }
+
+    let legacy_segments = append_segment(scope_segments, "learning_instructions");
+    let Some(item) = repo_ci_config_item(codex_home, &legacy_segments)? else {
+        return Ok(None);
+    };
+    Ok(repo_ci_learning_instruction_from_item(&item))
+}
+
+fn repo_ci_learning_instruction_from_item(item: &toml_edit::Item) -> Option<String> {
+    if let Some(value) = item.as_str() {
+        return normalize_repo_ci_learning_instruction_blob(value);
+    }
+    item.as_array().and_then(|array| {
+        normalize_repo_ci_learning_instruction_blob(
+            &array
+                .iter()
+                .filter_map(|value| value.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+    })
+}
+
+fn normalize_repo_ci_learning_instruction_blob(value: &str) -> Option<String> {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+async fn persist_repo_ci_learning_instruction(
+    codex_home: &Path,
+    scope_segments: &[String],
+    instruction: Option<&str>,
+) -> anyhow::Result<()> {
+    let instruction = instruction.and_then(normalize_repo_ci_learning_instruction_blob);
+    let builder = ConfigEditsBuilder::new(codex_home)
+        .clear_path(append_segment(scope_segments, "learning_instructions"));
+    let builder = if let Some(instruction) = instruction {
+        builder.set_path_value(
+            append_segment(scope_segments, "learning_instruction"),
+            toml_edit::value(instruction),
+        )
+    } else {
+        builder.clear_path(append_segment(scope_segments, "learning_instruction"))
+    };
+    builder.apply().await
+}
+
+#[derive(Debug)]
+struct ResolvedRepoCiInstructionScope {
+    label: String,
+    segments: Vec<String>,
+    local_repo_root: Option<PathBuf>,
+}
+
+async fn repo_ci_instruction(
+    instruction: RepoCiInstructionCli,
+    root_config_overrides: &CliConfigOverrides,
+) -> anyhow::Result<()> {
+    match instruction.sub {
+        RepoCiInstructionSubcommand::Show(scope) => {
+            let codex_home = find_codex_home()?;
+            let resolved = repo_ci_instruction_scope(&scope)?;
+            let current = configured_repo_ci_learning_instruction(&codex_home, &resolved.segments)?;
+            print_repo_ci_instruction("Current", &resolved, current.as_deref());
+            Ok(())
+        }
+        RepoCiInstructionSubcommand::Set(args) => {
+            let codex_home = find_codex_home()?;
+            let resolved = repo_ci_instruction_scope(&args.scope)?;
+            let old = configured_repo_ci_learning_instruction(&codex_home, &resolved.segments)?;
+            let new = normalize_repo_ci_learning_instruction_blob(&args.instruction);
+            persist_repo_ci_learning_instruction(&codex_home, &resolved.segments, new.as_deref())
+                .await?;
+            print_repo_ci_instruction_change(&resolved, old.as_deref(), new.as_deref());
+            repo_ci_relearn_for_instruction_scope(
+                root_config_overrides,
+                &codex_home,
+                resolved.local_repo_root.as_deref(),
+            )
+            .await
+        }
+        RepoCiInstructionSubcommand::Clear(scope) => {
+            let codex_home = find_codex_home()?;
+            let resolved = repo_ci_instruction_scope(&scope)?;
+            let old = configured_repo_ci_learning_instruction(&codex_home, &resolved.segments)?;
+            persist_repo_ci_learning_instruction(&codex_home, &resolved.segments, None).await?;
+            print_repo_ci_instruction_change(&resolved, old.as_deref(), None);
+            repo_ci_relearn_for_instruction_scope(
+                root_config_overrides,
+                &codex_home,
+                resolved.local_repo_root.as_deref(),
+            )
+            .await
+        }
+        RepoCiInstructionSubcommand::Edit(scope) => {
+            let codex_home = find_codex_home()?;
+            let resolved = repo_ci_instruction_scope(&scope)?;
+            let old = configured_repo_ci_learning_instruction(&codex_home, &resolved.segments)?;
+            let Some(edited) = edit_repo_ci_instruction(old.as_deref())? else {
+                println!("Repo CI learner instruction unchanged.");
+                return Ok(());
+            };
+            let new = normalize_repo_ci_learning_instruction_blob(&edited);
+            persist_repo_ci_learning_instruction(&codex_home, &resolved.segments, new.as_deref())
+                .await?;
+            print_repo_ci_instruction_change(&resolved, old.as_deref(), new.as_deref());
+            repo_ci_relearn_for_instruction_scope(
+                root_config_overrides,
+                &codex_home,
+                resolved.local_repo_root.as_deref(),
+            )
+            .await
+        }
+    }
+}
+
+fn repo_ci_instruction_scope(
+    scope: &RepoCiInstructionScopeArgs,
+) -> anyhow::Result<ResolvedRepoCiInstructionScope> {
+    let specified = (scope.cwd as usize) + (scope.github_repo.is_some() as usize);
+    if specified != 1 {
+        anyhow::bail!("choose exactly one repo CI instruction scope: --cwd or org/repo");
+    }
+    if scope.cwd {
+        let cwd = std::env::current_dir()?;
+        let repo_root = codex_repo_ci::repo_root_for_cwd(&cwd)?;
+        let label = repo_ci_current_repo_label(&repo_root);
+        return Ok(ResolvedRepoCiInstructionScope {
+            label,
+            segments: repo_ci_current_repo_scope_segments(&repo_root),
+            local_repo_root: Some(repo_root),
+        });
+    }
+    let Some(repo) = scope.github_repo.as_ref() else {
+        anyhow::bail!("choose exactly one repo CI instruction scope: --cwd or org/repo");
+    };
+    validate_github_repo_scope(repo)?;
+    Ok(ResolvedRepoCiInstructionScope {
+        label: format!("GitHub repo `{repo}`"),
+        segments: vec![
+            "repo_ci".to_string(),
+            "github_repos".to_string(),
+            repo.to_string(),
+        ],
+        local_repo_root: current_repo_root_if_github_repo(repo),
+    })
+}
+
+fn validate_github_repo_scope(repo: &str) -> anyhow::Result<()> {
+    let mut parts = repo.split('/');
+    let valid = parts.next().is_some_and(|part| !part.is_empty())
+        && parts.next().is_some_and(|part| !part.is_empty())
+        && parts.next().is_none();
+    if !valid {
+        anyhow::bail!("repo CI instruction scope must be `org/repo`");
+    }
+    Ok(())
+}
+
+fn current_repo_root_if_github_repo(repo: &str) -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    let repo_root = codex_repo_ci::repo_root_for_cwd(&cwd).ok()?;
+    (codex_repo_ci::github_repo_slug(&repo_root).as_deref() == Some(repo)).then_some(repo_root)
+}
+
+fn repo_ci_current_repo_label(repo_root: &Path) -> String {
+    codex_repo_ci::github_repo_slug(repo_root)
+        .map(|repo| format!("GitHub repo `{repo}`"))
+        .unwrap_or_else(|| format!("directory `{}`", repo_root.display()))
+}
+
+fn print_repo_ci_instruction(
+    label: &str,
+    scope: &ResolvedRepoCiInstructionScope,
+    instruction: Option<&str>,
+) {
+    println!("Scope: {}", scope.label);
+    match instruction {
+        Some(instruction) => println!("{label} instruction: {instruction}"),
+        None => println!("{label} instruction: not configured"),
+    }
+}
+
+fn print_repo_ci_instruction_change(
+    scope: &ResolvedRepoCiInstructionScope,
+    old: Option<&str>,
+    new: Option<&str>,
+) {
+    println!("Scope: {}", scope.label);
+    println!("Old instruction: {}", old.unwrap_or("not configured"));
+    println!("New instruction: {}", new.unwrap_or("not configured"));
+}
+
+async fn repo_ci_relearn_for_instruction_scope(
+    root_config_overrides: &CliConfigOverrides,
+    codex_home: &Path,
+    repo_root: Option<&Path>,
+) -> anyhow::Result<()> {
+    let Some(repo_root) = repo_root else {
+        println!(
+            "Repo CI learner instruction saved. Relearn skipped because no matching local repository is available."
+        );
+        return Ok(());
+    };
+    let status = codex_repo_ci::status(codex_home, repo_root)?;
+    let automation = status
+        .manifest
+        .as_ref()
+        .map(|manifest| manifest.automation)
+        .unwrap_or(codex_repo_ci::AutomationMode::LocalAndRemote);
+    let local_test_time_budget_sec = status
+        .manifest
+        .as_ref()
+        .map(|manifest| manifest.local_test_time_budget_sec)
+        .unwrap_or(300);
+    let learning_instruction = configured_repo_ci_learning_instruction(
+        codex_home,
+        &repo_ci_current_repo_scope_segments(repo_root),
+    )?;
+    let outcome = learn_repo_ci_with_ai(
+        root_config_overrides,
+        codex_home,
+        repo_root,
+        LearnOptions {
+            automation,
+            local_test_time_budget_sec,
+            learning_instruction,
+        },
+    )
+    .await?;
+    println!("Learned repo CI for {}", outcome.paths.repo_root.display());
+    println!(
+        "Validation: {}",
+        repo_ci_validation_label(&outcome.manifest.validation)
+    );
+    if matches!(
+        outcome.manifest.validation,
+        codex_repo_ci::ValidationStatus::Passed { .. }
+    ) {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "learned repo CI runner did not validate cleanly (exit code {:?})",
+            outcome.validation_exit_code
+        )
+    }
+}
+
+fn edit_repo_ci_instruction(current: Option<&str>) -> anyhow::Result<Option<String>> {
+    let editor = std::env::var("VISUAL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("EDITOR")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "repo CI instruction edit requires $VISUAL or $EDITOR; use `codex repo-ci instruction set --instruction ...` instead"
+            )
+        })?;
+    let mut file = tempfile::Builder::new()
+        .prefix("codex-repo-ci-instruction-")
+        .suffix(".txt")
+        .tempfile()?;
+    if let Some(current) = current {
+        writeln!(file, "{current}")?;
+    }
+    run_editor(&editor, file.path())?;
+    let edited = std::fs::read_to_string(file.path())?;
+    let edited = normalize_repo_ci_learning_instruction_blob(&edited).unwrap_or_default();
+    if current
+        .and_then(normalize_repo_ci_learning_instruction_blob)
+        .as_deref()
+        == Some(edited.as_str())
+    {
+        Ok(None)
+    } else {
+        Ok(Some(edited))
+    }
+}
+
+fn run_editor(editor: &str, path: &Path) -> anyhow::Result<()> {
+    let status = if cfg!(windows) {
+        std::process::Command::new("cmd")
+            .arg("/C")
+            .arg(format!("{editor} \"{}\"", path.display()))
+            .status()?
+    } else {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("{editor} \"$@\""))
+            .arg("codex-repo-ci-instruction-editor")
+            .arg(path)
+            .status()?
+    };
+    if !status.success() {
+        anyhow::bail!("repo CI instruction editor exited with {status}");
+    }
+    Ok(())
 }
 
 fn repo_ci_scope_segments(scope: &RepoCiScopeArgs) -> anyhow::Result<Vec<String>> {
@@ -4381,6 +4894,46 @@ mod tests {
     }
 
     #[test]
+    fn implement_parses_enable_and_max_cycles() {
+        let cli = MultitoolCli::try_parse_from(["codex", "implement", "enable", "--max-cycles=4"])
+            .expect("parse should succeed");
+        let Some(Subcommand::Implement(args)) = cli.subcommand else {
+            panic!("expected implement subcommand");
+        };
+        let ImplementCommand::Enable(action_args) = args.command else {
+            panic!("expected implement enable command");
+        };
+        assert_eq!(action_args.max_cycles, Some(4));
+    }
+
+    #[test]
+    fn implement_parses_implicit_and_max_cycles() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "implement", "implicit", "--max-cycles=2"])
+                .expect("parse should succeed");
+        let Some(Subcommand::Implement(args)) = cli.subcommand else {
+            panic!("expected implement subcommand");
+        };
+        let ImplementCommand::Implicit(action_args) = args.command else {
+            panic!("expected implement implicit command");
+        };
+        assert_eq!(action_args.max_cycles, Some(2));
+    }
+
+    #[test]
+    fn implement_parses_disable() {
+        let cli = MultitoolCli::try_parse_from(["codex", "implement", "disable"])
+            .expect("parse should succeed");
+        let Some(Subcommand::Implement(args)) = cli.subcommand else {
+            panic!("expected implement subcommand");
+        };
+        let ImplementCommand::Disable(action_args) = args.command else {
+            panic!("expected implement disable command");
+        };
+        assert_eq!(action_args.max_cycles, None);
+    }
+
+    #[test]
     fn repo_ci_long_ci_set_parses() {
         let cli =
             MultitoolCli::try_parse_from(["codex", "repo-ci", "long-ci", "set", "--global", "on"])
@@ -4396,6 +4949,64 @@ mod tests {
         };
         assert!(args.scope.global);
         assert!(args.value.as_bool());
+    }
+
+    #[test]
+    fn repo_ci_instruction_show_parses_cwd_scope() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "repo-ci", "instruction", "show", "--cwd"])
+                .expect("parse should succeed");
+        let Some(Subcommand::RepoCi(RepoCiCli { sub })) = cli.subcommand else {
+            panic!("expected repo-ci subcommand");
+        };
+        let RepoCiSubcommand::Instruction(RepoCiInstructionCli {
+            sub: RepoCiInstructionSubcommand::Show(args),
+        }) = sub
+        else {
+            panic!("expected repo-ci instruction show");
+        };
+        assert!(args.cwd);
+        assert_eq!(args.github_repo, None);
+    }
+
+    #[test]
+    fn repo_ci_instruction_set_parses_explicit_repo_scope() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "repo-ci",
+            "instruction",
+            "set",
+            "openai/codex",
+            "--instruction",
+            "Use nextest.",
+        ])
+        .expect("parse should succeed");
+        let Some(Subcommand::RepoCi(RepoCiCli { sub })) = cli.subcommand else {
+            panic!("expected repo-ci subcommand");
+        };
+        let RepoCiSubcommand::Instruction(RepoCiInstructionCli {
+            sub: RepoCiInstructionSubcommand::Set(args),
+        }) = sub
+        else {
+            panic!("expected repo-ci instruction set");
+        };
+        assert!(!args.scope.cwd);
+        assert_eq!(args.scope.github_repo.as_deref(), Some("openai/codex"));
+        assert_eq!(args.instruction, "Use nextest.");
+    }
+
+    #[test]
+    fn repo_ci_instruction_scope_rejects_cwd_and_repo() {
+        let err = repo_ci_instruction_scope(&RepoCiInstructionScopeArgs {
+            cwd: true,
+            github_repo: Some("openai/codex".to_string()),
+        })
+        .expect_err("ambiguous scope should fail");
+
+        assert!(
+            err.to_string()
+                .contains("choose exactly one repo CI instruction scope")
+        );
     }
 
     #[test]

@@ -39,6 +39,8 @@ use codex_app_server_protocol::ThreadApproveGuardianDeniedActionParams;
 use codex_app_server_protocol::ThreadApproveGuardianDeniedActionResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
+use codex_app_server_protocol::ThreadCodexConfigIntentSubmitParams;
+use codex_app_server_protocol::ThreadCodexConfigIntentSubmitResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
@@ -824,6 +826,28 @@ impl AppServerSession {
         Ok(())
     }
 
+    pub(crate) async fn thread_codex_config_intent_submit(
+        &mut self,
+        thread_id: ThreadId,
+        intent: String,
+        context: Option<String>,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadCodexConfigIntentSubmitResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadCodexConfigIntentSubmit {
+                request_id,
+                params: ThreadCodexConfigIntentSubmitParams {
+                    thread_id: thread_id.to_string(),
+                    intent,
+                    context,
+                },
+            })
+            .await
+            .wrap_err("thread/codexConfigIntent/submit failed in TUI")?;
+        Ok(())
+    }
+
     pub(crate) async fn thread_approve_guardian_denied_action(
         &mut self,
         thread_id: ThreadId,
@@ -870,6 +894,9 @@ impl AppServerSession {
         issue_types: Option<Option<Vec<codex_protocol::protocol::RepoCiIssueType>>>,
         review_rounds: Option<Option<u8>>,
         long_ci: Option<Option<bool>>,
+        implement_enabled: Option<Option<bool>>,
+        implement_mode: Option<Option<codex_protocol::protocol::ImplementMode>>,
+        implement_max_cycles: Option<Option<u8>>,
     ) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadRepoCiSessionConfigSetResponse = self
@@ -884,6 +911,9 @@ impl AppServerSession {
                     }),
                     review_rounds,
                     long_ci,
+                    implement_enabled,
+                    implement_mode: implement_mode.map(|mode| mode.map(Into::into)),
+                    implement_max_cycles,
                 },
             })
             .await
@@ -1212,6 +1242,9 @@ fn repo_ci_turn_overrides_to_params(overrides: RepoCiTurnOverrides) -> TurnRepoC
         }),
         review_rounds: overrides.review_rounds,
         long_ci: overrides.long_ci,
+        implement_enabled: overrides.implement_enabled,
+        implement_mode: overrides.implement_mode.map(|mode| mode.map(Into::into)),
+        implement_max_cycles: overrides.implement_max_cycles,
     }
 }
 

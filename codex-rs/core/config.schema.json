@@ -1026,6 +1026,37 @@
         }
       ]
     },
+    "ImplementMode": {
+      "enum": [
+        "auto",
+        "implicit"
+      ],
+      "type": "string"
+    },
+    "ImplementToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether the implement review/fix loop should run after agent edits.",
+          "type": "boolean"
+        },
+        "max_cycles": {
+          "description": "Maximum number of review/fix cycles before surfacing remaining findings.",
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ImplementMode"
+            }
+          ],
+          "description": "Whether review/fix cycles run automatically or only for `/implement` turns."
+        }
+      },
+      "type": "object"
+    },
     "MarketplaceConfig": {
       "additionalProperties": false,
       "properties": {
@@ -2184,6 +2215,11 @@
           "description": "Whether repo CI should run automatically for this scope.",
           "type": "boolean"
         },
+        "learning_instruction": {
+          "default": null,
+          "description": "Concise repo CI learner instruction blob for command selection.",
+          "type": "string"
+        },
         "local_test_time_budget_sec": {
           "description": "Local integration/e2e/ui tests above this budget are not selected for the fast runner.",
           "format": "uint64",
@@ -3197,6 +3233,15 @@
         }
       ],
       "description": "Lifecycle hooks configured inline in TOML."
+    },
+    "implement": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ImplementToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional review/fix implementation loop configuration."
     },
     "include_apps_instructions": {
       "description": "Whether to inject the `<apps_instructions>` developer block.",

@@ -699,7 +699,12 @@ pub(super) fn is_repo_ci_kind(where_kind: &str, kind: &str) -> bool {
     where_kind == "repo_ci"
         || matches!(
             kind,
-            "repo_ci" | "repo_ci_status" | "repo_ci_learn" | "repo_ci_run" | "repo_ci_result"
+            "repo_ci"
+                | "repo_ci_status"
+                | "repo_ci_learn"
+                | "repo_ci_run"
+                | "repo_ci_result"
+                | "repo_ci_instruction"
         )
 }
 

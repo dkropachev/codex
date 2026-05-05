@@ -36,6 +36,28 @@ async fn plan_implementation_popup_no_selected_snapshot() {
 }
 
 #[tokio::test]
+async fn codex_config_completion_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    let mask = crate::codex_config_context::codex_config_mask(&chat.config.cwd);
+    chat.set_collaboration_mask(mask);
+
+    chat.on_task_started();
+    chat.on_task_complete(
+        Some(format!(
+            "Configuration updated.\n{}",
+            crate::codex_config_context::CODEX_CONFIG_DONE_MARKER
+        )),
+        /*from_replay*/ false,
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("codex_config_completion_popup", popup);
+    assert!(popup.contains(codex_config_completion::CODEX_CONFIG_COMPLETION_TITLE));
+    assert!(!popup.contains(crate::codex_config_context::CODEX_CONFIG_DONE_MARKER));
+}
+
+#[tokio::test]
 async fn plan_implementation_popup_yes_emits_submit_message_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.open_plan_implementation_prompt();

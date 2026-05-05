@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "RepoCiLearningInstructionScopeParams": {
+      "properties": {
+        "cwd": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "githubRepo": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "properties": {
+    "scope": {
+      "$ref": "#/definitions/RepoCiLearningInstructionScopeParams"
+    }
+  },
+  "required": [
+    "scope"
+  ],
+  "title": "RepoCiLearningInstructionReadParams",
+  "type": "object"
+}

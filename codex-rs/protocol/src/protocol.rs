@@ -772,6 +772,18 @@ pub enum Op {
     /// enable/disable state) without restarting the thread.
     ReloadUserConfig,
 
+    /// Ask Codex to interpret and apply a user-facing configuration intent.
+    ///
+    /// This is the typed backing operation for `/codex <request>`. The caller
+    /// may include source-of-truth context from its own command registries;
+    /// core supplements it with the embedded Codex guide, CLI help, and a
+    /// scratch workspace before starting the model turn.
+    CodexConfigIntent {
+        intent: String,
+        #[serde(default)]
+        context: Option<String>,
+    },
+
     /// Patch repository CI review settings for this session.
     ///
     /// Omitted fields leave the current session value unchanged. Explicit
@@ -806,6 +818,27 @@ pub enum Op {
             skip_serializing_if = "Option::is_none"
         )]
         long_ci: Option<Option<bool>>,
+        #[serde(
+            default,
+            deserialize_with = "double_option_serde::deserialize",
+            serialize_with = "double_option_serde::serialize",
+            skip_serializing_if = "Option::is_none"
+        )]
+        implement_enabled: Option<Option<bool>>,
+        #[serde(
+            default,
+            deserialize_with = "double_option_serde::deserialize",
+            serialize_with = "double_option_serde::serialize",
+            skip_serializing_if = "Option::is_none"
+        )]
+        implement_mode: Option<Option<ImplementMode>>,
+        #[serde(
+            default,
+            deserialize_with = "double_option_serde::deserialize",
+            serialize_with = "double_option_serde::serialize",
+            skip_serializing_if = "Option::is_none"
+        )]
+        implement_max_cycles: Option<Option<u8>>,
     },
 
     /// Override model router enablement for this session.
@@ -977,6 +1010,7 @@ impl Op {
             Self::ListMcpTools => "list_mcp_tools",
             Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
             Self::ReloadUserConfig => "reload_user_config",
+            Self::CodexConfigIntent { .. } => "codex_config_intent",
             Self::SetRepoCiSessionConfig { .. } => "set_repo_ci_session_config",
             Self::SetModelRouterSessionConfig { .. } => "set_model_router_session_config",
             Self::ListSkills { .. } => "list_skills",
@@ -2183,6 +2217,13 @@ pub enum RepoCiSessionMode {
     LocalAndRemote,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ImplementMode {
+    Auto,
+    Implicit,
+}
+
 #[derive(
     Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, JsonSchema, TS,
 )]
@@ -2213,6 +2254,12 @@ pub struct RepoCiTurnOverrides {
     pub review_rounds: Option<Option<u8>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub long_ci: Option<Option<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub implement_enabled: Option<Option<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub implement_mode: Option<Option<ImplementMode>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub implement_max_cycles: Option<Option<u8>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

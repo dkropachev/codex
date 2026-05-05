@@ -119,6 +119,11 @@ use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_app_server_protocol::RepoCiLearningInstructionReadParams;
+use codex_app_server_protocol::RepoCiLearningInstructionReadResponse;
+use codex_app_server_protocol::RepoCiLearningInstructionScopeParams;
+use codex_app_server_protocol::RepoCiLearningInstructionWriteParams;
+use codex_app_server_protocol::RepoCiLearningInstructionWriteResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery as ApiReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
@@ -144,6 +149,8 @@ use codex_app_server_protocol::ThreadArchivedNotification;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadClosedNotification;
+use codex_app_server_protocol::ThreadCodexConfigIntentSubmitParams;
+use codex_app_server_protocol::ThreadCodexConfigIntentSubmitResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadDecrementElicitationParams;
@@ -416,10 +423,18 @@ mod apps_list_helpers;
 mod plugin_app_helpers;
 mod plugin_mcp_oauth;
 mod plugins;
+mod repo_ci_learning_instruction;
 mod token_usage_replay;
 
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
+use crate::repo_ci_learning_instruction::ResolvedRepoCiLearningInstructionScope;
+use crate::repo_ci_learning_instruction::configured_repo_ci_learning_instruction;
+use crate::repo_ci_learning_instruction::git_repo_root;
+use crate::repo_ci_learning_instruction::github_repo_slug_for_root;
+use crate::repo_ci_learning_instruction::normalize_repo_ci_learning_instruction;
+use crate::repo_ci_learning_instruction::persist_repo_ci_learning_instruction;
+use crate::repo_ci_learning_instruction::validate_repo_ci_github_repo;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
@@ -996,6 +1011,27 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadRepoCiSessionConfigSet { request_id, params } => {
                 self.thread_repo_ci_session_config_set(
+                    to_connection_request_id(request_id),
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::ThreadCodexConfigIntentSubmit { request_id, params } => {
+                self.thread_codex_config_intent_submit(
+                    to_connection_request_id(request_id),
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::RepoCiLearningInstructionRead { request_id, params } => {
+                self.repo_ci_learning_instruction_read(
+                    to_connection_request_id(request_id),
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::RepoCiLearningInstructionWrite { request_id, params } => {
+                self.repo_ci_learning_instruction_write(
                     to_connection_request_id(request_id),
                     params,
                 )
@@ -3873,6 +3909,9 @@ impl CodexMessageProcessor {
             issue_types,
             review_rounds,
             long_ci,
+            implement_enabled,
+            implement_mode,
+            implement_max_cycles,
         } = params;
 
         let (_, thread) = match self.load_thread(&thread_id).await {
@@ -3901,6 +3940,10 @@ impl CodexMessageProcessor {
                     }),
                     review_rounds,
                     long_ci,
+                    implement_enabled,
+                    implement_mode: implement_mode
+                        .map(|mode| mode.map(codex_app_server_protocol::ImplementMode::to_core)),
+                    implement_max_cycles,
                 },
             )
             .await
@@ -3918,6 +3961,144 @@ impl CodexMessageProcessor {
                 .await;
             }
         }
+    }
+
+    async fn repo_ci_learning_instruction_read(
+        &self,
+        request_id: ConnectionRequestId,
+        params: RepoCiLearningInstructionReadParams,
+    ) {
+        let resolved = match self.repo_ci_learning_instruction_scope(&params.scope) {
+            Ok(resolved) => resolved,
+            Err(message) => {
+                self.send_invalid_request_error(request_id, message).await;
+                return;
+            }
+        };
+        match configured_repo_ci_learning_instruction(&self.config.codex_home, &resolved.segments) {
+            Ok(instruction) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        RepoCiLearningInstructionReadResponse {
+                            scope: resolved.label,
+                            instruction,
+                        },
+                    )
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to read repo CI learner instruction: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn repo_ci_learning_instruction_write(
+        &self,
+        request_id: ConnectionRequestId,
+        params: RepoCiLearningInstructionWriteParams,
+    ) {
+        let resolved = match self.repo_ci_learning_instruction_scope(&params.scope) {
+            Ok(resolved) => resolved,
+            Err(message) => {
+                self.send_invalid_request_error(request_id, message).await;
+                return;
+            }
+        };
+        let old = match configured_repo_ci_learning_instruction(
+            &self.config.codex_home,
+            &resolved.segments,
+        ) {
+            Ok(instruction) => instruction,
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to read repo CI learner instruction: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+        let new = normalize_repo_ci_learning_instruction(&params.instruction);
+        match persist_repo_ci_learning_instruction(
+            &self.config.codex_home,
+            &resolved.segments,
+            new.as_deref(),
+        )
+        .await
+        {
+            Ok(()) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        RepoCiLearningInstructionWriteResponse {
+                            scope: resolved.label,
+                            old_instruction: old,
+                            new_instruction: new,
+                        },
+                    )
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to write repo CI learner instruction: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    fn repo_ci_learning_instruction_scope(
+        &self,
+        scope: &RepoCiLearningInstructionScopeParams,
+    ) -> Result<ResolvedRepoCiLearningInstructionScope, String> {
+        let specified =
+            (scope.cwd.unwrap_or(false) as usize) + (scope.github_repo.is_some() as usize);
+        if specified != 1 {
+            return Err(
+                "repoCiLearningInstruction scope requires exactly one of cwd or githubRepo"
+                    .to_string(),
+            );
+        }
+        if scope.cwd.unwrap_or(false) {
+            let repo_root = git_repo_root(self.config.cwd.as_path())
+                .unwrap_or_else(|| self.config.cwd.to_path_buf());
+            let github_repo = github_repo_slug_for_root(&repo_root);
+            let label = github_repo
+                .as_deref()
+                .map(|repo| format!("githubRepo:{repo}"))
+                .unwrap_or_else(|| format!("directory:{}", repo_root.display()));
+            let segments = github_repo
+                .map(|repo| vec!["repo_ci".to_string(), "github_repos".to_string(), repo])
+                .unwrap_or_else(|| {
+                    vec![
+                        "repo_ci".to_string(),
+                        "directories".to_string(),
+                        repo_root.to_string_lossy().to_string(),
+                    ]
+                });
+            return Ok(ResolvedRepoCiLearningInstructionScope { label, segments });
+        }
+        let Some(repo) = scope.github_repo.as_ref() else {
+            return Err(
+                "repoCiLearningInstruction scope requires exactly one of cwd or githubRepo"
+                    .to_string(),
+            );
+        };
+        validate_repo_ci_github_repo(repo)?;
+        Ok(ResolvedRepoCiLearningInstructionScope {
+            label: format!("githubRepo:{repo}"),
+            segments: vec![
+                "repo_ci".to_string(),
+                "github_repos".to_string(),
+                repo.clone(),
+            ],
+        })
     }
 
     async fn thread_model_router_session_config_set(
@@ -4014,6 +4195,62 @@ impl CodexMessageProcessor {
                 self.send_internal_error(
                     request_id,
                     format!("failed to start shell command: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn thread_codex_config_intent_submit(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadCodexConfigIntentSubmitParams,
+    ) {
+        let ThreadCodexConfigIntentSubmitParams {
+            thread_id,
+            intent,
+            context,
+        } = params;
+        let intent = intent.trim().to_string();
+        if intent.is_empty() {
+            self.outgoing
+                .send_error(
+                    request_id,
+                    JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: "intent must not be empty".to_string(),
+                        data: None,
+                    },
+                )
+                .await;
+            return;
+        }
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self
+            .submit_core_op(
+                &request_id,
+                thread.as_ref(),
+                Op::CodexConfigIntent { intent, context },
+            )
+            .await
+        {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadCodexConfigIntentSubmitResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to submit Codex config intent: {err}"),
                 )
                 .await;
             }
@@ -7431,6 +7668,11 @@ impl CodexMessageProcessor {
             }),
             review_rounds: params.review_rounds,
             long_ci: params.long_ci,
+            implement_enabled: params.implement_enabled,
+            implement_mode: params
+                .implement_mode
+                .map(|mode| mode.map(codex_app_server_protocol::ImplementMode::to_core)),
+            implement_max_cycles: params.implement_max_cycles,
         }
     }
 

@@ -4898,6 +4898,9 @@ async fn repo_ci_session_mode_is_submitted_to_app_server() {
         /*issue_types*/ None,
         /*review_rounds*/ None,
         /*long_ci*/ None,
+        /*implement_enabled*/ None,
+        /*implement_mode*/ None,
+        /*implement_max_cycles*/ None,
     );
 
     let handled = app
@@ -4930,6 +4933,9 @@ async fn repo_ci_session_config_is_submitted_to_app_server() {
         ])),
         Some(Some(4)),
         Some(Some(true)),
+        /*implement_enabled*/ Some(Some(true)),
+        /*implement_mode*/ Some(Some(codex_protocol::protocol::ImplementMode::Implicit)),
+        /*implement_max_cycles*/ Some(Some(5)),
     );
 
     let handled = app

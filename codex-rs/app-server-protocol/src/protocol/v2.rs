@@ -75,6 +75,7 @@ use codex_protocol::protocol::HookRunStatus as CoreHookRunStatus;
 use codex_protocol::protocol::HookRunSummary as CoreHookRunSummary;
 use codex_protocol::protocol::HookScope as CoreHookScope;
 use codex_protocol::protocol::HookSource as CoreHookSource;
+use codex_protocol::protocol::ImplementMode as CoreImplementMode;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::ModelVerification as CoreModelVerification;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
@@ -3992,6 +3993,13 @@ v2_enum_from_core! {
 }
 
 v2_enum_from_core! {
+    pub enum ImplementMode from CoreImplementMode {
+        Auto,
+        Implicit,
+    }
+}
+
+v2_enum_from_core! {
     pub enum RepoCiIssueType from CoreRepoCiIssueType {
         Correctness,
         Reliability,
@@ -4047,12 +4055,96 @@ pub struct ThreadRepoCiSessionConfigSetParams {
     )]
     #[ts(optional = nullable)]
     pub long_ci: Option<Option<bool>>,
+    /// Omit to leave unchanged; null clears the session override and returns to repo/user config.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub implement_enabled: Option<Option<bool>>,
+    /// Omit to leave unchanged; null clears the session override and returns to repo/user config.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub implement_mode: Option<Option<ImplementMode>>,
+    /// Omit to leave unchanged; null clears the session override and returns to repo/user config.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub implement_max_cycles: Option<Option<u8>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadRepoCiSessionConfigSetResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadCodexConfigIntentSubmitParams {
+    pub thread_id: String,
+    pub intent: String,
+    #[ts(optional = nullable)]
+    pub context: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadCodexConfigIntentSubmitResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RepoCiLearningInstructionScopeParams {
+    #[ts(optional = nullable)]
+    pub cwd: Option<bool>,
+    #[ts(optional = nullable)]
+    pub github_repo: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RepoCiLearningInstructionReadParams {
+    pub scope: RepoCiLearningInstructionScopeParams,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RepoCiLearningInstructionReadResponse {
+    pub scope: String,
+    pub instruction: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RepoCiLearningInstructionWriteParams {
+    pub scope: RepoCiLearningInstructionScopeParams,
+    pub instruction: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RepoCiLearningInstructionWriteResponse {
+    pub scope: String,
+    pub old_instruction: Option<String>,
+    pub new_instruction: Option<String>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -5397,6 +5489,30 @@ pub struct TurnRepoCiConfigParams {
     )]
     #[ts(optional = nullable)]
     pub long_ci: Option<Option<bool>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub implement_enabled: Option<Option<bool>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub implement_mode: Option<Option<ImplementMode>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub implement_max_cycles: Option<Option<u8>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

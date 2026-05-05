@@ -1073,13 +1073,14 @@ mod tests {
                 container_id: "def456".to_string(),
                 name: Some("svc-1".to_string()),
                 image: Some("redis:7".to_string()),
-                labels: BTreeMap::from([(COMPOSE_PROJECT_LABEL.to_string(), "project-2".to_string())]),
+                labels: BTreeMap::from([(
+                    COMPOSE_PROJECT_LABEL.to_string(),
+                    "project-2".to_string()
+                )]),
             })
         );
         assert_eq!(
-            parse_container_stats(
-                r#"{"CPUPerc":"12.5%","MemUsage":"1.5MiB / 8GiB"}"#,
-            ),
+            parse_container_stats(r#"{"CPUPerc":"12.5%","MemUsage":"1.5MiB / 8GiB"}"#,),
             Some(ContainerStats {
                 memory_bytes: Some(1_572_864),
                 cpu_percent: Some(12.5),
@@ -1097,7 +1098,8 @@ mod tests {
     #[test]
     fn attributes_labeled_compose_and_created_containers() {
         let run_labels = BTreeMap::from([(DOCKER_LABEL_RUN_ID.to_string(), "run".to_string())]);
-        let compose_labels = BTreeMap::from([(COMPOSE_PROJECT_LABEL.to_string(), "project".to_string())]);
+        let compose_labels =
+            BTreeMap::from([(COMPOSE_PROJECT_LABEL.to_string(), "project".to_string())]);
 
         assert_eq!(
             container_attribution(
