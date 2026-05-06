@@ -122,6 +122,7 @@ fn sample_thread_with_source(
 ) -> Thread {
     Thread {
         id: thread_id.to_string(),
+        session_id: format!("session-{thread_id}"),
         forked_from_id: None,
         preview: "first prompt".to_string(),
         ephemeral,
@@ -133,6 +134,7 @@ fn sample_thread_with_source(
         cwd: test_path_buf("/tmp").abs(),
         cli_version: "0.0.0".to_string(),
         source,
+        thread_source: None,
         agent_nickname: None,
         agent_role: None,
         git_info: None,
@@ -155,6 +157,7 @@ fn sample_thread_start_response(thread_id: &str, ephemeral: bool, model: &str) -
             approvals_reviewer: AppServerApprovalsReviewer::User,
             sandbox: AppServerSandboxPolicy::DangerFullAccess,
             permission_profile: Some(sample_permission_profile()),
+            active_permission_profile: None,
             reasoning_effort: None,
         },
     }
@@ -211,6 +214,7 @@ fn sample_thread_resume_response_with_source(
             approvals_reviewer: AppServerApprovalsReviewer::User,
             sandbox: AppServerSandboxPolicy::DangerFullAccess,
             permission_profile: Some(sample_permission_profile()),
+            active_permission_profile: None,
             reasoning_effort: None,
         },
     }

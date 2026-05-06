@@ -295,4 +295,58 @@ mod tests {
             .clone();
         assert_eq!(store_session, Some(expected_session));
     }
+
+    #[tokio::test]
+    async fn thread_read_fallback_uses_active_permission_settings() {
+        let mut app = make_test_app().await;
+        let primary_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000404").expect("valid thread");
+        let read_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000405").expect("valid thread");
+        let primary_session = ThreadSessionState {
+            permission_profile: PermissionProfile::workspace_write(),
+            ..test_thread_session(primary_thread_id, test_path_buf("/tmp/primary"))
+        };
+        let read_thread = Thread {
+            id: read_thread_id.to_string(),
+            session_id: read_thread_id.to_string(),
+            forked_from_id: None,
+            preview: "read thread".to_string(),
+            ephemeral: false,
+            model_provider: "read-provider".to_string(),
+            created_at: 1,
+            updated_at: 2,
+            status: codex_app_server_protocol::ThreadStatus::Idle,
+            path: None,
+            cwd: test_path_buf("/tmp/read").abs(),
+            cli_version: "0.0.0".to_string(),
+            source: codex_app_server_protocol::SessionSource::Unknown,
+            thread_source: None,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: Some("read thread".to_string()),
+            turns: Vec::new(),
+        };
+
+        app.primary_session_configured = Some(primary_session.clone());
+        app.chat_widget.handle_thread_session(primary_session);
+
+        let session = app
+            .session_state_for_thread_read(read_thread_id, &read_thread)
+            .await;
+
+        let expected_permission_profile = app
+            .chat_widget
+            .config_ref()
+            .permissions
+            .permission_profile();
+        assert_eq!(session.permission_profile, expected_permission_profile);
+        assert_ne!(
+            session.permission_profile,
+            app.config.permissions.permission_profile(),
+            "thread/read fallback must use the active widget permissions rather than stale app \
+             config defaults"
+        );
+    }
 }

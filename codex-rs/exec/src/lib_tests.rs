@@ -244,6 +244,7 @@ async fn resume_lookup_model_providers_filters_only_last_lookup() {
 fn turn_items_for_thread_returns_matching_turn_items() {
     let thread = AppServerThread {
         id: "thread-1".to_string(),
+        session_id: "thread-1".to_string(),
         forked_from_id: None,
         preview: String::new(),
         ephemeral: false,
@@ -394,11 +395,87 @@ async fn thread_start_params_include_review_policy_when_auto_review_is_enabled()
     );
 }
 
-#[test]
-fn session_configured_from_thread_response_uses_review_policy_from_response() {
-    let response = ThreadStartResponse {
+#[tokio::test]
+async fn thread_lifecycle_params_include_legacy_sandbox_when_no_active_profile() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            sandbox_mode: Some(SandboxMode::DangerFullAccess),
+            ..Default::default()
+        })
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config with legacy sandbox override");
+
+    let start_params = thread_start_params_from_config(&config);
+    let resume_params = thread_resume_params_from_config(&config, "thread-id".to_string());
+
+    assert_eq!(config.permissions.active_permission_profile(), None);
+    assert_eq!(
+        start_params.sandbox,
+        Some(codex_app_server_protocol::SandboxMode::DangerFullAccess)
+    );
+    assert_eq!(start_params.permissions, None);
+    assert_eq!(
+        resume_params.sandbox,
+        Some(codex_app_server_protocol::SandboxMode::DangerFullAccess)
+    );
+    assert_eq!(resume_params.permissions, None);
+}
+
+#[tokio::test]
+async fn session_configured_from_thread_response_uses_review_policy_from_response() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config");
+    let response = sample_thread_start_response();
+
+    let event = session_configured_from_thread_start_response(&response, &config)
+        .expect("build bootstrap session configured event");
+
+    assert_eq!(
+        event.session_id.to_string(),
+        "67e55044-10b1-426f-9247-bb680e5fe0c7"
+    );
+    assert_eq!(
+        event.thread_id.to_string(),
+        "67e55044-10b1-426f-9247-bb680e5fe0c8"
+    );
+    assert_eq!(event.approvals_reviewer, ApprovalsReviewer::AutoReview);
+}
+
+#[tokio::test]
+async fn session_configured_from_thread_response_uses_permission_profile_from_response() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config");
+    let mut response = sample_thread_start_response();
+    response.permission_profile = Some(PermissionProfile::Disabled.into());
+
+    let event = session_configured_from_thread_start_response(&response, &config)
+        .expect("build bootstrap session configured event");
+
+    assert_eq!(event.permission_profile, PermissionProfile::Disabled);
+}
+
+fn sample_thread_start_response() -> ThreadStartResponse {
+    ThreadStartResponse {
         thread: codex_app_server_protocol::Thread {
             id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+            session_id: "67e55044-10b1-426f-9247-bb680e5fe0c7".to_string(),
             forked_from_id: None,
             preview: String::new(),
             ephemeral: false,
@@ -410,6 +487,7 @@ fn session_configured_from_thread_response_uses_review_policy_from_response() {
             cwd: test_path_buf("/tmp").abs(),
             cli_version: "0.0.0".to_string(),
             source: codex_app_server_protocol::SessionSource::Cli,
+            thread_source: None,
             agent_nickname: None,
             agent_role: None,
             git_info: None,
@@ -435,11 +513,7 @@ fn session_configured_from_thread_response_uses_review_policy_from_response() {
             )
             .into(),
         ),
+        active_permission_profile: None,
         reasoning_effort: None,
-    };
-
-    let event = session_configured_from_thread_start_response(&response)
-        .expect("build bootstrap session configured event");
-
-    assert_eq!(event.approvals_reviewer, ApprovalsReviewer::AutoReview);
+    }
 }
