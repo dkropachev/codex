@@ -54,15 +54,12 @@ mod app_cmd;
 mod desktop_app;
 mod marketplace_cmd;
 mod mcp_cmd;
-mod repo_ci_exec;
 mod repo_ci_learn;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
-use crate::repo_ci_exec::repo_ci_exec_timeout;
-use crate::repo_ci_exec::run_repo_ci_exec_json;
 use crate::repo_ci_learn::learn_repo_ci_with_ai;
 use crate::repo_ci_learn::normalize_repo_ci_learning_instruction_with_ai;
 
@@ -2324,7 +2321,6 @@ async fn repo_ci_remote_commit_decision(
         &prompt,
         codex_repo_ci::remote_commit_decision_schema(),
         "repo-ci commit decision",
-        repo_ci_exec_timeout(300),
     )
     .await
     {
