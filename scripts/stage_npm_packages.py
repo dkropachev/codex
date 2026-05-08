@@ -100,6 +100,8 @@ def resolve_release_workflow(version: str) -> dict:
             "workflowName,url,headSha",
             "--workflow",
             WORKFLOW_NAME,
+            "--repo",
+            GITHUB_REPO,
             "--jq",
             "first(.[])",
         ],

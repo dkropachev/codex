@@ -2,11 +2,12 @@ name: sdk
 
 on:
   push:
-    branches: [main]
+    branches: [main, "forked-rust-v*"]
   pull_request: {}
 
 jobs:
   sdks:
+    if: ${{ github.repository == 'openai/codex' }}
     runs-on:
       group: codex-runners
       labels: codex-linux-x64
