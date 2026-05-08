@@ -397,7 +397,9 @@ use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
 mod plugins;
 use self::plugins::PluginsCacheState;
+mod codex_config_apply;
 mod codex_config_completion;
+mod codex_config_flow;
 mod plan_implementation;
 use self::plan_implementation::PLAN_IMPLEMENTATION_TITLE;
 mod realtime;
@@ -1009,8 +1011,14 @@ pub(crate) struct ChatWidget {
     // later steer. This is cleared when the user submits a steer so the plan popup only appears
     // if a newer proposed plan arrives afterward.
     saw_plan_item_this_turn: bool,
-    // Whether the current Codex config mode turn emitted the explicit completion marker.
+    // Whether the current Codex investigate turn emitted the explicit completion marker.
     saw_codex_config_done_this_turn: bool,
+    // Conversation captured while planning Codex config edits.
+    codex_config_planning_conversation: String,
+    // Pending history bundle for an approved Codex config apply turn.
+    pending_codex_config_apply_bundle: Option<crate::codex_config_history::CodexConfigHistoryBundle>,
+    // Completed assistant source used to consolidate a stream after hidden markers are stripped.
+    completed_assistant_stream_source_override: Option<String>,
     // Latest `update_plan` checklist task counts for terminal-title rendering.
     last_plan_progress: Option<(usize, usize)>,
     // Incremental buffer for streamed plan content.
@@ -2050,6 +2058,7 @@ impl ChatWidget {
 
     fn flush_answer_stream_with_separator(&mut self) {
         let had_stream_controller = self.stream_controller.is_some();
+        let source_override = self.completed_assistant_stream_source_override.take();
         if let Some(mut controller) = self.stream_controller.take() {
             let (cell, source) = controller.finalize();
             if let Some(cell) = cell {
@@ -2057,7 +2066,7 @@ impl ChatWidget {
             }
             // Consolidate the run of streaming AgentMessageCells into a single AgentMarkdownCell
             // that can re-render from source on resize.
-            if let Some(source) = source {
+            if let Some(source) = source_override.or(source) {
                 self.app_event_tx.send(AppEvent::ConsolidateAgentMessage {
                     source,
                     cwd: self.config.cwd.to_path_buf(),
@@ -2685,22 +2694,11 @@ impl ChatWidget {
 
     #[cfg(test)]
     fn on_agent_message(&mut self, message: String) {
-        let message = self.strip_codex_config_done_marker(message);
-        self.finalize_completed_assistant_message(Some(&message));
-    }
-
-    fn strip_codex_config_done_marker(&mut self, message: String) -> String {
-        if self.active_mode_kind() != ModeKind::Codex
-            || !message.contains(crate::codex_config_context::CODEX_CONFIG_DONE_MARKER)
-        {
-            return message;
+        let (message, stripped_marker) = self.strip_codex_config_done_marker(message);
+        if stripped_marker {
+            self.completed_assistant_stream_source_override = Some(message.clone());
         }
-
-        self.saw_codex_config_done_this_turn = true;
-        message
-            .replace(crate::codex_config_context::CODEX_CONFIG_DONE_MARKER, "")
-            .trim_end()
-            .to_string()
+        self.finalize_completed_assistant_message(Some(&message));
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
@@ -2708,7 +2706,7 @@ impl ChatWidget {
     }
 
     fn on_plan_delta(&mut self, delta: String) {
-        if self.active_mode_kind() != ModeKind::Plan {
+        if !self.active_mode_kind().is_plan_like() {
             return;
         }
         if !self.plan_item_active {
@@ -2745,6 +2743,7 @@ impl ChatWidget {
         if !plan_text.trim().is_empty() {
             self.record_agent_markdown(&plan_text);
             self.latest_proposed_plan_markdown = Some(plan_text.clone());
+            self.record_codex_config_plan(&plan_text);
         }
         // Plan commit ticks can hide the status row; remember whether we streamed plan output so
         // completion can restore it once stream queues are idle.
@@ -2835,6 +2834,7 @@ impl ChatWidget {
         self.saw_plan_item_this_turn = false;
         self.saw_codex_config_done_this_turn = false;
         self.latest_proposed_plan_markdown = None;
+        self.completed_assistant_stream_source_override = None;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.adaptive_chunking.reset();
@@ -2860,8 +2860,13 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
-        let last_agent_message =
-            last_agent_message.map(|message| self.strip_codex_config_done_marker(message));
+        let last_agent_message = last_agent_message.map(|message| {
+            let (message, stripped_marker) = self.strip_codex_config_done_marker(message);
+            if stripped_marker {
+                self.completed_assistant_stream_source_override = Some(message.clone());
+            }
+            message
+        });
         self.submit_pending_steers_after_interrupt = false;
         // Use `last_agent_message` from the turn-complete notification as the copy
         // source only when no earlier item-level event (AgentMessageItem, plan
@@ -2888,6 +2893,9 @@ impl ChatWidget {
                 }
             })
             .unwrap_or_default();
+        if !from_replay {
+            self.finalize_codex_config_apply_if_needed(&notification_response);
+        }
         self.saw_copy_source_this_turn = false;
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
@@ -2947,6 +2955,7 @@ impl ChatWidget {
         if !from_replay && !self.has_queued_follow_up_messages() && !had_pending_steers {
             self.maybe_prompt_plan_implementation();
             self.maybe_prompt_codex_config_completion();
+            self.maybe_prompt_codex_config_apply();
         }
         // Keep this flag for replayed completion events so a subsequent live TurnComplete can
         // still show the prompt once after thread switch replay.
@@ -3013,29 +3022,6 @@ impl ChatWidget {
         self.notify(Notification::PlanModePrompt {
             title: PLAN_IMPLEMENTATION_TITLE.to_string(),
         });
-    }
-
-    fn maybe_prompt_codex_config_completion(&mut self) {
-        if self.active_mode_kind() != ModeKind::Codex {
-            return;
-        }
-        if !self.saw_codex_config_done_this_turn {
-            return;
-        }
-        if self.has_queued_follow_up_messages() {
-            return;
-        }
-        if !self.bottom_pane.no_modal_or_popup_active() {
-            return;
-        }
-
-        self.open_codex_config_completion_prompt();
-    }
-
-    fn open_codex_config_completion_prompt(&mut self) {
-        let default_mask = collaboration_modes::default_mode_mask(self.model_catalog.as_ref());
-        self.bottom_pane
-            .show_selection_view(codex_config_completion::selection_view_params(default_mask));
     }
 
     /// Returns a context-used label for the plan implementation prompt.
@@ -5071,7 +5057,10 @@ impl ChatWidget {
                 AgentMessageContent::Text { text } => message.push_str(text),
             }
         }
-        let message = self.strip_codex_config_done_marker(message);
+        let (message, stripped_marker) = self.strip_codex_config_done_marker(message);
+        if stripped_marker {
+            self.completed_assistant_stream_source_override = Some(message.clone());
+        }
         self.finalize_completed_assistant_message(
             (!message.is_empty()).then_some(message.as_str()),
         );
@@ -5752,6 +5741,9 @@ impl ChatWidget {
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
             saw_codex_config_done_this_turn: false,
+            codex_config_planning_conversation: String::new(),
+            pending_codex_config_apply_bundle: None,
+            completed_assistant_stream_source_override: None,
             last_plan_progress: None,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
@@ -6521,6 +6513,9 @@ impl ChatWidget {
             }
         }
 
+        self.apply_codex_request_mode_for_text(&text);
+        self.record_codex_config_user_message(&text);
+
         let effective_mode = self.effective_collaboration_mode();
         if effective_mode.model().trim().is_empty() {
             self.add_error_message(
@@ -6538,8 +6533,11 @@ impl ChatWidget {
             ));
             return (false, None);
         }
-        let collaboration_mode =
-            if self.collaboration_modes_enabled() || self.active_mode_kind() == ModeKind::Codex {
+        let collaboration_mode = if self.collaboration_modes_enabled()
+            || matches!(
+                self.active_mode_kind(),
+                ModeKind::Codex | ModeKind::CodexConfigEdit
+            ) {
                 self.active_collaboration_mask
                     .as_ref()
                     .map(|_| effective_mode.clone())
@@ -6567,22 +6565,20 @@ impl ChatWidget {
             None if self.config.notices.fast_default_opt_out == Some(true) => Some(None),
             None => None,
         };
-        let (turn_cwd, turn_sandbox_policy, permission_profile) =
-            if self.active_mode_kind() == ModeKind::Codex {
-                (
-                    crate::codex_config_context::codex_config_workspace_for_cwd(&self.config.cwd),
-                    crate::codex_config_context::codex_config_sandbox_policy(),
-                    Some(crate::codex_config_context::codex_config_permission_profile()),
-                )
-            } else {
-                (
-                    self.config.cwd.to_path_buf(),
-                    self.config
-                        .permissions
-                        .legacy_sandbox_policy(self.config.cwd.as_path()),
-                    Some(self.config.permissions.permission_profile()),
-                )
-            };
+        let (turn_cwd, turn_sandbox_policy, permission_profile) = if matches!(
+            self.active_mode_kind(),
+            ModeKind::Codex | ModeKind::CodexConfigEdit
+        ) {
+            self.codex_turn_execution_context()
+        } else {
+            (
+                self.config.cwd.to_path_buf(),
+                self.config
+                    .permissions
+                    .legacy_sandbox_policy(self.config.cwd.as_path()),
+                Some(self.config.permissions.permission_profile()),
+            )
+        };
         let op = if let Some(repo_ci) = repo_ci {
             AppCommand::user_input_with_turn_context(
                 items,
@@ -11048,7 +11044,7 @@ impl ChatWidget {
         if !self.collaboration_modes_enabled() {
             return None;
         }
-        let active_mode = self.active_mode_kind();
+        let active_mode = self.active_mode_kind().visible_mode();
         active_mode
             .is_tui_visible()
             .then_some(active_mode.display_name())
@@ -11058,10 +11054,13 @@ impl ChatWidget {
         if !self.collaboration_modes_enabled() {
             return None;
         }
-        match self.active_mode_kind() {
+        match self.active_mode_kind().visible_mode() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
             ModeKind::Codex => Some(CollaborationModeIndicator::Codex),
-            ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => None,
+            ModeKind::Default
+            | ModeKind::CodexConfigEdit
+            | ModeKind::PairProgramming
+            | ModeKind::Execute => None,
         }
     }
 
@@ -11159,7 +11158,7 @@ impl ChatWidget {
         let previous_mode = self.active_mode_kind();
         let previous_model = self.current_model().to_string();
         let previous_effort = self.effective_reasoning_effort();
-        if mask.mode == Some(ModeKind::Plan)
+        if mask.mode.is_some_and(ModeKind::is_plan_like)
             && let Some(effort) = self.config.plan_mode_reasoning_effort
         {
             mask.reasoning_effort = Some(Some(effort));
@@ -11753,7 +11752,7 @@ impl ChatWidget {
         text: String,
         mut collaboration_mode: CollaborationModeMask,
     ) {
-        if collaboration_mode.mode == Some(ModeKind::Plan)
+        if collaboration_mode.mode.is_some_and(ModeKind::is_plan_like)
             && let Some(effort) = self.config.plan_mode_reasoning_effort
         {
             collaboration_mode.reasoning_effort = Some(Some(effort));

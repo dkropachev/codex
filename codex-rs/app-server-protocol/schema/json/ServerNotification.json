@@ -2736,6 +2736,49 @@
       ],
       "type": "object"
     },
+    "RepoCiStatusNotification": {
+      "properties": {
+        "attempt": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maxAttempts": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "phase": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "phase",
+        "scope",
+        "state",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "RequestId": {
       "anyOf": [
         {
@@ -5314,7 +5357,6 @@
       "type": "object"
     },
     {
-      "description": "Stream base64-encoded stdout/stderr chunks for a running `process/spawn` session.",
       "properties": {
         "method": {
           "enum": [
@@ -5335,7 +5377,6 @@
       "type": "object"
     },
     {
-      "description": "Final exit notification for a `process/spawn` session.",
       "properties": {
         "method": {
           "enum": [
@@ -5396,7 +5437,6 @@
       "type": "object"
     },
     {
-      "description": "Deprecated legacy apply_patch output stream notification.",
       "properties": {
         "method": {
           "enum": [
@@ -5560,26 +5600,6 @@
       "properties": {
         "method": {
           "enum": [
-            "app/list/updated"
-          ],
-          "title": "App/list/updatedNotificationMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/AppListUpdatedNotification"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ],
-      "title": "App/list/updatedNotification",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "method": {
-          "enum": [
             "remoteControl/status/changed"
           ],
           "title": "RemoteControl/status/changedNotificationMethod",
@@ -5594,6 +5614,26 @@
         "params"
       ],
       "title": "RemoteControl/status/changedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "app/list/updated"
+          ],
+          "title": "App/list/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/AppListUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "App/list/updatedNotification",
       "type": "object"
     },
     {
@@ -5795,6 +5835,26 @@
         "params"
       ],
       "title": "GuardianWarningNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "repoCi/status"
+          ],
+          "title": "RepoCi/statusNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/RepoCiStatusNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "RepoCi/statusNotification",
       "type": "object"
     },
     {

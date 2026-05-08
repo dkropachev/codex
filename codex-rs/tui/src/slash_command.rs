@@ -96,7 +96,7 @@ impl SlashCommand {
             SlashCommand::Goal => "set or inspect the current thread goal",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Limits => "show current ChatGPT usage limits",
-            SlashCommand::Codex => "show guide, or use AI to configure Codex with args",
+            SlashCommand::Codex => "investigate Codex, or plan config edits with args",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",

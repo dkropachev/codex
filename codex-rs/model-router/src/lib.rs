@@ -2,6 +2,8 @@ use codex_protocol::protocol::TokenUsage;
 use serde::Deserialize;
 use serde::Serialize;
 
+pub mod policy;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RouterRequestKind {
@@ -195,6 +197,18 @@ pub struct CandidateRoute {
     pub metrics: CandidateMetrics,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRouterCandidateIdentity {
+    pub id: Option<String>,
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub service_tier: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub account_pool: Option<String>,
+    pub account: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 pub struct CandidateSelection {
     pub index: usize,
@@ -206,6 +220,15 @@ pub fn select_candidate(
     task_key: &str,
     prompt_bytes: usize,
     candidates: &[CandidateRoute],
+) -> Option<CandidateSelection> {
+    select_candidate_with_score_bias(task_key, prompt_bytes, candidates, &[])
+}
+
+pub fn select_candidate_with_score_bias(
+    task_key: &str,
+    prompt_bytes: usize,
+    candidates: &[CandidateRoute],
+    score_biases: &[f64],
 ) -> Option<CandidateSelection> {
     if candidates.is_empty() {
         return None;
@@ -269,7 +292,8 @@ pub fn select_candidate(
             let score = profile.quality_weight * quality
                 + profile.cost_weight * cost
                 + profile.latency_weight * latency
-                + profile.reliability_weight * reliability;
+                + profile.reliability_weight * reliability
+                + score_biases.get(index).copied().unwrap_or_default();
             Some(CandidateSelection {
                 index,
                 score,
@@ -587,6 +611,39 @@ mod tests {
             select_candidate("module.repo_ci.triage", 8_000, &candidates)
                 .map(|selection| { (selection.index, selection.task_class) }),
             Some((0, RouterTaskClass::LatencySensitive))
+        );
+    }
+
+    #[test]
+    fn score_bias_can_change_selection() {
+        let candidates = vec![
+            CandidateRoute {
+                id: Some("quality".to_string()),
+                model: Some("gpt-5.5".to_string()),
+                model_provider: Some("openai".to_string()),
+                usable_context_window_tokens: Some(100_000),
+                is_incumbent: false,
+                metrics: CandidateMetrics::default(),
+            },
+            CandidateRoute {
+                id: Some("spark".to_string()),
+                model: Some("gpt-5.3-codex-spark".to_string()),
+                model_provider: Some("openai".to_string()),
+                usable_context_window_tokens: Some(100_000),
+                is_incumbent: false,
+                metrics: CandidateMetrics::default(),
+            },
+        ];
+
+        assert_eq!(
+            select_candidate_with_score_bias(
+                "module.repo_ci.review",
+                /*prompt_bytes*/ 1_000,
+                &candidates,
+                &[0.0, 0.40]
+            )
+            .map(|selection| selection.index),
+            Some(1)
         );
     }
 }

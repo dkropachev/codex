@@ -3,6 +3,7 @@ use crate::maybe_emit_implicit_skill_invocation;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::get_shell_by_model_provided_path;
+use crate::tools::ci_command_guard::redirect_for_ci_command;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -215,6 +216,10 @@ impl ToolHandler for UnifiedExecHandler {
                 let cwd = resolve_workdir_base_path(&arguments, &context.turn.cwd)?;
                 let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
                 let hook_command = args.cmd.clone();
+                if let Some(message) = redirect_for_ci_command(context.turn.as_ref(), &hook_command)
+                {
+                    return Err(FunctionCallError::RespondToModel(message));
+                }
                 let workdir = context.turn.resolve_path(args.workdir.clone());
                 maybe_emit_implicit_skill_invocation(
                     session.as_ref(),

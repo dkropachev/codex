@@ -1864,8 +1864,13 @@ async fn repo_ci_phase_config(
     model_router_source: ModelRouterSource,
     prompt_bytes: usize,
 ) -> crate::config::Config {
-    let available_models = available_router_models(&sess.services.models_manager);
     let mut config = turn_context.config.as_ref().clone();
+    let available_models = available_router_models(
+        &config,
+        &sess.services.models_manager,
+        &sess.services.model_router_discovery_cache,
+    )
+    .await;
     if let Err(err) = apply_model_router_with_state(
         &mut config,
         model_router_source,

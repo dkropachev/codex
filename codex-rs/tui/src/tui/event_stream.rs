@@ -248,7 +248,9 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             Event::Paste(pasted) => Some(TuiEvent::Paste(pasted)),
             Event::FocusGained => {
                 self.terminal_focused.store(true, Ordering::Relaxed);
-                crate::terminal_palette::requery_default_colors();
+                // Avoid OSC 10/11 palette queries while crossterm's event stream is active.
+                // If a terminal reply is decoded as key input, it can be inserted into the
+                // composer as text like `]11;rgb:0000/0000/0000`.
                 Some(TuiEvent::Draw)
             }
             Event::FocusLost => {

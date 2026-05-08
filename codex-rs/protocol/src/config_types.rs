@@ -506,6 +506,8 @@ pub enum AltScreenMode {
 pub enum ModeKind {
     Plan,
     Codex,
+    #[serde(rename = "codex_config_edit")]
+    CodexConfigEdit,
     #[default]
     #[serde(
         alias = "code",
@@ -534,6 +536,7 @@ impl ModeKind {
         match self {
             Self::Plan => "Plan",
             Self::Codex => "Codex",
+            Self::CodexConfigEdit => "Codex",
             Self::Default => "Default",
             Self::PairProgramming => "Pair Programming",
             Self::Execute => "Execute",
@@ -544,8 +547,21 @@ impl ModeKind {
         matches!(self, Self::Plan | Self::Codex | Self::Default)
     }
 
+    pub const fn visible_mode(self) -> Self {
+        match self {
+            Self::CodexConfigEdit => Self::Codex,
+            Self::Plan | Self::Codex | Self::Default | Self::PairProgramming | Self::Execute => {
+                self
+            }
+        }
+    }
+
+    pub const fn is_plan_like(self) -> bool {
+        matches!(self, Self::Plan | Self::CodexConfigEdit)
+    }
+
     pub const fn allows_request_user_input(self) -> bool {
-        matches!(self, Self::Plan | Self::Codex)
+        matches!(self, Self::Plan | Self::Codex | Self::CodexConfigEdit)
     }
 }
 
@@ -716,6 +732,7 @@ mod tests {
         }
 
         assert!(!ModeKind::PairProgramming.is_tui_visible());
+        assert!(!ModeKind::CodexConfigEdit.is_tui_visible());
         assert!(!ModeKind::Execute.is_tui_visible());
     }
 

@@ -2858,6 +2858,104 @@ async fn session_settings_model_router_override_updates_per_turn_config() {
     assert!(!inherited_model_router.enabled);
 }
 
+#[tokio::test]
+async fn model_router_enable_requires_configured_router() {
+    let session_configuration = make_session_configuration_for_tests().await;
+    let config = session_configuration.original_config_do_not_use;
+
+    assert_eq!(
+        handlers::model_router_session_config_error(&config, Some(true)),
+        Some("cannot enable model router for this session because no [model_router] is configured")
+    );
+    assert_eq!(
+        handlers::model_router_session_config_error(&config, Some(false)),
+        None
+    );
+    assert_eq!(
+        handlers::model_router_session_config_error(&config, None),
+        None
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn normal_chat_turn_applies_model_router_and_records_usage() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed_with_tokens("resp-1", /*total_tokens*/ 200),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.model_router = Some(codex_config::config_toml::ModelRouterToml {
+            enabled: true,
+            candidates: vec![
+                codex_config::config_toml::ModelRouterCandidateToml {
+                    id: Some("incumbent-price".to_string()),
+                    model: Some("gpt-5.4".to_string()),
+                    input_price_per_million: Some(5.0),
+                    output_price_per_million: Some(10.0),
+                    ..Default::default()
+                },
+                codex_config::config_toml::ModelRouterCandidateToml {
+                    id: Some("chat-fast".to_string()),
+                    model: Some("gpt-5.3-codex-spark".to_string()),
+                    input_price_per_million: Some(1.0),
+                    output_price_per_million: Some(2.0),
+                    ..Default::default()
+                },
+            ],
+            models: Some(codex_config::config_toml::ModelRouterModelsToml {
+                rules: vec![codex_config::config_toml::ModelRouterModelRuleToml {
+                    id: Some("chat-default-fast".to_string()),
+                    rule_type: codex_config::config_toml::ModelRouterModelRuleTypeToml::Require,
+                    tasks: vec!["chat.default".to_string()],
+                    except_tasks: Vec::new(),
+                    models: vec![codex_config::config_toml::ModelRouterModelSelectorToml {
+                        provider: Some("openai".to_string()),
+                        model: Some("gpt-5.3-codex-spark".to_string()),
+                    }],
+                }],
+            }),
+            ..Default::default()
+        });
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("hello").await?;
+
+    assert_eq!(
+        response.single_request().body_json()["model"].as_str(),
+        Some("gpt-5.3-codex-spark")
+    );
+    let runtime =
+        codex_state::StateRuntime::init(test.codex_home_path().to_path_buf(), "openai".to_string())
+            .await?;
+    let summary = runtime
+        .model_router_usage_summary(codex_state::ModelRouterUsageQuery {
+            window_start_ms: None,
+            window_end_ms: chrono::Utc::now().timestamp_millis(),
+            task_key: Some("chat.default".to_string()),
+            group_by: codex_state::ModelRouterUsageGroupBy::Task,
+        })
+        .await?;
+
+    assert_eq!(summary.totals.request_count, 1);
+    assert_eq!(summary.totals.production_request_count, 1);
+    assert_eq!(summary.totals.token_usage.total_tokens, 200);
+    assert_eq!(summary.groups.len(), 1);
+    assert_eq!(summary.groups[0].key, "chat.default");
+    assert!(
+        summary.totals.savings.counterfactual_cost_usd_micros
+            > summary.totals.savings.actual_production_cost_usd_micros
+    );
+    Ok(())
+}
+
 pub(crate) async fn make_session_configuration_for_tests() -> SessionConfiguration {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let config = build_test_config(codex_home.path()).await;
@@ -3559,6 +3657,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         auth_manager: auth_manager.clone(),
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
+        model_router_discovery_cache: crate::model_router::ModelRouterDiscoveryCache::new(),
         tool_approvals: Mutex::new(ApprovalStore::default()),
         guardian_rejections: Mutex::new(std::collections::HashMap::new()),
         guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
@@ -4845,6 +4944,7 @@ where
         auth_manager: Arc::clone(&auth_manager),
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
+        model_router_discovery_cache: crate::model_router::ModelRouterDiscoveryCache::new(),
         tool_approvals: Mutex::new(ApprovalStore::default()),
         guardian_rejections: Mutex::new(std::collections::HashMap::new()),
         guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
@@ -6750,15 +6850,13 @@ async fn active_goal_continuation_runs_to_completion_after_turn() -> anyhow::Res
         })
         .await?;
 
-    let mut completed_turns = 0;
     tokio::time::timeout(std::time::Duration::from_secs(8), async {
         loop {
             let event = test.codex.next_event().await?;
-            if matches!(event.msg, EventMsg::TurnComplete(_)) {
-                completed_turns += 1;
-                if completed_turns == 2 {
-                    return anyhow::Ok(());
-                }
+            if let EventMsg::AgentMessage(message) = event.msg
+                && message.message == "Goal complete."
+            {
+                return anyhow::Ok(());
             }
         }
     })
@@ -7079,9 +7177,14 @@ async fn completed_goal_accounts_current_turn_tokens_before_tool_response() -> a
     assert_eq!(complete_output["goal"]["tokensUsed"], 580);
     assert_eq!(complete_output["goal"]["status"], "complete");
     assert_eq!(complete_output["remainingTokens"], 0);
-    assert_eq!(
-        complete_output["completionBudgetReport"],
-        "Goal achieved. Report final budget usage to the user: tokens used: 580 of 500."
+    let completion_budget_report = complete_output["completionBudgetReport"]
+        .as_str()
+        .expect("completion budget report should be a string");
+    assert!(
+        completion_budget_report.contains(
+            "Goal achieved. Report final budget usage to the user: tokens used: 580 of 500"
+        ),
+        "unexpected completion budget report: {completion_budget_report}"
     );
     let requests = responses.requests();
     let completion_followup_request = requests

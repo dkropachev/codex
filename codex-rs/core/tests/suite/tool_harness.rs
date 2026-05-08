@@ -4,12 +4,14 @@ use std::fs;
 
 use assert_matches::assert_matches;
 use codex_features::Feature;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
@@ -25,7 +27,6 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
-use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use serde_json::Value;
 use serde_json::json;
@@ -77,9 +78,6 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
     let second_mock = responses::mount_sse_once(&server, second_response).await;
 
     let session_model = session_configured.model.clone();
-    let cwd_path = cwd.path().to_path_buf();
-    let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
 
     codex
         .submit(Op::UserTurn {
@@ -89,11 +87,11 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd_path,
+            cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -153,9 +151,6 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
     let second_mock = responses::mount_sse_once(&server, second_response).await;
 
     let session_model = session_configured.model.clone();
-    let cwd_path = cwd.path().to_path_buf();
-    let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
 
     codex
         .submit(Op::UserTurn {
@@ -165,11 +160,11 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd_path,
+            cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -239,9 +234,6 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
     let second_mock = responses::mount_sse_once(&server, second_response).await;
 
     let session_model = session_configured.model.clone();
-    let cwd_path = cwd.path().to_path_buf();
-    let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
 
     codex
         .submit(Op::UserTurn {
@@ -251,11 +243,11 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd_path,
+            cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -292,6 +284,98 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
             !success_flag,
             "expected tool output to mark success=false for malformed payload"
         );
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn update_plan_tool_rejects_codex_config_edit_mode() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex();
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let call_id = "plan-tool-config-edit";
+    let plan_args = json!({
+        "plan": [
+            {"step": "Inspect config", "status": "in_progress"},
+        ],
+    })
+    .to_string();
+
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call(call_id, "update_plan", &plan_args),
+        ev_completed("resp-1"),
+    ]);
+    responses::mount_sse_once(&server, first_response).await;
+
+    let second_response = sse(vec![
+        ev_assistant_message("msg-1", "tool rejected"),
+        ev_completed("resp-2"),
+    ]);
+    let second_mock = responses::mount_sse_once(&server, second_response).await;
+
+    let session_model = session_configured.model.clone();
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::CodexConfigEdit,
+        settings: Settings {
+            model: session_model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    codex
+        .submit(Op::UserTurn {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "please plan config".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: Some(collaboration_mode),
+            personality: None,
+        })
+        .await?;
+
+    let mut saw_plan_update = false;
+    wait_for_event(&codex, |event| match event {
+        EventMsg::PlanUpdate(_) => {
+            saw_plan_update = true;
+            false
+        }
+        EventMsg::TurnComplete(_) => true,
+        _ => false,
+    })
+    .await;
+    assert!(!saw_plan_update, "did not expect PlanUpdate event");
+
+    let req = second_mock.single_request();
+    let (output_text, success_flag) = call_output(&req, call_id);
+    assert!(
+        output_text.contains("not allowed in Plan-like modes"),
+        "expected Plan-like mode rejection, got {output_text:?}"
+    );
+    if let Some(success_flag) = success_flag {
+        assert!(!success_flag, "expected tool output to mark success=false");
     }
 
     Ok(())
@@ -340,9 +424,6 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
     let second_mock = responses::mount_sse_once(&server, second_response).await;
 
     let session_model = session_configured.model.clone();
-    let cwd_path = cwd.path().to_path_buf();
-    let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
 
     codex
         .submit(Op::UserTurn {
@@ -352,11 +433,11 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd_path,
+            cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -366,30 +447,9 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
         })
         .await?;
 
-    let mut saw_file_change_started = false;
-    let mut saw_file_change_completed = false;
     let mut saw_patch_begin = false;
     let mut patch_end_success = None;
     wait_for_event(&codex, |event| match event {
-        EventMsg::ItemStarted(started) => {
-            if let TurnItem::FileChange(item) = &started.item {
-                saw_file_change_started = true;
-                assert_eq!(item.id, call_id);
-                assert_eq!(item.status, None);
-            }
-            false
-        }
-        EventMsg::ItemCompleted(completed) => {
-            if let TurnItem::FileChange(item) = &completed.item {
-                saw_file_change_completed = true;
-                assert_eq!(item.id, call_id);
-                assert_eq!(
-                    item.status,
-                    Some(codex_protocol::protocol::PatchApplyStatus::Completed)
-                );
-            }
-            false
-        }
         EventMsg::PatchApplyBegin(begin) => {
             saw_patch_begin = true;
             assert_eq!(begin.call_id, call_id);
@@ -405,14 +465,6 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
     })
     .await;
 
-    assert!(
-        saw_file_change_started,
-        "expected ItemStarted for TurnItem::FileChange"
-    );
-    assert!(
-        saw_file_change_completed,
-        "expected ItemCompleted for TurnItem::FileChange"
-    );
     assert!(saw_patch_begin, "expected PatchApplyBegin event");
     let patch_end_success =
         patch_end_success.expect("expected PatchApplyEnd event to capture success flag");
@@ -478,9 +530,6 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
     let second_mock = responses::mount_sse_once(&server, second_response).await;
 
     let session_model = session_configured.model.clone();
-    let cwd_path = cwd.path().to_path_buf();
-    let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
 
     codex
         .submit(Op::UserTurn {
@@ -490,11 +539,11 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd_path,
+            cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,

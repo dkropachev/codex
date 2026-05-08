@@ -734,6 +734,9 @@ impl App {
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
             }
+            AppEvent::ApplyCodexConfigPlan => {
+                self.chat_widget.apply_codex_config_plan();
+            }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
             }

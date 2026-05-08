@@ -319,13 +319,6 @@ impl AppCommand {
         Self(Op::ReloadUserConfig)
     }
 
-    pub(crate) fn codex_config_intent(intent: String, context: String) -> Self {
-        Self(Op::CodexConfigIntent {
-            intent,
-            context: Some(context),
-        })
-    }
-
     pub(crate) fn set_repo_ci_session_config(
         mode: Option<Option<RepoCiSessionMode>>,
         issue_types: Option<Option<Vec<RepoCiIssueType>>>,
