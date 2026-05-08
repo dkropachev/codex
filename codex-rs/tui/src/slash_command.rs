@@ -43,6 +43,7 @@ pub enum SlashCommand {
     Mention,
     Status,
     Limits,
+    Codex,
     DebugConfig,
     Title,
     Statusline,
@@ -94,6 +95,7 @@ impl SlashCommand {
             SlashCommand::Goal => "set or inspect the current thread goal",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Limits => "show current ChatGPT usage limits",
+            SlashCommand::Codex => "show the Codex feature and debugging guide",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
@@ -167,6 +169,7 @@ impl SlashCommand {
                 | SlashCommand::Mention
                 | SlashCommand::Status
                 | SlashCommand::Limits
+                | SlashCommand::Codex
         )
     }
 
@@ -204,6 +207,7 @@ impl SlashCommand {
             | SlashCommand::Skills
             | SlashCommand::Status
             | SlashCommand::Limits
+            | SlashCommand::Codex
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop

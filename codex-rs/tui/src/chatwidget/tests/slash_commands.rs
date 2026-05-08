@@ -1213,6 +1213,22 @@ async fn repo_ci_slash_command_without_args_shows_usage_snapshot() {
 }
 
 #[tokio::test]
+async fn slash_codex_shows_guide_snapshot() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Codex);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected guide history cell");
+    let rendered = normalize_snapshot_paths(lines_to_single_string(&cells[0]));
+    assert_chatwidget_snapshot!("slash_codex_guide", rendered);
+    assert!(rendered.contains("Codex Guide"));
+    assert!(rendered.contains("Model Router"));
+    assert!(rendered.contains("Tool Router"));
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
 async fn repo_ci_setup_slash_command_runs_enable_and_learn() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
 
