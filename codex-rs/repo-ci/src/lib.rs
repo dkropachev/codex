@@ -157,6 +157,7 @@ pub use learning_hints::WorkflowRunHint;
 pub use persisted_runs::lookup_cached_passing_run;
 pub use persisted_runs::manifest_fingerprint;
 pub use persisted_runs::run_capture_persisted_with_cancellation;
+pub use persisted_runs::run_capture_persisted_with_cancellation_and_progress;
 pub use persisted_runs::store_captured_run_artifact;
 pub use persisted_runs::worktree_fingerprint;
 pub use plan_guardrail::render_plan_guardrail_feedback;
@@ -172,6 +173,7 @@ pub use remote_commit::remote_commit_decision_context;
 pub use remote_commit::remote_commit_decision_schema;
 pub use remote_commit::render_remote_commit_decision_prompt;
 pub use remote_workflow::RemoteRepoCiCheck;
+pub use remote_workflow::RemoteRepoCiProgress;
 pub use remote_workflow::RemoteRepoCiWorkflow;
 pub use remote_workflow::RemoteRepoCiWorkflowOutcome;
 pub use remote_workflow::RemoteRepoCiWorkflowRun;
@@ -179,6 +181,7 @@ pub use remote_workflow::RemoteRepoCiWorkflowStart;
 pub use remote_workflow::run_remote_workflow;
 pub use remote_workflow::run_started_remote_workflow;
 pub use remote_workflow::run_started_remote_workflow_with_commit_decision;
+pub use remote_workflow::run_started_remote_workflow_with_commit_decision_and_progress;
 pub use remote_workflow::start_remote_workflow;
 pub use repo_ci_ai_learning::AI_LEARN_MAX_ATTEMPTS;
 pub use repo_ci_ai_learning::RepoCiAiLearnedPlan;
@@ -186,7 +189,9 @@ pub use repo_ci_ai_learning::render_repo_ci_learning_prompt;
 pub use repo_ci_ai_learning::render_validation_feedback;
 pub use repo_ci_ai_learning::repo_ci_ai_plan_schema;
 pub use runner::RepoCiCancellation;
+pub use runner::RepoCiProgress;
 use runner::capture_runner;
+use runner::capture_runner_with_progress;
 use runner::run_runner;
 pub use workflow_history::WorkflowHistoryHint;
 
@@ -422,16 +427,33 @@ pub fn run_capture_with_cancellation(
     mode: RunMode,
     cancellation: RepoCiCancellation,
 ) -> Result<CapturedRun> {
+    run_capture_with_cancellation_and_progress(
+        codex_home,
+        cwd,
+        mode,
+        cancellation,
+        RepoCiProgress::none(),
+    )
+}
+
+pub fn run_capture_with_cancellation_and_progress(
+    codex_home: &Path,
+    cwd: &Path,
+    mode: RunMode,
+    cancellation: RepoCiCancellation,
+    progress: RepoCiProgress,
+) -> Result<CapturedRun> {
     cicd_artifacts::prune_stale_artifacts(codex_home)?;
     let paths = paths_for_repo(codex_home, cwd)?;
     require_runner(&paths)?;
     let manifest = read_manifest(&paths.manifest_path)?;
     touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
-    capture_runner(
+    capture_runner_with_progress(
         &paths,
         mode.as_str(),
         manifest.local_test_time_budget_sec,
         &cancellation,
+        progress,
     )
 }
 

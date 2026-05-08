@@ -207,6 +207,8 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot;
+#[cfg(test)]
+use codex_protocol::protocol::RepoCiState;
 use codex_protocol::protocol::RepoCiTurnOverrides;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
@@ -2177,6 +2179,41 @@ impl ChatWidget {
         } else {
             self.set_status_header(message);
         }
+    }
+
+    fn add_repo_ci_status_to_history(&mut self, message: String) {
+        self.add_to_history(history_cell::PrefixedWrappedHistoryCell::new(
+            message,
+            "• ".dim(),
+            "  ",
+        ));
+    }
+
+    fn repo_ci_server_state_is_terminal(state: &str) -> bool {
+        matches!(
+            state,
+            "passed" | "failed" | "skipped" | "ignored" | "exhausted"
+        )
+    }
+
+    fn should_preserve_repo_ci_status(state: &str, message: &str) -> bool {
+        Self::repo_ci_server_state_is_terminal(state) || Self::repo_ci_message_is_milestone(message)
+    }
+
+    #[cfg(test)]
+    fn repo_ci_core_state_is_terminal(state: &RepoCiState) -> bool {
+        matches!(
+            state,
+            RepoCiState::Passed
+                | RepoCiState::Failed
+                | RepoCiState::Skipped
+                | RepoCiState::Ignored
+                | RepoCiState::Exhausted
+        )
+    }
+
+    fn repo_ci_message_is_milestone(message: &str) -> bool {
+        message.starts_with("Repo CI fix workers applied")
     }
 
     /// Sets the currently rendered footer status-line value.
@@ -7177,6 +7214,10 @@ impl ChatWidget {
             ServerNotification::Warning(notification) => self.on_warning(notification.message),
             ServerNotification::RepoCiStatus(notification) => {
                 self.bottom_pane.ensure_status_indicator();
+                if Self::should_preserve_repo_ci_status(&notification.state, &notification.message)
+                {
+                    self.add_repo_ci_status_to_history(notification.message.clone());
+                }
                 self.set_repo_ci_status(notification.message)
             }
             ServerNotification::GuardianWarning(notification) => {
@@ -7714,6 +7755,11 @@ impl ChatWidget {
             | EventMsg::GuardianWarning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::RepoCiStatus(event) => {
                 self.bottom_pane.ensure_status_indicator();
+                if Self::repo_ci_core_state_is_terminal(&event.state)
+                    || Self::repo_ci_message_is_milestone(&event.message)
+                {
+                    self.add_repo_ci_status_to_history(event.message.clone());
+                }
                 self.set_repo_ci_status(event.message);
             }
             EventMsg::GuardianAssessment(ev) => self.on_guardian_assessment(ev),
@@ -9780,6 +9826,7 @@ impl ChatWidget {
         });
     }
 
+    #[allow(dead_code)]
     pub(crate) fn open_auto_review_denials_popup(&mut self) {
         if self.recent_auto_review_denials.is_empty() {
             self.add_info_message(
@@ -11916,7 +11963,7 @@ impl ChatWidget {
         self.config.config_layer_stack = config.config_layer_stack.clone();
         self.config.realtime = config.realtime.clone();
         self.config.memories = config.memories.clone();
-        self.config.terminal_resize_reflow = config.terminal_resize_reflow.clone();
+        self.config.terminal_resize_reflow = config.terminal_resize_reflow;
     }
 
     pub(crate) fn open_review_popup(&mut self) {
