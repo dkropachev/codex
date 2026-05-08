@@ -192,8 +192,8 @@ The temporary marketplace snapshot under `$CODEX_HOME/.tmp/plugins/plugins/` con
 - Configuration: use `[mcp_servers.<name>]`, MCP OAuth settings, `features.connectors`, and app enablement state. HTTP bearer tokens should use `bearer_token_env_var`.
 - Tuning: prefer `codex-rs/codex-mcp/src/mcp_connection_manager.rs` for MCP tool and tool-call mutation; keep tool names stable and schemas narrow.
 - Debug recipe: run `/mcp verbose` for server/tool/auth status, `/apps` for connector access, and inspect `FetchMcpInventory` or connector refresh events when the TUI differs from config.
-- Source entrypoints: `codex-rs/codex-mcp/src/`, `codex-rs/core/src/config/mod.rs`, `codex-rs/core/src/apps/`, `codex-rs/core/src/context/apps_instructions.rs`, `codex-rs/tui/src/history_cell.rs`, `codex-rs/tui/src/chatwidget.rs`.
-- Token impact: MCP tool schemas and app instructions increase the available tool surface. Use `tool_search` and app lazy-loading paths when a full tool list would be too large.
+- Source entrypoints: `codex-rs/codex-mcp/src/`, `codex-rs/core/src/config/mod.rs`, `codex-rs/core/src/apps/`, `codex-rs/core/src/context/apps_instructions.rs`, `codex-rs/core/src/realtime_tool_context.rs`, `codex-rs/tui/src/history_cell.rs`, `codex-rs/tui/src/chatwidget.rs`.
+- Token impact: MCP tool schemas and app instructions increase the available tool surface. Use `tool_search` and app lazy-loading paths when a full tool list would be too large. Realtime startup context includes only bounded MCP inventory summaries so voice can delegate app/MCP work without loading full schemas.
 
 ## Memories
 
