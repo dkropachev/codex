@@ -172,6 +172,7 @@ mod tests {
                 SlashCommand::Mention,
                 SlashCommand::Status,
                 SlashCommand::Limits,
+                SlashCommand::Codex,
             ]
         );
     }
