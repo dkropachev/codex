@@ -1150,7 +1150,7 @@ async fn ctrl_c_shutdown_works_with_caps_lock() {
 }
 
 #[tokio::test]
-async fn ctrl_c_interrupts_without_arming_quit_when_double_press_disabled() {
+async fn ctrl_c_interrupts_then_second_press_quits_while_work_is_active() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_task_running(/*running*/ true);
 
@@ -1158,13 +1158,13 @@ async fn ctrl_c_interrupts_without_arming_quit_when_double_press_disabled() {
 
     next_interrupt_op(&mut op_rx);
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
-    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+    assert!(chat.bottom_pane.quit_shortcut_hint_visible());
+    assert!(chat.quit_shortcut_expires_at.is_some());
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
 
-    next_interrupt_op(&mut op_rx);
-    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
-    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]
