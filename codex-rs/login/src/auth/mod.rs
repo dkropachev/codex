@@ -1,3 +1,4 @@
+mod account_pool;
 mod agent_identity;
 pub mod default_client;
 pub mod error;

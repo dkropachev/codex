@@ -97,6 +97,13 @@ pub struct SessionTelemetry {
     pub(crate) metrics_use_metadata_tags: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AccountRouteTelemetry {
+    pub account_id: Option<String>,
+    pub account_pool_id: Option<String>,
+    pub account_pool_member_id: Option<String>,
+}
+
 impl SessionTelemetry {
     pub fn with_auth_env(mut self, auth_env: AuthEnvTelemetryMetadata) -> Self {
         self.metadata.auth_env = auth_env;
@@ -395,6 +402,7 @@ impl SessionTelemetry {
             /*recovery_mode*/ None,
             /*recovery_phase*/ None,
             "unknown",
+            &AccountRouteTelemetry::default(),
             /*request_id*/ None,
             /*cf_ray*/ None,
             /*auth_error*/ None,
@@ -417,6 +425,7 @@ impl SessionTelemetry {
         recovery_mode: Option<&str>,
         recovery_phase: Option<&str>,
         endpoint: &str,
+        account_route: &AccountRouteTelemetry,
         request_id: Option<&str>,
         cf_ray: Option<&str>,
         auth_error: Option<&str>,
@@ -451,6 +460,9 @@ impl SessionTelemetry {
                 auth.recovery_mode = recovery_mode,
                 auth.recovery_phase = recovery_phase,
                 endpoint = endpoint,
+                auth.account_id = account_route.account_id.as_deref(),
+                auth.account_pool_id = account_route.account_pool_id.as_deref(),
+                auth.account_pool_member_id = account_route.account_pool_member_id.as_deref(),
                 auth.env_openai_api_key_present = self.metadata.auth_env.openai_api_key_env_present,
                 auth.env_codex_api_key_present = self.metadata.auth_env.codex_api_key_env_present,
                 auth.env_codex_api_key_enabled = self.metadata.auth_env.codex_api_key_env_enabled,
@@ -480,6 +492,7 @@ impl SessionTelemetry {
         recovery_phase: Option<&str>,
         endpoint: &str,
         connection_reused: bool,
+        account_route: &AccountRouteTelemetry,
         request_id: Option<&str>,
         cf_ray: Option<&str>,
         auth_error: Option<&str>,
@@ -504,6 +517,9 @@ impl SessionTelemetry {
                 auth.recovery_mode = recovery_mode,
                 auth.recovery_phase = recovery_phase,
                 endpoint = endpoint,
+                auth.account_id = account_route.account_id.as_deref(),
+                auth.account_pool_id = account_route.account_pool_id.as_deref(),
+                auth.account_pool_member_id = account_route.account_pool_member_id.as_deref(),
                 auth.env_openai_api_key_present = self.metadata.auth_env.openai_api_key_env_present,
                 auth.env_codex_api_key_present = self.metadata.auth_env.codex_api_key_env_present,
                 auth.env_codex_api_key_enabled = self.metadata.auth_env.codex_api_key_env_enabled,
@@ -526,6 +542,7 @@ impl SessionTelemetry {
         duration: Duration,
         error: Option<&str>,
         connection_reused: bool,
+        account_route: &AccountRouteTelemetry,
     ) {
         let success_str = if error.is_none() { "true" } else { "false" };
         self.counter(
@@ -545,6 +562,9 @@ impl SessionTelemetry {
                 duration_ms = %duration.as_millis(),
                 success = success_str,
                 error.message = error,
+                auth.account_id = account_route.account_id.as_deref(),
+                auth.account_pool_id = account_route.account_pool_id.as_deref(),
+                auth.account_pool_member_id = account_route.account_pool_member_id.as_deref(),
                 auth.env_openai_api_key_present = self.metadata.auth_env.openai_api_key_env_present,
                 auth.env_codex_api_key_present = self.metadata.auth_env.codex_api_key_env_present,
                 auth.env_codex_api_key_enabled = self.metadata.auth_env.codex_api_key_env_enabled,
@@ -1095,8 +1115,8 @@ impl SessionTelemetry {
             ResponseItem::CustomToolCallOutput { .. } => "custom_tool_call_output".into(),
             ResponseItem::WebSearchCall { .. } => "web_search_call".into(),
             ResponseItem::ImageGenerationCall { .. } => "image_generation_call".into(),
+            ResponseItem::GhostSnapshot { .. } => "ghost_snapshot".into(),
             ResponseItem::Compaction { .. } => "compaction".into(),
-            ResponseItem::ContextCompaction { .. } => "context_compaction".into(),
             ResponseItem::Other => "other".into(),
         }
     }

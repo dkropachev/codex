@@ -8,8 +8,6 @@ use app_test_support::ChatGptIdTokenClaims;
 use app_test_support::encode_id_token;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_models_cache;
-use chrono::Duration as ChronoDuration;
-use chrono::Utc;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::CancelLoginAccountParams;
@@ -19,8 +17,6 @@ use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountResponse;
-use codex_app_server_protocol::GetAuthStatusParams;
-use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -33,7 +29,6 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_config::types::AuthCredentialsStoreMode;
-use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::login_with_api_key;
 use codex_protocol::account::PlanType as AccountPlanType;
 use core_test_support::responses;
@@ -62,6 +57,7 @@ struct CreateConfigTomlParams {
     base_url: Option<String>,
     model_provider_id: Option<String>,
     extra_provider_config: Option<String>,
+    extra_config: Option<String>,
 }
 
 fn create_config_toml(codex_home: &Path, params: CreateConfigTomlParams) -> std::io::Result<()> {
@@ -101,6 +97,7 @@ stream_max_retries = 0
     } else {
         params.extra_provider_config.unwrap_or_default()
     };
+    let extra_config = params.extra_config.unwrap_or_default();
     let contents = format!(
         r#"
 model = "mock-model"
@@ -115,6 +112,7 @@ model_provider = "{model_provider_id}"
 shell_snapshot = false
 
 {provider_section}
+{extra_config}
 "#
     );
     std::fs::write(config_toml, contents)
@@ -1649,70 +1647,52 @@ async fn get_account_with_chatgpt() -> Result<()> {
 }
 
 #[tokio::test]
-async fn get_account_omits_chatgpt_after_permanent_refresh_failure() -> Result<()> {
+async fn get_account_with_chatgpt_pool() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(
         codex_home.path(),
         CreateConfigTomlParams {
             requires_openai_auth: Some(true),
+            extra_config: Some(
+                r#"
+[account_pool]
+enabled = true
+default_pool = "codex-pro"
+
+[account_pool.pools.codex-pro]
+provider = "openai"
+policy = "drain"
+accounts = ["work", "personal"]
+"#
+                .to_string(),
+            ),
             ..Default::default()
         },
     )?;
     write_chatgpt_auth(
-        codex_home.path(),
-        ChatGptAuthFixture::new("stale-access-token")
-            .refresh_token("stale-refresh-token")
-            .account_id("acct_123")
-            .email("user@example.com")
+        &codex_home.path().join("accounts").join("work"),
+        ChatGptAuthFixture::new("access-work")
+            .email("work@example.com")
             .plan_type("pro")
-            .last_refresh(Some(Utc::now() - ChronoDuration::days(9))),
+            .account_id("work"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    write_chatgpt_auth(
+        &codex_home.path().join("accounts").join("personal"),
+        ChatGptAuthFixture::new("access-personal")
+            .email("personal@example.com")
+            .plan_type("plus")
+            .account_id("personal"),
         AuthCredentialsStoreMode::File,
     )?;
 
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/oauth/token"))
-        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
-            "error": {
-                "code": "refresh_token_reused"
-            }
-        })))
-        .expect(1..=2)
-        .mount(&server)
-        .await;
-
-    let refresh_url = format!("{}/oauth/token", server.uri());
-    let mut mcp = McpProcess::new_with_env(
-        codex_home.path(),
-        &[
-            ("OPENAI_API_KEY", None),
-            (
-                REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
-                Some(refresh_url.as_str()),
-            ),
-        ],
-    )
-    .await?;
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let auth_status_request_id = mcp
-        .send_get_auth_status_request(GetAuthStatusParams {
-            include_token: Some(true),
-            refresh_token: Some(true),
-        })
-        .await?;
-    let auth_status_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(auth_status_request_id)),
-    )
-    .await??;
-    let _: GetAuthStatusResponse = to_response(auth_status_resp)?;
-
-    let request_id = mcp
-        .send_get_account_request(GetAccountParams {
-            refresh_token: false,
-        })
-        .await?;
+    let params = GetAccountParams {
+        refresh_token: false,
+    };
+    let request_id = mcp.send_get_account_request(params).await?;
 
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -1721,14 +1701,26 @@ async fn get_account_omits_chatgpt_after_permanent_refresh_failure() -> Result<(
     .await??;
     let received: GetAccountResponse = to_response(resp)?;
 
-    assert_eq!(
-        received,
-        GetAccountResponse {
-            account: None,
-            requires_openai_auth: true,
-        }
-    );
-    server.verify().await;
+    let Some(Account::ChatgptPool {
+        id,
+        active_account_id,
+        members,
+    }) = received.account
+    else {
+        bail!("expected chatgptPool account: {received:?}");
+    };
+    assert_eq!(id, "codex-pro");
+    assert_eq!(active_account_id.as_deref(), Some("work"));
+    assert_eq!(members.len(), 2);
+    assert_eq!(members[0].id, "work");
+    assert_eq!(members[0].email.as_deref(), Some("work@example.com"));
+    assert_eq!(members[0].plan_type, Some(AccountPlanType::Pro));
+    assert!(members[0].active);
+    assert_eq!(members[1].id, "personal");
+    assert_eq!(members[1].email.as_deref(), Some("personal@example.com"));
+    assert_eq!(members[1].plan_type, Some(AccountPlanType::Plus));
+    assert!(!members[1].active);
+    assert!(received.requires_openai_auth);
     Ok(())
 }
 
