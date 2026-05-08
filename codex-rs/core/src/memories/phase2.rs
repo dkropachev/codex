@@ -11,8 +11,8 @@ use crate::memories::prompts::build_consolidation_prompt;
 use crate::memories::storage::rebuild_raw_memories_file_from_memories;
 use crate::memories::storage::rollout_summary_file_stem;
 use crate::memories::storage::sync_rollout_summaries_from_memories;
-use crate::model_policy::ModelPolicySource;
-use crate::model_policy::apply_model_policy;
+use crate::model_router::ModelRouterSource;
+use crate::model_router::apply_model_router;
 use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
 use codex_config::Constrained;
@@ -139,12 +139,12 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
 
     // 5. Spawn the agent
     let prompt = agent::get_prompt(config, &selection, &removed_extension_resources);
-    if let Err(err) = apply_model_policy(
+    if let Err(err) = apply_model_router(
         &mut agent_config,
-        ModelPolicySource::SubAgent(SubAgentSource::MemoryConsolidation),
+        ModelRouterSource::SubAgent(SubAgentSource::MemoryConsolidation),
         prompt.len(),
     ) {
-        tracing::warn!("failed to apply memory consolidation model policy: {err}");
+        tracing::warn!("failed to apply memory consolidation model router: {err}");
     }
     let source = SessionSource::SubAgent(SubAgentSource::MemoryConsolidation);
     let agent_control = session.services.agent_control.detached_registry();
@@ -326,10 +326,9 @@ mod agent {
             .disable(Feature::SkillMcpDependencyInstall);
 
         // Sandbox policy
-        let writable_roots = Vec::new();
         // The consolidation agent only needs local memory-root write access and no network.
         let consolidation_sandbox_policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots,
+            writable_roots: Vec::new(),
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,

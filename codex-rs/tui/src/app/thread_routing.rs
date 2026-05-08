@@ -744,9 +744,9 @@ impl App {
                     .await?;
                 Ok(true)
             }
-            AppCommandView::SetModelPolicySessionConfig { enabled } => {
+            AppCommandView::SetModelRouterSessionConfig { enabled } => {
                 app_server
-                    .thread_model_policy_session_config_set(thread_id, *enabled)
+                    .thread_model_router_session_config_set(thread_id, *enabled)
                     .await?;
                 Ok(true)
             }

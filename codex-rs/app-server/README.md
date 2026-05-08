@@ -151,8 +151,8 @@ Example with notification opt-out:
 - `thread/turns/list` — page through a stored thread’s turn history without resuming it; supports cursor-based pagination with `sortDirection`, `nextCursor`, and `backwardsCursor`.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
-- `thread/repoCiSessionConfig/set` - set or clear the loaded thread’s repo CI session overrides. Pass `mode`, `issueTypes`, and/or `reviewRounds`; use `null` for any field you want to return to repo/user config. `issueTypes: []` disables the targeted repo-ci review phase for the session. Returns `{}` when accepted.
-- `thread/modelPolicySessionConfig/set` - set or clear the loaded thread’s model-policy enablement override. Pass `enabled: true|false`; use `null` to return to repo/user config. Enabling requires an existing `[model_policy]` configuration. Returns `{}` when accepted.
+- `thread/repoCiSessionConfig/set` - set or clear the loaded thread’s repo CI session overrides. Pass `mode`, `issueTypes`, `reviewRounds`, and/or `longCi`; use `null` for any field you want to return to repo/user config. `issueTypes: []` disables the targeted repo-ci review phase for the session. Returns `{}` when accepted.
+- `thread/modelRouterSessionConfig/set` - set or clear the loaded thread’s model-router enablement override. Pass `enabled: true|false`; use `null` to return to repo/user config. Enabling requires an existing `[model_router]` configuration. Returns `{}` when accepted.
 - `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite while preserving existing thread memory modes; returns `{}` on success.
 - `thread/goal/set` — create, replace, or update the single persisted goal for a materialized thread; returns the current goal and emits `thread/goal/updated`. Supplying a new `objective` replaces the goal and resets usage accounting. Supplying the current non-terminal objective or omitting `objective` updates the existing goal’s status and/or token budget while preserving usage.
 - `thread/goal/get` — fetch the current persisted goal for a materialized thread; returns `goal: null` when no goal exists.
@@ -612,7 +612,7 @@ Turns attach user input (text or images) to a thread and trigger Codex generatio
 - `{"type":"image","url":"https://…png"}`
 - `{"type":"localImage","path":"/tmp/screenshot.png"}`
 
-You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn. Experimental `environments` is turn-scoped: omit it to inherit the thread's sticky environments, pass `[]` to run the turn with no environments, or pass explicit environment ids to override the sticky selection for this turn only.
+You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn. Experimental `environments` is turn-scoped: omit it to inherit the thread's sticky environments, pass `[]` to run the turn with no environments, or pass explicit environment ids to override the sticky selection for this turn only. Experimental `repoCi` is also turn-scoped: omit a field to inherit the thread/session repo CI setting, or pass `null` for that field to clear it for this turn.
 
 `approvalsReviewer` accepts:
 
@@ -641,6 +641,12 @@ You can optionally specify config overrides on the new turn. If specified, these
     "effort": "medium",
     "summary": "concise",
     "personality": "friendly",
+    // Experimental: repo CI settings for this turn only.
+    "repoCi": {
+        "mode": "local",
+        "issueTypes": ["correctness", "testability"],
+        "reviewRounds": 2
+    },
     // Optional JSON Schema to constrain the final assistant message for this turn.
     "outputSchema": {
         "type": "object",

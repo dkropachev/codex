@@ -71,7 +71,7 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadMemoryModeSetParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
-use codex_app_server_protocol::ThreadModelPolicySessionConfigSetParams;
+use codex_app_server_protocol::ThreadModelRouterSessionConfigSetParams;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
@@ -679,13 +679,13 @@ impl McpProcess {
             .await
     }
 
-    /// Send a `thread/modelPolicySessionConfig/set` JSON-RPC request (v2).
-    pub async fn send_thread_model_policy_session_config_set_request(
+    /// Send a `thread/modelRouterSessionConfig/set` JSON-RPC request (v2).
+    pub async fn send_thread_model_router_session_config_set_request(
         &mut self,
-        params: ThreadModelPolicySessionConfigSetParams,
+        params: ThreadModelRouterSessionConfigSetParams,
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/modelPolicySessionConfig/set", params)
+        self.send_request("thread/modelRouterSessionConfig/set", params)
             .await
     }
 

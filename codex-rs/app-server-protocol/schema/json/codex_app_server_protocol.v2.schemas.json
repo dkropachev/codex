@@ -1206,13 +1206,13 @@
             },
             "method": {
               "enum": [
-                "thread/modelPolicySessionConfig/set"
+                "thread/modelRouterSessionConfig/set"
               ],
-              "title": "Thread/modelPolicySessionConfig/setRequestMethod",
+              "title": "Thread/modelRouterSessionConfig/setRequestMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/ThreadModelPolicySessionConfigSetParams"
+              "$ref": "#/definitions/ThreadModelRouterSessionConfigSetParams"
             }
           },
           "required": [
@@ -1220,7 +1220,7 @@
             "method",
             "params"
           ],
-          "title": "Thread/modelPolicySessionConfig/setRequest",
+          "title": "Thread/modelRouterSessionConfig/setRequest",
           "type": "object"
         },
         {
@@ -13792,7 +13792,7 @@
       "title": "ThreadMetadataUpdateResponse",
       "type": "object"
     },
-    "ThreadModelPolicySessionConfigSetParams": {
+    "ThreadModelRouterSessionConfigSetParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "enabled": {
@@ -13809,12 +13809,12 @@
       "required": [
         "threadId"
       ],
-      "title": "ThreadModelPolicySessionConfigSetParams",
+      "title": "ThreadModelRouterSessionConfigSetParams",
       "type": "object"
     },
-    "ThreadModelPolicySessionConfigSetResponse": {
+    "ThreadModelRouterSessionConfigSetResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "ThreadModelPolicySessionConfigSetResponse",
+      "title": "ThreadModelRouterSessionConfigSetResponse",
       "type": "object"
     },
     "ThreadNameUpdatedNotification": {

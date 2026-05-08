@@ -18,10 +18,9 @@ use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHa
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
 use crate::turn_diff_tracker::TurnDiffTracker;
-use codex_config::config_toml::ModelPolicyReasoningEffortToml;
-use codex_config::config_toml::ModelPolicyRouteToml;
-use codex_config::config_toml::ModelPolicyRuleToml;
-use codex_config::config_toml::ModelPolicyToml;
+use codex_config::config_toml::ModelRouterCandidateToml;
+use codex_config::config_toml::ModelRouterReasoningEffortToml;
+use codex_config::config_toml::ModelRouterToml;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -415,7 +414,7 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
 }
 
 #[tokio::test]
-async fn spawn_agent_model_policy_updates_thread_config_snapshot() {
+async fn spawn_agent_model_router_updates_thread_config_snapshot() {
     #[derive(Debug, Deserialize)]
     struct SpawnAgentResult {
         agent_id: String,
@@ -426,19 +425,14 @@ async fn spawn_agent_model_policy_updates_thread_config_snapshot() {
     session.services.agent_control = manager.agent_control();
 
     let mut config = (*turn.config).clone();
-    config.model_policy = Some(ModelPolicyToml {
+    config.model_router = Some(ModelRouterToml {
         enabled: true,
-        rules: vec![ModelPolicyRuleToml {
-            source: Some(vec!["subagent.thread_spawn".to_string()]),
-            max_prompt_bytes: Some(1024),
-            route: ModelPolicyRouteToml {
-                model: Some("gpt-5.3-codex-spark".to_string()),
-                reasoning_effort: Some(ModelPolicyReasoningEffortToml::Inherit),
-                ..Default::default()
-            },
+        candidates: vec![ModelRouterCandidateToml {
+            model: Some("gpt-5.3-codex-spark".to_string()),
+            reasoning_effort: Some(ModelRouterReasoningEffortToml::Inherit),
             ..Default::default()
         }],
-        default_route: None,
+        ..Default::default()
     });
     turn.config = Arc::new(config);
 

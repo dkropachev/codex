@@ -2378,6 +2378,7 @@ dependencies = [
  "codex-mcp",
  "codex-model-provider",
  "codex-model-provider-info",
+ "codex-model-router",
  "codex-models-manager",
  "codex-network-proxy",
  "codex-otel",
@@ -2973,6 +2974,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-model-router"
+version = "0.125.0"
+dependencies = [
+ "codex-protocol",
+ "pretty_assertions",
+ "serde",
+]
+
+[[package]]
 name = "codex-models-manager"
 version = "0.125.0"
 dependencies = [
@@ -3361,6 +3371,7 @@ dependencies = [
  "chrono",
  "clap",
  "codex-git-utils",
+ "codex-model-router",
  "codex-protocol",
  "dirs",
  "log",
@@ -3370,6 +3381,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "strum 0.27.2",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

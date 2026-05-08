@@ -1183,6 +1183,7 @@ async fn repo_ci_slash_command_sets_session_mode() {
             mode: Some(codex_protocol::protocol::RepoCiSessionMode::Remote),
             issue_types: None,
             review_rounds: None,
+            long_ci: None,
         })
     );
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
@@ -1208,6 +1209,7 @@ async fn repo_ci_slash_command_without_args_shows_usage_snapshot() {
     assert!(rendered.contains("/repo-ci setup"));
     assert!(rendered.contains("/repo-ci learn"));
     assert!(rendered.contains("/repo-ci retry"));
+    assert!(rendered.contains("/repo-ci long-ci"));
 }
 
 #[tokio::test]
@@ -1271,6 +1273,7 @@ async fn repo_ci_issues_slash_command_sets_session_config() {
             mode: None,
             issue_types: Some(issue_types),
             review_rounds: None,
+            long_ci: None,
         }) if issue_types == vec![
             codex_protocol::protocol::RepoCiIssueType::Correctness,
             codex_protocol::protocol::RepoCiIssueType::Security,
@@ -1294,20 +1297,128 @@ async fn repo_ci_rounds_slash_command_sets_session_config() {
             mode: None,
             issue_types: None,
             review_rounds: Some(3),
+            long_ci: None,
         })
     );
     assert_eq!(recall_latest_after_clearing(&mut chat), "/repo-ci rounds 3");
 }
 
 #[tokio::test]
-async fn model_policy_slash_command_sets_session_config() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+async fn repo_ci_long_ci_slash_command_sets_session_config() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
 
-    submit_composer_text(&mut chat, "/model-policy disable");
+    submit_composer_text(&mut chat, "/repo-ci long-ci on");
 
     assert_matches!(
         op_rx.try_recv(),
-        Ok(Op::SetModelPolicySessionConfig {
+        Ok(Op::SetRepoCiSessionConfig {
+            mode: None,
+            issue_types: None,
+            review_rounds: None,
+            long_ci: Some(true),
+        })
+    );
+    assert_eq!(
+        recall_latest_after_clearing(&mut chat),
+        "/repo-ci long-ci on"
+    );
+}
+
+#[tokio::test]
+async fn repo_ci_slash_command_with_task_applies_config_for_one_turn() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    submit_composer_text(&mut chat, "/repo-ci local fix the failing tests");
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserInputWithTurnContext { items, repo_ci, .. } => {
+            assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "fix the failing tests".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+            assert_eq!(
+                repo_ci,
+                Some(codex_protocol::protocol::RepoCiTurnOverrides {
+                    mode: Some(Some(codex_protocol::protocol::RepoCiSessionMode::Local)),
+                    issue_types: None,
+                    review_rounds: None,
+                    long_ci: None,
+                })
+            );
+        }
+        other => panic!("expected repo-ci task user turn, got {other:?}"),
+    }
+    assert_eq!(
+        recall_latest_after_clearing(&mut chat),
+        "/repo-ci local fix the failing tests"
+    );
+}
+
+#[tokio::test]
+async fn repo_ci_slash_command_with_task_restores_previous_session_config() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    submit_composer_text(&mut chat, "/repo-ci remote");
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::SetRepoCiSessionConfig {
+            mode: Some(codex_protocol::protocol::RepoCiSessionMode::Remote),
+            issue_types: None,
+            review_rounds: None,
+            long_ci: None,
+        })
+    );
+
+    submit_composer_text(&mut chat, "/repo-ci local rounds 2 fix the failing tests");
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserInputWithTurnContext { items, repo_ci, .. } => {
+            assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "fix the failing tests".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+            assert_eq!(
+                repo_ci,
+                Some(codex_protocol::protocol::RepoCiTurnOverrides {
+                    mode: Some(Some(codex_protocol::protocol::RepoCiSessionMode::Local)),
+                    issue_types: None,
+                    review_rounds: Some(Some(2)),
+                    long_ci: None,
+                })
+            );
+        }
+        other => panic!("expected repo-ci task user turn, got {other:?}"),
+    }
+    let remaining_ops = std::iter::from_fn(|| op_rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        remaining_ops
+            .iter()
+            .all(|op| !matches!(op, Op::SetRepoCiSessionConfig { .. })),
+        "repo-ci task should not restore by submitting session config ops: {remaining_ops:?}"
+    );
+    assert_eq!(
+        chat.config.repo_ci_session_mode,
+        Some(codex_protocol::protocol::RepoCiSessionMode::Remote)
+    );
+}
+
+#[tokio::test]
+async fn model_router_slash_command_sets_session_config() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/model-router disable");
+
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::SetModelRouterSessionConfig {
             enabled: Some(false),
         })
     );
@@ -1316,19 +1427,19 @@ async fn model_policy_slash_command_sets_session_config() {
         events
             .iter()
             .any(|event| matches!(event, AppEvent::InsertHistoryCell(_))),
-        "expected model-policy status history event; events: {events:?}"
+        "expected model-router status history event; events: {events:?}"
     );
     assert_eq!(
         recall_latest_after_clearing(&mut chat),
-        "/model-policy disable"
+        "/model-router disable"
     );
 }
 
 #[tokio::test]
-async fn model_policy_slash_command_without_args_shows_usage() {
+async fn model_router_slash_command_without_args_shows_usage() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
 
-    submit_composer_text(&mut chat, "/model-policy");
+    submit_composer_text(&mut chat, "/model-router");
 
     let cells = drain_insert_history(&mut rx);
     let rendered = cells
@@ -1336,7 +1447,7 @@ async fn model_policy_slash_command_without_args_shows_usage() {
         .map(|cell| lines_to_single_string(cell))
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(rendered.contains("Usage: /model-policy <enable|disable|inherit>"));
+    assert!(rendered.contains("Usage: /model-router <enable|disable|inherit>"));
 }
 
 #[tokio::test]

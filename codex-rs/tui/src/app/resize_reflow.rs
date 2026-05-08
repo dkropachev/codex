@@ -183,7 +183,7 @@ impl App {
     }
 
     fn resize_reflow_max_rows(&self) -> Option<usize> {
-        crate::resize_reflow_cap::resize_reflow_max_rows(self.config.terminal_resize_reflow)
+        crate::resize_reflow_cap::resize_reflow_max_rows(self.config.terminal_resize_reflow.clone())
     }
 
     fn clear_terminal_for_resize_replay(&mut self, tui: &mut tui::Tui) -> Result<()> {
