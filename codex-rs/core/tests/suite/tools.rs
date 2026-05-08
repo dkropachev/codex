@@ -251,6 +251,7 @@ async fn historical_unavailable_mcp_call_is_exposed_as_placeholder_tool() -> Res
                     enabled: true,
                     required: false,
                     supports_parallel_tool_calls: false,
+                    process_reuse_scope: codex_config::types::McpServerProcessReuseScope::Cwd,
                     disabled_reason: None,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,

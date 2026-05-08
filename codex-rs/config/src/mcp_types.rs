@@ -22,6 +22,38 @@ pub enum AppToolApproval {
     Approve,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum McpServerProcessReuseScope {
+    /// Never use the per-user MCP process broker for this server.
+    None,
+    /// Reuse a brokered process for matching launches from the same resolved cwd.
+    #[default]
+    Cwd,
+    /// Reuse within the detected project root from `project_root_markers`.
+    Project,
+    /// Reuse within the detected Git repository or worktree root.
+    Repo,
+    /// Reuse across workspaces for the same Codex home and OS user.
+    User,
+}
+
+impl McpServerProcessReuseScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Cwd => "cwd",
+            Self::Project => "project",
+            Self::Repo => "repo",
+            Self::User => "user",
+        }
+    }
+
+    pub fn is_default(scope: &Self) -> bool {
+        *scope == Self::default()
+    }
+}
+
 /// Human-readable reason a configured MCP server was disabled after requirements
 /// were applied.
 ///
@@ -119,6 +151,13 @@ pub struct McpServerConfig {
     #[serde(flatten)]
     pub transport: McpServerTransportConfig,
 
+    /// Scope used when local stdio MCP process reuse is enabled.
+    #[serde(
+        default,
+        skip_serializing_if = "McpServerProcessReuseScope::is_default"
+    )]
+    pub process_reuse_scope: McpServerProcessReuseScope,
+
     /// Experimental environment selector for where Codex should start this MCP server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experimental_environment: Option<String>,
@@ -208,6 +247,10 @@ pub struct RawMcpServerConfig {
     pub bearer_token: Option<String>,
     pub bearer_token_env_var: Option<String>,
 
+    // process reuse
+    #[serde(default)]
+    pub process_reuse_scope: Option<McpServerProcessReuseScope>,
+
     // shared
     #[serde(default)]
     pub experimental_environment: Option<String>,
@@ -256,6 +299,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             url,
             bearer_token,
             bearer_token_env_var,
+            process_reuse_scope,
             experimental_environment,
             startup_timeout_sec,
             startup_timeout_ms,
@@ -287,6 +331,8 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             Err(format!("{field} is not supported for {transport}"))
         }
 
+        let process_reuse_scope = process_reuse_scope.unwrap_or_default();
+
         let transport = if let Some(command) = command {
             throw_if_set("stdio", "url", url.as_ref())?;
             throw_if_set(
@@ -302,6 +348,18 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             for env_var in &env_vars {
                 env_var.validate_source()?;
             }
+            if process_reuse_scope == McpServerProcessReuseScope::User {
+                let Some(cwd) = cwd.as_ref() else {
+                    return Err(
+                        "process_reuse_scope = \"user\" requires an explicit stdio cwd".to_string(),
+                    );
+                };
+                if !cwd.is_absolute() {
+                    return Err(
+                        "process_reuse_scope = \"user\" requires an absolute stdio cwd".to_string(),
+                    );
+                }
+            }
             McpServerTransportConfig::Stdio {
                 command,
                 args: args.unwrap_or_default(),
@@ -310,6 +368,12 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
                 cwd,
             }
         } else if let Some(url) = url {
+            if process_reuse_scope != McpServerProcessReuseScope::Cwd {
+                return Err(
+                    "process_reuse_scope is ignored for streamable_http; only the default \"cwd\" scope is supported"
+                        .to_string(),
+                );
+            }
             throw_if_set("streamable_http", "args", args.as_ref())?;
             throw_if_set("streamable_http", "env", env.as_ref())?;
             throw_if_set("streamable_http", "env_vars", env_vars.as_ref())?;
@@ -327,6 +391,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
 
         Ok(Self {
             transport,
+            process_reuse_scope,
             experimental_environment,
             startup_timeout_sec,
             tool_timeout_sec,

@@ -12,6 +12,14 @@ Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the c
 
 - https://developers.openai.com/codex/config-reference
 
+Local stdio MCP servers can opt into narrower or broader process reuse with
+`process_reuse_scope`. The default is `cwd`, which preserves the current
+behavior of reusing only for the same resolved launch directory. Use `none` to
+disable broker reuse for a server, `project` or `repo` when the server is safe
+to share across subdirectories of the detected project or Git checkout, and
+`user` only for service-backed servers that do not read workspace state and have
+an explicit absolute `cwd`. HTTP MCP servers only support the default scope.
+
 MCP tools default to serialized calls. To mark every tool exposed by one server
 as eligible for parallel tool calls, set `supports_parallel_tool_calls` on that
 server:

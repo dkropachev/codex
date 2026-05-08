@@ -4,8 +4,6 @@ use anyhow::Result;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::load_global_mcp_servers;
-use predicates::prelude::PredicateBooleanExt;
-use predicates::str::contains;
 use pretty_assertions::assert_eq;
 use serde_json::Value as JsonValue;
 use serde_json::json;
@@ -75,7 +73,9 @@ async fn list_and_get_render_expected_output() -> Result<()> {
     assert!(stdout.contains("WORKSPACE_ID=*****"));
     assert!(stdout.contains("Status"));
     assert!(stdout.contains("Auth"));
+    assert!(stdout.contains("Reuse"));
     assert!(stdout.contains("enabled"));
+    assert!(stdout.contains("cwd"));
     assert!(stdout.contains("Unsupported"));
 
     let mut list_json_cmd = codex_command(codex_home.path())?;
@@ -90,6 +90,7 @@ async fn list_and_get_render_expected_output() -> Result<()> {
             "name": "docs",
             "enabled": true,
             "disabled_reason": null,
+            "process_reuse_scope": "cwd",
             "transport": {
               "type": "stdio",
               "command": "docs-server",
@@ -126,14 +127,19 @@ async fn list_and_get_render_expected_output() -> Result<()> {
     assert!(stdout.contains("APP_TOKEN=*****"));
     assert!(stdout.contains("WORKSPACE_ID=*****"));
     assert!(stdout.contains("enabled: true"));
+    assert!(stdout.contains("process_reuse_scope: cwd"));
     assert!(stdout.contains("remove: codex mcp remove docs"));
 
     let mut get_json_cmd = codex_command(codex_home.path())?;
-    get_json_cmd
+    let get_json_output = get_json_cmd
         .args(["mcp", "get", "docs", "--json"])
-        .assert()
-        .success()
-        .stdout(contains("\"name\": \"docs\"").and(contains("\"enabled\": true")));
+        .output()?;
+    assert!(get_json_output.status.success());
+    let stdout = String::from_utf8(get_json_output.stdout)?;
+    let parsed: JsonValue = serde_json::from_str(&stdout)?;
+    assert_eq!(parsed["name"], json!("docs"));
+    assert_eq!(parsed["enabled"], json!(true));
+    assert_eq!(parsed["process_reuse_scope"], json!("cwd"));
 
     Ok(())
 }

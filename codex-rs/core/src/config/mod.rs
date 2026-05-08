@@ -1,6 +1,20 @@
 use crate::agents_md::AgentsMdManager;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
+use crate::config_loader::CloudRequirementsLoader;
+use crate::config_loader::ConfigLayerStack;
+use crate::config_loader::ConfigLayerStackOrdering;
+use crate::config_loader::ConfigRequirements;
+use crate::config_loader::ConfigRequirementsToml;
+use crate::config_loader::ConstrainedWithSource;
+use crate::config_loader::FeatureRequirementsToml;
+use crate::config_loader::LoaderOverrides;
+use crate::config_loader::McpServerIdentity;
+use crate::config_loader::McpServerRequirement;
+use crate::config_loader::ResidencyRequirement;
+use crate::config_loader::Sourced;
+use crate::config_loader::load_config_layers_state;
+use crate::config_loader::project_trust_key;
 use crate::memories::memory_root;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
@@ -8,31 +22,17 @@ use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
-use codex_config::CloudRequirementsLoader;
-use codex_config::ConfigLayerStack;
-use codex_config::ConfigLayerStackOrdering;
-use codex_config::ConfigRequirements;
-use codex_config::ConfigRequirementsToml;
-use codex_config::ConstrainedWithSource;
-use codex_config::FeatureRequirementsToml;
-use codex_config::LoaderOverrides;
-use codex_config::McpServerIdentity;
-use codex_config::McpServerRequirement;
-use codex_config::ResidencyRequirement;
-use codex_config::SandboxModeRequirement;
-use codex_config::Sourced;
 use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigToml;
-use codex_config::config_toml::ModelPolicyToml;
+use codex_config::config_toml::ImplementToml;
+use codex_config::config_toml::ModelRouterToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
+use codex_config::config_toml::RepoCiToml;
 use codex_config::config_toml::ThreadStoreToml;
 use codex_config::config_toml::validate_model_providers;
-use codex_config::loader::load_config_layers_state;
-use codex_config::loader::project_trust_key;
 use codex_config::profile_toml::ConfigProfile;
-use codex_config::sandbox_mode_requirement_for_permission_profile;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::DEFAULT_OTEL_ENVIRONMENT;
@@ -52,6 +52,7 @@ use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
+use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
@@ -64,11 +65,13 @@ use codex_features::MultiAgentV2ConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
 use codex_mcp::McpConfig;
+use codex_mcp::McpRuntimeEnvironment;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::built_in_model_providers;
 use codex_model_provider_info::merge_configured_model_providers;
+use codex_model_router::TokenPrice;
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -89,6 +92,8 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::RepoCiIssueType;
+use codex_protocol::protocol::RepoCiSessionMode;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
@@ -118,7 +123,6 @@ pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
 pub use codex_network_proxy::NetworkProxyAuditMetadata;
-use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 pub use codex_sandboxing::system_bwrap_warning;
 pub use managed_features::ManagedFeatures;
 pub use network_proxy_spec::NetworkProxySpec;
@@ -132,7 +136,6 @@ pub use codex_git_utils::GhostSnapshotConfig;
 /// the context window.
 pub(crate) const AGENTS_MD_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
-pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION: usize = 4;
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
@@ -196,9 +199,16 @@ pub(crate) async fn test_config() -> Config {
 pub struct Permissions {
     /// Approval policy for executing commands.
     pub approval_policy: Constrained<AskForApproval>,
-    /// Canonical effective runtime permissions after config requirements and
-    /// runtime readable-root additions have been applied.
+    /// Effective permission profile used for sandbox-aware tool execution.
     pub permission_profile: Constrained<PermissionProfile>,
+    /// Effective sandbox policy used for shell/unified exec.
+    pub sandbox_policy: Constrained<SandboxPolicy>,
+    /// Effective filesystem sandbox policy, including entries that cannot yet
+    /// be fully represented by the legacy [`SandboxPolicy`] projection.
+    pub file_system_sandbox_policy: FileSystemSandboxPolicy,
+    /// Effective network sandbox policy split out from the legacy
+    /// [`SandboxPolicy`] projection.
+    pub network_sandbox_policy: NetworkSandboxPolicy,
     /// Effective network configuration applied to all spawned processes.
     pub network: Option<NetworkProxySpec>,
     /// Whether the model may request a login shell for shell-based tools.
@@ -226,90 +236,115 @@ impl Permissions {
         self.permission_profile.get().clone()
     }
 
-    /// Effective filesystem sandbox policy derived from the canonical profile.
     pub fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
-        self.permission_profile.get().file_system_sandbox_policy()
+        self.file_system_sandbox_policy.clone()
     }
 
-    /// Effective network sandbox policy derived from the canonical profile.
     pub fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
-        self.permission_profile.get().network_sandbox_policy()
+        self.network_sandbox_policy
     }
 
-    /// Legacy compatibility projection derived from the canonical profile.
     pub fn legacy_sandbox_policy(&self, cwd: &Path) -> SandboxPolicy {
-        let permission_profile = self.permission_profile.get();
-        let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
-        compatibility_sandbox_policy_for_permission_profile(
-            permission_profile,
-            &file_system_sandbox_policy,
-            permission_profile.network_sandbox_policy(),
-            cwd,
-        )
+        self.permission_profile
+            .get()
+            .to_legacy_sandbox_policy(cwd)
+            .unwrap_or_else(|_| self.sandbox_policy.get().clone())
     }
 
-    /// Check whether a legacy sandbox policy can be applied to this permission
-    /// set after projecting it into the canonical permission profile.
     pub fn can_set_legacy_sandbox_policy(
         &self,
         sandbox_policy: &SandboxPolicy,
         cwd: &Path,
     ) -> ConstraintResult<()> {
-        let file_system_sandbox_policy =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd);
-        let network_sandbox_policy = NetworkSandboxPolicy::from(sandbox_policy);
         let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
             SandboxEnforcement::from_legacy_sandbox_policy(sandbox_policy),
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
+            &FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd),
+            NetworkSandboxPolicy::from(sandbox_policy),
         );
-        self.permission_profile.can_set(&permission_profile)
+        self.permission_profile.can_set(&permission_profile)?;
+        self.sandbox_policy.can_set(sandbox_policy)
     }
 
-    /// Replace permissions from a legacy sandbox policy and keep every
-    /// permission projection in sync.
+    pub fn set_permission_profile_for_cwd(
+        &mut self,
+        permission_profile: PermissionProfile,
+        cwd: &Path,
+    ) -> ConstraintResult<()> {
+        let sandbox_policy = permission_profile
+            .to_legacy_sandbox_policy(cwd)
+            .map_err(|err| ConstraintError::InvalidValue {
+                field_name: "permission_profile",
+                candidate: format!("{permission_profile:?}"),
+                allowed: format!(
+                    "permission profiles that can be represented by the active sandbox constraints: {err}"
+                ),
+                requirement_source: codex_config::RequirementSource::Unknown,
+            })?;
+        self.permission_profile.set(permission_profile.clone())?;
+        self.sandbox_policy.set(sandbox_policy)?;
+        let (file_system_sandbox_policy, network_sandbox_policy) =
+            permission_profile.to_runtime_permissions();
+        self.file_system_sandbox_policy = file_system_sandbox_policy;
+        self.network_sandbox_policy = network_sandbox_policy;
+        Ok(())
+    }
+
+    pub fn set_permission_profile(
+        &mut self,
+        permission_profile: PermissionProfile,
+    ) -> ConstraintResult<()> {
+        self.set_permission_profile_for_cwd(permission_profile, Path::new("/"))
+    }
+
     pub fn set_legacy_sandbox_policy(
         &mut self,
         sandbox_policy: SandboxPolicy,
         cwd: &Path,
     ) -> ConstraintResult<()> {
-        self.can_set_legacy_sandbox_policy(&sandbox_policy, cwd)?;
-        let file_system_sandbox_policy =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, cwd);
-        let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
         let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
             SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
+            &FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, cwd),
+            NetworkSandboxPolicy::from(&sandbox_policy),
         );
-
         self.permission_profile.set(permission_profile)?;
-        Ok(())
-    }
-
-    /// Replace permissions from the canonical profile.
-    pub fn set_permission_profile(
-        &mut self,
-        permission_profile: PermissionProfile,
-    ) -> ConstraintResult<()> {
-        self.permission_profile.can_set(&permission_profile)?;
-
-        self.permission_profile.set(permission_profile)?;
+        self.sandbox_policy.set(sandbox_policy.clone())?;
+        self.file_system_sandbox_policy =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, cwd);
+        self.network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
         Ok(())
     }
 }
 
-/// Configured thread persistence backend.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ThreadStoreConfig {
-    /// Persist threads locally using rollout JSONL files and sqlite metadata.
-    #[default]
     Local,
-    /// Persist threads through the remote thread-store service.
-    Remote { endpoint: String },
-    /// Test-only in-memory thread store.
+    Remote {
+        endpoint: String,
+    },
     #[cfg(debug_assertions)]
-    InMemory { id: String },
+    InMemory {
+        id: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalResizeReflowConfig {
+    pub max_rows: TerminalResizeReflowMaxRows,
+}
+
+impl Default for TerminalResizeReflowConfig {
+    fn default() -> Self {
+        Self {
+            max_rows: TerminalResizeReflowMaxRows::Auto,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalResizeReflowMaxRows {
+    Auto,
+    Disabled,
+    Limit(usize),
 }
 
 /// Application configuration loaded from disk and merged with overrides.
@@ -439,7 +474,8 @@ pub struct Config {
     /// Persisted startup availability NUX state for model tooltips.
     pub model_availability_nux: ModelAvailabilityNuxConfig,
 
-    /// Start the TUI in the specified collaboration mode (plan/default).
+    /// Maximum rendered terminal rows to replay during terminal resize reflow.
+    pub terminal_resize_reflow: TerminalResizeReflowConfig,
 
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///
@@ -461,9 +497,6 @@ pub struct Config {
 
     /// Syntax highlighting theme override (kebab-case name).
     pub tui_theme: Option<String>,
-
-    /// Terminal resize-reflow tuning knobs.
-    pub terminal_resize_reflow: TerminalResizeReflowConfig,
 
     /// The absolute directory that should be treated as the current working
     /// directory for the session. All relative paths inside the business-logic
@@ -507,7 +540,10 @@ pub struct Config {
     pub account_pool: Option<codex_config::config_toml::AccountPoolToml>,
 
     /// Optional routing policy for internal model calls.
-    pub model_policy: Option<ModelPolicyToml>,
+    pub model_router: Option<ModelRouterToml>,
+
+    /// Runtime-only accounting metadata for a model-router-applied internal route.
+    pub(crate) model_router_accounting: Option<ModelRouterAccounting>,
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: usize,
@@ -523,7 +559,7 @@ pub struct Config {
     /// Maximum runtime in seconds for agent job workers before they are failed.
     pub agent_job_max_runtime_seconds: Option<u64>,
 
-    /// Whether to record a model-visible message when an agent turn is interrupted.
+    /// Whether interrupted turns should leave a model-visible marker.
     pub agent_interrupt_message_enabled: bool,
 
     /// Maximum nesting depth allowed for spawned agent threads.
@@ -571,6 +607,12 @@ pub struct Config {
     /// escalation. This cannot be set in the config file: it must be set in
     /// code via [`ConfigOverrides`].
     pub main_execve_wrapper_exe: Option<PathBuf>,
+
+    /// Optional absolute path to the Node runtime used by `js_repl`.
+    pub js_repl_node_path: Option<PathBuf>,
+
+    /// Ordered list of directories to search for Node modules in `js_repl`.
+    pub js_repl_node_module_dirs: Vec<PathBuf>,
 
     /// Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution.
     pub zsh_path: Option<PathBuf>,
@@ -630,12 +672,12 @@ pub struct Config {
     /// active.
     pub experimental_realtime_start_instructions: Option<String>,
 
+    /// Experimental / do not use. Selects the backing store for thread data.
+    pub experimental_thread_store: ThreadStoreConfig,
+
     /// Experimental / do not use. When set, app-server fetches thread-scoped
     /// config from a remote service at this endpoint.
     pub experimental_thread_config_endpoint: Option<String>,
-
-    /// Experimental / do not use. Selects the thread persistence backend.
-    pub experimental_thread_store: ThreadStoreConfig,
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     pub forced_chatgpt_workspace_id: Option<String>,
 
@@ -662,6 +704,18 @@ pub struct Config {
 
     /// Settings for ghost snapshots (used for undo).
     pub ghost_snapshot: GhostSnapshotConfig,
+
+    /// Repository CI learning and validation settings.
+    pub repo_ci: Option<RepoCiToml>,
+
+    /// Review/fix implementation loop settings.
+    pub implement: Option<ImplementToml>,
+
+    /// Session-only repo CI behavior override.
+    pub repo_ci_session_mode: Option<RepoCiSessionMode>,
+    pub repo_ci_issue_types: Option<Vec<RepoCiIssueType>>,
+    pub repo_ci_review_rounds: Option<u8>,
+    pub repo_ci_long_ci: Option<bool>,
 
     /// Settings specific to the task-path-based multi-agent tool surface.
     pub multi_agent_v2: MultiAgentV2Config,
@@ -710,6 +764,18 @@ pub struct Config {
     pub otel: codex_config::types::OtelConfig,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ModelRouterAccounting {
+    pub(crate) task_key: String,
+    pub(crate) model_provider: String,
+    pub(crate) model: Option<String>,
+    pub(crate) account_id: Option<String>,
+    pub(crate) actual_price: Option<TokenPrice>,
+    pub(crate) actual_price_confidence: f64,
+    pub(crate) counterfactual_price: Option<TokenPrice>,
+    pub(crate) counterfactual_price_confidence: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MultiAgentV2Config {
     pub max_concurrent_threads_per_session: usize,
@@ -721,29 +787,12 @@ pub struct MultiAgentV2Config {
 impl Default for MultiAgentV2Config {
     fn default() -> Self {
         Self {
-            max_concurrent_threads_per_session:
-                DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION,
+            max_concurrent_threads_per_session: 4,
             usage_hint_enabled: true,
             usage_hint_text: None,
             hide_spawn_agent_metadata: false,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TerminalResizeReflowMaxRows {
-    /// Use the runtime terminal detector to choose a scrollback-sized cap.
-    #[default]
-    Auto,
-    /// Keep all rendered transcript rows during resize reflow.
-    Disabled,
-    /// Keep at most this many rendered transcript rows during resize reflow.
-    Limit(usize),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct TerminalResizeReflowConfig {
-    pub max_rows: TerminalResizeReflowMaxRows,
 }
 
 impl AuthManagerConfig for Config {
@@ -768,7 +817,7 @@ impl AuthManagerConfig for Config {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ConfigBuilder {
     codex_home: Option<PathBuf>,
     cli_overrides: Option<Vec<(String, TomlValue)>>,
@@ -777,6 +826,22 @@ pub struct ConfigBuilder {
     cloud_requirements: CloudRequirementsLoader,
     thread_config_loader: Option<Arc<dyn ThreadConfigLoader>>,
     fallback_cwd: Option<PathBuf>,
+    host_name: Option<String>,
+}
+
+impl Default for ConfigBuilder {
+    fn default() -> Self {
+        Self {
+            codex_home: None,
+            cli_overrides: None,
+            harness_overrides: None,
+            loader_overrides: None,
+            cloud_requirements: CloudRequirementsLoader::default(),
+            thread_config_loader: None,
+            fallback_cwd: None,
+            host_name: codex_config::host_name(),
+        }
+    }
 }
 
 impl ConfigBuilder {
@@ -818,6 +883,11 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn host_name(mut self, host_name: Option<String>) -> Self {
+        self.host_name = host_name;
+        self
+    }
+
     pub async fn build(self) -> std::io::Result<Config> {
         let Self {
             codex_home,
@@ -827,6 +897,7 @@ impl ConfigBuilder {
             cloud_requirements,
             thread_config_loader,
             fallback_cwd,
+            host_name: _host_name,
         } = self;
         let codex_home = match codex_home {
             Some(codex_home) => AbsolutePathBuf::from_absolute_path(codex_home)?,
@@ -862,13 +933,12 @@ impl ConfigBuilder {
         let config_toml: ConfigToml = match merged_toml.try_into() {
             Ok(config_toml) => config_toml,
             Err(err) => {
-                if let Some(config_error) = codex_config::first_layer_config_error::<ConfigToml>(
-                    &config_layer_stack,
-                    codex_config::CONFIG_TOML_FILE,
-                )
+                if let Some(config_error) = crate::config_loader::first_layer_config_error::<
+                    ConfigToml,
+                >(&config_layer_stack, CONFIG_TOML_FILE)
                 .await
                 {
-                    return Err(codex_config::io_error_from_config_error(
+                    return Err(crate::config_loader::io_error_from_config_error(
                         std::io::ErrorKind::InvalidData,
                         config_error,
                         Some(err),
@@ -894,18 +964,6 @@ impl ConfigBuilder {
 }
 
 impl Config {
-    pub fn legacy_sandbox_policy(&self) -> SandboxPolicy {
-        self.permissions.legacy_sandbox_policy(self.cwd.as_path())
-    }
-
-    pub fn set_legacy_sandbox_policy(
-        &mut self,
-        sandbox_policy: SandboxPolicy,
-    ) -> ConstraintResult<()> {
-        self.permissions
-            .set_legacy_sandbox_policy(sandbox_policy, self.cwd.as_path())
-    }
-
     pub fn to_models_manager_config(&self) -> ModelsManagerConfig {
         ModelsManagerConfig {
             model_context_window: self.model_context_window,
@@ -941,9 +999,41 @@ impl Config {
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             use_legacy_landlock: self.features.use_legacy_landlock(),
             apps_enabled: self.features.enabled(Feature::Apps),
+            mcp_process_reuse_enabled: self.features.enabled(Feature::McpProcessReuse),
             configured_mcp_servers,
             plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
         }
+    }
+
+    pub fn mcp_runtime_environment(
+        &self,
+        environment: Arc<Environment>,
+        fallback_cwd: PathBuf,
+    ) -> McpRuntimeEnvironment {
+        let project_root_markers = match codex_config::project_root_markers_from_config(
+            &self.config_layer_stack.effective_config(),
+        ) {
+            Ok(Some(markers)) => markers,
+            Ok(None) => codex_config::default_project_root_markers(),
+            Err(err) => {
+                tracing::warn!(error = %err, "invalid project_root_markers; using default MCP reuse markers");
+                codex_config::default_project_root_markers()
+            }
+        };
+        McpRuntimeEnvironment::new(environment, fallback_cwd)
+            .with_project_root_markers(project_root_markers)
+    }
+
+    pub fn set_legacy_sandbox_policy(
+        &mut self,
+        sandbox_policy: SandboxPolicy,
+    ) -> ConstraintResult<()> {
+        self.permissions
+            .set_legacy_sandbox_policy(sandbox_policy, self.cwd.as_path())
+    }
+
+    pub fn legacy_sandbox_policy(&self) -> SandboxPolicy {
+        self.permissions.legacy_sandbox_policy(self.cwd.as_path())
     }
 
     /// This is the preferred way to create an instance of [Config].
@@ -980,8 +1070,8 @@ impl Config {
                 format!("failed to serialize default config: {e}"),
             )
         })?;
-        let cli_layer = codex_config::build_cli_overrides_layer(&cli_overrides);
-        codex_config::merge_toml_values(&mut merged, &cli_layer);
+        let cli_layer = crate::config_loader::build_cli_overrides_layer(&cli_overrides);
+        crate::config_loader::merge_toml_values(&mut merged, &cli_layer);
         let codex_home = AbsolutePathBuf::from_absolute_path_checked(codex_home)?;
         let config_toml = deserialize_config_toml_with_base(merged, &codex_home)?;
         Self::load_config_with_layer_stack(
@@ -1394,21 +1484,6 @@ fn resolve_tool_suggest_config(config_toml: &ConfigToml) -> ToolSuggestConfig {
     ToolSuggestConfig { discoverables }
 }
 
-fn thread_store_config(
-    thread_store: Option<ThreadStoreToml>,
-    legacy_remote_endpoint: Option<String>,
-) -> ThreadStoreConfig {
-    match thread_store {
-        Some(ThreadStoreToml::Local {}) => ThreadStoreConfig::Local,
-        Some(ThreadStoreToml::Remote { endpoint }) => ThreadStoreConfig::Remote { endpoint },
-        #[cfg(debug_assertions)]
-        Some(ThreadStoreToml::InMemory { id }) => ThreadStoreConfig::InMemory { id },
-        None => legacy_remote_endpoint.map_or(ThreadStoreConfig::Local, |endpoint| {
-            ThreadStoreConfig::Remote { endpoint }
-        }),
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PermissionConfigSyntax {
     Legacy,
@@ -1461,7 +1536,7 @@ fn resolve_permission_config_syntax(
 
 fn apply_managed_filesystem_constraints(
     file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
-    filesystem_constraints: &codex_config::FilesystemConstraints,
+    filesystem_constraints: &crate::config_loader::FilesystemConstraints,
 ) {
     for deny_read in &filesystem_constraints.deny_read {
         let deny_entry = if deny_read.contains_glob() {
@@ -1506,6 +1581,8 @@ pub struct ConfigOverrides {
     pub codex_self_exe: Option<PathBuf>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub main_execve_wrapper_exe: Option<PathBuf>,
+    pub js_repl_node_path: Option<PathBuf>,
+    pub js_repl_node_module_dirs: Option<Vec<PathBuf>>,
     pub zsh_path: Option<PathBuf>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
@@ -1515,6 +1592,10 @@ pub struct ConfigOverrides {
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub ephemeral: Option<bool>,
+    pub repo_ci_session_mode: Option<RepoCiSessionMode>,
+    pub repo_ci_issue_types: Option<Vec<RepoCiIssueType>>,
+    pub repo_ci_review_rounds: Option<u8>,
+    pub repo_ci_long_ci: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -1620,20 +1701,6 @@ fn resolve_multi_agent_v2_config(
     }
 }
 
-fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalResizeReflowConfig {
-    let Some(tui) = config_toml.tui.as_ref() else {
-        return TerminalResizeReflowConfig::default();
-    };
-
-    TerminalResizeReflowConfig {
-        max_rows: match tui.terminal_resize_reflow_max_rows {
-            Some(0) => TerminalResizeReflowMaxRows::Disabled,
-            Some(rows) => TerminalResizeReflowMaxRows::Limit(rows),
-            None => TerminalResizeReflowMaxRows::Auto,
-        },
-    }
-}
-
 fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiAgentV2ConfigToml> {
     match features?.multi_agent_v2.as_ref()? {
         FeatureToml::Enabled(_) => None,
@@ -1643,11 +1710,11 @@ fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiA
 
 pub(crate) fn resolve_web_search_mode_for_turn(
     web_search_mode: &Constrained<WebSearchMode>,
-    permission_profile: &PermissionProfile,
+    sandbox_policy: &SandboxPolicy,
 ) -> WebSearchMode {
     let preferred = web_search_mode.value();
 
-    if matches!(permission_profile, PermissionProfile::Disabled)
+    if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
         && preferred != WebSearchMode::Disabled
     {
         for mode in [
@@ -1743,6 +1810,8 @@ impl Config {
             codex_self_exe,
             codex_linux_sandbox_exe,
             main_execve_wrapper_exe,
+            js_repl_node_path: js_repl_node_path_override,
+            js_repl_node_module_dirs: js_repl_node_module_dirs_override,
             zsh_path: zsh_path_override,
             base_instructions,
             developer_instructions,
@@ -1752,6 +1821,10 @@ impl Config {
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             ephemeral,
+            repo_ci_session_mode,
+            repo_ci_issue_types,
+            repo_ci_review_rounds,
+            repo_ci_long_ci,
             additional_writable_roots,
         } = overrides;
 
@@ -1883,11 +1956,14 @@ impl Config {
             && has_permission_profiles);
         let (
             configured_network_proxy_config,
-            permission_profile,
+            _sandbox_policy,
             file_system_sandbox_policy,
-        ) = if let Some(mut permission_profile) = permission_profile {
+            network_sandbox_policy,
+            sandbox_enforcement,
+        ) = if let Some(permission_profile) = permission_profile {
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
+            let sandbox_enforcement = permission_profile.enforcement();
             let configured_network_proxy_config =
                 if network_sandbox_policy.is_enabled() && profiles_are_active {
                     let permissions = cfg.permissions.as_ref().ok_or_else(|| {
@@ -1911,28 +1987,29 @@ impl Config {
                 } else {
                     NetworkProxyConfig::default()
                 };
-            let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
-                &permission_profile,
-                &file_system_sandbox_policy,
-                network_sandbox_policy,
-                resolved_cwd.as_path(),
-            );
+            let mut sandbox_policy = permission_profile
+                .to_legacy_sandbox_policy(resolved_cwd.as_path())
+                .map_err(|err| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("invalid permission_profile override: {err}"),
+                    )
+                })?;
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
                 file_system_sandbox_policy = file_system_sandbox_policy
                     .with_additional_writable_roots(
                         resolved_cwd.as_path(),
                         &additional_writable_roots,
                     );
-                permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-                    permission_profile.enforcement(),
-                    &file_system_sandbox_policy,
-                    network_sandbox_policy,
-                );
+                sandbox_policy = file_system_sandbox_policy
+                    .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
             }
             (
                 configured_network_proxy_config,
-                permission_profile,
+                sandbox_policy,
                 file_system_sandbox_policy,
+                network_sandbox_policy,
+                sandbox_enforcement,
             )
         } else if profiles_are_active {
             let permissions = cfg.permissions.as_ref().ok_or_else(|| {
@@ -1957,31 +2034,23 @@ impl Config {
                     resolved_cwd.as_path(),
                     &mut startup_warnings,
                 )?;
-            let mut permission_profile = PermissionProfile::from_runtime_permissions(
-                &file_system_sandbox_policy,
-                network_sandbox_policy,
-            );
-            let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
-                &permission_profile,
-                &file_system_sandbox_policy,
-                network_sandbox_policy,
-                resolved_cwd.as_path(),
-            );
+            let mut sandbox_policy = file_system_sandbox_policy
+                .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
                 file_system_sandbox_policy = file_system_sandbox_policy
                     .with_additional_writable_roots(
                         resolved_cwd.as_path(),
                         &additional_writable_roots,
                     );
-                permission_profile = PermissionProfile::from_runtime_permissions(
-                    &file_system_sandbox_policy,
-                    network_sandbox_policy,
-                );
+                sandbox_policy = file_system_sandbox_policy
+                    .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
             }
             (
                 configured_network_proxy_config,
-                permission_profile,
+                sandbox_policy,
                 file_system_sandbox_policy,
+                network_sandbox_policy,
+                SandboxEnforcement::Managed,
             )
         } else {
             let configured_network_proxy_config = NetworkProxyConfig::default();
@@ -1991,7 +2060,7 @@ impl Config {
                     config_profile.sandbox_mode,
                     windows_sandbox_level,
                     Some(&active_project),
-                    Some(&constrained_permission_profile),
+                    /*sandbox_policy_constraint*/ None,
                 )
                 .await;
             if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
@@ -2003,19 +2072,17 @@ impl Config {
             }
             let file_system_sandbox_policy =
                 FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                &sandbox_policy,
-                resolved_cwd.as_path(),
-            );
+                    &sandbox_policy,
+                    resolved_cwd.as_path(),
+                );
             let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-            let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-                SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-                &file_system_sandbox_policy,
-                network_sandbox_policy,
-            );
+            let sandbox_enforcement = SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy);
             (
                 configured_network_proxy_config,
-                permission_profile,
+                sandbox_policy,
                 file_system_sandbox_policy,
+                network_sandbox_policy,
+                sandbox_enforcement,
             )
         };
         let approval_policy_was_explicit = approval_policy_override.is_some()
@@ -2062,7 +2129,6 @@ impl Config {
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg, &config_profile);
-        let terminal_resize_reflow = resolve_terminal_resize_reflow_config(&cfg);
 
         let agent_roles =
             agent_roles::load_agent_roles(fs, &cfg, &config_layer_stack, &mut startup_warnings)
@@ -2098,35 +2164,32 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
-        if multi_agent_v2.max_concurrent_threads_per_session == 0 {
+        let agent_max_threads_from_config =
+            cfg.agents.as_ref().and_then(|agents| agents.max_threads);
+        if features.enabled(Feature::MultiAgentV2) && agent_max_threads_from_config.is_some() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "features.multi_agent_v2.max_concurrent_threads_per_session must be at least 1",
+                "agents.max_threads cannot be set when multi_agent_v2 is enabled",
             ));
         }
-        let agent_max_threads_from_config = cfg.agents.as_ref().and_then(|agents| agents.max_threads);
         let agent_max_threads = if features.enabled(Feature::MultiAgentV2) {
-            if agent_max_threads_from_config.is_some() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "agents.max_threads cannot be set when multi_agent_v2 is enabled",
-                ));
-            }
             Some(
                 multi_agent_v2
                     .max_concurrent_threads_per_session
                     .saturating_sub(1),
             )
         } else {
-            let agent_max_threads = agent_max_threads_from_config.or(DEFAULT_AGENT_MAX_THREADS);
-            if agent_max_threads == Some(0) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "agents.max_threads must be at least 1",
-                ));
-            }
-            agent_max_threads
+            cfg.agents
+                .as_ref()
+                .and_then(|agents| agents.max_threads)
+                .or(DEFAULT_AGENT_MAX_THREADS)
         };
+        if !features.enabled(Feature::MultiAgentV2) && agent_max_threads == Some(0) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.max_threads must be at least 1",
+            ));
+        }
         let agent_max_depth = cfg
             .agents
             .as_ref()
@@ -2166,6 +2229,17 @@ impl Config {
             .background_terminal_max_timeout
             .unwrap_or(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS)
             .max(MIN_EMPTY_YIELD_TIME_MS);
+
+        let experimental_thread_store = match cfg.experimental_thread_store {
+            Some(ThreadStoreToml::Local) => ThreadStoreConfig::Local,
+            Some(ThreadStoreToml::Remote { endpoint }) => ThreadStoreConfig::Remote { endpoint },
+            #[cfg(debug_assertions)]
+            Some(ThreadStoreToml::InMemory { id }) => ThreadStoreConfig::InMemory { id },
+            None => cfg
+                .experimental_thread_store_endpoint
+                .map(|endpoint| ThreadStoreConfig::Remote { endpoint })
+                .unwrap_or(ThreadStoreConfig::Local),
+        };
 
         let ghost_snapshot = {
             let mut config = GhostSnapshotConfig::default();
@@ -2300,6 +2374,20 @@ impl Config {
         )
         .await?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
+        let js_repl_node_path = js_repl_node_path_override
+            .or(config_profile.js_repl_node_path.map(Into::into))
+            .or(cfg.js_repl_node_path.map(Into::into));
+        let js_repl_node_module_dirs = js_repl_node_module_dirs_override
+            .or_else(|| {
+                config_profile
+                    .js_repl_node_module_dirs
+                    .map(|dirs| dirs.into_iter().map(Into::into).collect::<Vec<PathBuf>>())
+            })
+            .or_else(|| {
+                cfg.js_repl_node_module_dirs
+                    .map(|dirs| dirs.into_iter().map(Into::into).collect::<Vec<PathBuf>>())
+            })
+            .unwrap_or_default();
         let zsh_path = zsh_path_override
             .or(config_profile.zsh_path.map(Into::into))
             .or(cfg.zsh_path.map(Into::into));
@@ -2325,7 +2413,12 @@ impl Config {
             .map(AbsolutePathBuf::to_path_buf)
             .or_else(|| resolve_sqlite_home_env(&resolved_cwd))
             .unwrap_or_else(|| codex_home.to_path_buf());
-        let original_permission_profile = permission_profile.clone();
+        let original_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+            sandbox_enforcement,
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
+        );
+
         apply_requirement_constrained_value(
             "approval_policy",
             approval_policy,
@@ -2341,20 +2434,15 @@ impl Config {
             let requirement_source = filesystem_requirements_source.clone();
             constrained_permission_profile
                 .value
-                .add_validator(move |permission_profile| {
-                    let mode = sandbox_mode_requirement_for_permission_profile(permission_profile);
-                    match mode {
-                        SandboxModeRequirement::ReadOnly
-                        | SandboxModeRequirement::WorkspaceWrite => Ok(()),
-                        SandboxModeRequirement::DangerFullAccess
-                        | SandboxModeRequirement::ExternalSandbox => {
-                            Err(ConstraintError::InvalidValue {
-                                field_name: "sandbox_mode",
-                                candidate: format!("{mode:?}"),
-                                allowed: "[read-only, workspace-write]".to_string(),
-                                requirement_source: requirement_source.clone(),
-                            })
-                        }
+                .add_validator(move |profile| match profile {
+                    PermissionProfile::Managed { .. } => Ok(()),
+                    PermissionProfile::Disabled | PermissionProfile::External { .. } => {
+                        Err(ConstraintError::InvalidValue {
+                            field_name: "permission_profile",
+                            candidate: format!("{profile:?}"),
+                            allowed: "managed permission profiles".to_string(),
+                            requirement_source: requirement_source.clone(),
+                        })
                     }
                 })
                 .map_err(std::io::Error::from)?;
@@ -2373,7 +2461,7 @@ impl Config {
         )?;
         apply_requirement_constrained_value(
             "permission_profile",
-            permission_profile,
+            original_permission_profile.clone(),
             &mut constrained_permission_profile,
             &mut startup_warnings,
         )?;
@@ -2392,11 +2480,10 @@ impl Config {
             None => (None, None),
         };
         let has_network_requirements = network_requirements.is_some();
-        let network_permission_profile = constrained_permission_profile.get().clone();
         let network = NetworkProxySpec::from_config_and_constraints(
             configured_network_proxy_config,
             network_requirements,
-            &network_permission_profile,
+            constrained_permission_profile.get(),
         )
         .map_err(|err| {
             if let Some(source) = network_requirements_source.as_ref() {
@@ -2418,13 +2505,14 @@ impl Config {
             zsh_path.as_ref(),
             main_execve_wrapper_exe.as_ref(),
         );
-        let effective_permission_profile = constrained_permission_profile.value.get().clone();
+        let constrained_effective_permission_profile =
+            constrained_permission_profile.value.get().clone();
         let (mut effective_file_system_sandbox_policy, effective_network_sandbox_policy) =
-            effective_permission_profile.to_runtime_permissions();
-        if effective_permission_profile != original_permission_profile {
-            effective_file_system_sandbox_policy
-                .preserve_deny_read_restrictions_from(&file_system_sandbox_policy);
-        }
+            if constrained_effective_permission_profile == original_permission_profile {
+                (file_system_sandbox_policy, network_sandbox_policy)
+            } else {
+                constrained_effective_permission_profile.to_runtime_permissions()
+            };
         if let Some(Sourced {
             value: filesystem_requirements,
             ..
@@ -2438,14 +2526,22 @@ impl Config {
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
             .with_additional_readable_roots(resolved_cwd.as_path(), &helper_readable_roots);
         let effective_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-            effective_permission_profile.enforcement(),
+            constrained_effective_permission_profile.enforcement(),
             &effective_file_system_sandbox_policy,
             effective_network_sandbox_policy,
         );
         constrained_permission_profile
             .value
-            .set(effective_permission_profile)
+            .set(effective_permission_profile.clone())
             .map_err(std::io::Error::from)?;
+        let effective_sandbox_policy = effective_permission_profile
+            .to_legacy_sandbox_policy(resolved_cwd.as_path())
+            .map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("invalid effective permission profile: {err}"),
+                )
+            })?;
         let config = Self {
             model,
             service_tier,
@@ -2459,6 +2555,9 @@ impl Config {
             permissions: Permissions {
                 approval_policy: constrained_approval_policy.value,
                 permission_profile: constrained_permission_profile.value,
+                sandbox_policy: Constrained::allow_any(effective_sandbox_policy),
+                file_system_sandbox_policy: effective_file_system_sandbox_policy,
+                network_sandbox_policy: effective_network_sandbox_policy,
                 network,
                 allow_login_shell,
                 shell_environment_policy,
@@ -2495,7 +2594,8 @@ impl Config {
             mcp_oauth_callback_url: cfg.mcp_oauth_callback_url.clone(),
             model_providers,
             account_pool: cfg.account_pool,
-            model_policy: cfg.model_policy,
+            model_router: cfg.model_router,
+            model_router_accounting: None,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(AGENTS_MD_MAX_BYTES),
             project_doc_fallback_filenames: cfg
                 .project_doc_fallback_filenames
@@ -2527,6 +2627,8 @@ impl Config {
             codex_self_exe,
             codex_linux_sandbox_exe,
             main_execve_wrapper_exe,
+            js_repl_node_path,
+            js_repl_node_module_dirs,
             zsh_path,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
@@ -2573,11 +2675,8 @@ impl Config {
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
             experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,
+            experimental_thread_store,
             experimental_thread_config_endpoint: cfg.experimental_thread_config_endpoint,
-            experimental_thread_store: thread_store_config(
-                cfg.experimental_thread_store,
-                cfg.experimental_thread_store_endpoint,
-            ),
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
@@ -2586,6 +2685,12 @@ impl Config {
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,
+            repo_ci: cfg.repo_ci,
+            implement: cfg.implement,
+            repo_ci_session_mode,
+            repo_ci_issue_types,
+            repo_ci_review_rounds,
+            repo_ci_long_ci,
             multi_agent_v2,
             features,
             suppress_unstable_features_warning: cfg
@@ -2620,6 +2725,18 @@ impl Config {
                 .as_ref()
                 .map(|t| t.model_availability_nux.clone())
                 .unwrap_or_default(),
+            terminal_resize_reflow: cfg
+                .tui
+                .as_ref()
+                .and_then(|t| t.terminal_resize_reflow_max_rows)
+                .map(|max_rows| TerminalResizeReflowConfig {
+                    max_rows: if max_rows == 0 {
+                        TerminalResizeReflowMaxRows::Disabled
+                    } else {
+                        TerminalResizeReflowMaxRows::Limit(max_rows)
+                    },
+                })
+                .unwrap_or_default(),
             tui_alternate_screen: cfg
                 .tui
                 .as_ref()
@@ -2628,7 +2745,6 @@ impl Config {
             tui_status_line: cfg.tui.as_ref().and_then(|t| t.status_line.clone()),
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
-            terminal_resize_reflow,
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -2712,9 +2828,9 @@ impl Config {
     }
 
     pub fn managed_network_requirements_enabled(&self) -> bool {
-        !matches!(
+        matches!(
             self.permissions.permission_profile.get(),
-            PermissionProfile::Disabled
+            PermissionProfile::Managed { .. }
         ) && self
             .config_layer_stack
             .requirements_toml()
@@ -2785,7 +2901,3 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "config_loader_tests.rs"]
-mod config_loader_tests;

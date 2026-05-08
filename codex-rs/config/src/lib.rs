@@ -86,6 +86,7 @@ pub use mcp_types::AppToolApproval;
 pub use mcp_types::McpServerConfig;
 pub use mcp_types::McpServerDisabledReason;
 pub use mcp_types::McpServerEnvVar;
+pub use mcp_types::McpServerProcessReuseScope;
 pub use mcp_types::McpServerToolConfig;
 pub use mcp_types::McpServerTransportConfig;
 pub use mcp_types::RawMcpServerConfig;

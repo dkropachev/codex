@@ -498,6 +498,9 @@
             "js_repl_tools_only": {
               "type": "boolean"
             },
+            "mcp_process_reuse": {
+              "type": "boolean"
+            },
             "memories": {
               "type": "boolean"
             },
@@ -1102,6 +1105,45 @@
             "name"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "McpServerProcessReuseScope": {
+      "oneOf": [
+        {
+          "description": "Never use the per-user MCP process broker for this server.",
+          "enum": [
+            "none"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Reuse a brokered process for matching launches from the same resolved cwd.",
+          "enum": [
+            "cwd"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Reuse within the detected project root from `project_root_markers`.",
+          "enum": [
+            "project"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Reuse within the detected Git repository or worktree root.",
+          "enum": [
+            "repo"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Reuse across workspaces for the same Codex home and OS user.",
+          "enum": [
+            "user"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -1957,6 +1999,14 @@
         "oauth_resource": {
           "default": null,
           "type": "string"
+        },
+        "process_reuse_scope": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/McpServerProcessReuseScope"
+            }
+          ],
+          "default": null
         },
         "required": {
           "default": null,
@@ -2824,6 +2874,9 @@
           "type": "boolean"
         },
         "js_repl_tools_only": {
+          "type": "boolean"
+        },
+        "mcp_process_reuse": {
           "type": "boolean"
         },
         "memories": {

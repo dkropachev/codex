@@ -6044,9 +6044,9 @@ impl CodexMessageProcessor {
             Some(environment) => {
                 // Status listing has no turn cwd. This fallback is used only
                 // by executor-backed stdio MCPs whose config omits `cwd`.
-                McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
+                config.mcp_runtime_environment(environment, config.cwd.to_path_buf())
             }
-            None => McpRuntimeEnvironment::new(
+            None => config.mcp_runtime_environment(
                 environment_manager.local_environment(),
                 config.cwd.to_path_buf(),
             ),
@@ -6215,7 +6215,7 @@ impl CodexMessageProcessor {
                 .unwrap_or_else(|| environment_manager.local_environment());
             // Resource reads without a thread have no turn cwd. This fallback
             // is used only by executor-backed stdio MCPs whose config omits `cwd`.
-            McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
+            config.mcp_runtime_environment(environment, config.cwd.to_path_buf())
         };
 
         tokio::spawn(async move {
