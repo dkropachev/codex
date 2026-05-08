@@ -29,7 +29,7 @@ mod repo_ci_ai_learning;
 mod runner;
 mod workflow_history;
 
-const MANIFEST_VERSION: u32 = 3;
+const MANIFEST_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -463,6 +463,13 @@ pub fn status(codex_home: &Path, cwd: &Path) -> Result<StatusOutcome> {
     let paths = resolved.paths;
     if paths.manifest_path.exists() {
         let manifest = read_manifest(&paths.manifest_path)?;
+        if manifest.version != MANIFEST_VERSION {
+            return Ok(StatusOutcome {
+                paths,
+                manifest: None,
+                stale_sources: resolved.learning_sources,
+            });
+        }
         touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
         let stale_sources = changed_sources(&manifest.learning_sources, &resolved.learning_sources);
         return Ok(StatusOutcome {
@@ -478,6 +485,9 @@ pub fn status(codex_home: &Path, cwd: &Path) -> Result<StatusOutcome> {
             continue;
         }
         let manifest = read_manifest(&paths.manifest_path)?;
+        if manifest.version != MANIFEST_VERSION {
+            continue;
+        }
         touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
         let stale_sources = changed_sources(&manifest.learning_sources, &resolved.learning_sources);
         return Ok(StatusOutcome {
@@ -932,9 +942,13 @@ fn hash_file(path: &Path) -> Option<String> {
 }
 
 fn write_runner(path: &Path, manifest: &RepoCiManifest) -> Result<()> {
+    let repo_root = manifest.repo_root.to_string_lossy();
+    #[cfg(windows)]
+    let repo_root = repo_root.replace('\\', "/");
+
     let mut script =
         String::from("#!/usr/bin/env bash\nset -euo pipefail\n\nmode=\"${1:-fast}\"\nrepo_root=");
-    script.push_str(&shell_quote(&manifest.repo_root.to_string_lossy()));
+    script.push_str(&shell_quote(&repo_root));
     script.push_str("\nrepo_root=\"${CODEX_REPO_CI_REPO_ROOT:-$repo_root}\"");
     script.push_str("\ncd \"$repo_root\"\n\nrecord_step() {\n  if [[ -n \"${CODEX_REPO_CI_JSONL:-}\" ]]; then\n    local id_json=\"$1\"\n    id_json=\"${id_json//\\\\/\\\\\\\\}\"\n    id_json=\"${id_json//\\\"/\\\\\\\"}\"\n    printf '{\"id\":\"%s\",\"event\":\"%s\",\"exit_code\":%s}\\n' \"$id_json\" \"$2\" \"$3\" >> \"$CODEX_REPO_CI_JSONL\"\n  fi\n}\n\nrun_step() {\n  local id=\"$1\"\n  shift\n  echo \"==> ${id}\"\n  record_step \"$id\" started null\n  set +e\n  \"$@\"\n  local status=$?\n  set -e\n  record_step \"$id\" finished \"$status\"\n  return \"$status\"\n}\n\nprepare() {\n");
     if manifest.prepare_steps.is_empty() {
@@ -1606,6 +1620,42 @@ jobs:
         let status = status(&codex_home, &repo).expect("status");
 
         assert!(status.manifest.is_none());
+    }
+
+    #[test]
+    fn status_treats_old_manifest_version_as_needing_learning() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).expect("create repo");
+        fs::write(repo.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
+        let learning_sources = collect_sources(&repo).expect("sources");
+        let paths = paths_for_repo(&codex_home, &repo).expect("paths");
+        fs::create_dir_all(&paths.state_dir).expect("state dir");
+        let manifest = RepoCiManifest {
+            version: MANIFEST_VERSION - 1,
+            repo_root: repo.clone(),
+            repo_key: cicd_artifacts::repo_key(&repo),
+            source_key: cicd_artifacts::source_key(&artifact_sources(&learning_sources)),
+            automation: AutomationMode::Local,
+            local_test_time_budget_sec: 300,
+            learned_at_unix_sec: 1,
+            learning_sources: learning_sources.clone(),
+            inferred_issue_types: default_issue_types(),
+            prepare_steps: vec![],
+            fast_steps: vec![step("test", "cargo test", StepPhase::Test)],
+            full_steps: vec![],
+            validation: ValidationStatus::Passed {
+                validated_at_unix_sec: 1,
+            },
+        };
+        write_manifest(&paths.manifest_path, &manifest).expect("write manifest");
+        register_manifest_artifact_state(&codex_home, &paths, &manifest).expect("register state");
+
+        let status = status(&codex_home, &repo).expect("status");
+
+        assert_eq!(status.manifest, None);
+        assert_eq!(status.stale_sources, learning_sources);
     }
 
     #[test]

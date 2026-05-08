@@ -57,7 +57,7 @@ pub fn render_repo_ci_learning_prompt(
     failure_feedback: Option<&str>,
 ) -> String {
     let mut prompt = format!(
-        "Learn local CI commands for this repository.\n\nRepository root: {}\nFast-step time budget: about {} seconds.\n\nYou must inspect the repository yourself to discover relevant files and commands.\nUse local read-only exploration only.\nDo not edit any files.\nUse provided GitHub Actions history hints, and you may run read-only GitHub CLI metadata commands such as `gh run list`, `gh run view`, `gh workflow list`, `gh workflow view`, or read-only `gh api` GET requests.\nReturn strict JSON only matching the schema.\n\nInspection rules:\n- Use only non-interactive repository inspection commands.\n- Never launch an editor, pager, REPL, fuzzy finder, or any other interactive terminal UI.\n- Never run commands such as `$EDITOR`, `$VISUAL`, `vim`, `nvim`, `vi`, `nano`, `emacs`, `less`, `more`, `most`, `bat --paging`, `fzf`, or `top`.\n- During discovery, do not execute local test, build, install, package-manager, service, container, or cluster-starting commands. This includes commands such as `pytest`, `tox`, `nox`, `cargo test`, `make test`, `npm test`, `uv run pytest`, `pip install`, `uv sync`, `docker`, `docker compose`, `ccm`, and similar project runners.\n- Prefer commands such as `rg`, `find`, `ls`, `sed -n`, `cat`, `git show`, and similar non-interactive readers.\n\nRequirements:\n- Produce prepareSteps, fastSteps, and fullSteps.\n- Every command must run from the repository root via `bash -lc`.\n- Prefer project-native entry points such as `just`, `make`, package scripts, cargo commands, pytest, tox, or repo scripts.\n- `prepareSteps` should set up dependencies or caches only when truly needed.\n- `fastSteps` should be the quickest representative local checks that CI expects to stay green and fit within the fast-step budget.\n- Never put integration, end-to-end, stress, cluster, service-backed, wheel-building, packaging, or other long suites in fastSteps when GitHub Actions history shows they exceed the fast-step budget.\n- `fullSteps` may be broader than `fastSteps`, but must still be valid local commands; omit suites that are only practical in remote CI.\n- Use stable, descriptive step ids.\n- Keep commands realistic for this machine; if a tool is optional and likely absent, prefer a repo wrapper or a more portable command.\n- If no distinct full suite exists, reuse the fast steps.\n",
+        "Learn local CI commands for this repository.\n\nRepository root: {}\nFast-step time budget: about {} seconds.\n\nYou must inspect the repository yourself to discover relevant files and commands.\nUse local read-only exploration only.\nDo not edit any files.\nUse provided GitHub Actions history hints, and you may run read-only GitHub CLI metadata commands such as `gh run list`, `gh run view`, `gh workflow list`, `gh workflow view`, or read-only `gh api` GET requests.\nReturn strict JSON only matching the schema.\n\nInspection rules:\n- Use only non-interactive repository inspection commands.\n- Never launch an editor, pager, REPL, fuzzy finder, or any other interactive terminal UI.\n- Never run commands such as `$EDITOR`, `$VISUAL`, `vim`, `nvim`, `vi`, `nano`, `emacs`, `less`, `more`, `most`, `bat --paging`, `fzf`, or `top`.\n- During discovery, do not execute local test, build, install, package-manager, service, container, or cluster-starting commands. This includes commands such as `pytest`, `tox`, `nox`, `cargo test`, `make test`, `npm test`, `uv run pytest`, `pip install`, `uv sync`, `docker`, `docker compose`, `ccm`, and similar project runners.\n- Prefer commands such as `rg`, `find`, `ls`, `sed -n`, `cat`, `git show`, and similar non-interactive readers.\n\nRequirements:\n- Produce prepareSteps, fastSteps, and fullSteps.\n- Every command must run from the repository root via `bash -lc`.\n- Prefer project-native entry points such as `just`, `make`, package scripts, cargo commands, pytest, tox, or repo scripts.\n- `prepareSteps` should set up dependencies or caches only when truly needed.\n- `fastSteps` should be the quickest representative local checks that CI expects to stay green and fit within the fast-step budget.\n- Never put integration, end-to-end, stress, cluster, service-backed, wheel-building, packaging, or other long suites in fastSteps when GitHub Actions history shows they exceed the fast-step budget.\n- `fullSteps` may be broader than `fastSteps`, but must still be valid local commands; omit suites that are only practical in remote CI.\n- Do not include GitHub Actions-only housekeeping commands, artifact packaging/upload commands, commands that rely on `${{ ... }}` expressions, or commands that rely on GitHub runner variables such as `GITHUB_*`, `RUNNER_*`, or `ARTIFACT_TAR`.\n- Use stable, descriptive step ids.\n- Keep commands realistic for this machine; if a tool is optional and likely absent, prefer a repo wrapper or a more portable command.\n- If no distinct full suite exists, reuse the fast steps.\n",
         repo_root.display(),
         local_test_time_budget_sec,
     );
@@ -285,7 +285,9 @@ fn normalize_steps(
         .enumerate()
         .filter_map(|(index, step)| {
             let command = step.command.trim().to_string();
-            if command.is_empty() {
+            let is_github_actions_only =
+                crate::learning_hints::is_github_actions_only_command(&command);
+            if command.is_empty() || is_github_actions_only {
                 return None;
             }
 
@@ -476,6 +478,40 @@ mod tests {
                     phase: StepPhase::Lint,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn normalize_steps_drops_github_actions_only_commands() {
+        let steps = normalize_steps(
+            vec![
+                RepoCiStep {
+                    id: "artifact".to_string(),
+                    command: r#"tar -cvf "$ARTIFACT_TAR" ."#.to_string(),
+                    phase: StepPhase::Build,
+                },
+                RepoCiStep {
+                    id: "matrix".to_string(),
+                    command: "make test CASSANDRA_VERSION=${{ matrix.version }}".to_string(),
+                    phase: StepPhase::Test,
+                },
+                RepoCiStep {
+                    id: "lint".to_string(),
+                    command: "make lint".to_string(),
+                    phase: StepPhase::Lint,
+                },
+            ],
+            StepPhase::Test,
+            "fast",
+        );
+
+        assert_eq!(
+            steps,
+            vec![RepoCiStep {
+                id: "lint".to_string(),
+                command: "make lint".to_string(),
+                phase: StepPhase::Lint,
+            }]
         );
     }
 
