@@ -110,6 +110,7 @@ pub fn store_captured_run_artifact(
         manifest_fingerprint,
         worktree_fingerprint,
         steps: summarize_steps(&run.steps),
+        resource_usage: run.resource_usage.clone(),
         stdout: run.stdout.clone(),
         stderr: run.stderr.clone(),
     };

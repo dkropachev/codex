@@ -236,7 +236,7 @@ fn starts_shell_array_assignment(line: &str) -> bool {
         && right.trim_start().starts_with('(')
 }
 
-fn references_shell_context(command: &str) -> bool {
+pub(crate) fn references_shell_context(command: &str) -> bool {
     let mut chars = command.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch != '$' {
@@ -252,7 +252,7 @@ fn references_shell_context(command: &str) -> bool {
     false
 }
 
-fn looks_like_shell_fragment(command: &str) -> bool {
+pub(crate) fn looks_like_shell_fragment(command: &str) -> bool {
     command.starts_with('-') || matches!(command, "build" | "check" | "lint" | "test")
 }
 
