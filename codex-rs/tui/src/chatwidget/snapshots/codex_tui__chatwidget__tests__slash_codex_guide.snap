@@ -2,5 +2,5 @@
 source: tui/src/chatwidget/tests/slash_commands.rs
 expression: rendered
 ---
-• Codex config mode enabled. Target workspace is read-only; scratch workspace is
+• Codex mode enabled. Investigating read-only; scratch workspace is
   <codex-config-workspace>. Use /codex off to leave.

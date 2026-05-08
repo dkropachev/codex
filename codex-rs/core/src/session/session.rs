@@ -802,6 +802,7 @@ impl Session {
                 auth_manager: Arc::clone(&auth_manager),
                 session_telemetry,
                 models_manager: Arc::clone(&models_manager),
+                model_router_discovery_cache: crate::model_router::ModelRouterDiscoveryCache::new(),
                 tool_approvals: Mutex::new(ApprovalStore::default()),
                 guardian_rejections: Mutex::new(HashMap::new()),
                 guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
@@ -918,7 +919,7 @@ impl Session {
                 INITIAL_SUBMIT_ID.to_owned(),
                 tx_event.clone(),
                 session_configuration.permission_profile(),
-                McpRuntimeEnvironment::new(
+                config.mcp_runtime_environment(
                     sess.services
                         .environment_manager
                         .default_environment()
@@ -929,6 +930,7 @@ impl Session {
                 codex_apps_tools_cache_key(auth),
                 tool_plugin_provenance,
                 auth,
+                config.features.enabled(Feature::McpProcessReuse),
             )
             .instrument(info_span!(
                 "session_init.mcp_manager_init",

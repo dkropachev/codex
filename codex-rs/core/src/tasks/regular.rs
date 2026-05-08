@@ -41,6 +41,16 @@ impl SessionTask for RegularTask {
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         let sess = session.clone_session();
+        let ctx = if ctx
+            .config
+            .model_router
+            .as_ref()
+            .is_some_and(|router| router.enabled)
+        {
+            Box::pin(sess.route_regular_turn_context_for_model_router(ctx, &input)).await
+        } else {
+            ctx
+        };
         let run_turn_span = trace_span!("run_turn");
         // Regular turns emit `TurnStarted` inline so first-turn lifecycle does
         // not wait on startup prewarm resolution.
@@ -58,8 +68,13 @@ impl SessionTask for RegularTask {
         {
             SessionStartupPrewarmResolution::Cancelled => return None,
             SessionStartupPrewarmResolution::Unavailable { .. } => None,
-            SessionStartupPrewarmResolution::Ready(prewarmed_client_session) => {
-                Some(*prewarmed_client_session)
+            SessionStartupPrewarmResolution::Ready(mut prewarmed_client_session) => {
+                if ctx.model_router_route_changed {
+                    prewarmed_client_session.reset_websocket_session();
+                    None
+                } else {
+                    Some(*prewarmed_client_session)
+                }
             }
         };
         let mut next_input = input;

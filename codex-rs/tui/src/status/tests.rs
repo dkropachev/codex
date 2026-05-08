@@ -7,6 +7,7 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::status::StatusAccountDisplay;
 use crate::test_support::PathBufExt;
+use crate::test_support::normalize_codex_version_for_snapshot;
 use crate::test_support::test_path_buf;
 use chrono::Duration as ChronoDuration;
 use chrono::TimeZone;
@@ -62,7 +63,7 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
 }
 
 fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
-    lines
+    let lines = lines
         .into_iter()
         .map(|line| {
             if let (Some(dir_pos), Some(pipe_idx)) = (line.find("Directory: "), line.rfind('│')) {
@@ -81,7 +82,9 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
                 line
             }
         })
-        .collect()
+        .collect();
+
+    normalize_codex_version_for_snapshot(lines, "v0.125.0")
 }
 
 fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) -> i64 {

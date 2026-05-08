@@ -74,7 +74,6 @@ use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
 use codex_hooks::HookResult;
 use codex_login::AccountPoolBucket;
-use codex_protocol::config_types::ModeKind;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::PlanItem;
@@ -95,6 +94,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::PlanDeltaEvent;
 use codex_protocol::protocol::ReasoningContentDeltaEvent;
 use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -627,6 +627,7 @@ pub(crate) async fn run_turn(
                         &sess,
                         &turn_context,
                         &mut repo_ci_state,
+                        &cancellation_token,
                     )
                     .await
                     {
@@ -2005,6 +2006,13 @@ async fn try_run_sampling_request(
     let mut stream = match stream_result {
         Ok(Ok(stream)) => stream,
         Ok(Err(err)) => {
+            crate::model_router::record_model_router_request_usage(
+                sess.services.state_db.as_deref(),
+                turn_context.config.model_router_accounting.as_ref(),
+                &TokenUsage::default(),
+                "stream_error",
+            )
+            .await;
             return Err(SamplingRequestFailure {
                 err,
                 visible_output_started: false,
@@ -2028,7 +2036,8 @@ async fn try_run_sampling_request(
         Box<dyn ToolArgumentDiffConsumer>,
     )> = None;
     let mut should_emit_turn_diff = false;
-    let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
+    let mut model_router_usage_recorded = false;
+    let plan_mode = turn_context.collaboration_mode.mode.is_plan_like();
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let receiving_span = trace_span!("receiving_stream");
@@ -2068,7 +2077,9 @@ async fn try_run_sampling_request(
         record_turn_ttft_metric(&turn_context, &event).await;
 
         match event {
-            ResponseEvent::Created => {}
+            ResponseEvent::Created => {
+                turn_context.increment_model_response_ordinal();
+            }
             ResponseEvent::OutputItemDone(item) => {
                 if response_item_starts_visible_output(&item) {
                     visible_output_started = true;
@@ -2272,6 +2283,15 @@ async fn try_run_sampling_request(
                 .await;
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
+                let accounting_usage = token_usage.clone().unwrap_or_default();
+                crate::model_router::record_model_router_request_usage(
+                    sess.services.state_db.as_deref(),
+                    turn_context.config.model_router_accounting.as_ref(),
+                    &accounting_usage,
+                    "completed",
+                )
+                .await;
+                model_router_usage_recorded = true;
                 should_emit_turn_diff = true;
                 if let Some(false) = end_turn {
                     needs_follow_up = true;
@@ -2394,11 +2414,28 @@ async fn try_run_sampling_request(
             visible_output_started,
         })?;
 
-    if cancellation_token.is_cancelled() {
+    if !model_router_usage_recorded && cancellation_token.is_cancelled() {
+        crate::model_router::record_model_router_request_usage(
+            sess.services.state_db.as_deref(),
+            turn_context.config.model_router_accounting.as_ref(),
+            &TokenUsage::default(),
+            "aborted",
+        )
+        .await;
         return Err(SamplingRequestFailure {
             err: CodexErr::TurnAborted,
             visible_output_started,
         });
+    }
+
+    if !model_router_usage_recorded && outcome.is_err() {
+        crate::model_router::record_model_router_request_usage(
+            sess.services.state_db.as_deref(),
+            turn_context.config.model_router_accounting.as_ref(),
+            &TokenUsage::default(),
+            "error",
+        )
+        .await;
     }
 
     if should_emit_turn_diff {

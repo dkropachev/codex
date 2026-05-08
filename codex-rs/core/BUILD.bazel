@@ -20,6 +20,7 @@ codex_rust_crate(
         ],
         allow_empty = True,
     ) + [
+        "//codex-rs/collaboration-mode-templates:templates/plan.md",
         "//codex-rs/tui:codex_guide_md",
     ],
     rustc_env = {

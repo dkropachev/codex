@@ -15,6 +15,7 @@ use serde_json::Value;
 use crate::CodexAuth;
 
 use super::manager::AuthManager;
+use super::manager::RefreshTokenError;
 
 const USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
@@ -193,6 +194,13 @@ impl AccountPoolManager {
                 }
             }
         }
+    }
+
+    pub async fn refresh_active_token(&self) -> Result<(), RefreshTokenError> {
+        let Some(pool) = self.pools.get(&self.default_pool) else {
+            return Ok(());
+        };
+        pool.refresh_active_token().await
     }
 
     pub fn set_usage_for_testing(
@@ -461,6 +469,23 @@ impl AccountPool {
         self.members
             .iter()
             .any(|member| !self.is_exhausted(&member.account_id, bucket))
+    }
+
+    async fn refresh_active_token(&self) -> Result<(), RefreshTokenError> {
+        if self.active_account_id().is_none() {
+            let _ = self.select_cached_auth(AccountPoolBucket::Regular);
+        }
+        let Some(account_id) = self.active_account_id() else {
+            return Ok(());
+        };
+        let Some(member) = self
+            .members
+            .iter()
+            .find(|member| member.account_id == account_id)
+        else {
+            return Ok(());
+        };
+        member.manager.refresh_token_unpooled().await
     }
 }
 

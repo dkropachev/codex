@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use crate::function_tool::FunctionCallError;
 use crate::tools::registry::ToolRegistry;
 use codex_tools::ConfiguredToolSpec;
+use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::TOOL_ROUTER_TOOL_NAME;
 use codex_tools::ToolName;
@@ -23,6 +24,8 @@ pub(crate) struct ToolIndexEntry {
     pub(crate) has_handler: bool,
     pub(crate) freeform: bool,
     pub(crate) fanout_safe: bool,
+    pub(crate) description: String,
+    pub(crate) argument_hints: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -38,7 +41,8 @@ impl ToolRouterIndex {
     ) -> Self {
         let mut entries = BTreeMap::<String, ToolIndexEntry>::new();
         for configured in specs {
-            for (name, freeform) in spec_tool_names(&configured.spec) {
+            for spec_entry in spec_tool_entries(&configured.spec) {
+                let name = spec_entry.name;
                 let display = name.display();
                 let has_handler = registry.has_handler(&name);
                 entries.insert(
@@ -48,7 +52,9 @@ impl ToolRouterIndex {
                         name,
                         source: ToolIndexSource::Spec,
                         has_handler,
-                        freeform,
+                        freeform: spec_entry.freeform,
+                        description: spec_entry.description,
+                        argument_hints: spec_entry.argument_hints,
                     },
                 );
             }
@@ -62,6 +68,8 @@ impl ToolRouterIndex {
                 source: ToolIndexSource::Registry,
                 has_handler: true,
                 freeform: false,
+                description: String::new(),
+                argument_hints: Vec::new(),
             });
         }
 
@@ -121,21 +129,6 @@ impl ToolRouterIndex {
         }
     }
 
-    pub(crate) fn prompt_catalog(&self) -> Vec<String> {
-        self.entries
-            .iter()
-            .filter(|entry| entry.has_handler && entry.name.name != TOOL_ROUTER_TOOL_NAME)
-            .map(|entry| {
-                let fanout = if entry.fanout_safe {
-                    " fanout_safe"
-                } else {
-                    ""
-                };
-                format!("{} ({:?}{fanout})", entry.name.display(), entry.source)
-            })
-            .collect()
-    }
-
     pub(crate) fn learned_rule_tool_names(&self) -> BTreeSet<String> {
         self.entries
             .iter()
@@ -145,34 +138,95 @@ impl ToolRouterIndex {
     }
 }
 
-fn spec_tool_names(spec: &ToolSpec) -> Vec<(ToolName, bool)> {
+struct ToolSpecCatalogEntry {
+    name: ToolName,
+    freeform: bool,
+    description: String,
+    argument_hints: Vec<String>,
+}
+
+fn spec_tool_entries(spec: &ToolSpec) -> Vec<ToolSpecCatalogEntry> {
     match spec {
-        ToolSpec::Function(tool) => vec![(ToolName::plain(tool.name.as_str()), false)],
-        ToolSpec::Freeform(tool) => vec![(ToolName::plain(tool.name.as_str()), true)],
+        ToolSpec::Function(tool) => vec![ToolSpecCatalogEntry {
+            name: ToolName::plain(tool.name.as_str()),
+            freeform: false,
+            description: tool.description.clone(),
+            argument_hints: argument_hints(&tool.parameters),
+        }],
+        ToolSpec::Freeform(tool) => vec![ToolSpecCatalogEntry {
+            name: ToolName::plain(tool.name.as_str()),
+            freeform: true,
+            description: tool.description.clone(),
+            argument_hints: vec!["freeform input".to_string()],
+        }],
         ToolSpec::Namespace(namespace) => namespace
             .tools
             .iter()
             .map(|tool| match tool {
-                ResponsesApiNamespaceTool::Function(tool) => (
-                    ToolName::namespaced(namespace.name.as_str(), tool.name.as_str()),
-                    false,
-                ),
+                ResponsesApiNamespaceTool::Function(tool) => ToolSpecCatalogEntry {
+                    name: ToolName::namespaced(namespace.name.as_str(), tool.name.as_str()),
+                    freeform: false,
+                    description: tool.description.clone(),
+                    argument_hints: argument_hints(&tool.parameters),
+                },
             })
             .collect(),
-        ToolSpec::ToolSearch { .. } => vec![(ToolName::plain("tool_search"), false)],
-        ToolSpec::LocalShell {} => vec![(ToolName::plain("local_shell"), false)],
-        ToolSpec::ImageGeneration { .. } => vec![(ToolName::plain("image_generation"), false)],
-        ToolSpec::WebSearch { .. } => vec![(ToolName::plain("web_search"), false)],
+        ToolSpec::ToolSearch {
+            description,
+            parameters,
+            ..
+        } => vec![ToolSpecCatalogEntry {
+            name: ToolName::plain("tool_search"),
+            freeform: false,
+            description: description.clone(),
+            argument_hints: argument_hints(parameters),
+        }],
+        ToolSpec::LocalShell {} => vec![ToolSpecCatalogEntry {
+            name: ToolName::plain("local_shell"),
+            freeform: false,
+            description: "execute a local shell action".to_string(),
+            argument_hints: vec!["cmd".to_string()],
+        }],
+        ToolSpec::ImageGeneration { .. } => vec![ToolSpecCatalogEntry {
+            name: ToolName::plain("image_generation"),
+            freeform: false,
+            description: "generate or edit bitmap images".to_string(),
+            argument_hints: vec!["prompt".to_string()],
+        }],
+        ToolSpec::WebSearch { .. } => vec![ToolSpecCatalogEntry {
+            name: ToolName::plain("web_search"),
+            freeform: false,
+            description: "search the web".to_string(),
+            argument_hints: vec!["query".to_string()],
+        }],
     }
+}
+
+fn argument_hints(schema: &JsonSchema) -> Vec<String> {
+    let Some(properties) = schema.properties.as_ref() else {
+        return Vec::new();
+    };
+    properties.keys().take(8).cloned().collect()
 }
 
 fn matches_candidate(tool_name: &ToolName, candidate: &str, namespace: Option<&str>) -> bool {
     if let Some(namespace) = namespace {
         return tool_name.namespace.as_deref() == Some(namespace)
-            && (tool_name.name == candidate || tool_name.display() == candidate);
+            && (tool_name.name == candidate
+                || tool_name.display() == candidate
+                || namespaced_dot_candidate(tool_name, candidate));
     }
 
-    tool_name.display() == candidate || tool_name.name == candidate
+    tool_name.display() == candidate
+        || tool_name.name == candidate
+        || namespaced_dot_candidate(tool_name, candidate)
+}
+
+fn namespaced_dot_candidate(tool_name: &ToolName, candidate: &str) -> bool {
+    tool_name
+        .namespace
+        .as_ref()
+        .is_some_and(|namespace| format!("{namespace}.{}", tool_name.name) == candidate)
 }
 
 fn fanout_safe_tool_name(name: &ToolName, parallel_mcp_server_names: &HashSet<String>) -> bool {
@@ -237,6 +291,8 @@ mod tests {
                     has_handler: true,
                     freeform: false,
                     fanout_safe: false,
+                    description: String::new(),
+                    argument_hints: Vec::new(),
                 },
                 ToolIndexEntry {
                     name: ToolName::namespaced("mcp__files__", "list"),
@@ -244,6 +300,8 @@ mod tests {
                     has_handler: true,
                     freeform: false,
                     fanout_safe: false,
+                    description: String::new(),
+                    argument_hints: Vec::new(),
                 },
             ],
         };
@@ -288,6 +346,19 @@ mod tests {
         assert_eq!(
             index.find_exact("missing_tool", None).expect("lookup"),
             None
+        );
+    }
+
+    #[test]
+    fn exact_lookup_accepts_dot_qualified_namespace_names() {
+        let tool_name = ToolName::namespaced("repo_ci", "run");
+        let registry =
+            ToolRegistry::with_handler_for_test(tool_name.clone(), Arc::new(TestHandler));
+        let index = ToolRouterIndex::build(&[], &registry, &HashSet::new());
+
+        assert_eq!(
+            index.find_exact("repo_ci.run", None).expect("lookup"),
+            Some(tool_name)
         );
     }
 

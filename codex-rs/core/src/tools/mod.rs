@@ -1,3 +1,4 @@
+pub(crate) mod ci_command_guard;
 pub(crate) mod code_mode;
 pub(crate) mod context;
 pub(crate) mod events;
@@ -11,7 +12,7 @@ pub(crate) mod router;
 pub(crate) mod router_index;
 pub(crate) mod router_prompt;
 pub(crate) mod routing_deterministic;
-pub(crate) mod routing_model_router;
+pub(crate) mod routing_learned_rules;
 pub(crate) mod routing_shell;
 pub(crate) mod routing_tool;
 pub(crate) mod runtimes;

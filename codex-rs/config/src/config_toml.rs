@@ -58,7 +58,6 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
-use serde::de;
 
 const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
     AMAZON_BEDROCK_PROVIDER_ID,
@@ -580,6 +579,15 @@ pub struct ModelRouterToml {
 
     #[serde(default)]
     pub candidates: Vec<ModelRouterCandidateToml>,
+
+    #[serde(default)]
+    pub models: Option<ModelRouterModelsToml>,
+
+    #[serde(default)]
+    pub bias: Option<ModelRouterBiasToml>,
+
+    #[serde(default)]
+    pub lifecycle: Option<ModelRouterLifecycleToml>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -600,6 +608,124 @@ pub struct ImplementToml {
 pub enum ModelRouterDiscoveryToml {
     #[default]
     Curated,
+    Manual,
+    FromRules,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelRouterModelsToml {
+    #[serde(default)]
+    pub rules: Vec<ModelRouterModelRuleToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelRouterModelRuleToml {
+    pub id: Option<String>,
+
+    #[serde(rename = "type")]
+    pub rule_type: ModelRouterModelRuleTypeToml,
+
+    #[serde(default)]
+    pub tasks: Vec<String>,
+
+    #[serde(default)]
+    pub except_tasks: Vec<String>,
+
+    #[serde(default)]
+    pub models: Vec<ModelRouterModelSelectorToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelRouterModelRuleTypeToml {
+    Require,
+    Exclude,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelRouterModelSelectorToml {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelRouterBiasToml {
+    #[serde(default)]
+    pub rules: Vec<ModelRouterBiasRuleToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelRouterBiasRuleToml {
+    pub id: Option<String>,
+
+    #[serde(default)]
+    pub tasks: Vec<String>,
+
+    #[serde(default)]
+    pub except_tasks: Vec<String>,
+
+    #[serde(default)]
+    pub models: Vec<ModelRouterModelSelectorToml>,
+
+    pub score_bias: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelRouterLifecycleToml {
+    #[serde(default)]
+    pub defaults: Option<ModelRouterLifecycleDefaultsToml>,
+
+    #[serde(default)]
+    pub rules: Vec<ModelRouterLifecycleRuleToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelRouterLifecycleDefaultsToml {
+    pub window: Option<String>,
+    pub cost_budget_usd: Option<f64>,
+    pub token_budget: Option<u64>,
+    pub min_evaluated: Option<u64>,
+    pub min_confidence: Option<f64>,
+    pub min_success_rate: Option<f64>,
+    pub shadow_allowed: Option<bool>,
+    pub promotion_shadow_sample_rate_limit: Option<f64>,
+    pub monitoring_shadow_sample_rate_limit: Option<f64>,
+    pub auto_promote: Option<bool>,
+    pub auto_demote: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelRouterLifecycleRuleToml {
+    pub id: String,
+
+    #[serde(default)]
+    pub tasks: Vec<String>,
+
+    #[serde(default)]
+    pub except_tasks: Vec<String>,
+
+    #[serde(default)]
+    pub models: Vec<ModelRouterModelSelectorToml>,
+
+    pub window: Option<String>,
+    pub cost_budget_usd: Option<f64>,
+    pub token_budget: Option<u64>,
+    pub min_evaluated: Option<u64>,
+    pub min_confidence: Option<f64>,
+    pub min_success_rate: Option<f64>,
+    pub shadow_allowed: Option<bool>,
+    pub promotion_shadow_sample_rate_limit: Option<f64>,
+    pub monitoring_shadow_sample_rate_limit: Option<f64>,
+    pub auto_promote: Option<bool>,
+    pub auto_demote: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
@@ -1185,7 +1311,229 @@ pub fn validate_model_router(model_router: &ModelRouterToml) -> Result<(), Strin
         validate_model_router_candidate(&label, candidate)?;
     }
 
+    if let Some(models) = model_router.models.as_ref() {
+        validate_model_router_model_rules(models)?;
+    }
+    if let Some(bias) = model_router.bias.as_ref() {
+        validate_model_router_bias_rules(bias)?;
+    }
+    if let Some(lifecycle) = model_router.lifecycle.as_ref() {
+        validate_model_router_lifecycle(lifecycle)?;
+    }
+
     Ok(())
+}
+
+fn validate_model_router_model_rules(models: &ModelRouterModelsToml) -> Result<(), String> {
+    for (index, rule) in models.rules.iter().enumerate() {
+        let label = format!("model_router.models.rules[{index}]");
+        validate_optional_rule_id(&label, rule.id.as_deref())?;
+        validate_selector_list(&label, "tasks", &rule.tasks)?;
+        validate_selector_list(&label, "except_tasks", &rule.except_tasks)?;
+        validate_model_selector_list(&label, &rule.models, true)?;
+    }
+    Ok(())
+}
+
+fn validate_model_router_bias_rules(bias: &ModelRouterBiasToml) -> Result<(), String> {
+    for (index, rule) in bias.rules.iter().enumerate() {
+        let label = format!("model_router.bias.rules[{index}]");
+        validate_optional_rule_id(&label, rule.id.as_deref())?;
+        validate_selector_list(&label, "tasks", &rule.tasks)?;
+        validate_selector_list(&label, "except_tasks", &rule.except_tasks)?;
+        validate_model_selector_list(&label, &rule.models, true)?;
+        if !rule.score_bias.is_finite() || !(-1.0..=1.0).contains(&rule.score_bias) {
+            return Err(format!(
+                "{label}: score_bias must be a finite value between -1.0 and 1.0"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_model_router_lifecycle(lifecycle: &ModelRouterLifecycleToml) -> Result<(), String> {
+    if let Some(defaults) = lifecycle.defaults.as_ref() {
+        validate_lifecycle_values("model_router.lifecycle.defaults", defaults)?;
+    }
+    for (index, rule) in lifecycle.rules.iter().enumerate() {
+        let label = format!("model_router.lifecycle.rules[{index}]");
+        if rule.id.trim().is_empty() {
+            return Err(format!("{label}: id must not be empty"));
+        }
+        validate_selector_list(&label, "tasks", &rule.tasks)?;
+        validate_selector_list(&label, "except_tasks", &rule.except_tasks)?;
+        validate_model_selector_list(&label, &rule.models, false)?;
+        validate_lifecycle_values(&label, rule)?;
+    }
+    Ok(())
+}
+
+fn validate_optional_rule_id(label: &str, id: Option<&str>) -> Result<(), String> {
+    if let Some(id) = id
+        && id.trim().is_empty()
+    {
+        return Err(format!("{label}: id must not be empty"));
+    }
+    Ok(())
+}
+
+fn validate_selector_list(label: &str, field: &str, selectors: &[String]) -> Result<(), String> {
+    for (index, selector) in selectors.iter().enumerate() {
+        validate_exact_or_regex(&format!("{label}.{field}[{index}]"), selector)?;
+    }
+    Ok(())
+}
+
+fn validate_model_selector_list(
+    label: &str,
+    selectors: &[ModelRouterModelSelectorToml],
+    require_non_empty: bool,
+) -> Result<(), String> {
+    if require_non_empty && selectors.is_empty() {
+        return Err(format!("{label}: models must not be empty"));
+    }
+    for (index, selector) in selectors.iter().enumerate() {
+        let label = format!("{label}.models[{index}]");
+        if selector.provider.is_none() && selector.model.is_none() {
+            return Err(format!(
+                "{label}: at least one of provider or model must be set"
+            ));
+        }
+        validate_optional_exact_or_regex(&label, "provider", selector.provider.as_deref())?;
+        validate_optional_exact_or_regex(&label, "model", selector.model.as_deref())?;
+    }
+    Ok(())
+}
+
+fn validate_optional_exact_or_regex(
+    label: &str,
+    field: &str,
+    value: Option<&str>,
+) -> Result<(), String> {
+    if let Some(value) = value {
+        validate_exact_or_regex(&format!("{label}.{field}"), value)?;
+    }
+    Ok(())
+}
+
+fn validate_exact_or_regex(label: &str, value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err(format!("{label}: selector must not be empty"));
+    }
+    if let Some(pattern) = regex_selector_pattern(value) {
+        if pattern.is_empty() {
+            return Err(format!("{label}: regex selector must not be empty"));
+        }
+        regex::Regex::new(pattern).map_err(|err| format!("{label}: invalid regex: {err}"))?;
+    }
+    Ok(())
+}
+
+fn regex_selector_pattern(value: &str) -> Option<&str> {
+    (value.len() >= 2 && value.starts_with('/') && value.ends_with('/'))
+        .then_some(&value[1..value.len() - 1])
+}
+
+/// Shared view over lifecycle defaults and rule overrides for validation.
+trait ModelRouterLifecycleValues {
+    fn window(&self) -> Option<&str>;
+    fn cost_budget_usd(&self) -> Option<f64>;
+    fn min_confidence(&self) -> Option<f64>;
+    fn min_success_rate(&self) -> Option<f64>;
+    fn promotion_shadow_sample_rate_limit(&self) -> Option<f64>;
+    fn monitoring_shadow_sample_rate_limit(&self) -> Option<f64>;
+}
+
+impl ModelRouterLifecycleValues for ModelRouterLifecycleDefaultsToml {
+    fn window(&self) -> Option<&str> {
+        self.window.as_deref()
+    }
+
+    fn cost_budget_usd(&self) -> Option<f64> {
+        self.cost_budget_usd
+    }
+
+    fn min_confidence(&self) -> Option<f64> {
+        self.min_confidence
+    }
+
+    fn min_success_rate(&self) -> Option<f64> {
+        self.min_success_rate
+    }
+
+    fn promotion_shadow_sample_rate_limit(&self) -> Option<f64> {
+        self.promotion_shadow_sample_rate_limit
+    }
+
+    fn monitoring_shadow_sample_rate_limit(&self) -> Option<f64> {
+        self.monitoring_shadow_sample_rate_limit
+    }
+}
+
+impl ModelRouterLifecycleValues for ModelRouterLifecycleRuleToml {
+    fn window(&self) -> Option<&str> {
+        self.window.as_deref()
+    }
+
+    fn cost_budget_usd(&self) -> Option<f64> {
+        self.cost_budget_usd
+    }
+
+    fn min_confidence(&self) -> Option<f64> {
+        self.min_confidence
+    }
+
+    fn min_success_rate(&self) -> Option<f64> {
+        self.min_success_rate
+    }
+
+    fn promotion_shadow_sample_rate_limit(&self) -> Option<f64> {
+        self.promotion_shadow_sample_rate_limit
+    }
+
+    fn monitoring_shadow_sample_rate_limit(&self) -> Option<f64> {
+        self.monitoring_shadow_sample_rate_limit
+    }
+}
+
+fn validate_lifecycle_values(
+    label: &str,
+    values: &impl ModelRouterLifecycleValues,
+) -> Result<(), String> {
+    if let Some(window) = values.window() {
+        validate_model_router_window(label, window)?;
+    }
+    validate_non_negative(label, "cost_budget_usd", values.cost_budget_usd())?;
+    validate_unit_interval(label, "min_confidence", values.min_confidence())?;
+    validate_unit_interval(label, "min_success_rate", values.min_success_rate())?;
+    validate_unit_interval(
+        label,
+        "promotion_shadow_sample_rate_limit",
+        values.promotion_shadow_sample_rate_limit(),
+    )?;
+    validate_unit_interval(
+        label,
+        "monitoring_shadow_sample_rate_limit",
+        values.monitoring_shadow_sample_rate_limit(),
+    )?;
+    Ok(())
+}
+
+fn validate_model_router_window(label: &str, window: &str) -> Result<(), String> {
+    let window = window.trim();
+    if window.eq_ignore_ascii_case("all") || window.eq_ignore_ascii_case("all-time") {
+        return Ok(());
+    }
+    let (number, unit) = window.split_at(window.len().saturating_sub(1));
+    let valid_unit = matches!(unit, "d" | "h" | "m");
+    let valid_number = number.parse::<u64>().is_ok_and(|value| value > 0);
+    if valid_unit && valid_number {
+        Ok(())
+    } else {
+        Err(format!(
+            "{label}: window must be a duration like 30d, 24h, 30m, or all"
+        ))
+    }
 }
 
 fn validate_model_router_candidate(
@@ -1339,9 +1687,22 @@ mod tests {
             r#"
             [model_router]
             enabled = true
-            discovery = "curated"
+            discovery = "from_rules"
             subscription_pricing = "amortized_scarce"
             savings_reference = "implicit_incumbent"
+
+            [model_router.lifecycle.defaults]
+            window = "30d"
+            cost_budget_usd = 10.0
+            token_budget = 1000000
+            min_evaluated = 20
+            min_confidence = 0.8
+            min_success_rate = 0.9
+            shadow_allowed = true
+            promotion_shadow_sample_rate_limit = 0.05
+            monitoring_shadow_sample_rate_limit = 0.02
+            auto_promote = true
+            auto_demote = true
 
             [[model_router.candidates]]
             id = "spark"
@@ -1359,6 +1720,31 @@ mod tests {
             [[model_router.candidates]]
             id = "codex-pro"
             account_pool = "codex-pro"
+
+            [[model_router.models.rules]]
+            id = "review-top-only"
+            type = "require"
+            tasks = ["/review$/"]
+            models = [{ provider = "openai", model = "/^gpt-5\\.5/" }]
+
+            [[model_router.models.rules]]
+            id = "spark-no-review"
+            type = "exclude"
+            tasks = ["/review$/"]
+            models = [{ provider = "openai", model = "/spark/" }]
+
+            [[model_router.bias.rules]]
+            id = "spark-triage-bias"
+            tasks = ["module.repo_ci.triage"]
+            models = [{ provider = "openai", model = "/spark/" }]
+            score_bias = 0.15
+
+            [[model_router.lifecycle.rules]]
+            id = "review-strict"
+            tasks = ["/review$/"]
+            min_evaluated = 40
+            min_confidence = 0.9
+            min_success_rate = 0.95
             "#,
         )
         .expect("config should parse");
@@ -1367,7 +1753,7 @@ mod tests {
         assert_eq!(model_router.enabled, true);
         assert_eq!(
             model_router.discovery,
-            Some(ModelRouterDiscoveryToml::Curated)
+            Some(ModelRouterDiscoveryToml::FromRules)
         );
         assert_eq!(
             model_router.subscription_pricing,
@@ -1400,6 +1786,140 @@ mod tests {
                 .and_then(|candidate| candidate.account_pool.as_deref()),
             Some("codex-pro")
         );
+        assert_eq!(
+            model_router
+                .models
+                .as_ref()
+                .map(|models| models.rules.len()),
+            Some(2)
+        );
+        assert_eq!(
+            model_router
+                .bias
+                .as_ref()
+                .and_then(|bias| bias.rules.first())
+                .map(|rule| rule.score_bias),
+            Some(0.15)
+        );
+        assert_eq!(
+            model_router
+                .lifecycle
+                .as_ref()
+                .and_then(|lifecycle| lifecycle.defaults.as_ref())
+                .and_then(|defaults| defaults.min_confidence),
+            Some(0.8)
+        );
+        assert_eq!(
+            model_router
+                .lifecycle
+                .as_ref()
+                .and_then(|lifecycle| lifecycle.rules.first())
+                .map(|rule| rule.id.as_str()),
+            Some("review-strict")
+        );
+    }
+
+    #[test]
+    fn parses_all_model_router_discovery_modes() {
+        for discovery in ["curated", "manual", "from_rules"] {
+            let config = format!(
+                r#"
+                [model_router]
+                enabled = true
+                discovery = "{discovery}"
+
+                [[model_router.candidates]]
+                model = "gpt-5.5"
+                "#
+            );
+            toml::from_str::<ConfigToml>(&config).expect("discovery mode should parse");
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_model_router_regex_selectors() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+            [model_router]
+            enabled = true
+
+            [[model_router.models.rules]]
+            type = "require"
+            tasks = ["/[broken/"]
+            models = [{ model = "gpt-5.5" }]
+            "#,
+        )
+        .expect_err("invalid regex selector should be rejected");
+
+        assert!(err.to_string().contains("invalid regex"));
+    }
+
+    #[test]
+    fn rejects_model_router_rules_without_model_selectors() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+            [model_router]
+            enabled = true
+
+            [[model_router.models.rules]]
+            type = "require"
+            tasks = ["module.repo_ci.review"]
+            "#,
+        )
+        .expect_err("models rule without selectors should be rejected");
+
+        assert!(err.to_string().contains("models must not be empty"));
+    }
+
+    #[test]
+    fn rejects_invalid_model_router_bias() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+            [model_router]
+            enabled = true
+
+            [[model_router.bias.rules]]
+            tasks = ["module.repo_ci.triage"]
+            models = [{ model = "/spark/" }]
+            score_bias = 1.5
+            "#,
+        )
+        .expect_err("invalid score bias should be rejected");
+
+        assert!(err.to_string().contains("score_bias"));
+    }
+
+    #[test]
+    fn rejects_invalid_model_router_lifecycle_thresholds() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+            [model_router]
+            enabled = true
+
+            [model_router.lifecycle.defaults]
+            min_confidence = 1.2
+            "#,
+        )
+        .expect_err("invalid lifecycle threshold should be rejected");
+
+        assert!(err.to_string().contains("min_confidence"));
+    }
+
+    #[test]
+    fn rejects_model_router_lifecycle_rule_without_id() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+            [model_router]
+            enabled = true
+
+            [[model_router.lifecycle.rules]]
+            id = ""
+            tasks = ["/review$/"]
+            "#,
+        )
+        .expect_err("empty lifecycle id should be rejected");
+
+        assert!(err.to_string().contains("id must not be empty"));
     }
 
     #[test]

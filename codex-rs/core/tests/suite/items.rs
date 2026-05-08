@@ -576,6 +576,81 @@ async fn plan_mode_emits_plan_item_from_proposed_plan_block() -> anyhow::Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_config_edit_emits_plan_item_from_proposed_plan_block() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let TestCodex {
+        codex,
+        session_configured,
+        ..
+    } = test_codex().build(&server).await?;
+
+    let plan_block = "<proposed_plan>\n- Update config\n- Reload Codex\n</proposed_plan>\n";
+    let full_message = format!("Intro\n{plan_block}Outro");
+    let stream = sse(vec![
+        ev_response_created("resp-1"),
+        ev_message_item_added("msg-1", ""),
+        ev_output_text_delta(&full_message),
+        ev_assistant_message("msg-1", &full_message),
+        ev_completed("resp-1"),
+    ]);
+    mount_sse_once(&server, stream).await;
+
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::CodexConfigEdit,
+        settings: Settings {
+            model: session_configured.model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    codex
+        .submit(Op::UserTurn {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "please plan config".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: std::env::current_dir()?,
+            approval_policy: codex_protocol::protocol::AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
+            model: session_configured.model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: Some(collaboration_mode),
+            personality: None,
+        })
+        .await?;
+
+    let plan_delta = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::PlanDelta(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+
+    let plan_completed = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::Plan(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(plan_delta.delta, "- Update config\n- Reload Codex\n");
+    assert_eq!(plan_completed.text, "- Update config\n- Reload Codex\n");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 

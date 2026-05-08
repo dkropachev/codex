@@ -6,6 +6,11 @@ use crate::memories::metrics;
 use crate::memories::phase_one;
 use crate::memories::phase_one::PRUNE_BATCH_SIZE;
 use crate::memories::prompts::build_stage_one_input_message;
+use crate::model_router::ModelRouterSource;
+use crate::model_router::apply_model_router_with_state;
+use crate::model_router::available_router_models;
+use crate::model_router::model_client_for_config;
+use crate::model_router::record_model_router_request_usage_for_config;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::policy::should_persist_response_item_for_memories;
 use crate::session::session::Session;
@@ -36,6 +41,7 @@ use tracing::warn;
 
 #[derive(Clone, Debug)]
 pub(in crate::memories) struct RequestContext {
+    pub(in crate::memories) config: Config,
     pub(in crate::memories) model_info: ModelInfo,
     pub(in crate::memories) session_telemetry: SessionTelemetry,
     pub(in crate::memories) reasoning_effort: Option<ReasoningEffortConfig>,
@@ -166,14 +172,67 @@ impl RequestContext {
         turn_context: &TurnContext,
         turn_metadata_header: Option<String>,
         model_info: ModelInfo,
+        config: Config,
     ) -> Self {
         Self {
+            session_telemetry: turn_context.session_telemetry.clone().with_model(
+                config.model.as_deref().unwrap_or(model_info.slug.as_str()),
+                model_info.slug.as_str(),
+            ),
+            reasoning_effort: config.model_reasoning_effort,
+            reasoning_summary: turn_context.reasoning_summary,
+            service_tier: config.service_tier,
+            config,
             model_info,
             turn_metadata_header,
-            session_telemetry: turn_context.session_telemetry.clone(),
-            reasoning_effort: Some(phase_one::REASONING_EFFORT),
-            reasoning_summary: turn_context.reasoning_summary,
-            service_tier: turn_context.config.service_tier,
+        }
+    }
+
+    pub(in crate::memories) async fn routed_for_prompt(
+        &self,
+        session: &Session,
+        prompt_bytes: usize,
+    ) -> Self {
+        let mut config = self.config.clone();
+        let available_models = available_router_models(
+            &config,
+            &session.services.models_manager,
+            &session.services.model_router_discovery_cache,
+        )
+        .await;
+        if let Err(err) = apply_model_router_with_state(
+            &mut config,
+            ModelRouterSource::Module("memories.extract"),
+            prompt_bytes,
+            &available_models,
+            session.services.state_db.as_deref(),
+        )
+        .await
+        {
+            warn!("failed to apply memory extraction model router: {err}");
+            config.model_router_accounting = None;
+        }
+
+        let model_name = config
+            .model
+            .clone()
+            .unwrap_or_else(|| self.model_info.slug.clone());
+        let model_info = session
+            .services
+            .models_manager
+            .get_model_info(&model_name, &config.to_models_manager_config())
+            .await;
+        Self {
+            reasoning_effort: config.model_reasoning_effort,
+            service_tier: config.service_tier,
+            config,
+            model_info: model_info.clone(),
+            session_telemetry: self
+                .session_telemetry
+                .clone()
+                .with_model(model_name.as_str(), model_info.slug.as_str()),
+            reasoning_summary: self.reasoning_summary,
+            turn_metadata_header: self.turn_metadata_header.clone(),
         }
     }
 }
@@ -226,16 +285,20 @@ async fn build_request_context(session: &Arc<Session>, config: &Config) -> Reque
         .extract_model
         .clone()
         .unwrap_or(phase_one::MODEL.to_string());
+    let mut request_config = config.clone();
+    request_config.model = Some(model_name.clone());
+    request_config.model_reasoning_effort = Some(phase_one::REASONING_EFFORT);
     let model = session
         .services
         .models_manager
-        .get_model_info(&model_name, &config.to_models_manager_config())
+        .get_model_info(&model_name, &request_config.to_models_manager_config())
         .await;
     let turn_context = session.new_default_turn().await;
     RequestContext::from_turn_context(
         turn_context.as_ref(),
         turn_context.turn_metadata_state.current_header_value(),
         model,
+        request_config,
     )
 }
 
@@ -319,6 +382,14 @@ mod job {
     ) -> anyhow::Result<(StageOneOutput, Option<TokenUsage>)> {
         let (rollout_items, _, _) = RolloutRecorder::load_rollout_items(rollout_path).await?;
         let rollout_contents = serialize_filtered_rollout_response_items(&rollout_items)?;
+        let stage_one_context = stage_one_context
+            .routed_for_prompt(
+                session,
+                rollout_contents.len()
+                    + phase_one::PROMPT.len()
+                    + rollout_path.as_os_str().to_string_lossy().len(),
+            )
+            .await;
 
         let prompt = Prompt {
             input: vec![ResponseItem::Message {
@@ -344,8 +415,13 @@ mod job {
             output_schema_strict: true,
         };
 
-        let mut client_session = session.services.model_client.new_session();
-        let mut stream = client_session
+        let routed_model_client = model_client_for_config(
+            &stage_one_context.config,
+            &session.services.model_client,
+            &session.services.auth_manager,
+        );
+        let mut client_session = routed_model_client.new_session();
+        let mut stream = match client_session
             .stream(
                 &prompt,
                 &stage_one_context.model_info,
@@ -356,13 +432,48 @@ mod job {
                 stage_one_context.turn_metadata_header.as_deref(),
                 &InferenceTraceContext::disabled(),
             )
-            .await?;
+            .await
+        {
+            Ok(stream) => stream,
+            Err(err) => {
+                record_model_router_request_usage_for_config(
+                    session.services.state_db.as_deref(),
+                    &stage_one_context.config,
+                    &TokenUsage::default(),
+                    "stream_error",
+                )
+                .await;
+                return Err(err.into());
+            }
+        };
 
         // TODO(jif) we should have a shared helper somewhere for this.
         // Unwrap the stream.
         let mut result = String::new();
-        let mut token_usage = None;
-        while let Some(message) = stream.next().await.transpose()? {
+        let token_usage = loop {
+            let Some(message) = stream.next().await else {
+                record_model_router_request_usage_for_config(
+                    session.services.state_db.as_deref(),
+                    &stage_one_context.config,
+                    &TokenUsage::default(),
+                    "error",
+                )
+                .await;
+                anyhow::bail!("stream closed before response.completed");
+            };
+            let message = match message {
+                Ok(message) => message,
+                Err(err) => {
+                    record_model_router_request_usage_for_config(
+                        session.services.state_db.as_deref(),
+                        &stage_one_context.config,
+                        &TokenUsage::default(),
+                        "error",
+                    )
+                    .await;
+                    return Err(err.into());
+                }
+            };
             match message {
                 ResponseEvent::OutputTextDelta(delta) => result.push_str(&delta),
                 ResponseEvent::OutputItemDone(item) => {
@@ -376,12 +487,19 @@ mod job {
                 ResponseEvent::Completed {
                     token_usage: usage, ..
                 } => {
-                    token_usage = usage;
-                    break;
+                    let accounting_usage = usage.clone().unwrap_or_default();
+                    record_model_router_request_usage_for_config(
+                        session.services.state_db.as_deref(),
+                        &stage_one_context.config,
+                        &accounting_usage,
+                        "completed",
+                    )
+                    .await;
+                    break usage;
                 }
                 _ => {}
             }
-        }
+        };
 
         let mut output: StageOneOutput = serde_json::from_str(&result)?;
         output.raw_memory = redact_secrets(output.raw_memory);

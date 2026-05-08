@@ -3317,7 +3317,11 @@ mod tests {
             /*show_fast_status*/ false,
         );
 
-        let rendered = render_transcript(&cell).join("\n");
+        let rendered = crate::test_support::normalize_codex_version_for_snapshot(
+            render_transcript(&cell),
+            "v0.125.0",
+        )
+        .join("\n");
         insta::assert_snapshot!(rendered);
     }
 

@@ -1212,7 +1212,7 @@ async fn repo_ci_slash_command_without_args_shows_usage_snapshot() {
     assert!(rendered.contains("/repo-ci setup"));
     assert!(rendered.contains("/repo-ci learn"));
     assert!(rendered.contains("/repo-ci retry"));
-    assert!(rendered.contains("/repo-ci long-ci"));
+    assert!(rendered.contains("long-ci <inherit|on|off>"));
 }
 
 #[tokio::test]
@@ -1222,8 +1222,11 @@ async fn slash_codex_enters_config_mode_snapshot() {
     submit_composer_text(&mut chat, "/codex");
 
     let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected one info history cell");
-    let mut rendered = normalize_snapshot_paths(lines_to_single_string(&cells[0]));
+    let codex_mode_cell = cells
+        .iter()
+        .find(|cell| lines_to_single_string(cell).contains("Codex mode enabled."))
+        .expect("expected Codex mode info history cell");
+    let mut rendered = normalize_snapshot_paths(lines_to_single_string(codex_mode_cell));
     let workspace_prefix = std::env::temp_dir()
         .join("codex-config-")
         .display()
@@ -1256,39 +1259,170 @@ async fn slash_codex_off_leaves_config_mode() {
         .map(|cell| lines_to_single_string(cell))
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(rendered.contains("Codex config mode disabled."));
+    assert!(rendered.contains("Codex mode disabled."));
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
 }
 
 #[tokio::test]
-async fn slash_codex_with_args_submits_codex_config_intent() {
+async fn slash_codex_with_investigate_args_submits_codex_turn() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    let command_text = "/codex don't run integration tests in this repo when validating /implement";
+    chat.thread_id = Some(ThreadId::new());
+    let command_text = "/codex explain how validation works for /implement";
+    let prompt_text = "explain how validation works for /implement";
 
     submit_composer_text(&mut chat, command_text);
 
-    match op_rx.try_recv() {
-        Ok(Op::CodexConfigIntent { intent, context }) => {
-            assert!(intent.contains("integration tests"));
-            assert!(intent.contains("/implement"));
-            let context = context.expect("expected generated /codex context");
-            assert!(context.contains("SlashCommand registry"));
-            assert!(context.contains("/repo-ci"));
-            assert!(context.contains("/implement"));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            items,
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Codex,
+                    settings,
+                }),
+            ..
+        } => {
+            assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: prompt_text.to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+            assert!(
+                settings
+                    .developer_instructions
+                    .as_deref()
+                    .is_some_and(|instructions| instructions.contains("Codex Investigate Mode"))
+            );
         }
-        other => panic!("expected CodexConfigIntent op, got {other:?}"),
+        other => panic!("expected Codex investigate UserTurn, got {other:?}"),
     }
-    assert!(drain_insert_history(&mut rx).is_empty());
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains(prompt_text));
+    assert!(!rendered.contains("Codex guide"));
+    assert!(!rendered.contains("TUI slash commands"));
+    assert!(!rendered.contains("Codex Investigate Mode"));
     assert_eq!(recall_latest_after_clearing(&mut chat), command_text);
 }
 
 #[tokio::test]
-async fn codex_config_mode_turn_uses_scratch_workspace_and_sandbox() {
+async fn slash_codex_with_edit_args_submits_config_edit_turn() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+    let command_text =
+        "/codex i don't want repo-ci to run cibuildwheel or integration tests at all";
+    let prompt_text = "i don't want repo-ci to run cibuildwheel or integration tests at all";
+
+    submit_composer_text(&mut chat, command_text);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            items,
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::CodexConfigEdit,
+                    settings,
+                }),
+            ..
+        } => {
+            assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: prompt_text.to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+            assert!(
+                settings.developer_instructions.as_deref().is_some_and(
+                    |instructions| instructions.contains("Codex Config Edit Planning Mode")
+                )
+            );
+            assert!(
+                settings.developer_instructions.as_deref().is_some_and(
+                    |instructions| instructions.contains("Execution vs. mutation in Plan Mode")
+                )
+            );
+        }
+        other => panic!("expected Codex config-edit UserTurn, got {other:?}"),
+    }
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains(prompt_text));
+    assert!(!rendered.contains("Codex guide"));
+    assert!(!rendered.contains("TUI slash commands"));
+    assert!(!rendered.contains("Codex Config Edit Planning Mode"));
+    assert_eq!(
+        chat.active_collaboration_mode_kind(),
+        ModeKind::CodexConfigEdit
+    );
+}
+
+#[tokio::test]
+async fn slash_codex_with_ambiguous_args_uses_ai_classification_fallback() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+    let command_text = "/codex repo-ci cibuildwheel integration tests";
+    let prompt_text = "repo-ci cibuildwheel integration tests";
+
+    submit_composer_text(&mut chat, command_text);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            items,
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::CodexConfigEdit,
+                    settings,
+                }),
+            ..
+        } => {
+            assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: prompt_text.to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+            assert!(
+                settings
+                    .developer_instructions
+                    .as_deref()
+                    .is_some_and(|instructions| instructions
+                        .contains("Codex AI Classification Fallback Mode"))
+            );
+        }
+        other => panic!("expected Codex AI fallback UserTurn, got {other:?}"),
+    }
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains(prompt_text));
+    assert!(!rendered.contains("Codex AI Classification Fallback Mode"));
+    assert_eq!(
+        chat.active_collaboration_mode_kind(),
+        ModeKind::CodexConfigEdit
+    );
+}
+
+#[tokio::test]
+async fn codex_mode_turn_uses_scratch_workspace_and_sandbox() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
     let target_cwd = chat.config.cwd.to_path_buf();
-    chat.set_collaboration_mask(crate::codex_config_context::codex_config_mask(&target_cwd));
+    chat.set_collaboration_mask(crate::codex_config_context::codex_config_edit_mask(
+        &target_cwd,
+    ));
 
     submit_composer_text(&mut chat, "configure Codex");
 
@@ -1299,7 +1433,7 @@ async fn codex_config_mode_turn_uses_scratch_workspace_and_sandbox() {
             permission_profile,
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::Codex,
+                    mode: ModeKind::CodexConfigEdit,
                     settings,
                 }),
             ..
@@ -1319,8 +1453,37 @@ async fn codex_config_mode_turn_uses_scratch_workspace_and_sandbox() {
                     .is_some_and(|instructions| instructions.contains("Codex guide"))
             );
         }
-        other => panic!("expected Codex-mode UserTurn, got {other:?}"),
+        other => panic!("expected Codex config-edit UserTurn, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn codex_mode_user_messages_switch_between_internal_submodes() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_collaboration_mask(crate::codex_config_context::codex_investigate_mask(
+        &chat.config.cwd,
+    ));
+
+    submit_composer_text(&mut chat, "update repo-ci settings");
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode: Some(CollaborationMode { mode, .. }),
+            ..
+        } => assert_eq!(mode, ModeKind::CodexConfigEdit),
+        other => panic!("expected Codex config-edit turn, got {other:?}"),
+    }
+    chat.on_task_complete(Some("Plan ready.".to_string()), /*from_replay*/ false);
+
+    submit_composer_text(&mut chat, "explain the current repo-ci config");
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode: Some(CollaborationMode { mode, .. }),
+            ..
+        } => assert_eq!(mode, ModeKind::Codex),
+        other => panic!("expected Codex investigate turn, got {other:?}"),
+    }
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Codex);
 }
 
 #[tokio::test]

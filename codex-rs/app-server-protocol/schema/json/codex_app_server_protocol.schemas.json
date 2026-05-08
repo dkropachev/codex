@@ -11085,6 +11085,7 @@
         "enum": [
           "plan",
           "codex",
+          "codex_config_edit",
           "default"
         ],
         "type": "string"

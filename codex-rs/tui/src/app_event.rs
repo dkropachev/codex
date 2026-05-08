@@ -177,6 +177,7 @@ pub(crate) enum AppEvent {
     CodexOp(Op),
 
     /// Approve one retry of a recent auto-review denial selected in the TUI.
+    #[allow(dead_code)]
     ApproveRecentAutoReviewDenial {
         thread_id: ThreadId,
         id: String,
@@ -439,6 +440,9 @@ pub(crate) enum AppEvent {
 
     /// Update the active collaboration mask in the running app and widget.
     UpdateCollaborationMode(CollaborationModeMask),
+
+    /// Apply the latest approved Codex config-edit plan.
+    ApplyCodexConfigPlan,
 
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),

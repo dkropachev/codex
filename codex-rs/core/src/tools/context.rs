@@ -18,6 +18,7 @@ use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_tools::LoadableToolSpec;
 use codex_tools::ToolName;
 use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Serialize;
@@ -99,6 +100,10 @@ pub trait ToolOutput: Send {
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
 
+    fn token_accounting(&self, returned_output_tokens: i64) -> ToolOutputTokenAccounting {
+        ToolOutputTokenAccounting::from_returned(returned_output_tokens)
+    }
+
     /// Returns the stable value exposed to `PostToolUse` hooks for this tool output.
     ///
     /// Tool handlers decide whether a tool participates in `PostToolUse`, but
@@ -113,6 +118,52 @@ pub trait ToolOutput: Send {
     fn code_mode_result(&self, payload: &ToolPayload) -> JsonValue {
         response_input_to_code_mode_result(self.to_response_item("", payload))
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ToolOutputTokenAccounting {
+    pub(crate) returned_output_tokens: i64,
+    pub(crate) original_output_tokens: i64,
+    pub(crate) truncated_output_tokens: i64,
+}
+
+impl ToolOutputTokenAccounting {
+    pub(crate) fn from_returned(returned_output_tokens: i64) -> Self {
+        Self {
+            returned_output_tokens,
+            original_output_tokens: returned_output_tokens,
+            truncated_output_tokens: returned_output_tokens,
+        }
+    }
+
+    pub(crate) fn zero() -> Self {
+        Self::from_returned(0)
+    }
+
+    pub(crate) fn with_returned_output_tokens(self, returned_output_tokens: i64) -> Self {
+        Self {
+            returned_output_tokens,
+            ..self
+        }
+    }
+
+    pub(crate) fn saturating_add(self, other: Self) -> Self {
+        Self {
+            returned_output_tokens: self
+                .returned_output_tokens
+                .saturating_add(other.returned_output_tokens),
+            original_output_tokens: self
+                .original_output_tokens
+                .saturating_add(other.original_output_tokens),
+            truncated_output_tokens: self
+                .truncated_output_tokens
+                .saturating_add(other.truncated_output_tokens),
+        }
+    }
+}
+
+fn usize_tokens_to_i64(tokens: usize) -> i64 {
+    i64::try_from(tokens).unwrap_or(i64::MAX)
 }
 
 impl ToolOutput for CallToolResult {
@@ -407,6 +458,22 @@ impl ToolOutput for ExecCommandToolOutput {
             }],
             Some(true),
         )
+    }
+
+    fn token_accounting(&self, returned_output_tokens: i64) -> ToolOutputTokenAccounting {
+        let raw_text = String::from_utf8_lossy(&self.raw_output);
+        let original_output_tokens = self
+            .original_token_count
+            .map(usize_tokens_to_i64)
+            .unwrap_or_else(|| usize_tokens_to_i64(approx_token_count(&raw_text)));
+        let truncated_output_tokens =
+            usize_tokens_to_i64(approx_token_count(&self.truncated_output()));
+
+        ToolOutputTokenAccounting {
+            returned_output_tokens,
+            original_output_tokens,
+            truncated_output_tokens,
+        }
     }
 
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {

@@ -1430,6 +1430,56 @@
       },
       "type": "object"
     },
+    "ModelRouterBiasRuleToml": {
+      "additionalProperties": false,
+      "properties": {
+        "except_tasks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "models": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ModelRouterModelSelectorToml"
+          },
+          "type": "array"
+        },
+        "score_bias": {
+          "format": "double",
+          "type": "number"
+        },
+        "tasks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "score_bias"
+      ],
+      "type": "object"
+    },
+    "ModelRouterBiasToml": {
+      "additionalProperties": false,
+      "properties": {
+        "rules": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ModelRouterBiasRuleToml"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ModelRouterCandidateToml": {
       "additionalProperties": false,
       "properties": {
@@ -1488,9 +1538,223 @@
     },
     "ModelRouterDiscoveryToml": {
       "enum": [
-        "curated"
+        "curated",
+        "manual",
+        "from_rules"
       ],
       "type": "string"
+    },
+    "ModelRouterLifecycleDefaultsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "auto_demote": {
+          "type": "boolean"
+        },
+        "auto_promote": {
+          "type": "boolean"
+        },
+        "cost_budget_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "min_confidence": {
+          "format": "double",
+          "type": "number"
+        },
+        "min_evaluated": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "min_success_rate": {
+          "format": "double",
+          "type": "number"
+        },
+        "monitoring_shadow_sample_rate_limit": {
+          "format": "double",
+          "type": "number"
+        },
+        "promotion_shadow_sample_rate_limit": {
+          "format": "double",
+          "type": "number"
+        },
+        "shadow_allowed": {
+          "type": "boolean"
+        },
+        "token_budget": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "window": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ModelRouterLifecycleRuleToml": {
+      "additionalProperties": false,
+      "properties": {
+        "auto_demote": {
+          "type": "boolean"
+        },
+        "auto_promote": {
+          "type": "boolean"
+        },
+        "cost_budget_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "except_tasks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "min_confidence": {
+          "format": "double",
+          "type": "number"
+        },
+        "min_evaluated": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "min_success_rate": {
+          "format": "double",
+          "type": "number"
+        },
+        "models": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ModelRouterModelSelectorToml"
+          },
+          "type": "array"
+        },
+        "monitoring_shadow_sample_rate_limit": {
+          "format": "double",
+          "type": "number"
+        },
+        "promotion_shadow_sample_rate_limit": {
+          "format": "double",
+          "type": "number"
+        },
+        "shadow_allowed": {
+          "type": "boolean"
+        },
+        "tasks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "token_budget": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "window": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "ModelRouterLifecycleToml": {
+      "additionalProperties": false,
+      "properties": {
+        "defaults": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelRouterLifecycleDefaultsToml"
+            }
+          ],
+          "default": null
+        },
+        "rules": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ModelRouterLifecycleRuleToml"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ModelRouterModelRuleToml": {
+      "additionalProperties": false,
+      "properties": {
+        "except_tasks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "models": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ModelRouterModelSelectorToml"
+          },
+          "type": "array"
+        },
+        "tasks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "type": {
+          "$ref": "#/definitions/ModelRouterModelRuleTypeToml"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "ModelRouterModelRuleTypeToml": {
+      "enum": [
+        "require",
+        "exclude"
+      ],
+      "type": "string"
+    },
+    "ModelRouterModelSelectorToml": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ModelRouterModelsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "rules": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ModelRouterModelRuleToml"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
     },
     "ModelRouterReasoningEffortToml": {
       "oneOf": [
@@ -1529,6 +1793,14 @@
     "ModelRouterToml": {
       "additionalProperties": false,
       "properties": {
+        "bias": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelRouterBiasToml"
+            }
+          ],
+          "default": null
+        },
         "candidates": {
           "default": [],
           "items": {
@@ -1547,6 +1819,22 @@
         "enabled": {
           "default": false,
           "type": "boolean"
+        },
+        "lifecycle": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelRouterLifecycleToml"
+            }
+          ],
+          "default": null
+        },
+        "models": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelRouterModelsToml"
+            }
+          ],
+          "default": null
         },
         "savings_reference": {
           "allOf": [

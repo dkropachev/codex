@@ -26,6 +26,7 @@ use codex_response_debug_context::telemetry_transport_error_message;
 use http::HeaderMap;
 use tokio::time::timeout;
 
+use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
 
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -63,6 +64,18 @@ impl OpenAiModelsEndpoint {
             .is_some_and(|auth_manager| auth_manager.codex_api_key_env_enabled());
         collect_auth_env_telemetry(&self.provider_info, codex_api_key_env_enabled)
     }
+}
+
+/// Fetches a provider's OpenAI-compatible `/models` catalog without using the
+/// app-wide model cache or first-party OpenAI/ChatGPT auth.
+pub async fn list_provider_models_uncached(
+    provider_info: ModelProviderInfo,
+    client_version: &str,
+) -> CoreResult<Vec<ModelInfo>> {
+    let auth_manager = auth_manager_for_provider(/*auth_manager*/ None, &provider_info);
+    let endpoint = OpenAiModelsEndpoint::new(provider_info, auth_manager);
+    let (models, _etag) = endpoint.list_models(client_version).await?;
+    Ok(models)
 }
 
 #[async_trait]
@@ -206,7 +219,17 @@ mod tests {
     use std::num::NonZeroU64;
 
     use super::*;
+    use codex_model_provider_info::WireApi;
     use codex_protocol::config_types::ModelProviderAuthInfo;
+    use codex_protocol::openai_models::ModelsResponse;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::header_regex;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
 
     fn provider_info_with_command_auth() -> ModelProviderInfo {
         ModelProviderInfo {
@@ -223,6 +246,55 @@ mod tests {
             requires_openai_auth: false,
             ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
         }
+    }
+
+    fn provider_for(base_url: String) -> ModelProviderInfo {
+        ModelProviderInfo {
+            name: "mock".into(),
+            base_url: Some(base_url),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            aws: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: Some(0),
+            stream_max_retries: Some(0),
+            stream_idle_timeout_ms: Some(5_000),
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        }
+    }
+
+    fn remote_model(slug: &str) -> ModelInfo {
+        serde_json::from_value(json!({
+            "slug": slug,
+            "display_name": slug,
+            "description": null,
+            "default_reasoning_level": "medium",
+            "supported_reasoning_levels": [],
+            "shell_type": "shell_command",
+            "visibility": "list",
+            "supported_in_api": true,
+            "priority": 0,
+            "upgrade": null,
+            "base_instructions": "base instructions",
+            "supports_reasoning_summaries": false,
+            "support_verbosity": false,
+            "default_verbosity": null,
+            "apply_patch_tool_type": null,
+            "truncation_policy": {"mode": "bytes", "limit": 10_000},
+            "supports_parallel_tool_calls": false,
+            "supports_image_detail_original": false,
+            "context_window": 272_000,
+            "max_context_window": 272_000,
+            "experimental_supported_tools": [],
+        }))
+        .expect("valid model")
     }
 
     #[test]
@@ -243,5 +315,38 @@ mod tests {
         );
 
         assert!(!endpoint.has_command_auth());
+    }
+
+    #[tokio::test]
+    async fn list_provider_models_uncached_uses_provider_local_bearer_token() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .and(header_regex("Authorization", "Bearer provider-token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_json(ModelsResponse {
+                        models: vec![remote_model("provider-model")],
+                    }),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut provider_info = provider_for(server.uri());
+        provider_info.experimental_bearer_token = Some("provider-token".to_string());
+        let models = list_provider_models_uncached(provider_info, "test-client")
+            .await
+            .expect("models should load");
+
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| model.slug.as_str())
+                .collect::<Vec<_>>(),
+            vec!["provider-model"]
+        );
     }
 }

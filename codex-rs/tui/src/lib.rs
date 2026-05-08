@@ -111,6 +111,7 @@ mod cli;
 mod clipboard_copy;
 mod clipboard_paste;
 mod codex_config_context;
+mod codex_config_history;
 mod codex_guide;
 mod collaboration_modes;
 mod color;

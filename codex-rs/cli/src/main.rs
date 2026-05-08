@@ -1,3 +1,4 @@
+use chrono::Utc;
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
@@ -37,6 +38,8 @@ use codex_tui::UpdateAction;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
+use serde::Serialize;
+use std::collections::BTreeSet;
 use std::io::IsTerminal;
 use std::io::Write;
 use std::path::Path;
@@ -147,7 +150,7 @@ enum Subcommand {
     #[clap(name = "tool-router")]
     ToolRouter(ToolRouterCli),
 
-    /// Tune and apply model-router metrics.
+    /// Inspect, tune, and manage model-router policy.
     #[clap(name = "model-router")]
     ModelRouter(ModelRouterCli),
 
@@ -273,11 +276,40 @@ struct ModelRouterCli {
 
 #[derive(Debug, clap::Subcommand)]
 enum ModelRouterSubcommand {
+    /// Show the effective routing policy for a task.
+    Policy(ModelRouterPolicyCommand),
+
     /// Replay historical completed turns and tune router metrics.
     Tune(ModelRouterTuneCommand),
 
     /// Show or apply a stored model-router tune report.
     Report(ModelRouterReportCli),
+
+    /// Show lifecycle promotion state.
+    Lifecycle(ModelRouterLifecycleCommand),
+
+    /// Show recorded shadow evaluation results.
+    Shadows(ModelRouterShadowsCommand),
+
+    /// Show model-router production savings and overhead usage.
+    Usage(ModelRouterUsageCommand),
+
+    /// Mark a candidate as promoted for a task.
+    Promote(ModelRouterPromoteCommand),
+
+    /// Mark a promoted candidate as demoted for a task.
+    Demote(ModelRouterDemoteCommand),
+}
+
+#[derive(Debug, Args)]
+struct ModelRouterPolicyCommand {
+    /// Task key to evaluate, such as module.repo_ci.triage or subagent.review.
+    #[arg(long = "task-key")]
+    task_key: Option<String>,
+
+    /// Emit the policy report as JSON.
+    #[arg(long = "json", default_value_t = false)]
+    json: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -299,16 +331,16 @@ enum ModelRouterReportSubcommand {
 #[derive(Debug, Args)]
 struct ModelRouterTuneCommand {
     /// Historical rollout window to inspect, such as 30d, 24h, 30m, or all.
-    #[arg(long = "window", default_value = "30d")]
-    window: String,
+    #[arg(long = "window")]
+    window: Option<String>,
 
     /// Maximum evaluation cost budget in USD.
-    #[arg(long = "cost-budget-usd", default_value_t = 10.0)]
-    cost_budget_usd: f64,
+    #[arg(long = "cost-budget-usd")]
+    cost_budget_usd: Option<f64>,
 
     /// Maximum replay and judge token budget.
-    #[arg(long = "token-budget", default_value_t = 1_000_000)]
-    token_budget: i64,
+    #[arg(long = "token-budget")]
+    token_budget: Option<i64>,
 
     /// Preview recommendations without writing metric overlays.
     #[arg(long = "dry-run", default_value_t = false)]
@@ -319,6 +351,121 @@ struct ModelRouterTuneCommand {
     report_out: Option<PathBuf>,
 
     /// Emit the report as JSON.
+    #[arg(long = "json", default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct ModelRouterLifecycleCommand {
+    /// Limit lifecycle state to a task key.
+    #[arg(long = "task-key")]
+    task_key: Option<String>,
+
+    /// Limit lifecycle state to one candidate identity key.
+    #[arg(long = "candidate-identity")]
+    candidate_identity: Option<String>,
+
+    /// Lifecycle event window to inspect, such as 30d, 24h, 30m, or all.
+    #[arg(long = "window", default_value = "all")]
+    window: String,
+
+    /// Include compact lifecycle event timeline rows in text output.
+    #[arg(long = "events", default_value_t = false)]
+    events: bool,
+
+    /// Maximum lifecycle event rows to include.
+    #[arg(long = "limit", default_value_t = 50)]
+    limit: i64,
+
+    /// Emit lifecycle state as JSON.
+    #[arg(long = "json", default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct ModelRouterShadowsCommand {
+    /// Limit shadow evaluations to a task key.
+    #[arg(long = "task-key")]
+    task_key: Option<String>,
+
+    /// Maximum raw shadow evaluation rows to print.
+    #[arg(long = "limit", default_value_t = 50)]
+    limit: i64,
+
+    /// Emit shadow evaluations as JSON.
+    #[arg(long = "json", default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct ModelRouterUsageCommand {
+    /// Ledger window to inspect, such as 30d, 24h, 30m, or all.
+    #[arg(long = "window", default_value = "30d")]
+    window: String,
+
+    /// Limit usage to a task key.
+    #[arg(long = "task-key")]
+    task_key: Option<String>,
+
+    /// Group usage rows by task, model, day, or request-kind.
+    #[arg(long = "group-by", value_enum, default_value = "task")]
+    group_by: ModelRouterUsageGroupByArg,
+
+    /// Emit usage as JSON.
+    #[arg(long = "json", default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum ModelRouterUsageGroupByArg {
+    Task,
+    Model,
+    Day,
+    RequestKind,
+}
+
+#[derive(Debug, Args)]
+struct ModelRouterPromoteCommand {
+    /// Task key whose production route should use this candidate.
+    #[arg(long = "task-key")]
+    task_key: String,
+
+    /// Candidate identity key from `codex model-router policy --json`.
+    #[arg(long = "candidate-identity")]
+    candidate_identity: String,
+
+    /// Base route identity key that the candidate shadowed.
+    #[arg(long = "base-candidate-identity")]
+    base_candidate_identity: String,
+
+    /// Lifecycle rule id that authorized the promotion.
+    #[arg(long = "rule-id")]
+    rule_id: Option<String>,
+
+    /// Human-readable promotion reason.
+    #[arg(long = "reason")]
+    reason: Option<String>,
+
+    /// Emit the updated promotion record as JSON.
+    #[arg(long = "json", default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct ModelRouterDemoteCommand {
+    /// Task key whose promoted candidate should be demoted.
+    #[arg(long = "task-key")]
+    task_key: String,
+
+    /// Candidate identity key to demote.
+    #[arg(long = "candidate-identity")]
+    candidate_identity: String,
+
+    /// Human-readable demotion reason.
+    #[arg(long = "reason")]
+    reason: Option<String>,
+
+    /// Emit the updated lifecycle state as JSON.
     #[arg(long = "json", default_value_t = false)]
     json: bool,
 }
@@ -3095,6 +3242,9 @@ async fn run_model_router_command(
     root_config_overrides: CliConfigOverrides,
 ) -> anyhow::Result<()> {
     match cli.subcommand {
+        ModelRouterSubcommand::Policy(cmd) => {
+            run_model_router_policy_command(cmd, root_config_overrides).await
+        }
         ModelRouterSubcommand::Tune(cmd) => {
             run_model_router_tune_command(cmd, root_config_overrides).await
         }
@@ -3106,7 +3256,292 @@ async fn run_model_router_command(
                 run_model_router_report_apply_command(cmd, root_config_overrides).await
             }
         },
+        ModelRouterSubcommand::Lifecycle(cmd) => {
+            run_model_router_lifecycle_command(cmd, root_config_overrides).await
+        }
+        ModelRouterSubcommand::Shadows(cmd) => {
+            run_model_router_shadows_command(cmd, root_config_overrides).await
+        }
+        ModelRouterSubcommand::Usage(cmd) => {
+            run_model_router_usage_command(cmd, root_config_overrides).await
+        }
+        ModelRouterSubcommand::Promote(cmd) => {
+            run_model_router_promote_command(cmd, root_config_overrides).await
+        }
+        ModelRouterSubcommand::Demote(cmd) => {
+            run_model_router_demote_command(cmd, root_config_overrides).await
+        }
     }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelRouterPolicyReport {
+    enabled: bool,
+    discovery: String,
+    task_key: Option<String>,
+    candidates: Vec<ModelRouterPolicyCandidateReport>,
+    policy: Option<codex_model_router::policy::PolicyApplication>,
+    policy_error: Option<String>,
+    lifecycle: codex_model_router::policy::EffectiveLifecycle,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelRouterPolicyCandidateReport {
+    route_index: usize,
+    identity_key: String,
+    id: Option<String>,
+    model_provider: String,
+    model: Option<String>,
+    incumbent: bool,
+    eligible: bool,
+    score_bias: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelRouterLifecycleStateReport {
+    task_key: Option<String>,
+    candidate_identity: Option<String>,
+    window: String,
+    effective_lifecycle: codex_model_router::policy::EffectiveLifecycle,
+    promotions: Vec<codex_state::ModelRouterLifecyclePromotionRecord>,
+    stats: codex_state::ModelRouterLifecycleStatsSummary,
+    events: Vec<codex_state::ModelRouterLifecycleEventRecord>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModelRouterLifecycleTimelineDisplay {
+    Hidden,
+    Shown,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelRouterShadowReport {
+    task_key: Option<String>,
+    summaries: Vec<codex_state::ModelRouterShadowEvaluationSummary>,
+    recent: Vec<codex_state::ModelRouterShadowEvaluationRecord>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelRouterUsageReport {
+    window: String,
+    summary: codex_state::ModelRouterUsageSummary,
+}
+
+async fn run_model_router_policy_command(
+    cmd: ModelRouterPolicyCommand,
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let (config, _state_db) = model_router_config_and_state(root_config_overrides).await?;
+    let report = model_router_policy_report(&config, cmd.task_key.as_deref()).await;
+    if cmd.json {
+        serde_json::to_writer_pretty(std::io::stdout(), &report)?;
+        println!();
+    } else {
+        print_model_router_policy_report(&report);
+    }
+    Ok(())
+}
+
+async fn run_model_router_lifecycle_command(
+    cmd: ModelRouterLifecycleCommand,
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let (config, state_db) = model_router_config_and_state(root_config_overrides).await?;
+    let effective_lifecycle = codex_model_router::policy::effective_lifecycle_for_route(
+        config.model_router.as_ref(),
+        cmd.task_key.as_deref().unwrap_or("model_router.lifecycle"),
+        None,
+    )?;
+    let now_ms = Utc::now().timestamp_millis();
+    let query = codex_state::ModelRouterLifecycleStatsQuery {
+        window_start_ms: model_router_usage_window_start_ms(&cmd.window, now_ms)?,
+        window_end_ms: now_ms,
+        task_key: cmd.task_key.clone(),
+        candidate_identity: cmd.candidate_identity.clone(),
+        event_limit: cmd.limit,
+    };
+    let mut promotions = state_db
+        .model_router_lifecycle_promotions(cmd.task_key.as_deref())
+        .await?;
+    if let Some(candidate_identity) = cmd.candidate_identity.as_deref() {
+        promotions.retain(|promotion| promotion.candidate_identity == candidate_identity);
+    }
+    let report = ModelRouterLifecycleStateReport {
+        task_key: cmd.task_key.clone(),
+        candidate_identity: cmd.candidate_identity.clone(),
+        window: cmd.window,
+        effective_lifecycle,
+        promotions,
+        stats: state_db.model_router_lifecycle_stats(query.clone()).await?,
+        events: state_db.model_router_lifecycle_events(query).await?,
+    };
+    if cmd.json {
+        serde_json::to_writer_pretty(std::io::stdout(), &report)?;
+        println!();
+    } else {
+        let timeline = if cmd.events {
+            ModelRouterLifecycleTimelineDisplay::Shown
+        } else {
+            ModelRouterLifecycleTimelineDisplay::Hidden
+        };
+        print!(
+            "{}",
+            format_model_router_lifecycle_report(&report, timeline)
+        );
+    }
+    Ok(())
+}
+
+async fn run_model_router_shadows_command(
+    cmd: ModelRouterShadowsCommand,
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let (_config, state_db) = model_router_config_and_state(root_config_overrides).await?;
+    let report = ModelRouterShadowReport {
+        task_key: cmd.task_key.clone(),
+        summaries: state_db
+            .model_router_shadow_evaluation_summaries(cmd.task_key.as_deref())
+            .await?,
+        recent: state_db
+            .model_router_shadow_evaluations(cmd.task_key.as_deref(), cmd.limit)
+            .await?,
+    };
+    if cmd.json {
+        serde_json::to_writer_pretty(std::io::stdout(), &report)?;
+        println!();
+    } else {
+        print_model_router_shadow_report(&report);
+    }
+    Ok(())
+}
+
+async fn run_model_router_usage_command(
+    cmd: ModelRouterUsageCommand,
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let (_config, state_db) = model_router_config_and_state(root_config_overrides).await?;
+    let now_ms = Utc::now().timestamp_millis();
+    let summary = state_db
+        .model_router_usage_summary(codex_state::ModelRouterUsageQuery {
+            window_start_ms: model_router_usage_window_start_ms(&cmd.window, now_ms)?,
+            window_end_ms: now_ms,
+            task_key: cmd.task_key.clone(),
+            group_by: cmd.group_by.into(),
+        })
+        .await?;
+    let report = ModelRouterUsageReport {
+        window: cmd.window,
+        summary,
+    };
+    if cmd.json {
+        serde_json::to_writer_pretty(std::io::stdout(), &report)?;
+        println!();
+    } else {
+        print!("{}", format_model_router_usage_report(&report));
+    }
+    Ok(())
+}
+
+async fn run_model_router_promote_command(
+    cmd: ModelRouterPromoteCommand,
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let (config, state_db) = model_router_config_and_state(root_config_overrides).await?;
+    let report = model_router_policy_report(&config, Some(&cmd.task_key)).await;
+    let candidate = report
+        .candidates
+        .iter()
+        .find(|candidate| candidate.identity_key == cmd.candidate_identity)
+        .ok_or_else(|| anyhow::anyhow!("candidate identity is not present in effective policy"))?;
+    let base = report
+        .candidates
+        .iter()
+        .find(|candidate| candidate.identity_key == cmd.base_candidate_identity);
+    let now_ms = Utc::now().timestamp_millis();
+    let record = codex_state::ModelRouterLifecyclePromotionRecord {
+        task_key: cmd.task_key,
+        candidate_identity: cmd.candidate_identity,
+        base_candidate_identity: cmd.base_candidate_identity,
+        status: "promoted".to_string(),
+        rule_id: cmd.rule_id,
+        production_model_provider: Some(candidate.model_provider.clone()),
+        production_model: candidate.model.clone(),
+        base_model_provider: base.map(|base| base.model_provider.clone()),
+        base_model: base.and_then(|base| base.model.clone()),
+        promoted_at_ms: now_ms,
+        updated_at_ms: now_ms,
+        reason: cmd.reason,
+    };
+    state_db
+        .promote_model_router_lifecycle_promotion(
+            record.clone(),
+            codex_state::ModelRouterLifecycleTransitionContext {
+                source: codex_state::MODEL_ROUTER_LIFECYCLE_SOURCE_MANUAL.to_string(),
+                lifecycle_window: Some(report.lifecycle.window.clone()),
+                shadow_phase: None,
+                shadow_summary: None,
+                failed_gates_json: None,
+            },
+        )
+        .await?;
+    if cmd.json {
+        serde_json::to_writer_pretty(std::io::stdout(), &record)?;
+        println!();
+    } else {
+        println!(
+            "Promoted {} for {}",
+            record.candidate_identity, record.task_key
+        );
+    }
+    Ok(())
+}
+
+async fn run_model_router_demote_command(
+    cmd: ModelRouterDemoteCommand,
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let (config, state_db) = model_router_config_and_state(root_config_overrides).await?;
+    let lifecycle_window = codex_model_router::policy::effective_lifecycle_for_route(
+        config.model_router.as_ref(),
+        &cmd.task_key,
+        None,
+    )
+    .ok()
+    .map(|lifecycle| lifecycle.window);
+    let rows = state_db
+        .demote_model_router_lifecycle_promotion_with_event(
+            &cmd.task_key,
+            &cmd.candidate_identity,
+            cmd.reason.as_deref(),
+            codex_state::ModelRouterLifecycleTransitionContext {
+                source: codex_state::MODEL_ROUTER_LIFECYCLE_SOURCE_MANUAL.to_string(),
+                lifecycle_window,
+                shadow_phase: None,
+                shadow_summary: None,
+                failed_gates_json: None,
+            },
+        )
+        .await?;
+    let promotions = state_db
+        .model_router_lifecycle_promotions(Some(&cmd.task_key))
+        .await?;
+    if cmd.json {
+        serde_json::to_writer_pretty(std::io::stdout(), &promotions)?;
+        println!();
+    } else if rows == 0 {
+        println!(
+            "No promoted model-router candidate found for {} on {}",
+            cmd.candidate_identity, cmd.task_key
+        );
+    } else {
+        println!("Demoted {} for {}", cmd.candidate_identity, cmd.task_key);
+    }
+    Ok(())
 }
 
 async fn model_router_config_and_state(
@@ -3121,11 +3556,537 @@ async fn model_router_config_and_state(
     Ok((config, state_db))
 }
 
+async fn model_router_policy_report(
+    config: &Config,
+    task_key: Option<&str>,
+) -> ModelRouterPolicyReport {
+    let available_models = model_router_available_policy_models(config).await;
+    let Some(model_router) = config.model_router.as_ref() else {
+        return ModelRouterPolicyReport {
+            enabled: false,
+            discovery: "curated".to_string(),
+            task_key: task_key.map(str::to_string),
+            candidates: Vec::new(),
+            policy: None,
+            policy_error: None,
+            lifecycle: codex_model_router::policy::EffectiveLifecycle::default(),
+        };
+    };
+    let curated_candidates = curated_candidates_for_policy(config, &available_models);
+    let (candidate_pool, mut policy_error) =
+        match codex_model_router::policy::candidate_pool_for_discovery(
+            model_router,
+            &model_router.candidates,
+            curated_candidates,
+            &available_models,
+            &config.model_provider_id,
+        ) {
+            Ok(candidates) => (candidates, None),
+            Err(err) => (model_router.candidates.clone(), Some(err.to_string())),
+        };
+
+    let mut routes = Vec::with_capacity(candidate_pool.len() + 1);
+    let mut candidates = Vec::with_capacity(candidate_pool.len() + 1);
+    let incumbent = codex_config::config_toml::ModelRouterCandidateToml {
+        id: Some("incumbent".to_string()),
+        model: config.model.clone(),
+        model_provider: Some(config.model_provider_id.clone()),
+        ..Default::default()
+    };
+    push_policy_candidate_report(
+        config,
+        &mut routes,
+        &mut candidates,
+        &incumbent,
+        /*incumbent*/ true,
+    );
+    for candidate in &candidate_pool {
+        push_policy_candidate_report(
+            config,
+            &mut routes,
+            &mut candidates,
+            candidate,
+            /*incumbent*/ false,
+        );
+    }
+
+    let policy = if let Some(task_key) = task_key {
+        match codex_model_router::policy::apply_model_router_policy(model_router, task_key, &routes)
+        {
+            Ok(policy) => Some(policy),
+            Err(err) => {
+                policy_error = Some(err.to_string());
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(policy) = policy.as_ref() {
+        for candidate in &mut candidates {
+            if let Some(decision) = policy
+                .routes
+                .iter()
+                .find(|decision| decision.route_index == candidate.route_index)
+            {
+                candidate.eligible = true;
+                candidate.score_bias = decision.score_bias;
+            } else {
+                candidate.eligible = false;
+                candidate.score_bias = 0.0;
+            }
+        }
+    }
+
+    let lifecycle = codex_model_router::policy::effective_lifecycle_for_route(
+        Some(model_router),
+        task_key.unwrap_or("model_router.policy"),
+        None,
+    )
+    .unwrap_or_default();
+
+    ModelRouterPolicyReport {
+        enabled: model_router.enabled,
+        discovery: format!("{:?}", model_router.discovery.unwrap_or_default()),
+        task_key: task_key.map(str::to_string),
+        candidates,
+        policy,
+        policy_error,
+        lifecycle,
+    }
+}
+
+async fn model_router_available_policy_models(
+    config: &Config,
+) -> Vec<codex_model_router::policy::PolicyAvailableModel> {
+    let auth_manager =
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true);
+    let models_manager =
+        build_models_manager(config, auth_manager, CollaborationModesConfig::default());
+    let remote_models = models_manager.try_get_remote_models().unwrap_or_default();
+    models_manager
+        .build_available_models(remote_models)
+        .into_iter()
+        .map(|model| codex_model_router::policy::PolicyAvailableModel {
+            provider: config.model_provider_id.clone(),
+            model: model.model,
+        })
+        .collect()
+}
+
+fn curated_candidates_for_policy(
+    config: &Config,
+    available_models: &[codex_model_router::policy::PolicyAvailableModel],
+) -> Vec<codex_config::config_toml::ModelRouterCandidateToml> {
+    let mut seen = BTreeSet::new();
+    if let Some(model) = config.model.as_deref() {
+        seen.insert(format!("{}\u{1f}{model}", config.model_provider_id));
+    }
+    if let Some(model_router) = config.model_router.as_ref() {
+        for candidate in &model_router.candidates {
+            if let Some(model) = candidate.model.as_deref().or(config.model.as_deref()) {
+                seen.insert(format!(
+                    "{}\u{1f}{model}",
+                    candidate
+                        .model_provider
+                        .as_deref()
+                        .unwrap_or(&config.model_provider_id)
+                ));
+            }
+        }
+    }
+    let mut candidates = Vec::new();
+    for available in available_models {
+        let key = format!("{}\u{1f}{}", available.provider, available.model);
+        if seen.insert(key) {
+            candidates.push(codex_config::config_toml::ModelRouterCandidateToml {
+                model: Some(available.model.clone()),
+                model_provider: Some(available.provider.clone()),
+                ..Default::default()
+            });
+        }
+    }
+    candidates
+}
+
+fn push_policy_candidate_report(
+    config: &Config,
+    routes: &mut Vec<codex_model_router::policy::PolicyRoute>,
+    candidates: &mut Vec<ModelRouterPolicyCandidateReport>,
+    candidate: &codex_config::config_toml::ModelRouterCandidateToml,
+    incumbent: bool,
+) {
+    let route_index = routes.len();
+    let model_provider = candidate
+        .model_provider
+        .clone()
+        .unwrap_or_else(|| config.model_provider_id.clone());
+    let model = candidate.model.clone().or_else(|| config.model.clone());
+    routes.push(codex_model_router::policy::PolicyRoute {
+        index: route_index,
+        model_provider: model_provider.clone(),
+        model: model.clone(),
+    });
+    candidates.push(ModelRouterPolicyCandidateReport {
+        route_index,
+        identity_key: codex_model_router::policy::candidate_identity_key(candidate),
+        id: candidate.id.clone(),
+        model_provider,
+        model,
+        incumbent,
+        eligible: true,
+        score_bias: 0.0,
+    });
+}
+
+fn print_model_router_policy_report(report: &ModelRouterPolicyReport) {
+    println!("Model router policy");
+    println!("Enabled: {}", report.enabled);
+    println!("Discovery: {}", report.discovery);
+    if let Some(task_key) = &report.task_key {
+        println!("Task: {task_key}");
+    }
+    if let Some(error) = &report.policy_error {
+        println!("Policy error: {error}");
+    }
+    println!(
+        "Lifecycle: window {}, min evaluated {}, confidence {:.2}, success {:.2}",
+        report.lifecycle.window,
+        report.lifecycle.min_evaluated,
+        report.lifecycle.min_confidence,
+        report.lifecycle.min_success_rate
+    );
+    println!("Candidates:");
+    for candidate in &report.candidates {
+        println!(
+            "- #{} {}{} model={} provider={} eligible={} bias={:.3}",
+            candidate.route_index,
+            candidate.id.as_deref().unwrap_or("<unnamed>"),
+            if candidate.incumbent {
+                " (incumbent)"
+            } else {
+                ""
+            },
+            candidate.model.as_deref().unwrap_or("<inherit>"),
+            candidate.model_provider,
+            candidate.eligible,
+            candidate.score_bias
+        );
+    }
+}
+
+fn format_model_router_lifecycle_report(
+    report: &ModelRouterLifecycleStateReport,
+    timeline: ModelRouterLifecycleTimelineDisplay,
+) -> String {
+    let mut lines = vec![
+        "Model router lifecycle".to_string(),
+        format!("Window: {}", report.window),
+    ];
+    if let Some(task_key) = &report.task_key {
+        lines.push(format!("Task: {task_key}"));
+    }
+    if let Some(candidate_identity) = &report.candidate_identity {
+        lines.push(format!("Candidate: {candidate_identity}"));
+    }
+    lines.push(format!(
+        "Defaults: window {}, budget {} tokens/${:.6}, gates {} evals/{:.2} confidence/{:.2} success",
+        report.effective_lifecycle.window,
+        report.effective_lifecycle.token_budget,
+        report.effective_lifecycle.cost_budget_usd,
+        report.effective_lifecycle.min_evaluated,
+        report.effective_lifecycle.min_confidence,
+        report.effective_lifecycle.min_success_rate
+    ));
+
+    let totals = &report.stats.totals;
+    lines.push(format!(
+        "Events: {} promoted, {} demoted, {} blocked (auto {}, manual {})",
+        totals.promoted, totals.demoted, totals.promotion_blocked, totals.auto, totals.manual
+    ));
+    if report.stats.candidates.is_empty() {
+        lines.push("No lifecycle state found.".to_string());
+    } else {
+        lines.push("Candidates:".to_string());
+        for candidate in &report.stats.candidates {
+            let status = candidate.current_status.as_deref().unwrap_or("none");
+            let last_event = candidate.last_event_at_ms.map_or_else(
+                || "never".to_string(),
+                |at_ms| {
+                    format!(
+                        "{} at {}",
+                        candidate.last_event_type.as_deref().unwrap_or("event"),
+                        at_ms
+                    )
+                },
+            );
+            let reason = candidate.last_reason.as_deref().unwrap_or("<none>");
+            lines.push(format!(
+                "- {} {}: status {}, promoted {}, demoted {}, blocked {}, auto/manual {}/{}, last {}, reason {}",
+                candidate.task_key,
+                candidate.candidate_identity,
+                status,
+                candidate.counts.promoted,
+                candidate.counts.demoted,
+                candidate.counts.promotion_blocked,
+                candidate.counts.auto,
+                candidate.counts.manual,
+                last_event,
+                reason
+            ));
+        }
+    }
+
+    if timeline == ModelRouterLifecycleTimelineDisplay::Shown {
+        if report.events.is_empty() {
+            lines.push("No lifecycle events found.".to_string());
+        } else {
+            lines.push("Timeline:".to_string());
+            for event in &report.events {
+                lines.push(format_model_router_lifecycle_event(event));
+            }
+        }
+    }
+
+    format!("{}\n", lines.join("\n"))
+}
+
+fn format_model_router_lifecycle_event(
+    event: &codex_state::ModelRouterLifecycleEventRecord,
+) -> String {
+    let status = match (&event.previous_status, &event.next_status) {
+        (Some(previous), Some(next)) => format!(" {previous}->{next}"),
+        (Some(previous), None) => format!(" {previous}->none"),
+        (None, Some(next)) => format!(" none->{next}"),
+        (None, None) => String::new(),
+    };
+    let mut line = format!(
+        "- {} {} {} {} {}{}",
+        event.created_at_ms,
+        event.source,
+        event.event_type,
+        event.task_key,
+        event.candidate_identity,
+        status
+    );
+    if let Some(reason) = &event.reason {
+        line.push_str(&format!(" reason={reason}"));
+    }
+    if let Some(phase) = &event.shadow_phase {
+        line.push_str(&format!(
+            " shadow={} evals={} success={:.2} confidence={:.2} cost={} tokens={} latest={}@{}",
+            phase,
+            event.shadow_evaluated_count.unwrap_or_default(),
+            event.shadow_success_rate.unwrap_or_default(),
+            event.shadow_average_confidence.unwrap_or_default(),
+            model_router_usd(event.shadow_cost_used_usd_micros.unwrap_or_default()),
+            event.shadow_tokens_used.unwrap_or_default(),
+            event
+                .shadow_latest_evaluation_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "?".to_string()),
+            event
+                .shadow_latest_evaluation_at_ms
+                .map(|at_ms| at_ms.to_string())
+                .unwrap_or_else(|| "?".to_string())
+        ));
+    }
+    if let Some(gates) = format_failed_lifecycle_gates(event.failed_gates_json.as_deref()) {
+        line.push_str(&format!(" failed_gates={gates}"));
+    }
+    line
+}
+
+fn format_failed_lifecycle_gates(failed_gates_json: Option<&str>) -> Option<String> {
+    let failed_gates_json = failed_gates_json?;
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(failed_gates_json) else {
+        return Some(failed_gates_json.to_string());
+    };
+    let Some(gates) = value.as_array() else {
+        return Some(failed_gates_json.to_string());
+    };
+    let names = gates
+        .iter()
+        .filter_map(|gate| gate.get("gate").and_then(serde_json::Value::as_str))
+        .collect::<Vec<_>>();
+    if names.is_empty() {
+        Some(failed_gates_json.to_string())
+    } else {
+        Some(names.join(","))
+    }
+}
+
+fn print_model_router_shadow_report(report: &ModelRouterShadowReport) {
+    println!("Model router shadows");
+    if let Some(task_key) = &report.task_key {
+        println!("Task: {task_key}");
+    }
+    if report.summaries.is_empty() {
+        println!("No shadow evaluations found.");
+    } else {
+        println!("Summaries:");
+        for summary in &report.summaries {
+            println!(
+                "- {} {} {} vs {}: {} evals, success {:.2}, confidence {:.2}, cost ${:.6}, tokens {}",
+                summary.task_key,
+                summary.phase,
+                summary.candidate_identity,
+                summary.base_candidate_identity,
+                summary.evaluated_count,
+                summary.success_rate,
+                summary.average_confidence,
+                summary.cost_used_usd_micros as f64 / 1_000_000.0,
+                summary.tokens_used
+            );
+        }
+    }
+    if !report.recent.is_empty() {
+        println!("Recent:");
+        for row in &report.recent {
+            println!(
+                "- {} {} {} {} vs {} success={} confidence={:.2}",
+                row.created_at_ms,
+                row.task_key,
+                row.phase,
+                row.candidate_identity,
+                row.base_candidate_identity,
+                row.success,
+                row.confidence
+            );
+        }
+    }
+}
+
+fn format_model_router_usage_report(report: &ModelRouterUsageReport) -> String {
+    let totals = &report.summary.totals;
+    let mut lines = vec![
+        "Model router usage".to_string(),
+        format!("Window: {}", report.window),
+    ];
+    if let Some(task_key) = &report.summary.task_key {
+        lines.push(format!("Task: {task_key}"));
+    }
+    lines.push(format!(
+        "Requests: {} production, {} overhead, {} total",
+        totals.production_request_count, totals.overhead_request_count, totals.request_count
+    ));
+    lines.push(format!(
+        "Tokens: {} total (input {}, cached {}, output {}, reasoning {})",
+        totals.token_usage.total_tokens,
+        totals.token_usage.input_tokens,
+        totals.token_usage.cached_input_tokens,
+        totals.token_usage.output_tokens,
+        totals.token_usage.reasoning_output_tokens
+    ));
+    lines.push(format!(
+        "Costs: production {}, counterfactual {}, overhead {}",
+        model_router_usd(totals.savings.actual_production_cost_usd_micros),
+        model_router_usd(totals.savings.counterfactual_cost_usd_micros),
+        model_router_usd(totals.savings.router_overhead_cost_usd_micros)
+    ));
+    lines.push(format!(
+        "Savings: gross {}, net {}",
+        model_router_usd(totals.savings.gross_savings_usd_micros),
+        model_router_usd(totals.savings.net_savings_usd_micros)
+    ));
+    lines.push(format!(
+        "Price confidence: avg {:.2}, min {:.2}",
+        totals.average_price_confidence, totals.minimum_price_confidence
+    ));
+    let coverage = &totals.coverage;
+    if coverage.missing_price_rows > 0
+        || coverage.low_confidence_price_rows > 0
+        || coverage.zero_token_rows > 0
+        || coverage.production_rows_missing_actual_cost > 0
+        || coverage.production_rows_missing_counterfactual > 0
+    {
+        lines.push(format!(
+            "Coverage gaps: missing price {}, low confidence {}, zero-token {}, missing production actual {}, missing production counterfactual {}",
+            coverage.missing_price_rows,
+            coverage.low_confidence_price_rows,
+            coverage.zero_token_rows,
+            coverage.production_rows_missing_actual_cost,
+            coverage.production_rows_missing_counterfactual
+        ));
+    }
+    if report.summary.groups.is_empty() {
+        lines.push("No model-router ledger rows found.".to_string());
+    } else {
+        let group_by = match report.summary.group_by {
+            codex_state::ModelRouterUsageGroupBy::Task => "task",
+            codex_state::ModelRouterUsageGroupBy::Model => "model",
+            codex_state::ModelRouterUsageGroupBy::Day => "day",
+            codex_state::ModelRouterUsageGroupBy::RequestKind => "request-kind",
+        };
+        lines.push(format!("Groups by {group_by}:"));
+        for group in &report.summary.groups {
+            let totals = &group.totals;
+            lines.push(format!(
+                "- {}: requests {}, tokens {}, production {}, counterfactual {}, overhead {}, net {}, confidence {:.2}",
+                group.key,
+                totals.request_count,
+                totals.token_usage.total_tokens,
+                model_router_usd(totals.savings.actual_production_cost_usd_micros),
+                model_router_usd(totals.savings.counterfactual_cost_usd_micros),
+                model_router_usd(totals.savings.router_overhead_cost_usd_micros),
+                model_router_usd(totals.savings.net_savings_usd_micros),
+                totals.average_price_confidence
+            ));
+        }
+    }
+    format!("{}\n", lines.join("\n"))
+}
+
+fn model_router_usd(usd_micros: i64) -> String {
+    format!("${:.6}", usd_micros as f64 / 1_000_000.0)
+}
+
+fn model_router_usage_window_start_ms(window: &str, now_ms: i64) -> anyhow::Result<Option<i64>> {
+    let window = window.trim();
+    if window.eq_ignore_ascii_case("all") || window.eq_ignore_ascii_case("all-time") {
+        return Ok(None);
+    }
+    let (number, unit) = window.split_at(window.len().saturating_sub(1));
+    let value = number.parse::<i64>()?.max(0);
+    let multiplier = match unit {
+        "d" => 24 * 60 * 60 * 1000,
+        "h" => 60 * 60 * 1000,
+        "m" => 60 * 1000,
+        _ => anyhow::bail!("window must be a duration like 30d, 24h, 30m, or all"),
+    };
+    Ok(Some(
+        now_ms.saturating_sub(value.saturating_mul(multiplier)),
+    ))
+}
+
+impl From<ModelRouterUsageGroupByArg> for codex_state::ModelRouterUsageGroupBy {
+    fn from(value: ModelRouterUsageGroupByArg) -> Self {
+        match value {
+            ModelRouterUsageGroupByArg::Task => Self::Task,
+            ModelRouterUsageGroupByArg::Model => Self::Model,
+            ModelRouterUsageGroupByArg::Day => Self::Day,
+            ModelRouterUsageGroupByArg::RequestKind => Self::RequestKind,
+        }
+    }
+}
+
 async fn run_model_router_tune_command(
     cmd: ModelRouterTuneCommand,
     root_config_overrides: CliConfigOverrides,
 ) -> anyhow::Result<()> {
     let (config, state_db) = model_router_config_and_state(root_config_overrides).await?;
+    let lifecycle_defaults = codex_model_router::policy::effective_lifecycle_for_route(
+        config.model_router.as_ref(),
+        "model_router.tune",
+        None,
+    )?;
+    let window = cmd.window.unwrap_or(lifecycle_defaults.window);
+    let cost_budget_usd = cmd
+        .cost_budget_usd
+        .unwrap_or(lifecycle_defaults.cost_budget_usd);
+    let token_budget = cmd
+        .token_budget
+        .unwrap_or_else(|| i64::try_from(lifecycle_defaults.token_budget).unwrap_or(i64::MAX));
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true);
     let models_manager = build_models_manager(
@@ -3139,9 +4100,9 @@ async fn run_model_router_tune_command(
         state_db.as_ref(),
         &config,
         codex_core::model_router_tune::ModelRouterTuneOptions {
-            window: cmd.window,
-            cost_budget_usd: cmd.cost_budget_usd,
-            token_budget: cmd.token_budget,
+            window,
+            cost_budget_usd,
+            token_budget,
             dry_run: cmd.dry_run,
         },
         Some(tune_runtime),
@@ -4112,9 +5073,9 @@ mod tests {
             panic!("expected model-router tune subcommand");
         };
 
-        assert_eq!(cmd.window, "24h");
-        assert_eq!(cmd.cost_budget_usd, 7.50);
-        assert_eq!(cmd.token_budget, 12345);
+        assert_eq!(cmd.window.as_deref(), Some("24h"));
+        assert_eq!(cmd.cost_budget_usd, Some(7.50));
+        assert_eq!(cmd.token_budget, Some(12345));
         assert_eq!(
             cmd.report_out,
             Some(PathBuf::from("/tmp/model-router-report.json"))
@@ -4135,10 +5096,389 @@ mod tests {
             panic!("expected model-router tune subcommand");
         };
 
-        assert_eq!(cmd.window, "30d");
-        assert_eq!(cmd.cost_budget_usd, 10.0);
-        assert_eq!(cmd.token_budget, 1_000_000);
+        assert_eq!(cmd.window, None);
+        assert_eq!(cmd.cost_budget_usd, None);
+        assert_eq!(cmd.token_budget, None);
         assert!(cmd.dry_run);
+    }
+
+    #[test]
+    fn model_router_policy_lifecycle_and_shadow_commands_parse() {
+        let policy = MultitoolCli::try_parse_from([
+            "codex",
+            "model-router",
+            "policy",
+            "--task-key",
+            "module.repo_ci.triage",
+            "--json",
+        ])
+        .expect("parse policy");
+        let Some(Subcommand::ModelRouter(ModelRouterCli {
+            subcommand: ModelRouterSubcommand::Policy(policy),
+        })) = policy.subcommand
+        else {
+            panic!("expected model-router policy subcommand");
+        };
+        assert_eq!(policy.task_key.as_deref(), Some("module.repo_ci.triage"));
+        assert!(policy.json);
+
+        let lifecycle = MultitoolCli::try_parse_from([
+            "codex",
+            "model-router",
+            "lifecycle",
+            "--task-key",
+            "subagent.review",
+            "--candidate-identity",
+            "candidate",
+            "--window",
+            "7d",
+            "--events",
+            "--limit",
+            "10",
+            "--json",
+        ])
+        .expect("parse lifecycle");
+        let Some(Subcommand::ModelRouter(ModelRouterCli {
+            subcommand: ModelRouterSubcommand::Lifecycle(lifecycle),
+        })) = lifecycle.subcommand
+        else {
+            panic!("expected model-router lifecycle subcommand");
+        };
+        assert_eq!(lifecycle.task_key.as_deref(), Some("subagent.review"));
+        assert_eq!(lifecycle.candidate_identity.as_deref(), Some("candidate"));
+        assert_eq!(lifecycle.window, "7d");
+        assert!(lifecycle.events);
+        assert_eq!(lifecycle.limit, 10);
+        assert!(lifecycle.json);
+
+        let shadows = MultitoolCli::try_parse_from([
+            "codex",
+            "model-router",
+            "shadows",
+            "--task-key",
+            "subagent.review",
+            "--limit",
+            "5",
+            "--json",
+        ])
+        .expect("parse shadows");
+        let Some(Subcommand::ModelRouter(ModelRouterCli {
+            subcommand: ModelRouterSubcommand::Shadows(shadows),
+        })) = shadows.subcommand
+        else {
+            panic!("expected model-router shadows subcommand");
+        };
+        assert_eq!(shadows.task_key.as_deref(), Some("subagent.review"));
+        assert_eq!(shadows.limit, 5);
+        assert!(shadows.json);
+    }
+
+    #[test]
+    fn model_router_lifecycle_formats_stats_events_and_json() {
+        let report = ModelRouterLifecycleStateReport {
+            task_key: Some("subagent.review".to_string()),
+            candidate_identity: Some("candidate".to_string()),
+            window: "all".to_string(),
+            effective_lifecycle: codex_model_router::policy::EffectiveLifecycle::default(),
+            promotions: vec![codex_state::ModelRouterLifecyclePromotionRecord {
+                task_key: "subagent.review".to_string(),
+                candidate_identity: "candidate".to_string(),
+                base_candidate_identity: "base".to_string(),
+                status: "promoted".to_string(),
+                rule_id: Some("review".to_string()),
+                production_model_provider: Some("openai".to_string()),
+                production_model: Some("gpt-5.5".to_string()),
+                base_model_provider: Some("openai".to_string()),
+                base_model: Some("gpt-5.4".to_string()),
+                promoted_at_ms: 20,
+                updated_at_ms: 20,
+                reason: Some("passed".to_string()),
+            }],
+            stats: codex_state::ModelRouterLifecycleStatsSummary {
+                window_start_ms: None,
+                window_end_ms: 30,
+                task_key: Some("subagent.review".to_string()),
+                candidate_identity: Some("candidate".to_string()),
+                totals: codex_state::ModelRouterLifecycleEventCounts {
+                    promoted: 1,
+                    demoted: 1,
+                    promotion_blocked: 1,
+                    auto: 2,
+                    manual: 1,
+                },
+                candidates: vec![codex_state::ModelRouterLifecycleCandidateStats {
+                    task_key: "subagent.review".to_string(),
+                    candidate_identity: "candidate".to_string(),
+                    current_status: Some("promoted".to_string()),
+                    base_candidate_identity: Some("base".to_string()),
+                    rule_id: Some("review".to_string()),
+                    production_model_provider: Some("openai".to_string()),
+                    production_model: Some("gpt-5.5".to_string()),
+                    base_model_provider: Some("openai".to_string()),
+                    base_model: Some("gpt-5.4".to_string()),
+                    promoted_at_ms: Some(20),
+                    updated_at_ms: Some(20),
+                    counts: codex_state::ModelRouterLifecycleEventCounts {
+                        promoted: 1,
+                        demoted: 1,
+                        promotion_blocked: 1,
+                        auto: 2,
+                        manual: 1,
+                    },
+                    last_event_at_ms: Some(20),
+                    last_event_type: Some("promoted".to_string()),
+                    last_reason: Some("passed".to_string()),
+                }],
+            },
+            events: vec![codex_state::ModelRouterLifecycleEventRecord {
+                id: Some(3),
+                created_at_ms: 30,
+                event_type: "promotion_blocked".to_string(),
+                source: "auto".to_string(),
+                task_key: "subagent.review".to_string(),
+                candidate_identity: "candidate".to_string(),
+                base_candidate_identity: "base".to_string(),
+                previous_status: Some("demoted".to_string()),
+                next_status: Some("demoted".to_string()),
+                rule_id: Some("review".to_string()),
+                reason: Some("promotion shadow gates failed".to_string()),
+                production_model_provider: Some("openai".to_string()),
+                production_model: Some("gpt-5.5".to_string()),
+                base_model_provider: Some("openai".to_string()),
+                base_model: Some("gpt-5.4".to_string()),
+                lifecycle_window: Some("all".to_string()),
+                shadow_phase: Some("promotion".to_string()),
+                shadow_evaluated_count: Some(2),
+                shadow_success_count: Some(1),
+                shadow_success_rate: Some(0.5),
+                shadow_average_score: Some(0.5),
+                shadow_average_confidence: Some(1.0),
+                shadow_cost_used_usd_micros: Some(100),
+                shadow_tokens_used: Some(200),
+                shadow_latest_evaluation_id: Some(9),
+                shadow_latest_evaluation_at_ms: Some(29),
+                failed_gates_json: Some(
+                    r#"[{"gate":"min_success_rate","actual":0.5,"threshold":0.9}]"#.to_string(),
+                ),
+            }],
+        };
+
+        let output = format_model_router_lifecycle_report(
+            &report,
+            ModelRouterLifecycleTimelineDisplay::Shown,
+        );
+        assert!(output.contains("Events: 1 promoted, 1 demoted, 1 blocked (auto 2, manual 1)"));
+        assert!(output.contains("status promoted"));
+        assert!(output.contains("failed_gates=min_success_rate"));
+
+        let json = serde_json::to_value(&report).expect("json report");
+        assert_eq!(
+            json["stats"]["totals"]["promotionBlocked"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            json["events"][0]["eventType"],
+            serde_json::json!("promotion_blocked")
+        );
+    }
+
+    #[test]
+    fn model_router_usage_parses_and_formats() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "model-router",
+            "usage",
+            "--window",
+            "7d",
+            "--task-key",
+            "module.repo_ci.review",
+            "--group-by",
+            "request-kind",
+            "--json",
+        ])
+        .expect("parse usage");
+        let Some(Subcommand::ModelRouter(ModelRouterCli {
+            subcommand: ModelRouterSubcommand::Usage(usage),
+        })) = cli.subcommand
+        else {
+            panic!("expected model-router usage subcommand");
+        };
+        assert_eq!(usage.window, "7d");
+        assert_eq!(usage.task_key.as_deref(), Some("module.repo_ci.review"));
+        assert_eq!(usage.group_by, ModelRouterUsageGroupByArg::RequestKind);
+        assert!(usage.json);
+
+        let report = ModelRouterUsageReport {
+            window: "7d".to_string(),
+            summary: codex_state::ModelRouterUsageSummary {
+                window_start_ms: Some(1),
+                window_end_ms: 2,
+                task_key: Some("module.repo_ci.review".to_string()),
+                group_by: codex_state::ModelRouterUsageGroupBy::RequestKind,
+                totals: codex_state::ModelRouterUsageTotals {
+                    request_count: 3,
+                    production_request_count: 2,
+                    overhead_request_count: 1,
+                    token_usage: codex_protocol::protocol::TokenUsage {
+                        input_tokens: 10,
+                        cached_input_tokens: 2,
+                        output_tokens: 3,
+                        reasoning_output_tokens: 1,
+                        total_tokens: 13,
+                    },
+                    savings: codex_model_router::RouterSavings {
+                        actual_production_cost_usd_micros: 100,
+                        router_overhead_cost_usd_micros: 25,
+                        counterfactual_cost_usd_micros: 175,
+                        gross_savings_usd_micros: 75,
+                        net_savings_usd_micros: 50,
+                    },
+                    average_price_confidence: 0.4,
+                    minimum_price_confidence: 0.0,
+                    coverage: codex_state::ModelRouterUsageCoverage {
+                        missing_price_rows: 1,
+                        low_confidence_price_rows: 1,
+                        zero_token_rows: 1,
+                        production_rows_missing_actual_cost: 1,
+                        production_rows_missing_counterfactual: 1,
+                    },
+                },
+                groups: vec![
+                    codex_state::ModelRouterUsageGroup {
+                        key: "judge".to_string(),
+                        totals: codex_state::ModelRouterUsageTotals {
+                            request_count: 1,
+                            production_request_count: 0,
+                            overhead_request_count: 1,
+                            token_usage: codex_protocol::protocol::TokenUsage::default(),
+                            savings: codex_model_router::RouterSavings {
+                                actual_production_cost_usd_micros: 0,
+                                router_overhead_cost_usd_micros: 25,
+                                counterfactual_cost_usd_micros: 0,
+                                gross_savings_usd_micros: 0,
+                                net_savings_usd_micros: -25,
+                            },
+                            average_price_confidence: 0.0,
+                            minimum_price_confidence: 0.0,
+                            coverage: codex_state::ModelRouterUsageCoverage {
+                                missing_price_rows: 1,
+                                low_confidence_price_rows: 0,
+                                zero_token_rows: 1,
+                                production_rows_missing_actual_cost: 0,
+                                production_rows_missing_counterfactual: 0,
+                            },
+                        },
+                    },
+                    codex_state::ModelRouterUsageGroup {
+                        key: "production".to_string(),
+                        totals: codex_state::ModelRouterUsageTotals {
+                            request_count: 2,
+                            production_request_count: 2,
+                            overhead_request_count: 0,
+                            token_usage: codex_protocol::protocol::TokenUsage {
+                                input_tokens: 10,
+                                cached_input_tokens: 2,
+                                output_tokens: 3,
+                                reasoning_output_tokens: 1,
+                                total_tokens: 13,
+                            },
+                            savings: codex_model_router::RouterSavings {
+                                actual_production_cost_usd_micros: 100,
+                                router_overhead_cost_usd_micros: 0,
+                                counterfactual_cost_usd_micros: 175,
+                                gross_savings_usd_micros: 75,
+                                net_savings_usd_micros: 75,
+                            },
+                            average_price_confidence: 0.6,
+                            minimum_price_confidence: 0.2,
+                            coverage: codex_state::ModelRouterUsageCoverage {
+                                missing_price_rows: 0,
+                                low_confidence_price_rows: 1,
+                                zero_token_rows: 0,
+                                production_rows_missing_actual_cost: 1,
+                                production_rows_missing_counterfactual: 1,
+                            },
+                        },
+                    },
+                ],
+            },
+        };
+
+        let output = format_model_router_usage_report(&report);
+        assert!(output.contains("Model router usage"));
+        assert!(output.contains("production $0.000100"));
+        assert!(output.contains("net $0.000050"));
+        assert!(output.contains(
+            "Coverage gaps: missing price 1, low confidence 1, zero-token 1, missing production actual 1, missing production counterfactual 1"
+        ));
+        let json_output = serde_json::to_string_pretty(&report).expect("json report string");
+        assert!(json_output.contains("\"missingPriceRows\": 1"));
+        let json = serde_json::to_value(&report).expect("json report");
+        assert_eq!(
+            json["summary"]["totals"]["requestCount"],
+            serde_json::json!(3)
+        );
+        assert_eq!(
+            json["summary"]["totals"]["coverage"]["productionRowsMissingCounterfactual"],
+            serde_json::json!(1)
+        );
+    }
+
+    #[test]
+    fn model_router_promote_and_demote_parse() {
+        let promote = MultitoolCli::try_parse_from([
+            "codex",
+            "model-router",
+            "promote",
+            "--task-key",
+            "subagent.review",
+            "--candidate-identity",
+            "candidate",
+            "--base-candidate-identity",
+            "base",
+            "--rule-id",
+            "review",
+            "--reason",
+            "passed",
+            "--json",
+        ])
+        .expect("parse promote");
+        let Some(Subcommand::ModelRouter(ModelRouterCli {
+            subcommand: ModelRouterSubcommand::Promote(promote),
+        })) = promote.subcommand
+        else {
+            panic!("expected model-router promote subcommand");
+        };
+        assert_eq!(promote.task_key, "subagent.review");
+        assert_eq!(promote.candidate_identity, "candidate");
+        assert_eq!(promote.base_candidate_identity, "base");
+        assert_eq!(promote.rule_id.as_deref(), Some("review"));
+        assert_eq!(promote.reason.as_deref(), Some("passed"));
+        assert!(promote.json);
+
+        let demote = MultitoolCli::try_parse_from([
+            "codex",
+            "model-router",
+            "demote",
+            "--task-key",
+            "subagent.review",
+            "--candidate-identity",
+            "candidate",
+            "--reason",
+            "failed",
+            "--json",
+        ])
+        .expect("parse demote");
+        let Some(Subcommand::ModelRouter(ModelRouterCli {
+            subcommand: ModelRouterSubcommand::Demote(demote),
+        })) = demote.subcommand
+        else {
+            panic!("expected model-router demote subcommand");
+        };
+        assert_eq!(demote.task_key, "subagent.review");
+        assert_eq!(demote.candidate_identity, "candidate");
+        assert_eq!(demote.reason.as_deref(), Some("failed"));
+        assert!(demote.json);
     }
 
     #[test]

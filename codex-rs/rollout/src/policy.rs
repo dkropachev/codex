@@ -106,6 +106,7 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::TurnAborted(_)
         | EventMsg::TurnStarted(_)
         | EventMsg::TurnComplete(_)
+        | EventMsg::RepoCiStatus(_)
         | EventMsg::ImageGenerationEnd(_) => Some(EventPersistenceMode::Limited),
         EventMsg::ItemCompleted(event) => {
             // Plan items are derived from streaming tags and are not part of the
@@ -133,7 +134,6 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::DynamicToolCallResponse(_) => Some(EventPersistenceMode::Extended),
         EventMsg::Warning(_)
         | EventMsg::GuardianWarning(_)
-        | EventMsg::RepoCiStatus(_)
         | EventMsg::RealtimeConversationStarted(_)
         | EventMsg::RealtimeConversationSdp(_)
         | EventMsg::RealtimeConversationRealtime(_)
@@ -196,6 +196,10 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ImageGenerationEndEvent;
+    use codex_protocol::protocol::RepoCiPhase;
+    use codex_protocol::protocol::RepoCiScope;
+    use codex_protocol::protocol::RepoCiState;
+    use codex_protocol::protocol::RepoCiStatusEvent;
     use codex_protocol::protocol::ThreadNameUpdatedEvent;
 
     #[test]
@@ -219,6 +223,23 @@ mod tests {
         let event = EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
             thread_id: ThreadId::new(),
             thread_name: Some("saved-session".to_string()),
+        });
+
+        assert!(should_persist_event_msg(
+            &event,
+            EventPersistenceMode::Limited
+        ));
+    }
+
+    #[test]
+    fn persists_repo_ci_status_events_in_limited_mode() {
+        let event = EventMsg::RepoCiStatus(RepoCiStatusEvent {
+            phase: RepoCiPhase::Remote,
+            state: RepoCiState::Passed,
+            scope: RepoCiScope::Remote,
+            attempt: None,
+            max_attempts: None,
+            message: "Repo CI remote checks passed.".to_string(),
         });
 
         assert!(should_persist_event_msg(

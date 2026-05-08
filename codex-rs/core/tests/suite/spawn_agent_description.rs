@@ -155,6 +155,7 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
                 .features
                 .enable(Feature::Collab)
                 .expect("test config should allow feature update");
+            config.agent_max_threads = Some(2);
         });
     let test = builder.build(&server).await?;
     wait_for_model_available(&test.thread_manager.get_models_manager(), "visible-model").await;
@@ -219,6 +220,10 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
     assert!(
         !description.contains("A mini model can solve many tasks faster than the main model."),
         "spawn_agent description should not encourage choosing a smaller model by default: {description:?}"
+    );
+    assert!(
+        description.contains("max_concurrent_threads_per_session = 2"),
+        "expected configured agent thread cap in spawn_agent description: {description:?}"
     );
 
     Ok(())

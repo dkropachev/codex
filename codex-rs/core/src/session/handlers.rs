@@ -27,11 +27,12 @@ use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::review_prompts::resolve_review_request;
+use crate::tasks::CodexConfigIntentMode;
 use crate::tasks::CompactTask;
 use crate::tasks::UndoTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
-use crate::tasks::codex_config_intent_input;
+use crate::tasks::codex_config_intent_turn;
 use crate::tasks::codex_config_permission_profile;
 use crate::tasks::codex_config_sandbox_policy;
 use crate::tasks::codex_config_workspace_for_target;
@@ -81,6 +82,9 @@ use std::sync::Arc;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
+
+const MODEL_ROUTER_MISSING_CONFIG_MESSAGE: &str =
+    "cannot enable model router for this session because no [model_router] is configured";
 
 pub async fn interrupt(sess: &Arc<Session>) {
     sess.interrupt_task().await;
@@ -577,15 +581,19 @@ pub async fn codex_config_intent(
     };
     let workspace = codex_config_workspace_for_target(&target_cwd);
     let sandbox_policy = codex_config_sandbox_policy();
+    let turn = codex_config_intent_turn(intent, context, &target_cwd, &workspace).await;
+    let mode = match turn.mode {
+        CodexConfigIntentMode::Investigate => ModeKind::Codex,
+        CodexConfigIntentMode::ConfigEdit | CodexConfigIntentMode::AiResolve => {
+            ModeKind::CodexConfigEdit
+        }
+    };
     let codex_mode = CollaborationMode {
-        mode: ModeKind::Codex,
+        mode,
         settings: Settings {
             model: current_mode.model().to_string(),
             reasoning_effort: current_mode.reasoning_effort(),
-            developer_instructions: Some(format!(
-                "You are handling a one-shot Codex configuration request. The target workspace `{}` is read-only; the active cwd is a writable scratch workspace. Ask for clarification before changing configuration when the target is ambiguous.",
-                target_cwd.display()
-            )),
+            developer_instructions: Some(turn.developer_instructions),
         },
     };
     let turn_context = match sess
@@ -604,10 +612,9 @@ pub async fn codex_config_intent(
         Ok(turn_context) => turn_context,
         Err(_) => return,
     };
-    let input = codex_config_intent_input(intent, context, &target_cwd, &workspace).await;
     sess.spawn_task(
         Arc::clone(&turn_context),
-        vec![input],
+        vec![turn.input],
         crate::tasks::RegularTask::new(),
     )
     .await;
@@ -1284,6 +1291,17 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::SetModelRouterSessionConfig { enabled } => {
+                    if let Some(message) = model_router_session_config_error(&config, enabled) {
+                        sess.send_event_raw(Event {
+                            id: sub.id.clone(),
+                            msg: EventMsg::Error(ErrorEvent {
+                                message: message.to_string(),
+                                codex_error_info: Some(CodexErrorInfo::BadRequest),
+                            }),
+                        })
+                        .await;
+                        return false;
+                    }
                     override_turn_context(
                         &sess,
                         sub.id.clone(),
@@ -1403,6 +1421,17 @@ Approved action:
 
     if let Err(items) = sess.inject_response_items(items).await {
         sess.queue_response_items_for_next_turn(items).await;
+    }
+}
+
+pub(super) fn model_router_session_config_error(
+    config: &Config,
+    enabled: Option<bool>,
+) -> Option<&'static str> {
+    if enabled == Some(true) && config.model_router.is_none() {
+        Some(MODEL_ROUTER_MISSING_CONFIG_MESSAGE)
+    } else {
+        None
     }
 }
 

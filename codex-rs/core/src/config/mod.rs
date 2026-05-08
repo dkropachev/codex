@@ -52,6 +52,7 @@ use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
+use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
@@ -64,11 +65,13 @@ use codex_features::MultiAgentV2ConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
 use codex_mcp::McpConfig;
+use codex_mcp::McpRuntimeEnvironment;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::built_in_model_providers;
 use codex_model_provider_info::merge_configured_model_providers;
+use codex_model_router::TokenPrice;
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -539,6 +542,9 @@ pub struct Config {
     /// Optional routing policy for internal model calls.
     pub model_router: Option<ModelRouterToml>,
 
+    /// Runtime-only accounting metadata for a model-router-applied internal route.
+    pub(crate) model_router_accounting: Option<ModelRouterAccounting>,
+
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: usize,
 
@@ -756,6 +762,18 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: codex_config::types::OtelConfig,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ModelRouterAccounting {
+    pub(crate) task_key: String,
+    pub(crate) model_provider: String,
+    pub(crate) model: Option<String>,
+    pub(crate) account_id: Option<String>,
+    pub(crate) actual_price: Option<TokenPrice>,
+    pub(crate) actual_price_confidence: f64,
+    pub(crate) counterfactual_price: Option<TokenPrice>,
+    pub(crate) counterfactual_price_confidence: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -981,9 +999,29 @@ impl Config {
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             use_legacy_landlock: self.features.use_legacy_landlock(),
             apps_enabled: self.features.enabled(Feature::Apps),
+            mcp_process_reuse_enabled: self.features.enabled(Feature::McpProcessReuse),
             configured_mcp_servers,
             plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
         }
+    }
+
+    pub fn mcp_runtime_environment(
+        &self,
+        environment: Arc<Environment>,
+        fallback_cwd: PathBuf,
+    ) -> McpRuntimeEnvironment {
+        let project_root_markers = match codex_config::project_root_markers_from_config(
+            &self.config_layer_stack.effective_config(),
+        ) {
+            Ok(Some(markers)) => markers,
+            Ok(None) => codex_config::default_project_root_markers(),
+            Err(err) => {
+                tracing::warn!(error = %err, "invalid project_root_markers; using default MCP reuse markers");
+                codex_config::default_project_root_markers()
+            }
+        };
+        McpRuntimeEnvironment::new(environment, fallback_cwd)
+            .with_project_root_markers(project_root_markers)
     }
 
     pub fn set_legacy_sandbox_policy(
@@ -2557,6 +2595,7 @@ impl Config {
             model_providers,
             account_pool: cfg.account_pool,
             model_router: cfg.model_router,
+            model_router_accounting: None,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(AGENTS_MD_MAX_BYTES),
             project_doc_fallback_filenames: cfg
                 .project_doc_fallback_filenames

@@ -1217,9 +1217,7 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
     )
     .await?;
 
-    let memories_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
-        codex_home.path().join("memories"),
-    )?)?;
+    let memories_root = codex_home.path().join("memories").abs();
     assert!(
         config
             .permissions
@@ -5488,6 +5486,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             model_providers: fixture.model_provider_map.clone(),
             account_pool: None,
             model_router: None,
+            model_router_accounting: None,
             project_doc_max_bytes: AGENTS_MD_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
@@ -5683,6 +5682,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         model_providers: fixture.model_provider_map.clone(),
         account_pool: None,
         model_router: None,
+        model_router_accounting: None,
         project_doc_max_bytes: AGENTS_MD_MAX_BYTES,
         project_doc_fallback_filenames: Vec::new(),
         tool_output_token_limit: None,
@@ -5832,6 +5832,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         model_providers: fixture.model_provider_map.clone(),
         account_pool: None,
         model_router: None,
+        model_router_accounting: None,
         project_doc_max_bytes: AGENTS_MD_MAX_BYTES,
         project_doc_fallback_filenames: Vec::new(),
         tool_output_token_limit: None,
@@ -5966,6 +5967,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         model_providers: fixture.model_provider_map.clone(),
         account_pool: None,
         model_router: None,
+        model_router_accounting: None,
         project_doc_max_bytes: AGENTS_MD_MAX_BYTES,
         project_doc_fallback_filenames: Vec::new(),
         tool_output_token_limit: None,

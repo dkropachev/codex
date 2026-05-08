@@ -28,6 +28,8 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -155,6 +157,14 @@ async fn run_compact_task_inner_impl(
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
+    let prompt_bytes = sess.model_router_prompt_bytes_for_turn(&input).await;
+    let turn_context = sess
+        .route_turn_context_for_model_router(
+            turn_context,
+            crate::model_router::ModelRouterSource::SubAgent(SubAgentSource::Compact),
+            prompt_bytes,
+        )
+        .await;
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
         .await;
@@ -536,7 +546,7 @@ async fn drain_to_completed(
     turn_metadata_header: Option<&str>,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    let mut stream = client_session
+    let mut stream = match client_session
         .stream(
             prompt,
             &turn_context.model_info,
@@ -549,10 +559,30 @@ async fn drain_to_completed(
             // are left untraced until the reducer has a first-class local compaction lifecycle.
             &InferenceTraceContext::disabled(),
         )
-        .await?;
+        .await
+    {
+        Ok(stream) => stream,
+        Err(err) => {
+            crate::model_router::record_model_router_request_usage_for_config(
+                sess.services.state_db.as_deref(),
+                turn_context.config.as_ref(),
+                &TokenUsage::default(),
+                "stream_error",
+            )
+            .await;
+            return Err(err);
+        }
+    };
     loop {
         let maybe_event = stream.next().await;
         let Some(event) = maybe_event else {
+            crate::model_router::record_model_router_request_usage_for_config(
+                sess.services.state_db.as_deref(),
+                turn_context.config.as_ref(),
+                &TokenUsage::default(),
+                "error",
+            )
+            .await;
             return Err(CodexErr::Stream(
                 "stream closed before response.completed".into(),
                 None,
@@ -572,10 +602,27 @@ async fn drain_to_completed(
             Ok(ResponseEvent::Completed { token_usage, .. }) => {
                 sess.update_token_usage_info(turn_context, token_usage.as_ref())
                     .await;
+                let accounting_usage = token_usage.unwrap_or_default();
+                crate::model_router::record_model_router_request_usage_for_config(
+                    sess.services.state_db.as_deref(),
+                    turn_context.config.as_ref(),
+                    &accounting_usage,
+                    "completed",
+                )
+                .await;
                 return Ok(());
             }
             Ok(_) => continue,
-            Err(e) => return Err(e),
+            Err(e) => {
+                crate::model_router::record_model_router_request_usage_for_config(
+                    sess.services.state_db.as_deref(),
+                    turn_context.config.as_ref(),
+                    &TokenUsage::default(),
+                    "error",
+                )
+                .await;
+                return Err(e);
+            }
         }
     }
 }

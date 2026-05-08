@@ -5,6 +5,7 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutputTokenAccounting;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolArgumentDiffConsumer;
@@ -417,16 +418,23 @@ impl ToolRouter {
             | ToolPayload::Custom { .. }
             | ToolPayload::LocalShell { .. }
             | ToolPayload::Mcp { .. } => {
-                self.record_tool_router_error(&session, &turn, &call_id, "invalid_payload")
-                    .await;
+                self.record_tool_router_error(
+                    &session,
+                    &turn,
+                    &call_id,
+                    "invalid_payload",
+                    /*request_shape_json*/ None,
+                )
+                .await;
                 return Err(FunctionCallError::RespondToModel(
                     "tool_router expects a function-call JSON payload".to_string(),
                 ));
             }
         };
+        let request_shape_json =
+            routing_tool::sanitized_request_shape_json_from_arguments(&arguments);
         let resolution = match routing_tool::resolve_router_request(
             session.as_ref(),
-            turn.as_ref(),
             &self.index,
             call_id.clone(),
             arguments,
@@ -435,8 +443,14 @@ impl ToolRouter {
         {
             Ok(resolution) => resolution,
             Err(err) => {
-                self.record_tool_router_error(&session, &turn, &call_id, "route_error")
-                    .await;
+                self.record_tool_router_error(
+                    &session,
+                    &turn,
+                    &call_id,
+                    "route_error",
+                    request_shape_json,
+                )
+                .await;
                 return Err(err);
             }
         };
@@ -449,7 +463,7 @@ impl ToolRouter {
                     &turn,
                     &call_id,
                     &usage,
-                    estimate_text_tokens(&message),
+                    ToolOutputTokenAccounting::from_returned(estimate_text_tokens(&message)),
                     Some("noop".to_string()),
                 )
                 .await;
@@ -471,7 +485,7 @@ impl ToolRouter {
                     &turn,
                     &call_id,
                     &usage,
-                    estimate_text_tokens(&message),
+                    ToolOutputTokenAccounting::from_returned(estimate_text_tokens(&message)),
                     Some(if success { "ok" } else { "failed" }.to_string()),
                 )
                 .await;
@@ -482,8 +496,7 @@ impl ToolRouter {
                     post_tool_use_payload: None,
                 })
             }
-            RouterResolution::SingleTool { call, usage }
-            | RouterResolution::ModelRouterScript { call, usage } => {
+            RouterResolution::SingleTool { call, usage } => {
                 let context = RoutedDispatchContext {
                     session,
                     turn,
@@ -527,13 +540,14 @@ impl ToolRouter {
             codex_protocol::models::function_call_output_content_items_to_text(&content)
                 .unwrap_or_default();
         let returned_output_tokens = estimate_text_tokens(&returned_text);
+        let token_accounting = result.result.token_accounting(returned_output_tokens);
         let output = FunctionToolOutput::from_content(content, Some(success));
         self.record_tool_router_usage(
             &context.session,
             &context.turn,
             &context.router_call_id,
             &usage,
-            returned_output_tokens,
+            token_accounting,
             Some(if success { "ok" } else { "failed" }.to_string()),
         )
         .await;
@@ -563,6 +577,7 @@ impl ToolRouter {
 
         let mut content = Vec::new();
         let mut all_success = true;
+        let mut token_accounting = ToolOutputTokenAccounting::zero();
         for call in calls {
             let label = call.tool_name.display();
             let result = self
@@ -576,6 +591,11 @@ impl ToolRouter {
                 &routing_tool::response_to_content_items(response),
             )
             .unwrap_or_default();
+            token_accounting = token_accounting.saturating_add(
+                result
+                    .result
+                    .token_accounting(estimate_text_tokens(&text)),
+            );
             content.push(FunctionCallOutputContentItem::InputText {
                 text: format!("## {label}\n{text}"),
             });
@@ -585,13 +605,15 @@ impl ToolRouter {
             codex_protocol::models::function_call_output_content_items_to_text(&content)
                 .unwrap_or_default();
         let returned_output_tokens = estimate_text_tokens(&returned_text);
+        let token_accounting =
+            token_accounting.with_returned_output_tokens(returned_output_tokens);
         let output = FunctionToolOutput::from_content(content, Some(all_success));
         self.record_tool_router_usage(
             &context.session,
             &context.turn,
             &context.router_call_id,
             &usage,
-            returned_output_tokens,
+            token_accounting,
             Some(if all_success { "ok" } else { "failed" }.to_string()),
         )
         .await;
@@ -634,7 +656,7 @@ impl ToolRouter {
         turn: &TurnContext,
         call_id: &str,
         usage: &routing_tool::ToolRouterUsage,
-        returned_output_tokens: i64,
+        token_accounting: ToolOutputTokenAccounting,
         outcome: Option<String>,
     ) {
         let Some(tokens) = self.tool_router_token_estimates else {
@@ -658,6 +680,7 @@ impl ToolRouter {
                 router_schema_version: prompt_info
                     .map(|info| info.router_schema_version)
                     .unwrap_or_default(),
+                model_response_ordinal: turn.model_response_ordinal(),
                 guidance_version: guidance.guidance_version,
                 guidance_tokens: guidance.guidance_tokens,
                 format_description_tokens: prompt_info
@@ -667,13 +690,14 @@ impl ToolRouter {
                 selected_tools: usage.selected_tools.clone(),
                 visible_router_schema_tokens: tokens.visible_router_schema_tokens,
                 hidden_tool_schema_tokens: tokens.hidden_tool_schema_tokens,
-                spark_prompt_tokens: usage.model_router_prompt_tokens,
-                spark_completion_tokens: usage.model_router_completion_tokens,
+                spark_prompt_tokens: usage.fallback_prompt_tokens,
+                spark_completion_tokens: usage.fallback_completion_tokens,
                 fanout_call_count: usage.fanout_call_count,
-                returned_output_tokens,
-                original_output_tokens: returned_output_tokens,
-                truncated_output_tokens: returned_output_tokens,
+                returned_output_tokens: token_accounting.returned_output_tokens,
+                original_output_tokens: token_accounting.original_output_tokens,
+                truncated_output_tokens: token_accounting.truncated_output_tokens,
                 outcome,
+                request_shape_json: usage.request_shape_json.clone(),
             })
             .await
         {
@@ -747,6 +771,7 @@ impl ToolRouter {
         turn: &TurnContext,
         call_id: &str,
         outcome: &str,
+        request_shape_json: Option<String>,
     ) {
         self.record_tool_router_usage(
             session,
@@ -755,11 +780,12 @@ impl ToolRouter {
             &routing_tool::ToolRouterUsage {
                 route_kind: "error".to_string(),
                 selected_tools: Vec::new(),
-                model_router_prompt_tokens: 0,
-                model_router_completion_tokens: 0,
+                fallback_prompt_tokens: 0,
+                fallback_completion_tokens: 0,
                 fanout_call_count: 0,
+                request_shape_json,
             },
-            0,
+            ToolOutputTokenAccounting::zero(),
             Some(outcome.to_string()),
         )
         .await;

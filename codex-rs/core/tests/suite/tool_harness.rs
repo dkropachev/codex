@@ -4,6 +4,9 @@ use std::fs;
 
 use assert_matches::assert_matches;
 use codex_features::Feature;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -281,6 +284,98 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
             !success_flag,
             "expected tool output to mark success=false for malformed payload"
         );
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn update_plan_tool_rejects_codex_config_edit_mode() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex();
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let call_id = "plan-tool-config-edit";
+    let plan_args = json!({
+        "plan": [
+            {"step": "Inspect config", "status": "in_progress"},
+        ],
+    })
+    .to_string();
+
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call(call_id, "update_plan", &plan_args),
+        ev_completed("resp-1"),
+    ]);
+    responses::mount_sse_once(&server, first_response).await;
+
+    let second_response = sse(vec![
+        ev_assistant_message("msg-1", "tool rejected"),
+        ev_completed("resp-2"),
+    ]);
+    let second_mock = responses::mount_sse_once(&server, second_response).await;
+
+    let session_model = session_configured.model.clone();
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::CodexConfigEdit,
+        settings: Settings {
+            model: session_model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    codex
+        .submit(Op::UserTurn {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "please plan config".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: Some(collaboration_mode),
+            personality: None,
+        })
+        .await?;
+
+    let mut saw_plan_update = false;
+    wait_for_event(&codex, |event| match event {
+        EventMsg::PlanUpdate(_) => {
+            saw_plan_update = true;
+            false
+        }
+        EventMsg::TurnComplete(_) => true,
+        _ => false,
+    })
+    .await;
+    assert!(!saw_plan_update, "did not expect PlanUpdate event");
+
+    let req = second_mock.single_request();
+    let (output_text, success_flag) = call_output(&req, call_id);
+    assert!(
+        output_text.contains("not allowed in Plan-like modes"),
+        "expected Plan-like mode rejection, got {output_text:?}"
+    );
+    if let Some(success_flag) = success_flag {
+        assert!(!success_flag, "expected tool output to mark success=false");
     }
 
     Ok(())
