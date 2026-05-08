@@ -51,6 +51,7 @@ codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-protocol = { workspace = true }
+codex-repo-ci = { workspace = true }
 codex-response-debug-context = { workspace = true }
 codex-rollout = { workspace = true }
 codex-rollout-trace = { workspace = true }
@@ -99,6 +100,7 @@ rmcp = { workspace = true, default-features = false, features = [
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha1 = { workspace = true }
+sha2 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
 tempfile = { workspace = true }

@@ -674,6 +674,21 @@ impl App {
                 self.refresh_in_memory_config_from_disk().await?;
                 Ok(true)
             }
+            AppCommandView::SetRepoCiSessionConfig {
+                mode,
+                issue_types,
+                review_rounds,
+            } => {
+                app_server
+                    .thread_repo_ci_session_config_set(
+                        thread_id,
+                        *mode,
+                        issue_types.clone(),
+                        *review_rounds,
+                    )
+                    .await?;
+                Ok(true)
+            }
             AppCommandView::OverrideTurnContext { .. } => Ok(true),
             AppCommandView::Other(Op::ApproveGuardianDeniedAction { event }) => {
                 app_server
