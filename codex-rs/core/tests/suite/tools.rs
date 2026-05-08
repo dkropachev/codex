@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_config::Constrained;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::sandboxing::SandboxPermissions;
@@ -564,16 +565,11 @@ async fn shell_enforces_glob_deny_read_policy() -> Result<()> {
                     },
                     access: FileSystemAccessMode::None,
                 });
-            config
-                .permissions
-                .set_permission_profile_for_cwd(
-                    PermissionProfile::from_runtime_permissions(
-                        &file_system_sandbox_policy,
-                        NetworkSandboxPolicy::Restricted,
-                    ),
-                    config.cwd.as_path(),
-                )
-                .expect("set permission profile");
+            config.permissions.permission_profile =
+                Constrained::allow_any(PermissionProfile::from_runtime_permissions(
+                    &file_system_sandbox_policy,
+                    NetworkSandboxPolicy::Restricted,
+                ));
         });
     let fixture = builder.build(&server).await?;
 

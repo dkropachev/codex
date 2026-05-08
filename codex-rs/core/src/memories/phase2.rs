@@ -317,7 +317,7 @@ mod agent {
         let root = memory_root(&config.codex_home);
         let mut agent_config = config.as_ref().clone();
 
-        agent_config.cwd = root;
+        agent_config.cwd = root.clone();
         // Consolidation threads must never feed back into phase-1 memory generation.
         agent_config.ephemeral = true;
         agent_config.memories.generate_memories = false;

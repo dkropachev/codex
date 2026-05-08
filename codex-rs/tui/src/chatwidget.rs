@@ -207,9 +207,6 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot;
-#[cfg(test)]
-use codex_protocol::protocol::RepoCiState;
-use codex_protocol::protocol::RepoCiTurnOverrides;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -6250,19 +6247,6 @@ impl ChatWidget {
         );
     }
 
-    fn submit_user_message_with_repo_ci(
-        &mut self,
-        user_message: UserMessage,
-        repo_ci: RepoCiTurnOverrides,
-    ) {
-        let _accepted = self.submit_user_message_with_history_shell_escape_and_repo_ci(
-            user_message,
-            UserMessageHistoryRecord::UserMessageText,
-            ShellEscapePolicy::Allow,
-            Some(repo_ci),
-        );
-    }
-
     fn submit_user_message_with_history_record(
         &mut self,
         user_message: UserMessage,
@@ -6294,21 +6278,6 @@ impl ChatWidget {
         user_message: UserMessage,
         history_record: UserMessageHistoryRecord,
         shell_escape_policy: ShellEscapePolicy,
-    ) -> (bool, Option<AppCommand>) {
-        self.submit_user_message_with_history_shell_escape_and_repo_ci(
-            user_message,
-            history_record,
-            shell_escape_policy,
-            /*repo_ci*/ None,
-        )
-    }
-
-    fn submit_user_message_with_history_shell_escape_and_repo_ci(
-        &mut self,
-        user_message: UserMessage,
-        history_record: UserMessageHistoryRecord,
-        shell_escape_policy: ShellEscapePolicy,
-        repo_ci: Option<RepoCiTurnOverrides>,
     ) -> (bool, Option<AppCommand>) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
@@ -6545,53 +6514,23 @@ impl ChatWidget {
             None if self.config.notices.fast_default_opt_out == Some(true) => Some(None),
             None => None,
         };
-        let (turn_cwd, turn_sandbox_policy, permission_profile) = if matches!(
-            self.active_mode_kind(),
-            ModeKind::Codex | ModeKind::CodexConfigEdit
-        ) {
-            self.codex_turn_execution_context()
-        } else {
-            (
-                self.config.cwd.to_path_buf(),
-                self.config
-                    .permissions
-                    .legacy_sandbox_policy(self.config.cwd.as_path()),
-                Some(self.config.permissions.permission_profile()),
-            )
-        };
-        let op = if let Some(repo_ci) = repo_ci {
-            AppCommand::user_input_with_turn_context(
-                items,
-                Some(turn_cwd),
-                Some(self.config.permissions.approval_policy.value()),
-                Some(self.config.approvals_reviewer),
-                Some(turn_sandbox_policy),
-                permission_profile,
-                Some(effective_mode.model().to_string()),
-                Some(effective_mode.reasoning_effort()),
-                /*summary*/ None,
-                service_tier,
-                /*final_output_json_schema*/ None,
-                collaboration_mode,
-                personality,
-                Some(repo_ci),
-            )
-        } else {
-            AppCommand::user_turn(
-                items,
-                turn_cwd,
-                self.config.permissions.approval_policy.value(),
-                turn_sandbox_policy,
-                permission_profile,
-                effective_mode.model().to_string(),
-                effective_mode.reasoning_effort(),
-                /*summary*/ None,
-                service_tier,
-                /*final_output_json_schema*/ None,
-                collaboration_mode,
-                personality,
-            )
-        };
+        let permission_profile = Some(self.config.permissions.permission_profile());
+        let op = AppCommand::user_turn(
+            items,
+            self.config.cwd.to_path_buf(),
+            self.config.permissions.approval_policy.value(),
+            self.config
+                .permissions
+                .legacy_sandbox_policy(self.config.cwd.as_path()),
+            permission_profile,
+            effective_mode.model().to_string(),
+            effective_mode.reasoning_effort(),
+            /*summary*/ None,
+            service_tier,
+            /*final_output_json_schema*/ None,
+            collaboration_mode,
+            personality,
+        );
 
         if !self.submit_op(op.clone()) {
             return (false, None);

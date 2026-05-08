@@ -209,7 +209,6 @@ pub(super) async fn user_input_or_turn_inner(
             collaboration_mode,
             personality,
             environments,
-            repo_ci,
         } => {
             let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
                 Some(collab_mode)

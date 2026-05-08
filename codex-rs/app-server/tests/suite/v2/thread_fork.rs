@@ -50,7 +50,6 @@ use super::analytics::wait_for_analytics_payload;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 #[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const CLOUD_REQUIREMENTS_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 const INTERNAL_ERROR_CODE: i64 = -32603;
 
 #[tokio::test]
@@ -531,7 +530,7 @@ async fn thread_fork_surfaces_cloud_requirements_load_errors() -> Result<()> {
         ],
     )
     .await?;
-    timeout(CLOUD_REQUIREMENTS_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
@@ -540,7 +539,7 @@ async fn thread_fork_surfaces_cloud_requirements_load_errors() -> Result<()> {
         })
         .await?;
     let fork_err: JSONRPCError = timeout(
-        CLOUD_REQUIREMENTS_READ_TIMEOUT,
+        DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_error_message(RequestId::Integer(fork_id)),
     )
     .await??;

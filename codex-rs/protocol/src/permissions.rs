@@ -907,11 +907,7 @@ impl FileSystemSandboxPolicy {
                     });
                 }
 
-                if workspace_root_writable
-                    || !writable_roots.is_empty()
-                    || tmpdir_writable
-                    || slash_tmp_writable
-                {
+                if workspace_root_writable {
                     SandboxPolicy::WorkspaceWrite {
                         writable_roots: dedup_absolute_paths(
                             writable_roots,
@@ -921,10 +917,14 @@ impl FileSystemSandboxPolicy {
                         exclude_tmpdir_env_var: !tmpdir_writable,
                         exclude_slash_tmp: !slash_tmp_writable,
                     }
-                } else if unbridgeable_root_write {
+                } else if unbridgeable_root_write
+                    || !writable_roots.is_empty()
+                    || tmpdir_writable
+                    || slash_tmp_writable
+                {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
-                        "permissions profile requests filesystem writes that cannot be represented by the legacy sandbox policy",
+                        "permissions profile requests filesystem writes outside the workspace root, which is not supported until the runtime enforces FileSystemSandboxPolicy directly",
                     ));
                 } else {
                     SandboxPolicy::ReadOnly {

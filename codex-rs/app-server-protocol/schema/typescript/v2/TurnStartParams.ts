@@ -11,7 +11,6 @@ import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
 import type { PermissionProfile } from "./PermissionProfile";
 import type { SandboxPolicy } from "./SandboxPolicy";
-import type { TurnRepoCiConfigParams } from "./TurnRepoCiConfigParams";
 import type { UserInput } from "./UserInput";
 
 export type TurnStartParams = {threadId: string, input: Array<UserInput>, /**
@@ -57,8 +56,4 @@ outputSchema?: JsonValue | null, /**
  * For `collaboration_mode.settings.developer_instructions`, `null` means
  * "use the built-in instructions for the selected mode".
  */
-collaborationMode?: CollaborationMode | null, /**
- * Optional turn-scoped repo CI overrides. Field omission inherits the
- * thread/session setting, explicit null clears it for this turn.
- */
-repoCi?: TurnRepoCiConfigParams | null};
+collaborationMode?: CollaborationMode | null};

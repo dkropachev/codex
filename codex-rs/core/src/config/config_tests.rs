@@ -110,22 +110,6 @@ fn stdio_mcp(command: &str) -> McpServerConfig {
     }
 }
 
-fn read_only_permissions(approval_policy: AskForApproval) -> Permissions {
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    Permissions {
-        approval_policy: Constrained::allow_any(approval_policy),
-        permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
-        sandbox_policy: Constrained::allow_any(sandbox_policy.clone()),
-        file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
-        network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
-        network: None,
-        allow_login_shell: true,
-        shell_environment_policy: ShellEnvironmentPolicy::default(),
-        windows_sandbox_mode: None,
-        windows_sandbox_private_desktop: true,
-    }
-}
-
 fn http_mcp(url: &str) -> McpServerConfig {
     McpServerConfig {
         transport: McpServerTransportConfig::StreamableHttp {
@@ -2269,8 +2253,9 @@ fn web_search_mode_disabled_overrides_legacy_request() {
 #[test]
 fn web_search_mode_for_turn_uses_preference_for_read_only() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &sandbox_policy);
+    let permission_profile =
+        PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::new_read_only_policy());
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &permission_profile);
 
     assert_eq!(mode, WebSearchMode::Cached);
 }
@@ -2278,7 +2263,7 @@ fn web_search_mode_for_turn_uses_preference_for_read_only() {
 #[test]
 fn web_search_mode_for_turn_prefers_live_for_disabled_permissions() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::DangerFullAccess);
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
 
     assert_eq!(mode, WebSearchMode::Live);
 }
@@ -2286,7 +2271,7 @@ fn web_search_mode_for_turn_prefers_live_for_disabled_permissions() {
 #[test]
 fn web_search_mode_for_turn_respects_disabled_for_disabled_permissions() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Disabled);
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::DangerFullAccess);
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
 
     assert_eq!(mode, WebSearchMode::Disabled);
 }
@@ -2306,7 +2291,7 @@ fn web_search_mode_for_turn_falls_back_when_live_is_disallowed() -> anyhow::Resu
             })
         }
     })?;
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::DangerFullAccess);
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
 
     assert_eq!(mode, WebSearchMode::Cached);
     Ok(())
@@ -5469,7 +5454,15 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             service_tier: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
-            permissions: read_only_permissions(AskForApproval::Never),
+            permissions: Permissions {
+                approval_policy: Constrained::allow_any(AskForApproval::Never),
+                permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
+                network: None,
+                allow_login_shell: true,
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
+                windows_sandbox_mode: None,
+                windows_sandbox_private_desktop: true,
+            },
             approvals_reviewer: ApprovalsReviewer::User,
             enforce_residency: Constrained::allow_any(/*initial_value*/ None),
             user_instructions: None,
@@ -5507,8 +5500,6 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             codex_self_exe: None,
             codex_linux_sandbox_exe: None,
             main_execve_wrapper_exe: None,
-            js_repl_node_path: None,
-            js_repl_node_module_dirs: Vec::new(),
             zsh_path: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
@@ -5665,7 +5656,15 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         service_tier: None,
         model_provider_id: "openai-custom".to_string(),
         model_provider: fixture.openai_custom_provider.clone(),
-        permissions: read_only_permissions(AskForApproval::UnlessTrusted),
+        permissions: Permissions {
+            approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
+            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
+            network: None,
+            allow_login_shell: true,
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
+            windows_sandbox_mode: None,
+            windows_sandbox_private_desktop: true,
+        },
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
@@ -5703,8 +5702,6 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         codex_self_exe: None,
         codex_linux_sandbox_exe: None,
         main_execve_wrapper_exe: None,
-        js_repl_node_path: None,
-        js_repl_node_module_dirs: Vec::new(),
         zsh_path: None,
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,
@@ -5815,7 +5812,15 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         service_tier: None,
         model_provider_id: "openai".to_string(),
         model_provider: fixture.openai_provider.clone(),
-        permissions: read_only_permissions(AskForApproval::OnFailure),
+        permissions: Permissions {
+            approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
+            network: None,
+            allow_login_shell: true,
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
+            windows_sandbox_mode: None,
+            windows_sandbox_private_desktop: true,
+        },
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
@@ -5853,8 +5858,6 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         codex_self_exe: None,
         codex_linux_sandbox_exe: None,
         main_execve_wrapper_exe: None,
-        js_repl_node_path: None,
-        js_repl_node_module_dirs: Vec::new(),
         zsh_path: None,
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,
@@ -5950,7 +5953,15 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         service_tier: None,
         model_provider_id: "openai".to_string(),
         model_provider: fixture.openai_provider.clone(),
-        permissions: read_only_permissions(AskForApproval::OnFailure),
+        permissions: Permissions {
+            approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
+            network: None,
+            allow_login_shell: true,
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
+            windows_sandbox_mode: None,
+            windows_sandbox_private_desktop: true,
+        },
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
@@ -5988,8 +5999,6 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         codex_self_exe: None,
         codex_linux_sandbox_exe: None,
         main_execve_wrapper_exe: None,
-        js_repl_node_path: None,
-        js_repl_node_module_dirs: Vec::new(),
         zsh_path: None,
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,
@@ -6396,8 +6405,8 @@ async fn derive_sandbox_policy_falls_back_to_read_only_for_implicit_defaults() -
     let active_project = ProjectConfig {
         trust_level: Some(TrustLevel::Trusted),
     };
-    let constrained = Constrained::new(SandboxPolicy::new_read_only_policy(), |candidate| {
-        if candidate == &SandboxPolicy::new_read_only_policy() {
+    let constrained = Constrained::new(PermissionProfile::read_only(), |candidate| {
+        if candidate == &PermissionProfile::read_only() {
             Ok(())
         } else {
             Err(ConstraintError::InvalidValue {
@@ -6441,18 +6450,29 @@ async fn derive_sandbox_policy_preserves_windows_downgrade_for_unsupported_fallb
     let active_project = ProjectConfig {
         trust_level: Some(TrustLevel::Trusted),
     };
-    let constrained = Constrained::new(SandboxPolicy::new_workspace_write_policy(), |candidate| {
-        if matches!(candidate, SandboxPolicy::WorkspaceWrite { .. }) {
-            Ok(())
-        } else {
-            Err(ConstraintError::InvalidValue {
-                field_name: "sandbox_mode",
-                candidate: format!("{candidate:?}"),
-                allowed: "[WorkspaceWrite]".to_string(),
-                requirement_source: RequirementSource::Unknown,
-            })
-        }
-    })?;
+    let constrained = Constrained::new(
+        PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
+        |candidate| {
+            if matches!(
+                candidate,
+                PermissionProfile::Managed {
+                    file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+                    ..
+                } if entries
+                        .iter()
+                        .any(|entry| entry.access.can_write())
+            ) {
+                Ok(())
+            } else {
+                Err(ConstraintError::InvalidValue {
+                    field_name: "sandbox_mode",
+                    candidate: format!("{candidate:?}"),
+                    allowed: "[WorkspaceWrite]".to_string(),
+                    requirement_source: RequirementSource::Unknown,
+                })
+            }
+        },
+    )?;
 
     let resolution = cfg
         .derive_sandbox_policy(
@@ -6888,7 +6908,7 @@ async fn requirements_web_search_mode_overrides_danger_full_access_default() -> 
     assert_eq!(
         resolve_web_search_mode_for_turn(
             &config.web_search_mode,
-            config.permissions.sandbox_policy.get(),
+            &config.permissions.permission_profile(),
         ),
         WebSearchMode::Cached,
     );

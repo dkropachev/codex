@@ -30,7 +30,6 @@ use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
 use codex_config::config_toml::RepoCiToml;
-use codex_config::config_toml::ThreadStoreToml;
 use codex_config::config_toml::validate_model_providers;
 use codex_config::profile_toml::ConfigProfile;
 use codex_config::types::ApprovalsReviewer;
@@ -47,6 +46,7 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
+use codex_config::types::ShellEnvironmentPolicy;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiNotificationSettings;
@@ -79,7 +79,6 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
-use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
@@ -199,8 +198,6 @@ pub(crate) async fn test_config() -> Config {
 pub struct Permissions {
     /// Approval policy for executing commands.
     pub approval_policy: Constrained<AskForApproval>,
-    /// Effective permission profile used for sandbox-aware tool execution.
-    pub permission_profile: Constrained<PermissionProfile>,
     /// Effective sandbox policy used for shell/unified exec.
     pub sandbox_policy: Constrained<SandboxPolicy>,
     /// Effective filesystem sandbox policy, including entries that cannot yet
@@ -233,118 +230,12 @@ impl Permissions {
     /// Effective runtime permissions after config requirements and runtime
     /// readable-root additions have been applied.
     pub fn permission_profile(&self) -> PermissionProfile {
-        self.permission_profile.get().clone()
+        PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::from_legacy_sandbox_policy(self.sandbox_policy.get()),
+            &self.file_system_sandbox_policy,
+            self.network_sandbox_policy,
+        )
     }
-
-    pub fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
-        self.file_system_sandbox_policy.clone()
-    }
-
-    pub fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
-        self.network_sandbox_policy
-    }
-
-    pub fn legacy_sandbox_policy(&self, cwd: &Path) -> SandboxPolicy {
-        self.permission_profile
-            .get()
-            .to_legacy_sandbox_policy(cwd)
-            .unwrap_or_else(|_| self.sandbox_policy.get().clone())
-    }
-
-    pub fn can_set_legacy_sandbox_policy(
-        &self,
-        sandbox_policy: &SandboxPolicy,
-        cwd: &Path,
-    ) -> ConstraintResult<()> {
-        let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(sandbox_policy),
-            &FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd),
-            NetworkSandboxPolicy::from(sandbox_policy),
-        );
-        self.permission_profile.can_set(&permission_profile)?;
-        self.sandbox_policy.can_set(sandbox_policy)
-    }
-
-    pub fn set_permission_profile_for_cwd(
-        &mut self,
-        permission_profile: PermissionProfile,
-        cwd: &Path,
-    ) -> ConstraintResult<()> {
-        let sandbox_policy = permission_profile
-            .to_legacy_sandbox_policy(cwd)
-            .map_err(|err| ConstraintError::InvalidValue {
-                field_name: "permission_profile",
-                candidate: format!("{permission_profile:?}"),
-                allowed: format!(
-                    "permission profiles that can be represented by the active sandbox constraints: {err}"
-                ),
-                requirement_source: codex_config::RequirementSource::Unknown,
-            })?;
-        self.permission_profile.set(permission_profile.clone())?;
-        self.sandbox_policy.set(sandbox_policy)?;
-        let (file_system_sandbox_policy, network_sandbox_policy) =
-            permission_profile.to_runtime_permissions();
-        self.file_system_sandbox_policy = file_system_sandbox_policy;
-        self.network_sandbox_policy = network_sandbox_policy;
-        Ok(())
-    }
-
-    pub fn set_permission_profile(
-        &mut self,
-        permission_profile: PermissionProfile,
-    ) -> ConstraintResult<()> {
-        self.set_permission_profile_for_cwd(permission_profile, Path::new("/"))
-    }
-
-    pub fn set_legacy_sandbox_policy(
-        &mut self,
-        sandbox_policy: SandboxPolicy,
-        cwd: &Path,
-    ) -> ConstraintResult<()> {
-        let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-            &FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, cwd),
-            NetworkSandboxPolicy::from(&sandbox_policy),
-        );
-        self.permission_profile.set(permission_profile)?;
-        self.sandbox_policy.set(sandbox_policy.clone())?;
-        self.file_system_sandbox_policy =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, cwd);
-        self.network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ThreadStoreConfig {
-    Local,
-    Remote {
-        endpoint: String,
-    },
-    #[cfg(debug_assertions)]
-    InMemory {
-        id: String,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TerminalResizeReflowConfig {
-    pub max_rows: TerminalResizeReflowMaxRows,
-}
-
-impl Default for TerminalResizeReflowConfig {
-    fn default() -> Self {
-        Self {
-            max_rows: TerminalResizeReflowMaxRows::Auto,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TerminalResizeReflowMaxRows {
-    Auto,
-    Disabled,
-    Limit(usize),
 }
 
 /// Application configuration loaded from disk and merged with overrides.
@@ -474,8 +365,7 @@ pub struct Config {
     /// Persisted startup availability NUX state for model tooltips.
     pub model_availability_nux: ModelAvailabilityNuxConfig,
 
-    /// Maximum rendered terminal rows to replay during terminal resize reflow.
-    pub terminal_resize_reflow: TerminalResizeReflowConfig,
+    /// Start the TUI in the specified collaboration mode (plan/default).
 
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///
@@ -558,9 +448,6 @@ pub struct Config {
     pub agent_max_threads: Option<usize>,
     /// Maximum runtime in seconds for agent job workers before they are failed.
     pub agent_job_max_runtime_seconds: Option<u64>,
-
-    /// Whether interrupted turns should leave a model-visible marker.
-    pub agent_interrupt_message_enabled: bool,
 
     /// Maximum nesting depth allowed for spawned agent threads.
     pub agent_max_depth: i32,
@@ -672,8 +559,9 @@ pub struct Config {
     /// active.
     pub experimental_realtime_start_instructions: Option<String>,
 
-    /// Experimental / do not use. Selects the backing store for thread data.
-    pub experimental_thread_store: ThreadStoreConfig,
+    /// Experimental / do not use. When set, app-server uses a remote thread
+    /// store at this endpoint instead of the local filesystem/SQLite store.
+    pub experimental_thread_store_endpoint: Option<String>,
 
     /// Experimental / do not use. When set, app-server fetches thread-scoped
     /// config from a remote service at this endpoint.
@@ -778,7 +666,6 @@ pub(crate) struct ModelRouterAccounting {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MultiAgentV2Config {
-    pub max_concurrent_threads_per_session: usize,
     pub usage_hint_enabled: bool,
     pub usage_hint_text: Option<String>,
     pub hide_spawn_agent_metadata: bool,
@@ -787,7 +674,6 @@ pub struct MultiAgentV2Config {
 impl Default for MultiAgentV2Config {
     fn default() -> Self {
         Self {
-            max_concurrent_threads_per_session: 4,
             usage_hint_enabled: true,
             usage_hint_text: None,
             hide_spawn_agent_metadata: false,
@@ -897,7 +783,7 @@ impl ConfigBuilder {
             cloud_requirements,
             thread_config_loader,
             fallback_cwd,
-            host_name: _host_name,
+            host_name,
         } = self;
         let codex_home = match codex_home {
             Some(codex_home) => AbsolutePathBuf::from_absolute_path(codex_home)?,
@@ -922,6 +808,7 @@ impl ConfigBuilder {
             thread_config_loader
                 .as_deref()
                 .unwrap_or(&codex_config::NoopThreadConfigLoader),
+            host_name.as_deref(),
         )
         .await?;
         let merged_toml = config_layer_stack.effective_config();
@@ -933,10 +820,8 @@ impl ConfigBuilder {
         let config_toml: ConfigToml = match merged_toml.try_into() {
             Ok(config_toml) => config_toml,
             Err(err) => {
-                if let Some(config_error) = crate::config_loader::first_layer_config_error::<
-                    ConfigToml,
-                >(&config_layer_stack, CONFIG_TOML_FILE)
-                .await
+                if let Some(config_error) =
+                    crate::config_loader::first_layer_config_error(&config_layer_stack).await
                 {
                     return Err(crate::config_loader::io_error_from_config_error(
                         std::io::ErrorKind::InvalidData,
@@ -1135,6 +1020,7 @@ pub async fn load_config_as_toml_with_cli_and_loader_overrides(
         loader_overrides,
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -1316,6 +1202,7 @@ pub async fn load_global_mcp_servers(
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
     let merged_toml = config_layer_stack.effective_config();
@@ -1675,10 +1562,6 @@ fn resolve_multi_agent_v2_config(
     let profile = multi_agent_v2_toml_config(config_profile.features.as_ref());
     let default = MultiAgentV2Config::default();
 
-    let max_concurrent_threads_per_session = profile
-        .and_then(|config| config.max_concurrent_threads_per_session)
-        .or_else(|| base.and_then(|config| config.max_concurrent_threads_per_session))
-        .unwrap_or(default.max_concurrent_threads_per_session);
     let usage_hint_enabled = profile
         .and_then(|config| config.usage_hint_enabled)
         .or_else(|| base.and_then(|config| config.usage_hint_enabled))
@@ -1694,7 +1577,6 @@ fn resolve_multi_agent_v2_config(
         .unwrap_or(default.hide_spawn_agent_metadata);
 
     MultiAgentV2Config {
-        max_concurrent_threads_per_session,
         usage_hint_enabled,
         usage_hint_text,
         hide_spawn_agent_metadata,
@@ -1779,7 +1661,7 @@ impl Config {
         let ConfigRequirements {
             approval_policy: mut constrained_approval_policy,
             approvals_reviewer: mut constrained_approvals_reviewer,
-            permission_profile: mut constrained_permission_profile,
+            sandbox_policy: mut constrained_sandbox_policy,
             web_search_mode: mut constrained_web_search_mode,
             feature_requirements,
             managed_hooks: _,
@@ -1956,14 +1838,12 @@ impl Config {
             && has_permission_profiles);
         let (
             configured_network_proxy_config,
-            _sandbox_policy,
+            sandbox_policy,
             file_system_sandbox_policy,
             network_sandbox_policy,
-            sandbox_enforcement,
         ) = if let Some(permission_profile) = permission_profile {
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
-            let sandbox_enforcement = permission_profile.enforcement();
             let configured_network_proxy_config =
                 if network_sandbox_policy.is_enabled() && profiles_are_active {
                     let permissions = cfg.permissions.as_ref().ok_or_else(|| {
@@ -2009,7 +1889,6 @@ impl Config {
                 sandbox_policy,
                 file_system_sandbox_policy,
                 network_sandbox_policy,
-                sandbox_enforcement,
             )
         } else if profiles_are_active {
             let permissions = cfg.permissions.as_ref().ok_or_else(|| {
@@ -2050,7 +1929,6 @@ impl Config {
                 sandbox_policy,
                 file_system_sandbox_policy,
                 network_sandbox_policy,
-                SandboxEnforcement::Managed,
             )
         } else {
             let configured_network_proxy_config = NetworkProxyConfig::default();
@@ -2060,7 +1938,7 @@ impl Config {
                     config_profile.sandbox_mode,
                     windows_sandbox_level,
                     Some(&active_project),
-                    /*sandbox_policy_constraint*/ None,
+                    Some(&constrained_sandbox_policy),
                 )
                 .await;
             if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
@@ -2070,19 +1948,16 @@ impl Config {
                     }
                 }
             }
-            let file_system_sandbox_policy =
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                    &sandbox_policy,
-                    resolved_cwd.as_path(),
-                );
+            let file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                &sandbox_policy,
+                resolved_cwd.as_path(),
+            );
             let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-            let sandbox_enforcement = SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy);
             (
                 configured_network_proxy_config,
                 sandbox_policy,
                 file_system_sandbox_policy,
                 network_sandbox_policy,
-                sandbox_enforcement,
             )
         };
         let approval_policy_was_explicit = approval_policy_override.is_some()
@@ -2164,27 +2039,19 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
-        let agent_max_threads_from_config =
-            cfg.agents.as_ref().and_then(|agents| agents.max_threads);
+        let agent_max_threads_from_config = cfg.agents.as_ref().and_then(|agents| agents.max_threads);
         if features.enabled(Feature::MultiAgentV2) && agent_max_threads_from_config.is_some() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "agents.max_threads cannot be set when multi_agent_v2 is enabled",
             ));
         }
-        let agent_max_threads = if features.enabled(Feature::MultiAgentV2) {
-            Some(
-                multi_agent_v2
-                    .max_concurrent_threads_per_session
-                    .saturating_sub(1),
-            )
-        } else {
-            cfg.agents
-                .as_ref()
-                .and_then(|agents| agents.max_threads)
-                .or(DEFAULT_AGENT_MAX_THREADS)
-        };
-        if !features.enabled(Feature::MultiAgentV2) && agent_max_threads == Some(0) {
+        let agent_max_threads = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.max_threads)
+            .or(DEFAULT_AGENT_MAX_THREADS);
+        if agent_max_threads == Some(0) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "agents.max_threads must be at least 1",
@@ -2220,26 +2087,10 @@ impl Config {
                 "agents.job_max_runtime_seconds must fit within a 64-bit signed integer",
             ));
         }
-        let agent_interrupt_message_enabled = cfg
-            .agents
-            .as_ref()
-            .and_then(|agents| agents.interrupt_message)
-            .unwrap_or(true);
         let background_terminal_max_timeout = cfg
             .background_terminal_max_timeout
             .unwrap_or(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS)
             .max(MIN_EMPTY_YIELD_TIME_MS);
-
-        let experimental_thread_store = match cfg.experimental_thread_store {
-            Some(ThreadStoreToml::Local) => ThreadStoreConfig::Local,
-            Some(ThreadStoreToml::Remote { endpoint }) => ThreadStoreConfig::Remote { endpoint },
-            #[cfg(debug_assertions)]
-            Some(ThreadStoreToml::InMemory { id }) => ThreadStoreConfig::InMemory { id },
-            None => cfg
-                .experimental_thread_store_endpoint
-                .map(|endpoint| ThreadStoreConfig::Remote { endpoint })
-                .unwrap_or(ThreadStoreConfig::Local),
-        };
 
         let ghost_snapshot = {
             let mut config = GhostSnapshotConfig::default();
@@ -2413,11 +2264,7 @@ impl Config {
             .map(AbsolutePathBuf::to_path_buf)
             .or_else(|| resolve_sqlite_home_env(&resolved_cwd))
             .unwrap_or_else(|| codex_home.to_path_buf());
-        let original_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-            sandbox_enforcement,
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
-        );
+        let original_sandbox_policy = sandbox_policy.clone();
 
         apply_requirement_constrained_value(
             "approval_policy",
@@ -2432,15 +2279,15 @@ impl Config {
             && !filesystem_requirements.deny_read.is_empty()
         {
             let requirement_source = filesystem_requirements_source.clone();
-            constrained_permission_profile
+            constrained_sandbox_policy
                 .value
-                .add_validator(move |profile| match profile {
-                    PermissionProfile::Managed { .. } => Ok(()),
-                    PermissionProfile::Disabled | PermissionProfile::External { .. } => {
+                .add_validator(move |policy| match policy {
+                    SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => Ok(()),
+                    SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                         Err(ConstraintError::InvalidValue {
-                            field_name: "permission_profile",
-                            candidate: format!("{profile:?}"),
-                            allowed: "managed permission profiles".to_string(),
+                            field_name: "sandbox_mode",
+                            candidate: policy.to_string(),
+                            allowed: "[read-only, workspace-write]".to_string(),
                             requirement_source: requirement_source.clone(),
                         })
                     }
@@ -2460,9 +2307,9 @@ impl Config {
             &mut startup_warnings,
         )?;
         apply_requirement_constrained_value(
-            "permission_profile",
-            original_permission_profile.clone(),
-            &mut constrained_permission_profile,
+            "sandbox_mode",
+            sandbox_policy,
+            &mut constrained_sandbox_policy,
             &mut startup_warnings,
         )?;
         apply_requirement_constrained_value(
@@ -2483,7 +2330,7 @@ impl Config {
         let network = NetworkProxySpec::from_config_and_constraints(
             configured_network_proxy_config,
             network_requirements,
-            constrained_permission_profile.get(),
+            constrained_sandbox_policy.get(),
         )
         .map_err(|err| {
             if let Some(source) = network_requirements_source.as_ref() {
@@ -2505,13 +2352,16 @@ impl Config {
             zsh_path.as_ref(),
             main_execve_wrapper_exe.as_ref(),
         );
-        let constrained_effective_permission_profile =
-            constrained_permission_profile.value.get().clone();
-        let (mut effective_file_system_sandbox_policy, effective_network_sandbox_policy) =
-            if constrained_effective_permission_profile == original_permission_profile {
-                (file_system_sandbox_policy, network_sandbox_policy)
+        let effective_sandbox_policy = constrained_sandbox_policy.value.get().clone();
+        let mut effective_file_system_sandbox_policy =
+            if effective_sandbox_policy == original_sandbox_policy {
+                file_system_sandbox_policy
             } else {
-                constrained_effective_permission_profile.to_runtime_permissions()
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
+                    &effective_sandbox_policy,
+                    resolved_cwd.as_path(),
+                    &file_system_sandbox_policy,
+                )
             };
         if let Some(Sourced {
             value: filesystem_requirements,
@@ -2525,23 +2375,12 @@ impl Config {
         }
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
             .with_additional_readable_roots(resolved_cwd.as_path(), &helper_readable_roots);
-        let effective_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-            constrained_effective_permission_profile.enforcement(),
-            &effective_file_system_sandbox_policy,
-            effective_network_sandbox_policy,
-        );
-        constrained_permission_profile
-            .value
-            .set(effective_permission_profile.clone())
-            .map_err(std::io::Error::from)?;
-        let effective_sandbox_policy = effective_permission_profile
-            .to_legacy_sandbox_policy(resolved_cwd.as_path())
-            .map_err(|err| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("invalid effective permission profile: {err}"),
-                )
-            })?;
+        let effective_network_sandbox_policy =
+            if effective_sandbox_policy == original_sandbox_policy {
+                network_sandbox_policy
+            } else {
+                NetworkSandboxPolicy::from(&effective_sandbox_policy)
+            };
         let config = Self {
             model,
             service_tier,
@@ -2554,8 +2393,7 @@ impl Config {
             startup_warnings,
             permissions: Permissions {
                 approval_policy: constrained_approval_policy.value,
-                permission_profile: constrained_permission_profile.value,
-                sandbox_policy: Constrained::allow_any(effective_sandbox_policy),
+                sandbox_policy: constrained_sandbox_policy.value,
                 file_system_sandbox_policy: effective_file_system_sandbox_policy,
                 network_sandbox_policy: effective_network_sandbox_policy,
                 network,
@@ -2616,7 +2454,6 @@ impl Config {
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
             agent_job_max_runtime_seconds,
-            agent_interrupt_message_enabled,
             codex_home,
             sqlite_home,
             log_dir,
@@ -2675,7 +2512,7 @@ impl Config {
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
             experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,
-            experimental_thread_store,
+            experimental_thread_store_endpoint: cfg.experimental_thread_store_endpoint,
             experimental_thread_config_endpoint: cfg.experimental_thread_config_endpoint,
             forced_chatgpt_workspace_id,
             forced_login_method,
@@ -2724,18 +2561,6 @@ impl Config {
                 .tui
                 .as_ref()
                 .map(|t| t.model_availability_nux.clone())
-                .unwrap_or_default(),
-            terminal_resize_reflow: cfg
-                .tui
-                .as_ref()
-                .and_then(|t| t.terminal_resize_reflow_max_rows)
-                .map(|max_rows| TerminalResizeReflowConfig {
-                    max_rows: if max_rows == 0 {
-                        TerminalResizeReflowMaxRows::Disabled
-                    } else {
-                        TerminalResizeReflowMaxRows::Limit(max_rows)
-                    },
-                })
                 .unwrap_or_default(),
             tui_alternate_screen: cfg
                 .tui
@@ -2828,9 +2653,9 @@ impl Config {
     }
 
     pub fn managed_network_requirements_enabled(&self) -> bool {
-        matches!(
-            self.permissions.permission_profile.get(),
-            PermissionProfile::Managed { .. }
+        !matches!(
+            self.permissions.sandbox_policy.get(),
+            SandboxPolicy::DangerFullAccess
         ) && self
             .config_layer_stack
             .requirements_toml()
