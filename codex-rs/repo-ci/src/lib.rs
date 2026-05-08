@@ -16,6 +16,7 @@ use std::process::ExitStatus;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+mod branch_diff;
 mod inference;
 mod learning_hints;
 mod remote_commit;
@@ -136,6 +137,7 @@ pub struct LearnedPlan {
     pub full_steps: Vec<RepoCiStep>,
 }
 
+pub use branch_diff::BranchDiffSnapshot;
 pub use learning_hints::RepoCiLearningHints;
 pub use learning_hints::WorkflowRunHint;
 pub use remote_commit::RemoteCommitApplied;

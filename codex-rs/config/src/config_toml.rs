@@ -458,6 +458,9 @@ pub struct RepoCiScopeToml {
     /// Local integration/e2e/ui tests above this budget are not selected for the fast runner.
     pub local_test_time_budget_sec: Option<u64>,
 
+    /// Whether local repo CI should run the full runner, including long integration/e2e checks.
+    pub long_ci: Option<bool>,
+
     /// Maximum number of local fix attempts before surfacing the failure.
     pub max_local_fix_rounds: Option<u8>,
 
@@ -1386,6 +1389,7 @@ mod tests {
             r#"
             [repo_ci.github_repos."openai/codex"]
             enabled = true
+            long_ci = true
             review_issue_types = []
             max_review_fix_rounds = 4
             "#,
@@ -1398,6 +1402,7 @@ mod tests {
             .get("openai/codex")
             .expect("github repo scope");
         assert_eq!(scope.enabled, Some(true));
+        assert_eq!(scope.long_ci, Some(true));
         assert_eq!(scope.review_issue_types, Some(Vec::new()));
         assert_eq!(scope.max_review_fix_rounds, Some(4));
     }

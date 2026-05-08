@@ -753,6 +753,8 @@ pub enum Op {
         issue_types: Option<Vec<RepoCiIssueType>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         review_rounds: Option<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        long_ci: Option<bool>,
     },
 
     /// Request the list of skills for the provided `cwd` values or the session default.
