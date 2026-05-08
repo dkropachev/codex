@@ -39,18 +39,30 @@ use tracing::warn;
 use crate::Prompt;
 use crate::ResponseEvent;
 use crate::codex_delegate::run_codex_thread_one_shot;
+use crate::context::ContextualUserFragment;
+use crate::context::RepoCiFollowup;
 use crate::model_router::ModelRouterSource;
 use crate::model_router::apply_model_router;
+use crate::model_router::auth_manager_for_config;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 
 const MAX_OUTPUT_BYTES: usize = 24_000;
+const MAX_CHANGED_PATHS_BYTES: usize = 8_000;
+const MAX_FOLLOWUP_OUTPUT_BYTES: usize = 1_200;
+const MAX_FOLLOWUP_CHANGED_PATHS_BYTES: usize = 600;
+const MAX_FOLLOWUP_DIFF_BYTES: usize = 800;
+const MAX_FOLLOWUP_TRIAGE_SUMMARY_BYTES: usize = 400;
+const MAX_FOLLOWUP_REVIEW_SUMMARY_BYTES: usize = 500;
+const MAX_FOLLOWUP_FINDINGS_BYTES: usize = 1_800;
 const TRIAGE_BASE_INSTRUCTIONS: &str =
     "You classify repository CI failures. Return strict JSON only. Do not suggest code edits.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RepoCiTurnState {
     initial_snapshot: WorktreeSnapshot,
+    review_fix_rounds: u8,
+    review_exhausted: bool,
     local_fix_rounds: u8,
     remote_fix_rounds: u8,
     remote_completed: bool,
@@ -60,6 +72,8 @@ impl RepoCiTurnState {
     pub(crate) fn new(cwd: &Path) -> Self {
         Self {
             initial_snapshot: WorktreeSnapshot::capture(cwd),
+            review_fix_rounds: 0,
+            review_exhausted: false,
             local_fix_rounds: 0,
             remote_fix_rounds: 0,
             remote_completed: false,
@@ -350,11 +364,12 @@ impl RepoCiReviewIssueTracker {
     }
 
     fn summary_message(&self) -> Option<String> {
-        if self.resolved.is_empty() && self.disregarded.is_empty() {
+        if self.active.is_empty() && self.resolved.is_empty() && self.disregarded.is_empty() {
             return None;
         }
         Some(format!(
-            "Repo CI targeted review summary.\n\nResolved issues:\n{}\n\nDisregarded by issue-type filter:\n{}",
+            "Repo CI targeted review summary.\n\nUnresolved issues:\n{}\n\nResolved issues:\n{}\n\nDisregarded by issue-type filter:\n{}",
+            format_review_item_lines(self.active.values().map(RepoCiReviewFinding::summary_line)),
             format_review_item_lines(
                 self.resolved
                     .values()
@@ -444,9 +459,10 @@ pub(crate) async fn maybe_run_after_agent(
     let mut ran_review = false;
     let mut review_summary_state = RepoCiState::Passed;
     let mut review_summary_attempt = None;
-    if config.review_enabled() {
+    if config.review_enabled() && !state.review_exhausted {
         ran_review = true;
-        for attempt in 1..=config.max_review_fix_rounds {
+        loop {
+            let review_attempt = state.review_fix_rounds.saturating_add(1);
             let review_snapshot = codex_repo_ci::BranchDiffSnapshot::capture(&turn_context.cwd);
             let review =
                 match run_targeted_review(sess, turn_context, &config, &review_snapshot).await {
@@ -458,45 +474,52 @@ pub(crate) async fn maybe_run_after_agent(
                             RepoCiPhase::Triage,
                             RepoCiState::Failed,
                             RepoCiScope::Local,
-                            Some(attempt),
+                            Some(review_attempt),
                             Some(config.max_review_fix_rounds),
                             format!("Repo CI targeted review failed: {err:#}"),
                         )
                         .await;
                         review_summary_state = RepoCiState::Failed;
-                        review_summary_attempt = Some(attempt);
+                        review_summary_attempt = Some(review_attempt);
                         break;
                     }
                 };
             review_tracker.record_review(&review, &config.review_issue_types);
             if review.findings.is_empty() {
-                review_summary_attempt = Some(attempt);
+                state.review_fix_rounds = 0;
+                state.review_exhausted = false;
+                review_summary_attempt = Some(review_attempt);
                 break;
             }
-            if attempt == config.max_review_fix_rounds {
+            if state.review_fix_rounds >= config.max_review_fix_rounds {
+                state.review_exhausted = true;
                 send_status(
                     sess,
                     turn_context,
                     RepoCiPhase::Triage,
                     RepoCiState::Exhausted,
                     RepoCiScope::Local,
-                    Some(attempt),
+                    Some(state.review_fix_rounds),
                     Some(config.max_review_fix_rounds),
                     "Repo CI targeted review still found issues after the configured review rounds."
                         .to_string(),
                 )
                 .await;
+                review_summary_state = RepoCiState::Exhausted;
+                review_summary_attempt = Some(state.review_fix_rounds);
                 send_review_resolution_summary(
                     sess,
                     turn_context,
                     &review_tracker,
                     RepoCiState::Exhausted,
-                    Some(attempt),
+                    Some(state.review_fix_rounds),
                     Some(config.max_review_fix_rounds),
                 )
                 .await;
-                return Some(review_findings_prompt(&review));
+                break;
             }
+            state.review_fix_rounds = state.review_fix_rounds.saturating_add(1);
+            let fix_attempt = state.review_fix_rounds;
             let worker_outputs = match run_review_fix_workers(sess, turn_context, &review).await {
                 Ok(worker_outputs) => worker_outputs,
                 Err(err) => {
@@ -506,7 +529,7 @@ pub(crate) async fn maybe_run_after_agent(
                         RepoCiPhase::Triage,
                         RepoCiState::Failed,
                         RepoCiScope::Local,
-                        Some(attempt),
+                        Some(fix_attempt),
                         Some(config.max_review_fix_rounds),
                         format!("Repo CI fix workers failed: {err:#}"),
                     )
@@ -516,7 +539,7 @@ pub(crate) async fn maybe_run_after_agent(
                         turn_context,
                         &review_tracker,
                         RepoCiState::Failed,
-                        Some(attempt),
+                        Some(fix_attempt),
                         Some(config.max_review_fix_rounds),
                     )
                     .await;
@@ -529,7 +552,7 @@ pub(crate) async fn maybe_run_after_agent(
                 RepoCiPhase::Triage,
                 RepoCiState::Retrying,
                 RepoCiScope::Local,
-                Some(attempt),
+                Some(fix_attempt),
                 Some(config.max_review_fix_rounds),
                 aggregate_worker_summary(&worker_outputs),
             )
@@ -622,7 +645,9 @@ pub(crate) async fn maybe_run_after_agent(
         }
         LocalRepoCiOutcome::Passed => {
             state.local_fix_rounds = 0;
-            state.initial_snapshot = current_snapshot.clone();
+            if !config.remote_enabled() || state.remote_completed {
+                state.initial_snapshot = current_snapshot.clone();
+            }
             send_status(
                 sess,
                 turn_context,
@@ -725,6 +750,7 @@ pub(crate) async fn maybe_run_after_agent(
         Ok(Ok(codex_repo_ci::RemoteRepoCiWorkflowStart::Ready(workflow))) => workflow,
         Ok(Ok(codex_repo_ci::RemoteRepoCiWorkflowStart::Skipped(reason))) => {
             state.remote_completed = true;
+            state.initial_snapshot = current_snapshot.clone();
             send_status(
                 sess,
                 turn_context,
@@ -771,14 +797,13 @@ pub(crate) async fn maybe_run_after_agent(
         }
     };
 
-    if prepare_remote_repo_ci_commit(sess, turn_context)
-        .await
-        .is_err()
-    {
-        send_final_review_summary!();
-        return None;
-    }
-    current_snapshot = WorktreeSnapshot::capture(&turn_context.cwd);
+    let remote_commit_decision = match prepare_remote_repo_ci_commit(sess, turn_context).await {
+        Ok(decision) => decision,
+        Err(_) => {
+            send_final_review_summary!();
+            return None;
+        }
+    };
 
     send_status(
         sess,
@@ -793,7 +818,7 @@ pub(crate) async fn maybe_run_after_agent(
     .await;
     let result = tokio::task::spawn_blocking({
         let cwd = turn_context.cwd.clone();
-        move || run_remote_repo_ci(&cwd, &workflow)
+        move || run_remote_repo_ci(&cwd, &workflow, remote_commit_decision.as_ref())
     })
     .await;
     let remote_outcome = match result {
@@ -833,6 +858,7 @@ pub(crate) async fn maybe_run_after_agent(
     match remote_outcome {
         RemoteRepoCiOutcome::Skipped(reason) => {
             state.remote_completed = true;
+            state.initial_snapshot = WorktreeSnapshot::capture(&turn_context.cwd);
             send_status(
                 sess,
                 turn_context,
@@ -847,9 +873,22 @@ pub(crate) async fn maybe_run_after_agent(
             send_final_review_summary!();
             None
         }
-        RemoteRepoCiOutcome::Passed => {
+        RemoteRepoCiOutcome::Passed { prepared_commit } => {
+            if let Some(applied) = prepared_commit {
+                send_status(
+                    sess,
+                    turn_context,
+                    RepoCiPhase::Remote,
+                    RepoCiState::Passed,
+                    RepoCiScope::Remote,
+                    None,
+                    None,
+                    format_remote_commit_applied(&applied),
+                )
+                .await;
+            }
             state.remote_completed = true;
-            state.initial_snapshot = current_snapshot.clone();
+            state.initial_snapshot = WorktreeSnapshot::capture(&turn_context.cwd);
             send_status(
                 sess,
                 turn_context,
@@ -882,7 +921,7 @@ pub(crate) async fn maybe_run_after_agent(
             .await;
             if triage.should_ignore() {
                 state.remote_completed = true;
-                state.initial_snapshot = current_snapshot.clone();
+                state.initial_snapshot = WorktreeSnapshot::capture(&turn_context.cwd);
                 send_status(
                     sess,
                     turn_context,
@@ -1059,7 +1098,7 @@ async fn ensure_repo_ci_learned(
 async fn prepare_remote_repo_ci_commit(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-) -> Result<()> {
+) -> Result<Option<codex_repo_ci::RemoteCommitDecision>> {
     let context = tokio::task::spawn_blocking({
         let cwd = turn_context.cwd.clone();
         move || codex_repo_ci::remote_commit_decision_context(&cwd)
@@ -1067,7 +1106,7 @@ async fn prepare_remote_repo_ci_commit(
     .await
     .context("repo-ci remote commit inspection task failed")??;
     let Some(context) = context else {
-        return Ok(());
+        return Ok(None);
     };
 
     send_status(
@@ -1114,44 +1153,7 @@ async fn prepare_remote_repo_ci_commit(
         }
     };
 
-    let result = tokio::task::spawn_blocking({
-        let cwd = turn_context.cwd.clone();
-        let decision = decision.clone();
-        move || codex_repo_ci::apply_remote_commit_decision(&cwd, &decision)
-    })
-    .await
-    .context("repo-ci remote commit task failed");
-    match result {
-        Ok(Ok(Some(applied))) => {
-            send_status(
-                sess,
-                turn_context,
-                RepoCiPhase::Remote,
-                RepoCiState::Passed,
-                RepoCiScope::Remote,
-                None,
-                None,
-                format_remote_commit_applied(&applied),
-            )
-            .await;
-            Ok(())
-        }
-        Ok(Ok(None)) => Ok(()),
-        Ok(Err(err)) | Err(err) => {
-            send_status(
-                sess,
-                turn_context,
-                RepoCiPhase::Remote,
-                RepoCiState::Failed,
-                RepoCiScope::Remote,
-                None,
-                None,
-                format!("Repo CI remote commit preparation failed: {err:#}"),
-            )
-            .await;
-            Err(err)
-        }
-    }
+    Ok(Some(decision))
 }
 
 fn format_remote_commit_applied(applied: &codex_repo_ci::RemoteCommitApplied) -> String {
@@ -1512,7 +1514,7 @@ fn targeted_review_prompt(
         if snapshot.changed_paths.is_empty() {
             "(no changed paths recorded)".to_string()
         } else {
-            snapshot.changed_paths.join("\n")
+            format_changed_paths_for_prompt(&snapshot.changed_paths)
         },
         truncate_middle(&snapshot.diff_summary, 4_000),
     )
@@ -1617,30 +1619,45 @@ fn review_fix_output_schema() -> serde_json::Value {
 }
 
 fn review_findings_prompt(review: &RepoCiReviewOutput) -> ResponseItem {
-    let findings = review
-        .findings
-        .iter()
-        .map(|finding| {
-            format!(
-                "- [{}] {}: {}\n  {}",
-                repo_ci_issue_type_slug(finding.issue_type),
-                finding.title,
-                finding.location(),
-                finding.body
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: format!(
-                "Repo CI targeted review found scoped issues that still need fixes.\n\nSummary: {}\n\nFindings:\n{}",
-                review.summary, findings
-            ),
-        }],
-        phase: None,
+    let findings = bounded_review_findings(review);
+    ContextualUserFragment::into(RepoCiFollowup::new(format!(
+        "Repo CI targeted review found scoped issues that still need fixes.\n\nSummary: {}\n\nFindings:\n{}",
+        truncate_middle(&review.summary, MAX_FOLLOWUP_REVIEW_SUMMARY_BYTES),
+        findings
+    )))
+}
+
+fn bounded_review_findings(review: &RepoCiReviewOutput) -> String {
+    let mut output = String::new();
+    let mut omitted = 0usize;
+    for finding in &review.findings {
+        let rendered = format!(
+            "- [{}] {}: {}\n  {}",
+            repo_ci_issue_type_slug(finding.issue_type),
+            finding.title,
+            finding.location(),
+            finding.body
+        );
+        let separator_len = usize::from(!output.is_empty());
+        if output.len() + separator_len + rendered.len() > MAX_FOLLOWUP_FINDINGS_BYTES {
+            omitted += 1;
+            continue;
+        }
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(&rendered);
+    }
+    if omitted > 0 {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(&format!("... omitted {omitted} additional finding(s) ..."));
+    }
+    if output.is_empty() {
+        "(no findings were included)".to_string()
+    } else {
+        output
     }
 }
 
@@ -1889,7 +1906,9 @@ fn automation_to_repo_ci(automation: RepoCiAutomationToml) -> codex_repo_ci::Aut
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RemoteRepoCiOutcome {
     Skipped(String),
-    Passed,
+    Passed {
+        prepared_commit: Option<codex_repo_ci::RemoteCommitApplied>,
+    },
     Failed {
         output: String,
         classification: FailureClassification,
@@ -1899,12 +1918,20 @@ enum RemoteRepoCiOutcome {
 fn run_remote_repo_ci(
     cwd: &Path,
     workflow: &codex_repo_ci::RemoteRepoCiWorkflow,
+    commit_decision: Option<&codex_repo_ci::RemoteCommitDecision>,
 ) -> Result<RemoteRepoCiOutcome> {
-    match codex_repo_ci::run_started_remote_workflow(cwd, workflow)? {
+    let run = codex_repo_ci::run_started_remote_workflow_with_commit_decision(
+        cwd,
+        workflow,
+        commit_decision,
+    )?;
+    match run.outcome {
         codex_repo_ci::RemoteRepoCiWorkflowOutcome::Skipped(reason) => {
             Ok(RemoteRepoCiOutcome::Skipped(reason))
         }
-        codex_repo_ci::RemoteRepoCiWorkflowOutcome::Passed => Ok(RemoteRepoCiOutcome::Passed),
+        codex_repo_ci::RemoteRepoCiWorkflowOutcome::Passed => Ok(RemoteRepoCiOutcome::Passed {
+            prepared_commit: run.prepared_commit,
+        }),
         codex_repo_ci::RemoteRepoCiWorkflowOutcome::Failed {
             watch_status,
             checks,
@@ -1922,7 +1949,9 @@ fn run_remote_repo_ci(
                 .filter(|check| check.bucket.as_deref() == Some("fail") || check.state == "FAILURE")
                 .collect::<Vec<_>>();
             if failed.is_empty() {
-                return Ok(RemoteRepoCiOutcome::Passed);
+                return Ok(RemoteRepoCiOutcome::Passed {
+                    prepared_commit: run.prepared_commit,
+                });
             }
             let classification = classify_remote_failure(checks.len(), &failed);
             Ok(RemoteRepoCiOutcome::Failed {
@@ -2156,7 +2185,12 @@ async fn run_model_triage(
         .or(turn_context.reasoning_effort)
         .or(model_info.default_reasoning_level);
 
-    let mut client_session = sess.services.model_client.new_session();
+    let routed_auth_manager = auth_manager_for_config(&policy_config, &sess.services.auth_manager);
+    let routed_model_client = sess.services.model_client.with_provider_info(
+        policy_config.model_provider.clone(),
+        Some(routed_auth_manager),
+    );
+    let mut client_session = routed_model_client.new_session();
     let prompt = Prompt {
         input: vec![ResponseItem::Message {
             id: None,
@@ -2214,7 +2248,7 @@ fn triage_prompt_text(input: &TriageInput<'_>) -> String {
     let changed_paths = if input.changed_paths.is_empty() {
         "(no changed paths recorded)".to_string()
     } else {
-        input.changed_paths.join("\n")
+        format_changed_paths_for_prompt(input.changed_paths)
     };
     format!(
         "Classify this repo CI {kind} failure.\n\nRules:\n- Return JSON only.\n- classification must be one of related, unrelated, whole_suite, unknown.\n- Use unrelated only when the failure is clearly not caused by the current branch.\n- Use whole_suite if all or nearly all checks failed or the output indicates broad infrastructure failure.\n- Use unknown when evidence is insufficient.\n\nDeterministic initial classification: {classification}\n\nChanged paths:\n```text\n{changed_paths}\n```\n\nDiff summary:\n```text\n{}\n```\n\nFailure output:\n```text\n{}\n```",
@@ -2288,22 +2322,21 @@ fn repair_prompt(
     let changed_paths = if changed_paths.is_empty() {
         "(no changed paths recorded)".to_string()
     } else {
-        changed_paths.join("\n")
+        truncate_middle(&changed_paths.join("\n"), MAX_FOLLOWUP_CHANGED_PATHS_BYTES)
     };
     let text = format!(
         "Repo CI {kind} checks failed after your changes.\n\nTriage classification: {} ({:?} confidence)\nTriage summary: {}\n\nChanged paths:\n```text\n{changed_paths}\n```\n\nDiff summary:\n```text\n{}\n```\n\nIf the failure is related or uncertain, fix the code, then let repo CI run again. Do not edit code for clearly unrelated failures.\n\nFailure output:\n```text\n{}\n```",
         triage.classification.as_str(),
         triage.confidence,
-        triage.summary,
-        truncate_middle(diff_summary, 4_000),
-        truncate_middle(output, MAX_OUTPUT_BYTES)
+        truncate_middle(&triage.summary, MAX_FOLLOWUP_TRIAGE_SUMMARY_BYTES),
+        truncate_middle(diff_summary, MAX_FOLLOWUP_DIFF_BYTES),
+        truncate_middle(output, MAX_FOLLOWUP_OUTPUT_BYTES)
     );
-    ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText { text }],
-        phase: None,
-    }
+    ContextualUserFragment::into(RepoCiFollowup::new(text))
+}
+
+fn format_changed_paths_for_prompt(changed_paths: &[String]) -> String {
+    truncate_middle(&changed_paths.join("\n"), MAX_CHANGED_PATHS_BYTES)
 }
 
 fn truncate_middle(value: &str, max_bytes: usize) -> String {
@@ -2573,6 +2606,40 @@ mod tests {
     }
 
     #[test]
+    fn format_changed_paths_for_prompt_caps_large_lists() {
+        let changed_paths = (0..2_000)
+            .map(|index| format!("src/generated/file_{index}.rs"))
+            .collect::<Vec<_>>();
+
+        let formatted = format_changed_paths_for_prompt(&changed_paths);
+
+        assert!(formatted.len() < changed_paths.join("\n").len());
+        assert!(formatted.contains("omitted"));
+    }
+
+    #[test]
+    fn repair_prompt_is_bounded_contextual_followup() {
+        let changed_paths = (0..500)
+            .map(|index| format!("src/generated/file_{index}.rs"))
+            .collect::<Vec<_>>();
+        let triage =
+            TriageResult::deterministic(FailureClassification::Related, "triage ".repeat(1_000));
+
+        let prompt = response_item_text(&repair_prompt(
+            "local",
+            &"output ".repeat(10_000),
+            &changed_paths,
+            &"diff ".repeat(10_000),
+            &triage,
+        ));
+
+        assert!(prompt.starts_with("<repo_ci_followup>"));
+        assert!(prompt.ends_with("</repo_ci_followup>"));
+        assert!(prompt.len() < 5_000);
+        assert!(prompt.contains("omitted"));
+    }
+
+    #[test]
     fn targeted_review_prompt_lists_selected_and_excluded_issue_types() {
         let config = EffectiveRepoCiConfig {
             automation: RepoCiAutomationToml::Local,
@@ -2636,6 +2703,46 @@ mod tests {
             absolute_file_path: Some(PathBuf::from(path)),
             location_hint: None,
             reason: "outside configured issue-type filter".to_string(),
+        }
+    }
+
+    #[test]
+    fn review_findings_prompt_is_bounded_contextual_followup() {
+        let review = RepoCiReviewOutput {
+            summary: "summary ".repeat(1_000),
+            findings: (0..50)
+                .map(|index| RepoCiReviewFinding {
+                    title: format!("finding {index}"),
+                    body: "body ".repeat(500),
+                    issue_type: RepoCiIssueType::Correctness,
+                    absolute_file_path: Some(PathBuf::from(format!("/tmp/repo/src/{index}.rs"))),
+                    location_hint: None,
+                })
+                .collect(),
+            disregarded_findings: Vec::new(),
+        };
+
+        let prompt = response_item_text(&review_findings_prompt(&review));
+
+        assert!(prompt.starts_with("<repo_ci_followup>"));
+        assert!(prompt.ends_with("</repo_ci_followup>"));
+        assert!(prompt.len() < 5_000);
+        assert!(prompt.contains("omitted"));
+    }
+
+    fn response_item_text(item: &ResponseItem) -> String {
+        match item {
+            ResponseItem::Message { content, .. } => content
+                .iter()
+                .filter_map(|content| match content {
+                    ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                        Some(text.as_str())
+                    }
+                    ContentItem::InputImage { .. } => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
         }
     }
 

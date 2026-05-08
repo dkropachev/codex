@@ -41,12 +41,12 @@ async fn thread_repo_ci_session_config_set_accepts_loaded_thread() -> Result<()>
         .send_thread_repo_ci_session_config_set_request(ThreadRepoCiSessionConfigSetParams {
             thread_id: thread.id,
             mode: None,
-            issue_types: Some(vec![
+            issue_types: Some(Some(vec![
                 RepoCiIssueType::Correctness,
                 RepoCiIssueType::Security,
-            ]),
-            review_rounds: Some(3),
-            long_ci: Some(true),
+            ])),
+            review_rounds: Some(Some(3)),
+            long_ci: Some(Some(true)),
         })
         .await?;
     let set_resp: JSONRPCResponse = timeout(
