@@ -2208,26 +2208,6 @@ impl ChatWidget {
         )
     }
 
-    fn should_preserve_repo_ci_status(state: &str, message: &str) -> bool {
-        Self::repo_ci_server_state_is_terminal(state) || Self::repo_ci_message_is_milestone(message)
-    }
-
-    #[cfg(test)]
-    fn repo_ci_core_state_is_terminal(state: &RepoCiState) -> bool {
-        matches!(
-            state,
-            RepoCiState::Passed
-                | RepoCiState::Failed
-                | RepoCiState::Skipped
-                | RepoCiState::Ignored
-                | RepoCiState::Exhausted
-        )
-    }
-
-    fn repo_ci_message_is_milestone(message: &str) -> bool {
-        message.starts_with("Repo CI fix workers applied")
-    }
-
     /// Sets the currently rendered footer status-line value.
     pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
         self.bottom_pane.set_status_line(status_line);
@@ -7268,8 +7248,7 @@ impl ChatWidget {
             ServerNotification::Warning(notification) => self.on_warning(notification.message),
             ServerNotification::RepoCiStatus(notification) => {
                 self.bottom_pane.ensure_status_indicator();
-                if Self::should_preserve_repo_ci_status(&notification.state, &notification.message)
-                {
+                if Self::repo_ci_server_state_is_terminal(&notification.state) {
                     self.add_repo_ci_status_to_history(notification.message.clone());
                 }
                 self.set_repo_ci_status(notification.message)
@@ -7809,9 +7788,14 @@ impl ChatWidget {
             | EventMsg::GuardianWarning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::RepoCiStatus(event) => {
                 self.bottom_pane.ensure_status_indicator();
-                if Self::repo_ci_core_state_is_terminal(&event.state)
-                    || Self::repo_ci_message_is_milestone(&event.message)
-                {
+                if matches!(
+                    event.state,
+                    RepoCiState::Passed
+                        | RepoCiState::Failed
+                        | RepoCiState::Skipped
+                        | RepoCiState::Ignored
+                        | RepoCiState::Exhausted
+                ) {
                     self.add_repo_ci_status_to_history(event.message.clone());
                 }
                 self.set_repo_ci_status(event.message);
