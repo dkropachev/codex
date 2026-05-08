@@ -1569,6 +1569,27 @@ async fn model_router_slash_command_sets_session_config() {
             .iter()
             .any(|event| matches!(event, AppEvent::InsertHistoryCell(_))),
         "expected model-router status history event; events: {events:?}"
+        "expected repo-ci status history event; events: {events:?}"
+    );
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/repo-ci remote");
+}
+
+#[tokio::test]
+async fn repo_ci_issues_slash_command_sets_session_config() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/repo-ci issues correctness,security");
+
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::SetRepoCiSessionConfig {
+            mode: None,
+            issue_types: Some(issue_types),
+            review_rounds: None,
+        }) if issue_types == vec![
+            codex_protocol::protocol::RepoCiIssueType::Correctness,
+            codex_protocol::protocol::RepoCiIssueType::Security,
+        ]
     );
     assert_eq!(
         recall_latest_after_clearing(&mut chat),

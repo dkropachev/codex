@@ -128,6 +128,7 @@ impl SlashCommand {
             }
             SlashCommand::Implement => "configure implement review/fix cycles",
             SlashCommand::RepoCi => "configure repo CI or run one task with repo CI",
+            SlashCommand::RepoCi => "override repo CI automation for this session",
             SlashCommand::Memories => "configure memory use and generation",
             SlashCommand::Mcp => "list configured MCP tools; use /mcp verbose for details",
             SlashCommand::Apps => "manage apps",

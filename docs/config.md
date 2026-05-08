@@ -103,6 +103,7 @@ inspect the repository, generate candidate local CI commands, run them, and
 iteratively repair the plan until the fast runner validates or the bounded
 retry budget is exhausted. The learner records the source files and SHA-256
 hashes it used;
+local checks. The learner records the source files and SHA-256 hashes it used;
 `codex repo-ci status --cwd` reports when those files changed and the repository
 should be learned again.
 

@@ -35,6 +35,7 @@ const MODEL_ROUTER_USAGE: &str = "Usage: /model-router <enable|disable|inherit>"
 const IMPLEMENT_USAGE: &str =
     "Usage: /implement <enable|disable|inherit|implicit> [--max-cycles=N] [task]";
 const REPO_CI_USAGE: &str = "Usage: /repo-ci setup | /repo-ci learn | /repo-ci retry | /repo-ci instruction <show|set --instruction TEXT|clear|edit> | /repo-ci <options> [task]\nOptions: <inherit|off|local|remote|local-and-remote> [issues <inherit|none|comma-list>] [rounds <inherit|N>] [long-ci <inherit|on|off>]";
+const REPO_CI_USAGE: &str = "Usage: /repo-ci <inherit|off|local|remote|local-and-remote> | /repo-ci issues <inherit|none|comma-list> | /repo-ci rounds <inherit|N>";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -337,6 +338,8 @@ impl ChatWidget {
                         "This override affects only the current thread and lasts until the session ends or you run /implement inherit."
                             .to_string(),
                     ),
+                    REPO_CI_USAGE.to_string(),
+                    Some("This only changes the current session.".to_string()),
                 );
             }
             SlashCommand::Memories => {
@@ -826,6 +829,29 @@ impl ChatWidget {
                     self.submit_user_message(user_message);
                 } else {
                     self.queue_user_message(user_message);
+            SlashCommand::RepoCi if !trimmed.is_empty() => {
+                if let Some(raw_issue_types) = trimmed.strip_prefix("issues ") {
+                    let issue_types = match parse_repo_ci_issue_types(raw_issue_types) {
+                        Ok(issue_types) => issue_types,
+                        Err(message) => {
+                            self.add_error_message(message);
+                            self.add_info_message(REPO_CI_USAGE.to_string(), /*hint*/ None);
+                            return;
+                        }
+                    };
+                    self.submit_op(AppCommand::set_repo_ci_session_config(
+                        /*mode*/ None,
+                        issue_types.clone(),
+                        /*review_rounds*/ None,
+                    ));
+                    self.add_info_message(
+                        repo_ci_issue_types_message(issue_types.as_deref()),
+                        Some(
+                            "This override lasts until the session ends or you run /repo-ci issues inherit."
+                                .to_string(),
+                        ),
+                    );
+                    return;
                 }
             }
             SlashCommand::Implement if !trimmed.is_empty() => {
