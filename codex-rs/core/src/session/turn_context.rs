@@ -194,7 +194,12 @@ impl TurnContext {
         .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
         .with_goal_tools_allowed(self.tools_config.goal_tools)
-        .with_max_concurrent_threads_per_session(config.agent_max_threads)
+        .with_max_concurrent_threads_per_session(
+            config
+                .features
+                .enabled(Feature::MultiAgentV2)
+                .then_some(config.multi_agent_v2.max_concurrent_threads_per_session),
+        )
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &config.agent_roles,
         ));
@@ -383,11 +388,9 @@ impl Session {
         per_turn_config.approvals_reviewer = session_configuration.approvals_reviewer;
         per_turn_config.permissions.permission_profile =
             session_configuration.permission_profile.clone();
-        let sandbox_policy = session_configuration.sandbox_policy();
-        per_turn_config.permissions.sandbox_policy =
-            Constrained::allow_only(sandbox_policy.clone());
+        let permission_profile = session_configuration.permission_profile();
         let resolved_web_search_mode =
-            resolve_web_search_mode_for_turn(&per_turn_config.web_search_mode, &sandbox_policy);
+            resolve_web_search_mode_for_turn(&per_turn_config.web_search_mode, &permission_profile);
         if let Err(err) = per_turn_config
             .web_search_mode
             .set(resolved_web_search_mode)
@@ -461,7 +464,16 @@ impl Session {
         .with_spawn_agent_usage_hint_text(per_turn_config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(per_turn_config.multi_agent_v2.hide_spawn_agent_metadata)
         .with_goal_tools_allowed(goal_tools_supported)
-        .with_max_concurrent_threads_per_session(per_turn_config.agent_max_threads)
+        .with_max_concurrent_threads_per_session(
+            per_turn_config
+                .features
+                .enabled(Feature::MultiAgentV2)
+                .then_some(
+                    per_turn_config
+                        .multi_agent_v2
+                        .max_concurrent_threads_per_session,
+                ),
+        )
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &per_turn_config.agent_roles,
         ));

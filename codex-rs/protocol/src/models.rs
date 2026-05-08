@@ -280,6 +280,24 @@ impl AdditionalPermissionProfile {
     }
 }
 
+/// Named permission profile and bounded runtime modifications currently active
+/// for a conversation, turn, or command.
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct ActivePermissionProfile {
+    pub id: String,
+    pub extends: Option<String>,
+    pub modifications: Vec<ActivePermissionProfileModification>,
+}
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+pub enum ActivePermissionProfileModification {
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    AdditionalWritableRoot { path: AbsolutePathBuf },
+}
+
 #[derive(
     Debug, Clone, Copy, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS,
 )]
