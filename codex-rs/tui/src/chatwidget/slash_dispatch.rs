@@ -8,6 +8,7 @@
 use super::*;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands;
+use codex_protocol::protocol::ImplementMode;
 use codex_protocol::protocol::RepoCiIssueType;
 use codex_protocol::protocol::RepoCiSessionMode;
 use codex_protocol::protocol::RepoCiTurnOverrides;
@@ -32,7 +33,9 @@ const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
     "'/side' is unavailable while code review is running.";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
 const MODEL_ROUTER_USAGE: &str = "Usage: /model-router <enable|disable|inherit>";
-const REPO_CI_USAGE: &str = "Usage: /repo-ci setup | /repo-ci learn | /repo-ci retry | /repo-ci <options> [task]\nOptions: <inherit|off|local|remote|local-and-remote> [issues <inherit|none|comma-list>] [rounds <inherit|N>] [long-ci <inherit|on|off>]";
+const IMPLEMENT_USAGE: &str =
+    "Usage: /implement <enable|disable|inherit|implicit> [--max-cycles=N] [task]";
+const REPO_CI_USAGE: &str = "Usage: /repo-ci setup | /repo-ci learn | /repo-ci retry | /repo-ci instruction <show|set --instruction TEXT|clear|edit> | /repo-ci <options> [task]\nOptions: <inherit|off|local|remote|local-and-remote> [issues <inherit|none|comma-list>] [rounds <inherit|N>] [long-ci <inherit|on|off>]";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -78,6 +81,39 @@ impl ChatWidget {
             );
             false
         }
+    }
+
+    fn apply_codex_slash_command(&mut self) -> bool {
+        if self.bottom_pane.is_task_running() {
+            self.add_error_message(
+                "Cannot enter Codex config mode while a task is in progress.".to_string(),
+            );
+            return false;
+        }
+        let mask = crate::codex_config_context::codex_config_mask(&self.config.cwd);
+        let workspace =
+            crate::codex_config_context::codex_config_workspace_for_cwd(&self.config.cwd);
+        self.set_collaboration_mask(mask);
+        self.add_info_message(
+            "Codex config mode enabled.".to_string(),
+            Some(format!(
+                "Target workspace is read-only; scratch workspace is {}. Use /codex off to leave.",
+                workspace.display()
+            )),
+        );
+        true
+    }
+
+    fn disable_codex_slash_command(&mut self) -> bool {
+        let Some(default_mask) =
+            collaboration_modes::default_mode_mask(self.model_catalog.as_ref())
+        else {
+            self.add_info_message("Default mode unavailable right now.".to_string(), None);
+            return false;
+        };
+        self.set_collaboration_mask(default_mask);
+        self.add_info_message("Codex config mode disabled.".to_string(), None);
+        true
     }
 
     fn request_side_conversation(
@@ -375,6 +411,15 @@ impl ChatWidget {
                     ),
                 );
             }
+            SlashCommand::Implement => {
+                self.add_info_message(
+                    IMPLEMENT_USAGE.to_string(),
+                    Some(
+                        "This override affects only the current thread and lasts until the session ends or you run /implement inherit."
+                            .to_string(),
+                    ),
+                );
+            }
             SlashCommand::RepoCi => {
                 self.add_info_message(
                     REPO_CI_USAGE.to_string(),
@@ -438,7 +483,7 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Codex => {
-                self.add_to_history(crate::codex_guide::new_codex_guide_output(&self.config.cwd));
+                self.apply_codex_slash_command();
             }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
@@ -659,6 +704,18 @@ impl ChatWidget {
             );
             return;
         }
+        if trimmed == "instruction" || trimmed.starts_with("instruction ") {
+            let command = match repo_ci_instruction_command(&self.config, trimmed) {
+                Ok(command) => command,
+                Err(message) => {
+                    self.add_error_message(message);
+                    self.add_info_message(REPO_CI_USAGE.to_string(), /*hint*/ None);
+                    return;
+                }
+            };
+            self.submit_op(AppCommand::run_user_shell_command(command));
+            return;
+        }
 
         let parsed = match parse_repo_ci_command(trimmed) {
             Ok(parsed) => parsed,
@@ -697,6 +754,9 @@ impl ChatWidget {
                     issue_types: parsed.options.issue_types,
                     review_rounds: parsed.options.review_rounds,
                     long_ci: parsed.options.long_ci,
+                    implement_enabled: None,
+                    implement_mode: None,
+                    implement_max_cycles: None,
                 },
             );
             return;
@@ -709,6 +769,9 @@ impl ChatWidget {
             issue_types: options.issue_types,
             review_rounds: options.review_rounds,
             long_ci: options.long_ci,
+            implement_enabled: None,
+            implement_mode: None,
+            implement_max_cycles: None,
         };
         if let Some(mode) = session_config.mode {
             self.config.repo_ci_session_mode = mode;
@@ -738,7 +801,114 @@ impl ChatWidget {
             config.issue_types,
             config.review_rounds,
             config.long_ci,
+            config.implement_enabled,
+            config.implement_mode,
+            config.implement_max_cycles,
         ));
+    }
+
+    fn dispatch_implement_command_with_args(
+        &mut self,
+        args: String,
+        text_elements: Vec<TextElement>,
+        local_images: Vec<LocalImageAttachment>,
+        remote_image_urls: Vec<String>,
+        mention_bindings: Vec<MentionBinding>,
+        source: SlashCommandDispatchSource,
+    ) {
+        let trimmed = args.trim();
+        let parsed = match parse_implement_command(trimmed) {
+            Ok(parsed) => parsed,
+            Err(message) => {
+                self.add_error_message(message);
+                self.add_info_message(IMPLEMENT_USAGE.to_string(), /*hint*/ None);
+                return;
+            }
+        };
+
+        if let Some(task) = parsed.task {
+            if parsed.options.enabled == Some(Some(false)) || parsed.options.enabled == Some(None) {
+                self.add_error_message(
+                    "Use `/implement disable` or `/implement inherit` without task text."
+                        .to_string(),
+                );
+                return;
+            }
+            if !self.is_session_configured() {
+                self.queue_prepared_slash_command_with_args(
+                    SlashCommand::Implement,
+                    args,
+                    text_elements,
+                    source,
+                );
+                return;
+            }
+
+            let task_elements =
+                Self::slash_command_args_elements(&task.text, task.offset, &text_elements);
+            let user_message = self.prepared_inline_user_message(
+                task.text,
+                task_elements,
+                local_images,
+                remote_image_urls,
+                mention_bindings,
+                source,
+            );
+            self.submit_user_message_with_repo_ci(
+                user_message,
+                RepoCiTurnOverrides {
+                    mode: None,
+                    issue_types: None,
+                    review_rounds: None,
+                    long_ci: None,
+                    implement_enabled: Some(Some(true)),
+                    implement_mode: parsed.options.mode,
+                    implement_max_cycles: parsed.options.max_cycles,
+                },
+            );
+            return;
+        }
+
+        let options = parsed.options;
+
+        if let Some(enabled) = options.enabled {
+            let implement = self
+                .config
+                .implement
+                .get_or_insert_with(codex_config::config_toml::ImplementToml::default);
+            implement.enabled = enabled;
+        }
+        if let Some(mode) = options.mode {
+            let implement = self
+                .config
+                .implement
+                .get_or_insert_with(codex_config::config_toml::ImplementToml::default);
+            implement.mode = mode;
+        }
+        if let Some(max_cycles) = options.max_cycles {
+            let implement = self
+                .config
+                .implement
+                .get_or_insert_with(codex_config::config_toml::ImplementToml::default);
+            implement.max_cycles = max_cycles;
+        }
+
+        self.submit_repo_ci_session_config(RepoCiSessionConfigValues {
+            mode: None,
+            issue_types: None,
+            review_rounds: None,
+            long_ci: None,
+            implement_enabled: options.enabled,
+            implement_mode: options.mode,
+            implement_max_cycles: options.max_cycles,
+        });
+        self.add_info_message(
+            implement_session_config_message(&options),
+            Some(
+                "This override affects only the current thread and lasts until the session ends or you run /implement inherit."
+                    .to_string(),
+            ),
+        );
     }
 
     fn dispatch_prepared_command_with_args(
@@ -859,6 +1029,40 @@ impl ChatWidget {
             }
             SlashCommand::RepoCi if !trimmed.is_empty() => {
                 self.dispatch_repo_ci_command_with_args(
+                    args,
+                    text_elements,
+                    local_images,
+                    remote_image_urls,
+                    mention_bindings,
+                    source,
+                );
+            }
+            SlashCommand::Codex if !trimmed.is_empty() => {
+                if matches!(
+                    trimmed.to_ascii_lowercase().as_str(),
+                    "disable" | "off" | "cancel"
+                ) {
+                    self.disable_codex_slash_command();
+                    return;
+                }
+                if self.bottom_pane.is_task_running() {
+                    self.add_error_message(
+                        "'/codex <request>' is disabled while a task is in progress.".to_string(),
+                    );
+                    return;
+                }
+                let workspace =
+                    crate::codex_config_context::codex_config_workspace_for_cwd(&self.config.cwd);
+                self.submit_op(AppCommand::codex_config_intent(
+                    args,
+                    crate::codex_config_context::build_codex_config_context(
+                        &self.config.cwd,
+                        &workspace,
+                    ),
+                ));
+            }
+            SlashCommand::Implement if !trimmed.is_empty() => {
+                self.dispatch_implement_command_with_args(
                     args,
                     text_elements,
                     local_images,
@@ -1033,6 +1237,7 @@ impl ChatWidget {
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
             | SlashCommand::ModelRouter
+            | SlashCommand::Implement
             | SlashCommand::RepoCi
             | SlashCommand::Memories
             | SlashCommand::Quit
@@ -1112,6 +1317,9 @@ struct RepoCiSessionConfigValues {
     issue_types: Option<Option<Vec<RepoCiIssueType>>>,
     review_rounds: Option<Option<u8>>,
     long_ci: Option<Option<bool>>,
+    implement_enabled: Option<Option<bool>>,
+    implement_mode: Option<Option<ImplementMode>>,
+    implement_max_cycles: Option<Option<u8>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1120,6 +1328,19 @@ struct RepoCiOptionPatch {
     issue_types: Option<Option<Vec<RepoCiIssueType>>>,
     review_rounds: Option<Option<u8>>,
     long_ci: Option<Option<bool>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ImplementOptionPatch {
+    enabled: Option<Option<bool>>,
+    mode: Option<Option<ImplementMode>>,
+    max_cycles: Option<Option<u8>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ImplementParsedCommand {
+    options: ImplementOptionPatch,
+    task: Option<RepoCiInlineTask>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1219,6 +1440,102 @@ fn repo_ci_command_tokens(raw: &str) -> Vec<RepoCiCommandToken<'_>> {
     tokens
 }
 
+fn parse_implement_command(raw: &str) -> Result<ImplementParsedCommand, String> {
+    let tokens = repo_ci_command_tokens(raw);
+    let mut options = ImplementOptionPatch::default();
+    let mut index = 0;
+
+    while let Some(token) = tokens.get(index) {
+        let normalized = token.text.to_ascii_lowercase();
+        if let Some(raw_value) = normalized.strip_prefix("--max-cycles=") {
+            options.max_cycles = Some(parse_implement_max_cycles(raw_value)?);
+            index += 1;
+        } else if normalized == "--max-cycles" {
+            let Some(value) = tokens.get(index + 1) else {
+                return Err("Missing implement max cycle count after `--max-cycles`.".to_string());
+            };
+            options.max_cycles = Some(parse_implement_max_cycles(value.text)?);
+            index += 2;
+        } else if matches!(normalized.as_str(), "enable" | "enabled" | "on") {
+            options.enabled = Some(Some(true));
+            options.mode = Some(Some(ImplementMode::Auto));
+            index += 1;
+        } else if matches!(normalized.as_str(), "implicit" | "on-demand") {
+            options.enabled = Some(Some(true));
+            options.mode = Some(Some(ImplementMode::Implicit));
+            index += 1;
+        } else if normalized == "auto" {
+            options.enabled = Some(Some(true));
+            options.mode = Some(Some(ImplementMode::Auto));
+            index += 1;
+        } else if matches!(normalized.as_str(), "disable" | "disabled" | "off") {
+            options.enabled = Some(Some(false));
+            index += 1;
+        } else if matches!(normalized.as_str(), "inherit" | "default" | "config") {
+            options.enabled = Some(None);
+            options.mode = Some(None);
+            options.max_cycles = Some(None);
+            index += 1;
+        } else if token.text.starts_with('-') {
+            return Err(format!("Unknown implement option `{}`.", token.text));
+        } else {
+            break;
+        }
+    }
+
+    let task = tokens.get(index).map(|token| RepoCiInlineTask {
+        text: raw[token.start..].to_string(),
+        offset: token.start,
+    });
+    if options.enabled.is_none()
+        && options.mode.is_none()
+        && options.max_cycles.is_none()
+        && task.is_none()
+    {
+        return Err(IMPLEMENT_USAGE.to_string());
+    }
+    Ok(ImplementParsedCommand { options, task })
+}
+
+fn parse_implement_max_cycles(raw: &str) -> Result<Option<u8>, String> {
+    let trimmed = raw.trim();
+    let normalized = trimmed.to_ascii_lowercase();
+    if matches!(normalized.as_str(), "inherit" | "default" | "config") {
+        return Ok(None);
+    }
+    trimmed
+        .parse::<u8>()
+        .map(Some)
+        .map_err(|_| format!("Invalid implement max cycle count `{trimmed}`."))
+}
+
+fn implement_session_config_message(options: &ImplementOptionPatch) -> String {
+    match (options.enabled, options.mode, options.max_cycles) {
+        (Some(Some(true)), Some(Some(ImplementMode::Implicit)), None) => {
+            "Implement review/fix cycles now run only for /implement turns.".to_string()
+        }
+        (Some(Some(true)), Some(Some(ImplementMode::Auto)), None) => {
+            "Implement review/fix cycles now run automatically after agent edits.".to_string()
+        }
+        (Some(Some(true)), _, None) => {
+            "Implement review/fix cycles are enabled for this session.".to_string()
+        }
+        (Some(Some(false)), _, None) => {
+            "Implement review/fix cycles are disabled for this session.".to_string()
+        }
+        (Some(None), Some(None) | None, Some(None) | None) => {
+            "Implement review/fix cycles now inherit repo/user config for this session.".to_string()
+        }
+        (None, _, Some(Some(max_cycles))) => format!(
+            "Implement review/fix cycles now use {max_cycles} max cycle(s) for this session."
+        ),
+        (None, _, Some(None)) => {
+            "Implement max cycles now inherit repo/user config for this session.".to_string()
+        }
+        _ => "Implement session config updated.".to_string(),
+    }
+}
+
 fn parse_model_router_enabled(raw: &str) -> Result<Option<bool>, String> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "enable" | "enabled" | "on" => Ok(Some(true)),
@@ -1273,6 +1590,48 @@ fn repo_ci_setup_command(config: &Config) -> String {
 fn repo_ci_learn_command(config: &Config) -> String {
     let codex = repo_ci_codex_command(config);
     format!("{codex} repo-ci learn --cwd")
+}
+
+fn repo_ci_instruction_command(config: &Config, raw: &str) -> Result<String, String> {
+    let Some(rest) = raw.strip_prefix("instruction") else {
+        return Err(REPO_CI_USAGE.to_string());
+    };
+    let rest = rest.trim();
+    let codex = repo_ci_codex_command(config);
+    match rest {
+        "show" => Ok(format!("{codex} repo-ci instruction show --cwd")),
+        "clear" => Ok(format!("{codex} repo-ci instruction clear --cwd")),
+        "edit" => Ok(format!("{codex} repo-ci instruction edit --cwd")),
+        _ => {
+            let Some(instruction) = rest.strip_prefix("set") else {
+                return Err(REPO_CI_USAGE.to_string());
+            };
+            let instruction = instruction.trim();
+            let Some(instruction) = instruction.strip_prefix("--instruction") else {
+                return Err(REPO_CI_USAGE.to_string());
+            };
+            let instruction = strip_wrapping_quotes(instruction.trim());
+            if instruction.is_empty() {
+                return Err("Repo CI learner instruction must not be empty.".to_string());
+            }
+            Ok(format!(
+                "{codex} repo-ci instruction set --cwd --instruction {}",
+                shell_quote(instruction)
+            ))
+        }
+    }
+}
+
+fn strip_wrapping_quotes(value: &str) -> &str {
+    if value.len() >= 2
+        && let Some(quote) = value.as_bytes().first().copied()
+        && matches!(quote, b'\'' | b'\"')
+        && value.as_bytes().last().copied() == Some(quote)
+    {
+        &value[1..value.len() - 1]
+    } else {
+        value
+    }
 }
 
 fn repo_ci_workflow_command(config: &Config) -> String {

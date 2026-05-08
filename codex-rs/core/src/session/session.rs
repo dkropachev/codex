@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::ConstraintError;
+use codex_protocol::protocol::ImplementMode;
 use codex_protocol::protocol::RepoCiIssueType;
 use tokio::sync::Semaphore;
 
@@ -93,6 +94,9 @@ pub(crate) struct SessionConfiguration {
     pub(super) repo_ci_issue_types: Option<Vec<RepoCiIssueType>>,
     pub(super) repo_ci_review_rounds: Option<u8>,
     pub(super) repo_ci_long_ci: Option<bool>,
+    pub(super) implement_enabled: Option<bool>,
+    pub(super) implement_mode: Option<ImplementMode>,
+    pub(super) implement_max_cycles: Option<u8>,
 }
 
 impl SessionConfiguration {
@@ -251,6 +255,15 @@ impl SessionConfiguration {
         if let Some(repo_ci_long_ci) = updates.repo_ci_long_ci {
             next_configuration.repo_ci_long_ci = repo_ci_long_ci;
         }
+        if let Some(implement_enabled) = updates.implement_enabled {
+            next_configuration.implement_enabled = implement_enabled;
+        }
+        if let Some(implement_mode) = updates.implement_mode {
+            next_configuration.implement_mode = implement_mode;
+        }
+        if let Some(implement_max_cycles) = updates.implement_max_cycles {
+            next_configuration.implement_max_cycles = implement_max_cycles;
+        }
         Ok(next_configuration)
     }
 }
@@ -279,6 +292,9 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) repo_ci_issue_types: Option<Option<Vec<RepoCiIssueType>>>,
     pub(crate) repo_ci_review_rounds: Option<Option<u8>>,
     pub(crate) repo_ci_long_ci: Option<Option<bool>>,
+    pub(crate) implement_enabled: Option<Option<bool>>,
+    pub(crate) implement_mode: Option<Option<ImplementMode>>,
+    pub(crate) implement_max_cycles: Option<Option<u8>>,
     pub(crate) repo_ci_turn_overrides: Option<RepoCiTurnOverrides>,
 }
 

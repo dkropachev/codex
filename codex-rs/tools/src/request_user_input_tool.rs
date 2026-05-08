@@ -138,7 +138,13 @@ fn format_allowed_modes(default_mode_request_user_input: bool) -> String {
         [] => "no modes".to_string(),
         [mode] => format!("{mode} mode"),
         [first, second] => format!("{first} or {second} mode"),
-        [..] => format!("modes: {}", mode_names.join(",")),
+        [..] => {
+            let Some(last) = mode_names.last() else {
+                return "no modes".to_string();
+            };
+            let leading = mode_names[..mode_names.len() - 1].join(", ");
+            format!("{leading}, or {last} modes")
+        }
     }
 }
 

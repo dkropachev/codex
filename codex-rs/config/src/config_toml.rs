@@ -49,6 +49,7 @@ use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ImplementMode;
 use codex_protocol::protocol::RepoCiIssueType;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -57,6 +58,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
+use serde::de;
 
 const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
     AMAZON_BEDROCK_PROVIDER_ID,
@@ -207,6 +209,10 @@ pub struct ConfigToml {
     /// Optional adaptive router for internal model calls.
     #[serde(default, deserialize_with = "deserialize_model_router")]
     pub model_router: Option<ModelRouterToml>,
+
+    /// Optional review/fix implementation loop configuration.
+    #[serde(default)]
+    pub implement: Option<ImplementToml>,
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: Option<usize>,
@@ -476,6 +482,44 @@ pub struct RepoCiScopeToml {
 
     /// Maximum number of repo CI targeted review/fix rounds before surfacing the result.
     pub max_review_fix_rounds: Option<u8>,
+
+    /// Concise repo CI learner instruction blob for command selection.
+    #[serde(
+        default,
+        alias = "learning_instructions",
+        deserialize_with = "deserialize_repo_ci_learning_instruction"
+    )]
+    pub learning_instruction: Option<String>,
+}
+
+fn deserialize_repo_ci_learning_instruction<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum RepoCiLearningInstruction {
+        Blob(String),
+        LegacyList(Vec<String>),
+    }
+
+    let value = Option::<RepoCiLearningInstruction>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(RepoCiLearningInstruction::Blob(value)) => {
+            normalize_repo_ci_learning_instruction(value)
+        }
+        Some(RepoCiLearningInstruction::LegacyList(values)) => {
+            normalize_repo_ci_learning_instruction(values.join(" "))
+        }
+        None => None,
+    })
+}
+
+fn normalize_repo_ci_learning_instruction(value: String) -> Option<String> {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
@@ -536,6 +580,19 @@ pub struct ModelRouterToml {
 
     #[serde(default)]
     pub candidates: Vec<ModelRouterCandidateToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ImplementToml {
+    /// Whether the implement review/fix loop should run after agent edits.
+    pub enabled: Option<bool>,
+
+    /// Whether review/fix cycles run automatically or only for `/implement` turns.
+    pub mode: Option<ImplementMode>,
+
+    /// Maximum number of review/fix cycles before surfacing remaining findings.
+    pub max_cycles: Option<u8>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
@@ -1463,5 +1520,57 @@ mod tests {
         assert_eq!(scope.long_ci, Some(true));
         assert_eq!(scope.review_issue_types, Some(Vec::new()));
         assert_eq!(scope.max_review_fix_rounds, Some(4));
+    }
+
+    #[test]
+    fn parses_repo_ci_learning_instruction_and_legacy_list() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            [repo_ci.defaults]
+            learning_instruction = "Use cargo nextest.  Skip slow integration tests."
+
+            [repo_ci.github_repos."openai/codex"]
+            learning_instructions = ["Use just test.", "Skip networked tests."]
+            "#,
+        )
+        .expect("config should parse");
+
+        let repo_ci = config.repo_ci.expect("repo_ci");
+        let defaults = repo_ci.defaults.expect("defaults");
+        let github_repo = repo_ci
+            .github_repos
+            .get("openai/codex")
+            .expect("github repo scope");
+
+        assert_eq!(
+            defaults.learning_instruction,
+            Some("Use cargo nextest. Skip slow integration tests.".to_string())
+        );
+        assert_eq!(
+            github_repo.learning_instruction,
+            Some("Use just test. Skip networked tests.".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_implement_config() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            [implement]
+            enabled = true
+            mode = "implicit"
+            max_cycles = 4
+            "#,
+        )
+        .expect("config should parse");
+
+        assert_eq!(
+            config.implement,
+            Some(ImplementToml {
+                enabled: Some(true),
+                mode: Some(ImplementMode::Implicit),
+                max_cycles: Some(4),
+            })
+        );
     }
 }

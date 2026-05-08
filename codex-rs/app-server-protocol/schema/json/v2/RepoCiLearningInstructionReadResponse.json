@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "instruction": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scope": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "scope"
+  ],
+  "title": "RepoCiLearningInstructionReadResponse",
+  "type": "object"
+}

@@ -313,6 +313,18 @@ client_request_definitions! {
         params: v2::ThreadRepoCiSessionConfigSetParams,
         response: v2::ThreadRepoCiSessionConfigSetResponse,
     },
+    ThreadCodexConfigIntentSubmit => "thread/codexConfigIntent/submit" {
+        params: v2::ThreadCodexConfigIntentSubmitParams,
+        response: v2::ThreadCodexConfigIntentSubmitResponse,
+    },
+    RepoCiLearningInstructionRead => "repoCiLearningInstruction/read" {
+        params: v2::RepoCiLearningInstructionReadParams,
+        response: v2::RepoCiLearningInstructionReadResponse,
+    },
+    RepoCiLearningInstructionWrite => "repoCiLearningInstruction/write" {
+        params: v2::RepoCiLearningInstructionWriteParams,
+        response: v2::RepoCiLearningInstructionWriteResponse,
+    },
     ThreadModelRouterSessionConfigSet => "thread/modelRouterSessionConfig/set" {
         params: v2::ThreadModelRouterSessionConfigSetParams,
         response: v2::ThreadModelRouterSessionConfigSetResponse,
@@ -1885,6 +1897,9 @@ mod tests {
                 ])),
                 review_rounds: Some(Some(3)),
                 long_ci: Some(Some(true)),
+                implement_enabled: Some(Some(true)),
+                implement_mode: Some(Some(v2::ImplementMode::Implicit)),
+                implement_max_cycles: Some(Some(4)),
             },
         };
         assert_eq!(
@@ -1896,7 +1911,10 @@ mod tests {
                     "mode": "remote",
                     "issueTypes": ["correctness", "security"],
                     "reviewRounds": 3,
-                    "longCi": true
+                    "longCi": true,
+                    "implementEnabled": true,
+                    "implementMode": "implicit",
+                    "implementMaxCycles": 4
                 }
             }),
             serde_json::to_value(&request)?,
@@ -1922,6 +1940,34 @@ mod tests {
         assert_eq!(params.issue_types, Some(None));
         assert_eq!(params.review_rounds, None);
         assert_eq!(params.long_ci, None);
+        assert_eq!(params.implement_enabled, None);
+        assert_eq!(params.implement_mode, None);
+        assert_eq!(params.implement_max_cycles, None);
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_codex_config_intent_submit() -> Result<()> {
+        let request = ClientRequest::ThreadCodexConfigIntentSubmit {
+            request_id: RequestId::Integer(10),
+            params: v2::ThreadCodexConfigIntentSubmitParams {
+                thread_id: "thr_123".to_string(),
+                intent: "prefer nextest for repo-ci learning".to_string(),
+                context: Some("slash commands: /repo-ci".to_string()),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/codexConfigIntent/submit",
+                "id": 10,
+                "params": {
+                    "threadId": "thr_123",
+                    "intent": "prefer nextest for repo-ci learning",
+                    "context": "slash commands: /repo-ci"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
         Ok(())
     }
 

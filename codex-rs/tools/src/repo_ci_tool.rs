@@ -12,6 +12,7 @@ pub const REPO_CI_STATUS_TOOL_NAME: &str = "status";
 pub const REPO_CI_LEARN_TOOL_NAME: &str = "learn";
 pub const REPO_CI_RUN_TOOL_NAME: &str = "run";
 pub const REPO_CI_RESULT_TOOL_NAME: &str = "result";
+pub const REPO_CI_INSTRUCTION_TOOL_NAME: &str = "instruction";
 
 pub fn create_repo_ci_namespace_tool() -> ToolSpec {
     ToolSpec::Namespace(ResponsesApiNamespace {
@@ -23,16 +24,18 @@ pub fn create_repo_ci_namespace_tool() -> ToolSpec {
             ResponsesApiNamespaceTool::Function(learn_tool()),
             ResponsesApiNamespaceTool::Function(run_tool()),
             ResponsesApiNamespaceTool::Function(result_tool()),
+            ResponsesApiNamespaceTool::Function(instruction_tool()),
         ],
     })
 }
 
-pub fn repo_ci_tool_names() -> [&'static str; 4] {
+pub fn repo_ci_tool_names() -> [&'static str; 5] {
     [
         REPO_CI_STATUS_TOOL_NAME,
         REPO_CI_LEARN_TOOL_NAME,
         REPO_CI_RUN_TOOL_NAME,
         REPO_CI_RESULT_TOOL_NAME,
+        REPO_CI_INSTRUCTION_TOOL_NAME,
     ]
 }
 
@@ -156,6 +159,59 @@ fn result_tool() -> ResponsesApiTool {
                 ),
             ]),
             Some(vec!["artifact_id".to_string()]),
+            Some(AdditionalProperties::Boolean(false)),
+        ),
+        output_schema: None,
+    }
+}
+
+fn instruction_tool() -> ResponsesApiTool {
+    ResponsesApiTool {
+        name: REPO_CI_INSTRUCTION_TOOL_NAME.to_string(),
+        description: "Read, fully replace, or clear the repo-scoped repo-ci learner instruction blob. The blob must be concise, non-contradictory, repo-ci-learning specific, and contain all details needed for the learner to apply it. Empty set instructions clear the blob."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            BTreeMap::from([
+                (
+                    "action".to_string(),
+                    JsonSchema::string_enum(
+                        vec![json!("show"), json!("set"), json!("clear")],
+                        Some("Instruction action to perform.".to_string()),
+                    ),
+                ),
+                (
+                    "scope".to_string(),
+                    JsonSchema::object(
+                        BTreeMap::from([
+                            (
+                                "cwd".to_string(),
+                                JsonSchema::boolean(Some(
+                                    "Resolve the current repository and prefer its GitHub repo scope when available."
+                                        .to_string(),
+                                )),
+                            ),
+                            (
+                                "github_repo".to_string(),
+                                JsonSchema::string(Some(
+                                    "Explicit GitHub repository scope as org/repo.".to_string(),
+                                )),
+                            ),
+                        ]),
+                        /*required*/ None,
+                        Some(AdditionalProperties::Boolean(false)),
+                    ),
+                ),
+                (
+                    "instruction".to_string(),
+                    JsonSchema::string(Some(
+                        "Replacement instruction blob for set. Empty string clears the blob."
+                            .to_string(),
+                    )),
+                ),
+            ]),
+            Some(vec!["action".to_string(), "scope".to_string()]),
             Some(AdditionalProperties::Boolean(false)),
         ),
         output_schema: None,

@@ -1184,6 +1184,9 @@ async fn repo_ci_slash_command_sets_session_mode() {
             issue_types: None,
             review_rounds: None,
             long_ci: None,
+            implement_enabled: None,
+            implement_mode: None,
+            implement_max_cycles: None,
         })
     );
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
@@ -1213,19 +1216,111 @@ async fn repo_ci_slash_command_without_args_shows_usage_snapshot() {
 }
 
 #[tokio::test]
-async fn slash_codex_shows_guide_snapshot() {
+async fn slash_codex_enters_config_mode_snapshot() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.dispatch_command(SlashCommand::Codex);
+    submit_composer_text(&mut chat, "/codex");
 
     let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected guide history cell");
-    let rendered = normalize_snapshot_paths(lines_to_single_string(&cells[0]));
+    assert_eq!(cells.len(), 1, "expected one info history cell");
+    let mut rendered = normalize_snapshot_paths(lines_to_single_string(&cells[0]));
+    let workspace_prefix = std::env::temp_dir()
+        .join("codex-config-")
+        .display()
+        .to_string();
+    if let Some(start) = rendered.find(&workspace_prefix) {
+        let end = rendered[start..]
+            .find('.')
+            .map(|offset| start + offset)
+            .unwrap_or(rendered.len());
+        rendered.replace_range(start..end, "<codex-config-workspace>");
+    }
     assert_chatwidget_snapshot!("slash_codex_guide", rendered);
-    assert!(rendered.contains("Codex Guide"));
-    assert!(rendered.contains("Model Router"));
-    assert!(rendered.contains("Tool Router"));
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Codex);
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/codex");
+}
+
+#[tokio::test]
+async fn slash_codex_off_leaves_config_mode() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/codex");
+    let _ = drain_insert_history(&mut rx);
+    submit_composer_text(&mut chat, "/codex off");
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Codex config mode disabled."));
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_codex_with_args_submits_codex_config_intent() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    let command_text = "/codex don't run integration tests in this repo when validating /implement";
+
+    submit_composer_text(&mut chat, command_text);
+
+    match op_rx.try_recv() {
+        Ok(Op::CodexConfigIntent { intent, context }) => {
+            assert!(intent.contains("integration tests"));
+            assert!(intent.contains("/implement"));
+            let context = context.expect("expected generated /codex context");
+            assert!(context.contains("SlashCommand registry"));
+            assert!(context.contains("/repo-ci"));
+            assert!(context.contains("/implement"));
+        }
+        other => panic!("expected CodexConfigIntent op, got {other:?}"),
+    }
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert_eq!(recall_latest_after_clearing(&mut chat), command_text);
+}
+
+#[tokio::test]
+async fn codex_config_mode_turn_uses_scratch_workspace_and_sandbox() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    let target_cwd = chat.config.cwd.to_path_buf();
+    chat.set_collaboration_mask(crate::codex_config_context::codex_config_mask(&target_cwd));
+
+    submit_composer_text(&mut chat, "configure Codex");
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            cwd,
+            sandbox_policy,
+            permission_profile,
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Codex,
+                    settings,
+                }),
+            ..
+        } => {
+            let expected_sandbox = crate::codex_config_context::codex_config_sandbox_policy();
+            assert_ne!(cwd, target_cwd);
+            assert!(cwd.starts_with(std::env::temp_dir()));
+            assert_eq!(sandbox_policy, expected_sandbox);
+            assert_eq!(
+                permission_profile,
+                Some(crate::codex_config_context::codex_config_permission_profile())
+            );
+            assert!(
+                settings
+                    .developer_instructions
+                    .as_deref()
+                    .is_some_and(|instructions| instructions.contains("Codex guide"))
+            );
+        }
+        other => panic!("expected Codex-mode UserTurn, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -1261,6 +1356,70 @@ async fn repo_ci_learn_slash_command_runs_learning() {
 }
 
 #[tokio::test]
+async fn repo_ci_instruction_show_slash_command_runs_show() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/repo-ci instruction show");
+
+    match op_rx.try_recv() {
+        Ok(Op::RunUserShellCommand { command }) => {
+            assert!(command.contains("repo-ci instruction show --cwd"));
+        }
+        other => panic!("expected RunUserShellCommand op, got {other:?}"),
+    }
+    assert_eq!(
+        recall_latest_after_clearing(&mut chat),
+        "/repo-ci instruction show"
+    );
+}
+
+#[tokio::test]
+async fn repo_ci_instruction_set_slash_command_runs_set() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(
+        &mut chat,
+        "/repo-ci instruction set --instruction \"Use nextest.\"",
+    );
+
+    match op_rx.try_recv() {
+        Ok(Op::RunUserShellCommand { command }) => {
+            assert!(command.contains("repo-ci instruction set --cwd --instruction"));
+            assert!(command.contains("Use nextest."));
+        }
+        other => panic!("expected RunUserShellCommand op, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn repo_ci_instruction_clear_slash_command_runs_clear() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/repo-ci instruction clear");
+
+    match op_rx.try_recv() {
+        Ok(Op::RunUserShellCommand { command }) => {
+            assert!(command.contains("repo-ci instruction clear --cwd"));
+        }
+        other => panic!("expected RunUserShellCommand op, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn repo_ci_instruction_edit_slash_command_runs_edit() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/repo-ci instruction edit");
+
+    match op_rx.try_recv() {
+        Ok(Op::RunUserShellCommand { command }) => {
+            assert!(command.contains("repo-ci instruction edit --cwd"));
+        }
+        other => panic!("expected RunUserShellCommand op, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn repo_ci_retry_slash_command_runs_workflow() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
 
@@ -1290,6 +1449,9 @@ async fn repo_ci_issues_slash_command_sets_session_config() {
             issue_types: Some(Some(issue_types)),
             review_rounds: None,
             long_ci: None,
+            implement_enabled: None,
+            implement_mode: None,
+            implement_max_cycles: None,
         }) if issue_types == vec![
             codex_protocol::protocol::RepoCiIssueType::Correctness,
             codex_protocol::protocol::RepoCiIssueType::Security,
@@ -1313,6 +1475,9 @@ async fn repo_ci_partial_slash_command_preserves_unspecified_session_config() {
             issue_types: None,
             review_rounds: None,
             long_ci: None,
+            implement_enabled: None,
+            implement_mode: None,
+            implement_max_cycles: None,
         })
     );
 
@@ -1325,6 +1490,9 @@ async fn repo_ci_partial_slash_command_preserves_unspecified_session_config() {
             issue_types: Some(Some(issue_types)),
             review_rounds: None,
             long_ci: None,
+            implement_enabled: None,
+            implement_mode: None,
+            implement_max_cycles: None,
         }) if issue_types == vec![codex_protocol::protocol::RepoCiIssueType::Security]
     );
     assert_eq!(
@@ -1346,6 +1514,9 @@ async fn repo_ci_rounds_slash_command_sets_session_config() {
             issue_types: None,
             review_rounds: Some(Some(3)),
             long_ci: None,
+            implement_enabled: None,
+            implement_mode: None,
+            implement_max_cycles: None,
         })
     );
     assert_eq!(recall_latest_after_clearing(&mut chat), "/repo-ci rounds 3");
@@ -1364,6 +1535,9 @@ async fn repo_ci_long_ci_slash_command_sets_session_config() {
             issue_types: None,
             review_rounds: None,
             long_ci: Some(Some(true)),
+            implement_enabled: None,
+            implement_mode: None,
+            implement_max_cycles: None,
         })
     );
     assert_eq!(
@@ -1395,6 +1569,9 @@ async fn repo_ci_slash_command_with_task_applies_config_for_one_turn() {
                     issue_types: None,
                     review_rounds: None,
                     long_ci: None,
+                    implement_enabled: None,
+                    implement_mode: None,
+                    implement_max_cycles: None,
                 })
             );
         }
@@ -1419,6 +1596,9 @@ async fn repo_ci_slash_command_with_task_restores_previous_session_config() {
             issue_types: None,
             review_rounds: None,
             long_ci: None,
+            implement_enabled: None,
+            implement_mode: None,
+            implement_max_cycles: None,
         })
     );
 
@@ -1440,6 +1620,9 @@ async fn repo_ci_slash_command_with_task_restores_previous_session_config() {
                     issue_types: None,
                     review_rounds: Some(Some(2)),
                     long_ci: None,
+                    implement_enabled: None,
+                    implement_mode: None,
+                    implement_max_cycles: None,
                 })
             );
         }
@@ -1455,6 +1638,115 @@ async fn repo_ci_slash_command_with_task_restores_previous_session_config() {
     assert_eq!(
         chat.config.repo_ci_session_mode,
         Some(codex_protocol::protocol::RepoCiSessionMode::Remote)
+    );
+}
+
+#[tokio::test]
+async fn implement_slash_command_sets_session_config() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/implement enable --max-cycles=4");
+
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::SetRepoCiSessionConfig {
+            mode: None,
+            issue_types: None,
+            review_rounds: None,
+            long_ci: None,
+            implement_enabled: Some(Some(true)),
+            implement_mode: Some(Some(codex_protocol::protocol::ImplementMode::Auto)),
+            implement_max_cycles: Some(Some(4)),
+        })
+    );
+    assert_eq!(
+        recall_latest_after_clearing(&mut chat),
+        "/implement enable --max-cycles=4"
+    );
+}
+
+#[tokio::test]
+async fn implement_implicit_slash_command_sets_session_config() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/implement implicit --max-cycles=2");
+
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::SetRepoCiSessionConfig {
+            mode: None,
+            issue_types: None,
+            review_rounds: None,
+            long_ci: None,
+            implement_enabled: Some(Some(true)),
+            implement_mode: Some(Some(codex_protocol::protocol::ImplementMode::Implicit)),
+            implement_max_cycles: Some(Some(2)),
+        })
+    );
+    assert_eq!(
+        recall_latest_after_clearing(&mut chat),
+        "/implement implicit --max-cycles=2"
+    );
+}
+
+#[tokio::test]
+async fn implement_inherit_slash_command_sets_session_config() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/implement inherit");
+
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::SetRepoCiSessionConfig {
+            mode: None,
+            issue_types: None,
+            review_rounds: None,
+            long_ci: None,
+            implement_enabled: Some(None),
+            implement_mode: Some(None),
+            implement_max_cycles: Some(None),
+        })
+    );
+    assert_eq!(
+        recall_latest_after_clearing(&mut chat),
+        "/implement inherit"
+    );
+}
+
+#[tokio::test]
+async fn implement_slash_command_with_task_applies_for_one_turn() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    submit_composer_text(&mut chat, "/implement --max-cycles=1 fix the failing tests");
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserInputWithTurnContext { items, repo_ci, .. } => {
+            assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "fix the failing tests".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+            assert_eq!(
+                repo_ci,
+                Some(codex_protocol::protocol::RepoCiTurnOverrides {
+                    mode: None,
+                    issue_types: None,
+                    review_rounds: None,
+                    long_ci: None,
+                    implement_enabled: Some(Some(true)),
+                    implement_mode: None,
+                    implement_max_cycles: Some(Some(1)),
+                })
+            );
+        }
+        other => panic!("expected implement task user turn, got {other:?}"),
+    }
+    assert_eq!(
+        recall_latest_after_clearing(&mut chat),
+        "/implement --max-cycles=1 fix the failing tests"
     );
 }
 

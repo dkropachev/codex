@@ -38,7 +38,10 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
+use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use supports_color::Stream;
 
 mod account_usage;
@@ -48,14 +51,17 @@ mod app_cmd;
 mod desktop_app;
 mod marketplace_cmd;
 mod mcp_cmd;
+mod repo_ci_exec;
 mod repo_ci_learn;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
+use crate::repo_ci_exec::repo_ci_exec_timeout;
+use crate::repo_ci_exec::run_repo_ci_exec_json;
 use crate::repo_ci_learn::learn_repo_ci_with_ai;
-use crate::repo_ci_learn::run_repo_ci_exec_json;
+use crate::repo_ci_learn::normalize_repo_ci_learning_instruction_with_ai;
 
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::LoaderOverrides;
@@ -141,6 +147,10 @@ enum Subcommand {
     #[clap(name = "tool-router")]
     ToolRouter(ToolRouterCli),
 
+    /// Tune and apply model-router metrics.
+    #[clap(name = "model-router")]
+    ModelRouter(ModelRouterCli),
+
     /// Start Codex as an MCP server (stdio).
     McpServer,
 
@@ -199,6 +209,9 @@ enum Subcommand {
     /// Learn and run repository CI checks.
     #[clap(name = "repo-ci")]
     RepoCi(RepoCiCli),
+
+    /// Configure implement review/fix cycles.
+    Implement(ImplementCli),
 }
 
 #[derive(Debug, Parser)]
@@ -212,10 +225,126 @@ struct PluginCli {
 }
 
 #[derive(Debug, Parser)]
+#[command(bin_name = "codex implement")]
+struct ImplementCli {
+    #[command(subcommand)]
+    command: ImplementCommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ImplementCommand {
+    /// Enable automatic implement review/fix cycles.
+    Enable(ImplementActionArgs),
+
+    /// Disable implement review/fix cycles.
+    Disable(ImplementActionArgs),
+
+    /// Enable implement review/fix cycles only for explicit /implement turns.
+    Implicit(ImplementActionArgs),
+}
+
+#[derive(Debug, Args)]
+struct ImplementActionArgs {
+    /// Maximum number of review/fix cycles before surfacing remaining findings.
+    #[arg(long = "max-cycles")]
+    max_cycles: Option<u8>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ImplementConfigMode {
+    Auto,
+    Disabled,
+    Implicit,
+}
+
+#[derive(Debug, Parser)]
 #[command(bin_name = "codex tool-router")]
 struct ToolRouterCli {
     #[command(subcommand)]
     subcommand: ToolRouterSubcommand,
+}
+
+#[derive(Debug, Parser)]
+#[command(bin_name = "codex model-router")]
+struct ModelRouterCli {
+    #[command(subcommand)]
+    subcommand: ModelRouterSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ModelRouterSubcommand {
+    /// Replay historical completed turns and tune router metrics.
+    Tune(ModelRouterTuneCommand),
+
+    /// Show or apply a stored model-router tune report.
+    Report(ModelRouterReportCli),
+}
+
+#[derive(Debug, Parser)]
+#[command(bin_name = "codex model-router report")]
+struct ModelRouterReportCli {
+    #[command(subcommand)]
+    subcommand: ModelRouterReportSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ModelRouterReportSubcommand {
+    /// Print a stored report and show deltas from current state.
+    Show(ModelRouterReportShowCommand),
+
+    /// Apply passing recommendations from a stored report.
+    Apply(ModelRouterReportApplyCommand),
+}
+
+#[derive(Debug, Args)]
+struct ModelRouterTuneCommand {
+    /// Historical rollout window to inspect, such as 30d, 24h, 30m, or all.
+    #[arg(long = "window", default_value = "30d")]
+    window: String,
+
+    /// Maximum evaluation cost budget in USD.
+    #[arg(long = "cost-budget-usd", default_value_t = 10.0)]
+    cost_budget_usd: f64,
+
+    /// Maximum replay and judge token budget.
+    #[arg(long = "token-budget", default_value_t = 1_000_000)]
+    token_budget: i64,
+
+    /// Preview recommendations without writing metric overlays.
+    #[arg(long = "dry-run", default_value_t = false)]
+    dry_run: bool,
+
+    /// Write the JSON report to this path.
+    #[arg(long = "report-out", value_name = "PATH")]
+    report_out: Option<PathBuf>,
+
+    /// Emit the report as JSON.
+    #[arg(long = "json", default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct ModelRouterReportShowCommand {
+    /// Stored report path.
+    path: PathBuf,
+
+    /// Emit the report as JSON.
+    #[arg(long = "json", default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct ModelRouterReportApplyCommand {
+    /// Stored report path.
+    path: PathBuf,
+
+    /// Preview applicable recommendations without writing metric overlays.
+    #[arg(long = "dry-run", default_value_t = false)]
+    dry_run: bool,
+
+    /// Emit the apply outcome as JSON.
+    #[arg(long = "json", default_value_t = false)]
+    json: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -246,7 +375,7 @@ struct ToolRouterTuneCommand {
     #[arg(long = "introspection-model", value_name = "SLUG")]
     introspection_model: Option<String>,
 
-    /// Persist only optimizations whose deterministic tests pass.
+    /// Persist only passing dynamic guidance with positive estimated net savings.
     #[arg(long = "apply", default_value_t = false)]
     apply: bool,
 
@@ -862,6 +991,8 @@ enum RepoCiSubcommand {
     /// Configure whether repo CI runs long local checks.
     #[clap(name = "long-ci")]
     LongCi(RepoCiLongCiCli),
+    /// Configure the repo CI learner instruction blob.
+    Instruction(RepoCiInstructionCli),
 }
 
 #[derive(Debug, Args)]
@@ -896,6 +1027,8 @@ struct RepoCiLearnArgs {
     automation: RepoCiAutomationArg,
     #[arg(long = "local-test-time-budget-sec", default_value_t = 300)]
     local_test_time_budget_sec: u64,
+    #[arg(long = "instruction")]
+    instruction: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -972,6 +1105,37 @@ struct RepoCiLongCiSetArgs {
     scope: RepoCiScopeArgs,
     #[arg(value_enum, default_value_t = RepoCiLongCiArg::On)]
     value: RepoCiLongCiArg,
+}
+
+#[derive(Debug, Parser)]
+#[command(bin_name = "codex repo-ci instruction")]
+struct RepoCiInstructionCli {
+    #[command(subcommand)]
+    sub: RepoCiInstructionSubcommand,
+}
+
+#[derive(Debug, Parser)]
+enum RepoCiInstructionSubcommand {
+    Show(RepoCiInstructionScopeArgs),
+    Set(RepoCiInstructionSetArgs),
+    Clear(RepoCiInstructionScopeArgs),
+    Edit(RepoCiInstructionScopeArgs),
+}
+
+#[derive(Debug, Args)]
+struct RepoCiInstructionScopeArgs {
+    #[arg(long)]
+    cwd: bool,
+    #[arg(value_name = "ORG/REPO")]
+    github_repo: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct RepoCiInstructionSetArgs {
+    #[command(flatten)]
+    scope: RepoCiInstructionScopeArgs,
+    #[arg(long = "instruction")]
+    instruction: String,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -1176,6 +1340,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     run_tool_router_tune_command(cmd, root_config_overrides).await?;
                 }
             }
+        }
+        Some(Subcommand::ModelRouter(model_router_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "model-router",
+            )?;
+            run_model_router_command(model_router_cli, root_config_overrides).await?;
         }
         Some(Subcommand::AppServer(app_server_cli)) => {
             let AppServerCommand {
@@ -1641,6 +1813,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )?;
             run_repo_ci_command(sub, &root_config_overrides).await?;
         }
+        Some(Subcommand::Implement(args)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "implement",
+            )?;
+            run_implement_command(args).await?;
+        }
     }
 
     Ok(())
@@ -1688,6 +1868,75 @@ async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyho
     Ok(())
 }
 
+async fn run_implement_command(args: ImplementCli) -> anyhow::Result<()> {
+    let codex_home = find_codex_home()?;
+    let mut edits = ConfigEditsBuilder::new(&codex_home);
+    let (mode, max_cycles) = match args.command {
+        ImplementCommand::Enable(action_args) => {
+            (ImplementConfigMode::Auto, action_args.max_cycles)
+        }
+        ImplementCommand::Disable(action_args) => {
+            (ImplementConfigMode::Disabled, action_args.max_cycles)
+        }
+        ImplementCommand::Implicit(action_args) => {
+            (ImplementConfigMode::Implicit, action_args.max_cycles)
+        }
+    };
+    match mode {
+        ImplementConfigMode::Auto => {
+            edits = edits.set_path_value(
+                vec!["implement".to_string(), "enabled".to_string()],
+                toml_edit::value(true),
+            );
+            edits = edits.set_path_value(
+                vec!["implement".to_string(), "mode".to_string()],
+                toml_edit::value("auto"),
+            );
+        }
+        ImplementConfigMode::Disabled => {
+            edits = edits.set_path_value(
+                vec!["implement".to_string(), "enabled".to_string()],
+                toml_edit::value(false),
+            );
+        }
+        ImplementConfigMode::Implicit => {
+            edits = edits.set_path_value(
+                vec!["implement".to_string(), "enabled".to_string()],
+                toml_edit::value(true),
+            );
+            edits = edits.set_path_value(
+                vec!["implement".to_string(), "mode".to_string()],
+                toml_edit::value("implicit"),
+            );
+        }
+    }
+    if let Some(max_cycles) = max_cycles {
+        edits = edits.set_path_value(
+            vec!["implement".to_string(), "max_cycles".to_string()],
+            toml_edit::Item::Value(i64::from(max_cycles).into()),
+        );
+    }
+    edits.apply().await?;
+
+    match (mode, max_cycles) {
+        (ImplementConfigMode::Disabled, Some(max_cycles)) => {
+            println!("Disabled implement review/fix cycles and set max_cycles={max_cycles}.");
+        }
+        (ImplementConfigMode::Disabled, None) => println!("Disabled implement review/fix cycles."),
+        (ImplementConfigMode::Implicit, Some(max_cycles)) => {
+            println!("Enabled implicit implement review/fix cycles with max_cycles={max_cycles}.");
+        }
+        (ImplementConfigMode::Implicit, None) => {
+            println!("Enabled implicit implement review/fix cycles.");
+        }
+        (ImplementConfigMode::Auto, Some(max_cycles)) => {
+            println!("Enabled implement review/fix cycles with max_cycles={max_cycles}.");
+        }
+        (ImplementConfigMode::Auto, None) => println!("Enabled implement review/fix cycles."),
+    }
+    Ok(())
+}
+
 async fn run_repo_ci_command(
     sub: RepoCiSubcommand,
     root_config_overrides: &CliConfigOverrides,
@@ -1709,13 +1958,42 @@ async fn run_repo_ci_command(
         RepoCiSubcommand::Learn(args) => {
             let codex_home = find_codex_home()?;
             let cwd = std::env::current_dir()?;
+            let repo_root = codex_repo_ci::repo_root_for_cwd(&cwd)?;
+            let mut learning_instruction = configured_repo_ci_learning_instruction(
+                &codex_home,
+                &repo_ci_current_repo_scope_segments(&repo_root),
+            )?;
+            if let Some(instruction) = args.instruction.as_deref() {
+                let normalized_instruction = normalize_repo_ci_learning_instruction_with_ai(
+                    root_config_overrides,
+                    &repo_root,
+                    instruction,
+                    repo_ci_exec_timeout(args.local_test_time_budget_sec),
+                )
+                .await?;
+                if learning_instruction.as_deref() != Some(normalized_instruction.as_str()) {
+                    persist_repo_ci_learning_instruction(
+                        &codex_home,
+                        &repo_ci_current_repo_scope_segments(&repo_root),
+                        Some(&normalized_instruction),
+                    )
+                    .await?;
+                    learning_instruction = Some(normalized_instruction.clone());
+                    println!("Saved repo CI learner instruction: {normalized_instruction}");
+                } else {
+                    println!(
+                        "Repo CI learner instruction already configured: {normalized_instruction}"
+                    );
+                }
+            }
             let outcome = learn_repo_ci_with_ai(
                 root_config_overrides,
                 &codex_home,
-                &cwd,
+                &repo_root,
                 LearnOptions {
                     automation: args.automation.into(),
                     local_test_time_budget_sec: args.local_test_time_budget_sec,
+                    learning_instruction,
                 },
             )
             .await?;
@@ -1754,13 +2032,19 @@ async fn run_repo_ci_command(
                 .unwrap_or(300);
 
             if status.manifest.is_none() || !status.stale_sources.is_empty() {
+                let repo_root = codex_repo_ci::repo_root_for_cwd(&cwd)?;
+                let learning_instruction = configured_repo_ci_learning_instruction(
+                    &codex_home,
+                    &repo_ci_current_repo_scope_segments(&repo_root),
+                )?;
                 let outcome = learn_repo_ci_with_ai(
                     root_config_overrides,
                     &codex_home,
-                    &cwd,
+                    &repo_root,
                     LearnOptions {
                         automation,
                         local_test_time_budget_sec,
+                        learning_instruction,
                     },
                 )
                 .await?;
@@ -1803,10 +2087,21 @@ async fn run_repo_ci_command(
                         println!("{reason}");
                     }
                     codex_repo_ci::RemoteRepoCiWorkflowStart::Ready(workflow) => {
-                        prepare_repo_ci_remote_commit(root_config_overrides, &cwd).await?;
-                        handle_remote_workflow_outcome(
-                            codex_repo_ci::run_started_remote_workflow(&cwd, &workflow)?,
+                        let owned_paths = codex_repo_ci::remote_commit_changed_paths(&cwd)?;
+                        let commit_decision = repo_ci_remote_commit_decision(
+                            root_config_overrides,
+                            &cwd,
+                            &owned_paths,
+                        )
+                        .await?;
+                        let run = codex_repo_ci::run_started_remote_workflow_with_commit_decision(
+                            &cwd,
+                            &workflow,
+                            commit_decision.as_ref(),
+                            &owned_paths,
                         )?;
+                        print_repo_ci_remote_commit_applied(run.prepared_commit.as_ref());
+                        handle_remote_workflow_outcome(run.outcome)?;
                     }
                 }
             }
@@ -1859,16 +2154,21 @@ async fn run_repo_ci_command(
         RepoCiSubcommand::IssueTypes(issue_types) => repo_ci_issue_types(issue_types).await,
         RepoCiSubcommand::ReviewRounds(review_rounds) => repo_ci_review_rounds(review_rounds).await,
         RepoCiSubcommand::LongCi(long_ci) => repo_ci_long_ci(long_ci).await,
+        RepoCiSubcommand::Instruction(instruction) => {
+            repo_ci_instruction(instruction, root_config_overrides).await
+        }
     }
 }
 
-async fn prepare_repo_ci_remote_commit(
+async fn repo_ci_remote_commit_decision(
     root_config_overrides: &CliConfigOverrides,
     cwd: &std::path::Path,
-) -> anyhow::Result<()> {
+    owned_paths: &[String],
+) -> anyhow::Result<Option<codex_repo_ci::RemoteCommitDecision>> {
     let repo_root = codex_repo_ci::repo_root_for_cwd(cwd)?;
-    let Some(context) = codex_repo_ci::remote_commit_decision_context(&repo_root)? else {
-        return Ok(());
+    let Some(context) = codex_repo_ci::remote_commit_decision_context(&repo_root, owned_paths)?
+    else {
+        return Ok(None);
     };
     let prompt = codex_repo_ci::render_remote_commit_decision_prompt(&context);
     let decision = match run_repo_ci_exec_json::<codex_repo_ci::RemoteCommitDecision>(
@@ -1877,6 +2177,7 @@ async fn prepare_repo_ci_remote_commit(
         &prompt,
         codex_repo_ci::remote_commit_decision_schema(),
         "repo-ci commit decision",
+        repo_ci_exec_timeout(300),
     )
     .await
     {
@@ -1886,23 +2187,27 @@ async fn prepare_repo_ci_remote_commit(
             codex_repo_ci::fallback_remote_commit_decision()
         }
     };
-    if let Some(applied) = codex_repo_ci::apply_remote_commit_decision(&repo_root, &decision)? {
-        match applied.strategy {
-            codex_repo_ci::RemoteCommitStrategy::AmendPriorCommit => {
-                println!("Repo CI amended the prior commit before remote checks.");
-            }
-            codex_repo_ci::RemoteCommitStrategy::SeparateCommit => {
-                println!(
-                    "Repo CI created commit `{}` before remote checks.",
-                    applied
-                        .title
-                        .as_deref()
-                        .unwrap_or("repo-ci: prepare remote retry")
-                );
-            }
+    Ok(Some(decision))
+}
+
+fn print_repo_ci_remote_commit_applied(applied: Option<&codex_repo_ci::RemoteCommitApplied>) {
+    let Some(applied) = applied else {
+        return;
+    };
+    match applied.strategy {
+        codex_repo_ci::RemoteCommitStrategy::AmendPriorCommit => {
+            println!("Repo CI amended the prior commit before remote checks.");
+        }
+        codex_repo_ci::RemoteCommitStrategy::SeparateCommit => {
+            println!(
+                "Repo CI created commit `{}` before remote checks.",
+                applied
+                    .title
+                    .as_deref()
+                    .unwrap_or("repo-ci: prepare remote retry")
+            );
         }
     }
-    Ok(())
 }
 
 fn handle_remote_workflow_outcome(
@@ -2177,6 +2482,330 @@ fn repo_ci_config_item(
     Ok(Some(item.clone()))
 }
 
+fn repo_ci_current_repo_scope_segments(repo_root: &std::path::Path) -> Vec<String> {
+    if let Some(repo) = codex_repo_ci::github_repo_slug(repo_root) {
+        return vec!["repo_ci".to_string(), "github_repos".to_string(), repo];
+    }
+    vec![
+        "repo_ci".to_string(),
+        "directories".to_string(),
+        repo_root.to_string_lossy().to_string(),
+    ]
+}
+
+fn configured_repo_ci_learning_instruction(
+    codex_home: &Path,
+    scope_segments: &[String],
+) -> anyhow::Result<Option<String>> {
+    let singular_segments = append_segment(scope_segments, "learning_instruction");
+    if let Some(item) = repo_ci_config_item(codex_home, &singular_segments)?
+        && let Some(instruction) = repo_ci_learning_instruction_from_item(&item)
+    {
+        return Ok(Some(instruction));
+    }
+
+    let legacy_segments = append_segment(scope_segments, "learning_instructions");
+    let Some(item) = repo_ci_config_item(codex_home, &legacy_segments)? else {
+        return Ok(None);
+    };
+    Ok(repo_ci_learning_instruction_from_item(&item))
+}
+
+fn repo_ci_learning_instruction_from_item(item: &toml_edit::Item) -> Option<String> {
+    if let Some(value) = item.as_str() {
+        return normalize_repo_ci_learning_instruction_blob(value);
+    }
+    item.as_array().and_then(|array| {
+        normalize_repo_ci_learning_instruction_blob(
+            &array
+                .iter()
+                .filter_map(|value| value.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+    })
+}
+
+fn normalize_repo_ci_learning_instruction_blob(value: &str) -> Option<String> {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+async fn persist_repo_ci_learning_instruction(
+    codex_home: &Path,
+    scope_segments: &[String],
+    instruction: Option<&str>,
+) -> anyhow::Result<()> {
+    let instruction = instruction.and_then(normalize_repo_ci_learning_instruction_blob);
+    let builder = ConfigEditsBuilder::new(codex_home)
+        .clear_path(append_segment(scope_segments, "learning_instructions"));
+    let builder = if let Some(instruction) = instruction {
+        builder.set_path_value(
+            append_segment(scope_segments, "learning_instruction"),
+            toml_edit::value(instruction),
+        )
+    } else {
+        builder.clear_path(append_segment(scope_segments, "learning_instruction"))
+    };
+    builder.apply().await
+}
+
+#[derive(Debug)]
+struct ResolvedRepoCiInstructionScope {
+    label: String,
+    segments: Vec<String>,
+    local_repo_root: Option<PathBuf>,
+}
+
+async fn repo_ci_instruction(
+    instruction: RepoCiInstructionCli,
+    root_config_overrides: &CliConfigOverrides,
+) -> anyhow::Result<()> {
+    match instruction.sub {
+        RepoCiInstructionSubcommand::Show(scope) => {
+            let codex_home = find_codex_home()?;
+            let resolved = repo_ci_instruction_scope(&scope)?;
+            let current = configured_repo_ci_learning_instruction(&codex_home, &resolved.segments)?;
+            print_repo_ci_instruction("Current", &resolved, current.as_deref());
+            Ok(())
+        }
+        RepoCiInstructionSubcommand::Set(args) => {
+            let codex_home = find_codex_home()?;
+            let resolved = repo_ci_instruction_scope(&args.scope)?;
+            let old = configured_repo_ci_learning_instruction(&codex_home, &resolved.segments)?;
+            let new = normalize_repo_ci_learning_instruction_blob(&args.instruction);
+            persist_repo_ci_learning_instruction(&codex_home, &resolved.segments, new.as_deref())
+                .await?;
+            print_repo_ci_instruction_change(&resolved, old.as_deref(), new.as_deref());
+            repo_ci_relearn_for_instruction_scope(
+                root_config_overrides,
+                &codex_home,
+                resolved.local_repo_root.as_deref(),
+            )
+            .await
+        }
+        RepoCiInstructionSubcommand::Clear(scope) => {
+            let codex_home = find_codex_home()?;
+            let resolved = repo_ci_instruction_scope(&scope)?;
+            let old = configured_repo_ci_learning_instruction(&codex_home, &resolved.segments)?;
+            persist_repo_ci_learning_instruction(&codex_home, &resolved.segments, None).await?;
+            print_repo_ci_instruction_change(&resolved, old.as_deref(), None);
+            repo_ci_relearn_for_instruction_scope(
+                root_config_overrides,
+                &codex_home,
+                resolved.local_repo_root.as_deref(),
+            )
+            .await
+        }
+        RepoCiInstructionSubcommand::Edit(scope) => {
+            let codex_home = find_codex_home()?;
+            let resolved = repo_ci_instruction_scope(&scope)?;
+            let old = configured_repo_ci_learning_instruction(&codex_home, &resolved.segments)?;
+            let Some(edited) = edit_repo_ci_instruction(old.as_deref())? else {
+                println!("Repo CI learner instruction unchanged.");
+                return Ok(());
+            };
+            let new = normalize_repo_ci_learning_instruction_blob(&edited);
+            persist_repo_ci_learning_instruction(&codex_home, &resolved.segments, new.as_deref())
+                .await?;
+            print_repo_ci_instruction_change(&resolved, old.as_deref(), new.as_deref());
+            repo_ci_relearn_for_instruction_scope(
+                root_config_overrides,
+                &codex_home,
+                resolved.local_repo_root.as_deref(),
+            )
+            .await
+        }
+    }
+}
+
+fn repo_ci_instruction_scope(
+    scope: &RepoCiInstructionScopeArgs,
+) -> anyhow::Result<ResolvedRepoCiInstructionScope> {
+    let specified = (scope.cwd as usize) + (scope.github_repo.is_some() as usize);
+    if specified != 1 {
+        anyhow::bail!("choose exactly one repo CI instruction scope: --cwd or org/repo");
+    }
+    if scope.cwd {
+        let cwd = std::env::current_dir()?;
+        let repo_root = codex_repo_ci::repo_root_for_cwd(&cwd)?;
+        let label = repo_ci_current_repo_label(&repo_root);
+        return Ok(ResolvedRepoCiInstructionScope {
+            label,
+            segments: repo_ci_current_repo_scope_segments(&repo_root),
+            local_repo_root: Some(repo_root),
+        });
+    }
+    let Some(repo) = scope.github_repo.as_ref() else {
+        anyhow::bail!("choose exactly one repo CI instruction scope: --cwd or org/repo");
+    };
+    validate_github_repo_scope(repo)?;
+    Ok(ResolvedRepoCiInstructionScope {
+        label: format!("GitHub repo `{repo}`"),
+        segments: vec![
+            "repo_ci".to_string(),
+            "github_repos".to_string(),
+            repo.to_string(),
+        ],
+        local_repo_root: current_repo_root_if_github_repo(repo),
+    })
+}
+
+fn validate_github_repo_scope(repo: &str) -> anyhow::Result<()> {
+    let mut parts = repo.split('/');
+    let valid = parts.next().is_some_and(|part| !part.is_empty())
+        && parts.next().is_some_and(|part| !part.is_empty())
+        && parts.next().is_none();
+    if !valid {
+        anyhow::bail!("repo CI instruction scope must be `org/repo`");
+    }
+    Ok(())
+}
+
+fn current_repo_root_if_github_repo(repo: &str) -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    let repo_root = codex_repo_ci::repo_root_for_cwd(&cwd).ok()?;
+    (codex_repo_ci::github_repo_slug(&repo_root).as_deref() == Some(repo)).then_some(repo_root)
+}
+
+fn repo_ci_current_repo_label(repo_root: &Path) -> String {
+    codex_repo_ci::github_repo_slug(repo_root)
+        .map(|repo| format!("GitHub repo `{repo}`"))
+        .unwrap_or_else(|| format!("directory `{}`", repo_root.display()))
+}
+
+fn print_repo_ci_instruction(
+    label: &str,
+    scope: &ResolvedRepoCiInstructionScope,
+    instruction: Option<&str>,
+) {
+    println!("Scope: {}", scope.label);
+    match instruction {
+        Some(instruction) => println!("{label} instruction: {instruction}"),
+        None => println!("{label} instruction: not configured"),
+    }
+}
+
+fn print_repo_ci_instruction_change(
+    scope: &ResolvedRepoCiInstructionScope,
+    old: Option<&str>,
+    new: Option<&str>,
+) {
+    println!("Scope: {}", scope.label);
+    println!("Old instruction: {}", old.unwrap_or("not configured"));
+    println!("New instruction: {}", new.unwrap_or("not configured"));
+}
+
+async fn repo_ci_relearn_for_instruction_scope(
+    root_config_overrides: &CliConfigOverrides,
+    codex_home: &Path,
+    repo_root: Option<&Path>,
+) -> anyhow::Result<()> {
+    let Some(repo_root) = repo_root else {
+        println!(
+            "Repo CI learner instruction saved. Relearn skipped because no matching local repository is available."
+        );
+        return Ok(());
+    };
+    let status = codex_repo_ci::status(codex_home, repo_root)?;
+    let automation = status
+        .manifest
+        .as_ref()
+        .map(|manifest| manifest.automation)
+        .unwrap_or(codex_repo_ci::AutomationMode::LocalAndRemote);
+    let local_test_time_budget_sec = status
+        .manifest
+        .as_ref()
+        .map(|manifest| manifest.local_test_time_budget_sec)
+        .unwrap_or(300);
+    let learning_instruction = configured_repo_ci_learning_instruction(
+        codex_home,
+        &repo_ci_current_repo_scope_segments(repo_root),
+    )?;
+    let outcome = learn_repo_ci_with_ai(
+        root_config_overrides,
+        codex_home,
+        repo_root,
+        LearnOptions {
+            automation,
+            local_test_time_budget_sec,
+            learning_instruction,
+        },
+    )
+    .await?;
+    println!("Learned repo CI for {}", outcome.paths.repo_root.display());
+    println!(
+        "Validation: {}",
+        repo_ci_validation_label(&outcome.manifest.validation)
+    );
+    if matches!(
+        outcome.manifest.validation,
+        codex_repo_ci::ValidationStatus::Passed { .. }
+    ) {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "learned repo CI runner did not validate cleanly (exit code {:?})",
+            outcome.validation_exit_code
+        )
+    }
+}
+
+fn edit_repo_ci_instruction(current: Option<&str>) -> anyhow::Result<Option<String>> {
+    let editor = std::env::var("VISUAL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("EDITOR")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "repo CI instruction edit requires $VISUAL or $EDITOR; use `codex repo-ci instruction set --instruction ...` instead"
+            )
+        })?;
+    let mut file = tempfile::Builder::new()
+        .prefix("codex-repo-ci-instruction-")
+        .suffix(".txt")
+        .tempfile()?;
+    if let Some(current) = current {
+        writeln!(file, "{current}")?;
+    }
+    run_editor(&editor, file.path())?;
+    let edited = std::fs::read_to_string(file.path())?;
+    let edited = normalize_repo_ci_learning_instruction_blob(&edited).unwrap_or_default();
+    if current
+        .and_then(normalize_repo_ci_learning_instruction_blob)
+        .as_deref()
+        == Some(edited.as_str())
+    {
+        Ok(None)
+    } else {
+        Ok(Some(edited))
+    }
+}
+
+fn run_editor(editor: &str, path: &Path) -> anyhow::Result<()> {
+    let status = if cfg!(windows) {
+        std::process::Command::new("cmd")
+            .arg("/C")
+            .arg(format!("{editor} \"{}\"", path.display()))
+            .status()?
+    } else {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("{editor} \"$@\""))
+            .arg("codex-repo-ci-instruction-editor")
+            .arg(path)
+            .status()?
+    };
+    if !status.success() {
+        anyhow::bail!("repo CI instruction editor exited with {status}");
+    }
+    Ok(())
+}
+
 fn repo_ci_scope_segments(scope: &RepoCiScopeArgs) -> anyhow::Result<Vec<String>> {
     let specified = [
         scope.global,
@@ -2416,6 +3045,28 @@ async fn run_tool_router_tune_command(
     };
     let state_db =
         StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone()).await?;
+    let introspection_provider = if cmd.introspection_model.is_some() {
+        let auth_manager =
+            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true);
+        let models_manager = build_models_manager(
+            &config,
+            Arc::clone(&auth_manager),
+            CollaborationModesConfig::default(),
+        );
+        Some(Arc::new(
+            codex_core::tool_router_tune::ToolRouterModelIntrospectionProvider::new(
+                config.clone(),
+                auth_manager,
+                models_manager,
+            )
+            .await?,
+        )
+            as Arc<
+                dyn codex_core::tool_router_tune::ToolRouterIntrospectionProvider,
+            >)
+    } else {
+        None
+    };
     let report = codex_core::tool_router_tune::tune_tool_router(
         state_db.as_ref(),
         codex_core::tool_router_tune::ToolRouterTuneOptions {
@@ -2423,6 +3074,7 @@ async fn run_tool_router_tune_command(
             model_slug,
             max_guidance_tokens: cmd.max_guidance_tokens,
             introspection_model: cmd.introspection_model,
+            introspection_provider,
             apply: cmd.apply,
         },
     )
@@ -2438,40 +3090,318 @@ async fn run_tool_router_tune_command(
     Ok(())
 }
 
-fn print_tool_router_tune_report(report: &codex_core::tool_router_tune::ToolRouterTuneReport) {
-    let mode = if report.apply { "apply" } else { "dry-run" };
-    println!("Tool router tune ({mode})");
+async fn run_model_router_command(
+    cli: ModelRouterCli,
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<()> {
+    match cli.subcommand {
+        ModelRouterSubcommand::Tune(cmd) => {
+            run_model_router_tune_command(cmd, root_config_overrides).await
+        }
+        ModelRouterSubcommand::Report(report_cli) => match report_cli.subcommand {
+            ModelRouterReportSubcommand::Show(cmd) => {
+                run_model_router_report_show_command(cmd, root_config_overrides).await
+            }
+            ModelRouterReportSubcommand::Apply(cmd) => {
+                run_model_router_report_apply_command(cmd, root_config_overrides).await
+            }
+        },
+    }
+}
+
+async fn model_router_config_and_state(
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<(Config, std::sync::Arc<StateRuntime>)> {
+    let cli_overrides = root_config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let config = Config::load_with_cli_overrides(cli_overrides).await?;
+    let state_db =
+        StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone()).await?;
+    Ok((config, state_db))
+}
+
+async fn run_model_router_tune_command(
+    cmd: ModelRouterTuneCommand,
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let (config, state_db) = model_router_config_and_state(root_config_overrides).await?;
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true);
+    let models_manager = build_models_manager(
+        &config,
+        auth_manager.clone(),
+        CollaborationModesConfig::default(),
+    );
+    let tune_runtime =
+        codex_core::model_router_tune::ModelRouterTuneRuntime::new(auth_manager, models_manager);
+    let report = codex_core::model_router_tune::tune_model_router(
+        state_db.as_ref(),
+        &config,
+        codex_core::model_router_tune::ModelRouterTuneOptions {
+            window: cmd.window,
+            cost_budget_usd: cmd.cost_budget_usd,
+            token_budget: cmd.token_budget,
+            dry_run: cmd.dry_run,
+        },
+        Some(tune_runtime),
+    )
+    .await?;
+    if let Some(report_out) = cmd.report_out {
+        let json = serde_json::to_string_pretty(&report)?;
+        tokio::fs::write(report_out, format!("{json}\n")).await?;
+    }
+    if cmd.json {
+        serde_json::to_writer_pretty(std::io::stdout(), &report)?;
+        println!();
+    } else {
+        print_model_router_tune_report(&report);
+    }
+    Ok(())
+}
+
+async fn run_model_router_report_show_command(
+    cmd: ModelRouterReportShowCommand,
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let (config, state_db) = model_router_config_and_state(root_config_overrides).await?;
+    let mut report = read_model_router_report(&cmd.path).await?;
+    codex_core::model_router_tune::refresh_model_router_report_deltas(
+        state_db.as_ref(),
+        &config,
+        &mut report,
+    )
+    .await?;
+    if cmd.json {
+        serde_json::to_writer_pretty(std::io::stdout(), &report)?;
+        println!();
+    } else {
+        print_model_router_tune_report(&report);
+    }
+    Ok(())
+}
+
+async fn run_model_router_report_apply_command(
+    cmd: ModelRouterReportApplyCommand,
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let (config, state_db) = model_router_config_and_state(root_config_overrides).await?;
+    let report = read_model_router_report(&cmd.path).await?;
+    let outcome = codex_core::model_router_tune::apply_model_router_tune_report(
+        state_db.as_ref(),
+        &config,
+        report,
+        cmd.dry_run,
+    )
+    .await?;
+    if cmd.json {
+        serde_json::to_writer_pretty(std::io::stdout(), &outcome)?;
+        println!();
+    } else {
+        let mode = if outcome.dry_run { "dry-run" } else { "apply" };
+        println!(
+            "Model router report {mode}: {} recommendation(s)",
+            outcome.applied_recommendations
+        );
+        print_model_router_tune_report(&outcome.report);
+    }
+    Ok(())
+}
+
+async fn read_model_router_report(
+    path: &PathBuf,
+) -> anyhow::Result<codex_core::model_router_tune::ModelRouterTuneReport> {
+    let text = tokio::fs::read_to_string(path).await?;
+    Ok(serde_json::from_str(&text)?)
+}
+
+fn print_model_router_tune_report(report: &codex_core::model_router_tune::ModelRouterTuneReport) {
+    println!("Model router tune report");
+    println!("Run: {}", report.run_id);
+    println!("Generated: {}", report.generated_at);
     println!("Window: {}", report.window);
     println!(
-        "Introspection tokens: prompt {}, completion {}, total {}",
-        report.introspection_tokens.prompt_tokens,
-        report.introspection_tokens.completion_tokens,
-        report.introspection_tokens.total_tokens
+        "Budget: {} tokens, ${:.6} cost; used {} tokens, ${:.6}",
+        report.budget.token_budget,
+        report.budget.cost_budget_usd_micros as f64 / 1_000_000.0,
+        report.budget_used.tokens_used,
+        report.budget_used.cost_used_usd_micros as f64 / 1_000_000.0
     );
     println!(
+        "Cases: evaluated {}, skipped {}",
+        report.evaluated_count, report.skipped_count
+    );
+    if !report.apply_eligibility.eligible {
+        println!(
+            "Apply eligibility: refused ({})",
+            report
+                .apply_eligibility
+                .reason
+                .as_deref()
+                .unwrap_or("unknown reason")
+        );
+    }
+    if report.recommendations.is_empty() {
+        println!("No recommendations found.");
+        return;
+    }
+    println!("Recommendations:");
+    for recommendation in &report.recommendations {
+        println!(
+            "- {}: confidence {:.2}, passing {}, eligible {}, applied {}",
+            recommendation.candidate_identity_key,
+            recommendation.confidence,
+            recommendation.passing,
+            recommendation.apply_eligible,
+            recommendation.applied
+        );
+        for change in &recommendation.changes {
+            println!(
+                "  {}: {} {:?} -> {} ({:?}, eligible {})",
+                model_router_metric_name(change.metric),
+                model_router_metric_source(change.current_source),
+                change.current_value,
+                model_router_metric_value(change.proposed_value),
+                change.action,
+                change.apply_eligible
+            );
+        }
+    }
+}
+
+fn model_router_metric_name(
+    metric: codex_core::model_router_tune::ModelRouterMetricName,
+) -> &'static str {
+    match metric {
+        codex_core::model_router_tune::ModelRouterMetricName::IntelligenceScore => {
+            "intelligence_score"
+        }
+        codex_core::model_router_tune::ModelRouterMetricName::SuccessRate => "success_rate",
+        codex_core::model_router_tune::ModelRouterMetricName::MedianLatencyMs => {
+            "median_latency_ms"
+        }
+        codex_core::model_router_tune::ModelRouterMetricName::EstimatedCostUsdMicros => {
+            "estimated_cost_usd_micros"
+        }
+    }
+}
+
+fn model_router_metric_source(
+    source: codex_core::model_router_tune::ModelRouterMetricSource,
+) -> &'static str {
+    match source {
+        codex_core::model_router_tune::ModelRouterMetricSource::ExplicitToml => "explicit",
+        codex_core::model_router_tune::ModelRouterMetricSource::AppliedOverlay => "overlay",
+        codex_core::model_router_tune::ModelRouterMetricSource::Missing => "missing",
+    }
+}
+
+fn model_router_metric_value(
+    value: Option<codex_core::model_router_tune::ModelRouterMetricValue>,
+) -> String {
+    match value {
+        Some(codex_core::model_router_tune::ModelRouterMetricValue::Score(value)) => {
+            format!("{value:.3}")
+        }
+        Some(codex_core::model_router_tune::ModelRouterMetricValue::Millis(value)) => {
+            format!("{value}ms")
+        }
+        Some(codex_core::model_router_tune::ModelRouterMetricValue::UsdMicros(value)) => {
+            format!("${:.6}", value as f64 / 1_000_000.0)
+        }
+        None => "none".to_string(),
+    }
+}
+
+fn print_tool_router_tune_report(report: &codex_core::tool_router_tune::ToolRouterTuneReport) {
+    print!("{}", format_tool_router_tune_report(report));
+}
+
+fn format_tool_router_tune_report(
+    report: &codex_core::tool_router_tune::ToolRouterTuneReport,
+) -> String {
+    let mode = if report.apply { "apply" } else { "dry-run" };
+    let mut output = String::new();
+    output.push_str(&format!("Tool router tune ({mode})\n"));
+    output.push_str(&format!("Window: {}\n", report.window));
+    if let Some(model) = &report.introspection_model {
+        output.push_str(&format!(
+            "Introspection: {model} (prompt {}, completion {}, total {})\n",
+            report.introspection_tokens.prompt_tokens,
+            report.introspection_tokens.completion_tokens,
+            report.introspection_tokens.total_tokens
+        ));
+    } else {
+        output.push_str("Introspection: disabled\n");
+    }
+    output.push_str(&format!(
         "Schema/format tokens: visible router {}, hidden tools {}, format {}",
         report.schema_format_tokens.visible_router_schema_tokens,
         report.schema_format_tokens.hidden_tool_schema_tokens,
         report.schema_format_tokens.format_description_tokens
-    );
+    ));
+    output.push('\n');
     if report.optimizations.is_empty() {
-        println!("No optimizations found.");
-        return;
+        output.push_str("No optimizations found.\n");
+        return output;
     }
-    println!("Optimizations:");
+    output.push_str("Optimizations:\n");
     for optimization in &report.optimizations {
-        println!(
-            "- {} [{}]: calls {}, guidance {} -> {}, gross {}, net {}, persisted {}",
+        output.push_str(&format!(
+            "- {} [{}]: model {} via {}, toolset {}, calls {} (fallbacks {}, errors {}), guidance {} -> {}, gross {}, guidance-cost {}, net {}, persisted {}\n",
             tool_router_optimization_name(optimization.optimization_type),
             tool_router_test_status_name(optimization.test_status),
+            optimization.model_slug,
+            optimization.model_provider,
+            optimization.toolset_hash,
             optimization.affected_call_count,
+            optimization.fallback_call_count,
+            optimization.invalid_route_errors,
             optimization.guidance_tokens_before,
             optimization.guidance_tokens_after,
             optimization.gross_savings_tokens,
+            optimization.guidance_delta_cost_tokens,
             optimization.net_savings_tokens,
             optimization.persisted
-        );
+        ));
+        output.push_str(&format!(
+            "  route kinds: {}\n",
+            format_tool_router_counts(&optimization.route_kind_breakdown)
+        ));
+        output.push_str(&format!(
+            "  selected tools: {}\n",
+            format_tool_router_counts(&optimization.selected_tool_breakdown)
+        ));
+        output.push_str(&format!(
+            "  fallback tools: {}\n",
+            format_tool_router_counts(&optimization.fallback_tool_breakdown)
+        ));
+        output.push_str(&format!(
+            "  outcomes: {}\n",
+            format_tool_router_counts(&optimization.outcome_breakdown)
+        ));
+        output.push_str(&format!(
+            "  learned rule hits: {}\n",
+            optimization.learned_rule_hits
+        ));
+        output.push_str(&format!(
+            "  error outcomes: {}\n",
+            format_tool_router_counts(&optimization.error_outcome_breakdown)
+        ));
+        output.push_str(&format!("  guidance: {}\n", optimization.message));
     }
+    output
+}
+
+fn format_tool_router_counts(counts: &[codex_state::ToolRouterTuneCount]) -> String {
+    if counts.is_empty() {
+        return "none".to_string();
+    }
+    counts
+        .iter()
+        .map(|count| format!("{}={}", count.name, count.count))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn tool_router_optimization_name(
@@ -3082,6 +4012,180 @@ mod tests {
         .expect_err("conflicting model selection flags should be rejected");
 
         assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn tool_router_tune_text_report_includes_diagnostics() {
+        use codex_core::tool_router_tune::ToolRouterOptimizationReport;
+        use codex_core::tool_router_tune::ToolRouterOptimizationTestStatus;
+        use codex_core::tool_router_tune::ToolRouterOptimizationType;
+        use codex_core::tool_router_tune::ToolRouterSchemaFormatTokens;
+        use codex_core::tool_router_tune::ToolRouterTuneReport;
+        use codex_core::tool_router_tune::ToolRouterTuneTokenUsage;
+
+        let report = ToolRouterTuneReport {
+            window: "24h".to_string(),
+            apply: false,
+            introspection_model: None,
+            introspection_tokens: ToolRouterTuneTokenUsage::default(),
+            schema_format_tokens: ToolRouterSchemaFormatTokens {
+                visible_router_schema_tokens: 10,
+                hidden_tool_schema_tokens: 20,
+                format_description_tokens: 30,
+            },
+            optimizations: vec![ToolRouterOptimizationReport {
+                optimization_type: ToolRouterOptimizationType::DynamicGuidance,
+                model_slug: "gpt-test".to_string(),
+                model_provider: "openai".to_string(),
+                toolset_hash: "abc123".to_string(),
+                router_schema_version: 1,
+                guidance_version: 2,
+                guidance_tokens_before: 5,
+                guidance_tokens_after: 8,
+                fallback_call_count: 2,
+                invalid_route_errors: 1,
+                affected_call_count: 3,
+                route_kind_breakdown: vec![codex_state::ToolRouterTuneCount {
+                    name: "spark".to_string(),
+                    count: 2,
+                }],
+                selected_tool_breakdown: vec![codex_state::ToolRouterTuneCount {
+                    name: "exec_command".to_string(),
+                    count: 2,
+                }],
+                fallback_tool_breakdown: vec![codex_state::ToolRouterTuneCount {
+                    name: "exec_command".to_string(),
+                    count: 2,
+                }],
+                outcome_breakdown: vec![codex_state::ToolRouterTuneCount {
+                    name: "route_error".to_string(),
+                    count: 1,
+                }],
+                error_outcome_breakdown: vec![codex_state::ToolRouterTuneCount {
+                    name: "route_error".to_string(),
+                    count: 1,
+                }],
+                learned_rule_hits: 0,
+                request_shape_clusters: Vec::new(),
+                per_call_estimated_savings_tokens: 12,
+                gross_savings_tokens: 24,
+                guidance_delta_cost_tokens: 9,
+                allocated_introspection_tokens: 0,
+                net_savings_tokens: 15,
+                test_status: ToolRouterOptimizationTestStatus::Passing,
+                persisted: false,
+                message: "Prefer exact routes.".to_string(),
+            }],
+        };
+
+        let output = format_tool_router_tune_report(&report);
+
+        assert!(output.contains("Introspection: disabled"));
+        assert!(output.contains("model gpt-test via openai, toolset abc123"));
+        assert!(output.contains("fallbacks 2, errors 1"));
+        assert!(output.contains("selected tools: exec_command=2"));
+        assert!(output.contains("guidance: Prefer exact routes."));
+    }
+
+    #[test]
+    fn model_router_tune_parses_flags_and_defaults_to_apply() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "model-router",
+            "tune",
+            "--window",
+            "24h",
+            "--cost-budget-usd",
+            "7.50",
+            "--token-budget",
+            "12345",
+            "--report-out",
+            "/tmp/model-router-report.json",
+            "--json",
+        ])
+        .expect("parse");
+
+        let Some(Subcommand::ModelRouter(ModelRouterCli {
+            subcommand: ModelRouterSubcommand::Tune(cmd),
+        })) = cli.subcommand
+        else {
+            panic!("expected model-router tune subcommand");
+        };
+
+        assert_eq!(cmd.window, "24h");
+        assert_eq!(cmd.cost_budget_usd, 7.50);
+        assert_eq!(cmd.token_budget, 12345);
+        assert_eq!(
+            cmd.report_out,
+            Some(PathBuf::from("/tmp/model-router-report.json"))
+        );
+        assert!(!cmd.dry_run);
+        assert!(cmd.json);
+    }
+
+    #[test]
+    fn model_router_tune_dry_run_parses() {
+        let cli = MultitoolCli::try_parse_from(["codex", "model-router", "tune", "--dry-run"])
+            .expect("parse");
+
+        let Some(Subcommand::ModelRouter(ModelRouterCli {
+            subcommand: ModelRouterSubcommand::Tune(cmd),
+        })) = cli.subcommand
+        else {
+            panic!("expected model-router tune subcommand");
+        };
+
+        assert_eq!(cmd.window, "30d");
+        assert_eq!(cmd.cost_budget_usd, 10.0);
+        assert_eq!(cmd.token_budget, 1_000_000);
+        assert!(cmd.dry_run);
+    }
+
+    #[test]
+    fn model_router_report_show_and_apply_parse() {
+        let show = MultitoolCli::try_parse_from([
+            "codex",
+            "model-router",
+            "report",
+            "show",
+            "/tmp/report.json",
+            "--json",
+        ])
+        .expect("parse show");
+        let Some(Subcommand::ModelRouter(ModelRouterCli {
+            subcommand:
+                ModelRouterSubcommand::Report(ModelRouterReportCli {
+                    subcommand: ModelRouterReportSubcommand::Show(show),
+                }),
+        })) = show.subcommand
+        else {
+            panic!("expected model-router report show subcommand");
+        };
+        assert_eq!(show.path, PathBuf::from("/tmp/report.json"));
+        assert!(show.json);
+
+        let apply = MultitoolCli::try_parse_from([
+            "codex",
+            "model-router",
+            "report",
+            "apply",
+            "/tmp/report.json",
+            "--dry-run",
+            "--json",
+        ])
+        .expect("parse apply");
+        let Some(Subcommand::ModelRouter(ModelRouterCli {
+            subcommand:
+                ModelRouterSubcommand::Report(ModelRouterReportCli {
+                    subcommand: ModelRouterReportSubcommand::Apply(apply),
+                }),
+        })) = apply.subcommand
+        else {
+            panic!("expected model-router report apply subcommand");
+        };
+        assert_eq!(apply.path, PathBuf::from("/tmp/report.json"));
+        assert!(apply.dry_run);
+        assert!(apply.json);
     }
 
     #[test]
@@ -3790,6 +4894,46 @@ mod tests {
     }
 
     #[test]
+    fn implement_parses_enable_and_max_cycles() {
+        let cli = MultitoolCli::try_parse_from(["codex", "implement", "enable", "--max-cycles=4"])
+            .expect("parse should succeed");
+        let Some(Subcommand::Implement(args)) = cli.subcommand else {
+            panic!("expected implement subcommand");
+        };
+        let ImplementCommand::Enable(action_args) = args.command else {
+            panic!("expected implement enable command");
+        };
+        assert_eq!(action_args.max_cycles, Some(4));
+    }
+
+    #[test]
+    fn implement_parses_implicit_and_max_cycles() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "implement", "implicit", "--max-cycles=2"])
+                .expect("parse should succeed");
+        let Some(Subcommand::Implement(args)) = cli.subcommand else {
+            panic!("expected implement subcommand");
+        };
+        let ImplementCommand::Implicit(action_args) = args.command else {
+            panic!("expected implement implicit command");
+        };
+        assert_eq!(action_args.max_cycles, Some(2));
+    }
+
+    #[test]
+    fn implement_parses_disable() {
+        let cli = MultitoolCli::try_parse_from(["codex", "implement", "disable"])
+            .expect("parse should succeed");
+        let Some(Subcommand::Implement(args)) = cli.subcommand else {
+            panic!("expected implement subcommand");
+        };
+        let ImplementCommand::Disable(action_args) = args.command else {
+            panic!("expected implement disable command");
+        };
+        assert_eq!(action_args.max_cycles, None);
+    }
+
+    #[test]
     fn repo_ci_long_ci_set_parses() {
         let cli =
             MultitoolCli::try_parse_from(["codex", "repo-ci", "long-ci", "set", "--global", "on"])
@@ -3805,6 +4949,64 @@ mod tests {
         };
         assert!(args.scope.global);
         assert!(args.value.as_bool());
+    }
+
+    #[test]
+    fn repo_ci_instruction_show_parses_cwd_scope() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "repo-ci", "instruction", "show", "--cwd"])
+                .expect("parse should succeed");
+        let Some(Subcommand::RepoCi(RepoCiCli { sub })) = cli.subcommand else {
+            panic!("expected repo-ci subcommand");
+        };
+        let RepoCiSubcommand::Instruction(RepoCiInstructionCli {
+            sub: RepoCiInstructionSubcommand::Show(args),
+        }) = sub
+        else {
+            panic!("expected repo-ci instruction show");
+        };
+        assert!(args.cwd);
+        assert_eq!(args.github_repo, None);
+    }
+
+    #[test]
+    fn repo_ci_instruction_set_parses_explicit_repo_scope() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "repo-ci",
+            "instruction",
+            "set",
+            "openai/codex",
+            "--instruction",
+            "Use nextest.",
+        ])
+        .expect("parse should succeed");
+        let Some(Subcommand::RepoCi(RepoCiCli { sub })) = cli.subcommand else {
+            panic!("expected repo-ci subcommand");
+        };
+        let RepoCiSubcommand::Instruction(RepoCiInstructionCli {
+            sub: RepoCiInstructionSubcommand::Set(args),
+        }) = sub
+        else {
+            panic!("expected repo-ci instruction set");
+        };
+        assert!(!args.scope.cwd);
+        assert_eq!(args.scope.github_repo.as_deref(), Some("openai/codex"));
+        assert_eq!(args.instruction, "Use nextest.");
+    }
+
+    #[test]
+    fn repo_ci_instruction_scope_rejects_cwd_and_repo() {
+        let err = repo_ci_instruction_scope(&RepoCiInstructionScopeArgs {
+            cwd: true,
+            github_repo: Some("openai/codex".to_string()),
+        })
+        .expect_err("ambiguous scope should fail");
+
+        assert!(
+            err.to_string()
+                .contains("choose exactly one repo CI instruction scope")
+        );
     }
 
     #[test]

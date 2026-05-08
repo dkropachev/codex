@@ -1206,6 +1206,78 @@
             },
             "method": {
               "enum": [
+                "thread/codexConfigIntent/submit"
+              ],
+              "title": "Thread/codexConfigIntent/submitRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadCodexConfigIntentSubmitParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/codexConfigIntent/submitRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "repoCiLearningInstruction/read"
+              ],
+              "title": "RepoCiLearningInstruction/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/RepoCiLearningInstructionReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "RepoCiLearningInstruction/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "repoCiLearningInstruction/write"
+              ],
+              "title": "RepoCiLearningInstruction/writeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/RepoCiLearningInstructionWriteParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "RepoCiLearningInstruction/writeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/modelRouterSessionConfig/set"
               ],
               "title": "Thread/modelRouterSessionConfig/setRequestMethod",
@@ -6545,6 +6617,13 @@
       ],
       "type": "string"
     },
+    "ImplementMode": {
+      "enum": [
+        "auto",
+        "implicit"
+      ],
+      "type": "string"
+    },
     "InitializeCapabilities": {
       "description": "Client-declared capabilities negotiated during initialize.",
       "properties": {
@@ -7659,6 +7738,7 @@
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
+        "codex",
         "default"
       ],
       "type": "string"
@@ -9378,6 +9458,97 @@
         "uxConfigCli"
       ],
       "type": "string"
+    },
+    "RepoCiLearningInstructionReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "scope": {
+          "$ref": "#/definitions/RepoCiLearningInstructionScopeParams"
+        }
+      },
+      "required": [
+        "scope"
+      ],
+      "title": "RepoCiLearningInstructionReadParams",
+      "type": "object"
+    },
+    "RepoCiLearningInstructionReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "instruction": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope"
+      ],
+      "title": "RepoCiLearningInstructionReadResponse",
+      "type": "object"
+    },
+    "RepoCiLearningInstructionScopeParams": {
+      "properties": {
+        "cwd": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "githubRepo": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "RepoCiLearningInstructionWriteParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "instruction": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/definitions/RepoCiLearningInstructionScopeParams"
+        }
+      },
+      "required": [
+        "instruction",
+        "scope"
+      ],
+      "title": "RepoCiLearningInstructionWriteParams",
+      "type": "object"
+    },
+    "RepoCiLearningInstructionWriteResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "newInstruction": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "oldInstruction": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope"
+      ],
+      "title": "RepoCiLearningInstructionWriteResponse",
+      "type": "object"
     },
     "RepoCiSessionMode": {
       "enum": [
@@ -12537,6 +12708,34 @@
       "title": "ThreadClosedNotification",
       "type": "object"
     },
+    "ThreadCodexConfigIntentSubmitParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "context": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "intent": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "intent",
+        "threadId"
+      ],
+      "title": "ThreadCodexConfigIntentSubmitParams",
+      "type": "object"
+    },
+    "ThreadCodexConfigIntentSubmitResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadCodexConfigIntentSubmitResponse",
+      "type": "object"
+    },
     "ThreadCompactStartParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -14110,6 +14309,40 @@
     "ThreadRepoCiSessionConfigSetParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "implementEnabled": {
+          "description": "Omit to leave unchanged; null clears the session override and returns to repo/user config.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "implementMaxCycles": {
+          "description": "Omit to leave unchanged; null clears the session override and returns to repo/user config.",
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "implementMode": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImplementMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Omit to leave unchanged; null clears the session override and returns to repo/user config."
+        },
         "issueTypes": {
           "description": "Omit to leave unchanged; null clears the session override and returns to repo/user config.",
           "items": {
@@ -15312,6 +15545,37 @@
     },
     "TurnRepoCiConfigParams": {
       "properties": {
+        "implementEnabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "implementMaxCycles": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "implementMode": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImplementMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "issueTypes": {
           "items": {
             "$ref": "#/definitions/RepoCiIssueType"

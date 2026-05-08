@@ -1,6 +1,13 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "ImplementMode": {
+      "enum": [
+        "auto",
+        "implicit"
+      ],
+      "type": "string"
+    },
     "RepoCiIssueType": {
       "enum": [
         "correctness",
@@ -27,6 +34,40 @@
     }
   },
   "properties": {
+    "implementEnabled": {
+      "description": "Omit to leave unchanged; null clears the session override and returns to repo/user config.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "implementMaxCycles": {
+      "description": "Omit to leave unchanged; null clears the session override and returns to repo/user config.",
+      "format": "uint8",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "implementMode": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ImplementMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Omit to leave unchanged; null clears the session override and returns to repo/user config."
+    },
     "issueTypes": {
       "description": "Omit to leave unchanged; null clears the session override and returns to repo/user config.",
       "items": {

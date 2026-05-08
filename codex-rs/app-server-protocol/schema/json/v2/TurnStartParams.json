@@ -310,10 +310,18 @@
         }
       ]
     },
+    "ImplementMode": {
+      "enum": [
+        "auto",
+        "implicit"
+      ],
+      "type": "string"
+    },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
+        "codex",
         "default"
       ],
       "type": "string"
@@ -692,6 +700,37 @@
     },
     "TurnRepoCiConfigParams": {
       "properties": {
+        "implementEnabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "implementMaxCycles": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "implementMode": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImplementMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "issueTypes": {
           "items": {
             "$ref": "#/definitions/RepoCiIssueType"
