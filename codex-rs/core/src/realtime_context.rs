@@ -1,5 +1,6 @@
 use crate::compact::content_items_to_text;
 use crate::event_mapping::is_contextual_user_message_content;
+use crate::realtime_tool_context::build_realtime_tool_context;
 use crate::session::session::Session;
 use chrono::Utc;
 use codex_exec_server::LOCAL_FS;
@@ -26,13 +27,14 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
-const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.\nThis is background context about recent work and machine/workspace layout. It may be incomplete or stale. Use it to inform responses, and do not repeat it back unless relevant.";
+const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.\nThis is background context about recent work, available tooling, and machine/workspace layout. It may be incomplete or stale. Use it to inform responses, and do not repeat it back unless relevant.";
 const STARTUP_CONTEXT_OPEN_TAG: &str = "<startup_context>";
 const STARTUP_CONTEXT_CLOSE_TAG: &str = "</startup_context>";
 const CURRENT_THREAD_SECTION_TOKEN_BUDGET: usize = 1_200;
-const RECENT_WORK_SECTION_TOKEN_BUDGET: usize = 2_200;
-const WORKSPACE_SECTION_TOKEN_BUDGET: usize = 1_600;
-const NOTES_SECTION_TOKEN_BUDGET: usize = 300;
+const RECENT_WORK_SECTION_TOKEN_BUDGET: usize = 1_900;
+const WORKSPACE_SECTION_TOKEN_BUDGET: usize = 1_300;
+const TOOLING_SECTION_TOKEN_BUDGET: usize = 700;
+const NOTES_SECTION_TOKEN_BUDGET: usize = 200;
 pub(crate) const REALTIME_TURN_TOKEN_BUDGET: usize = 300;
 const MAX_RECENT_THREADS: usize = 40;
 const MAX_RECENT_WORK_GROUPS: usize = 8;
@@ -66,10 +68,12 @@ pub(crate) async fn build_realtime_startup_context(
     let recent_threads = load_recent_threads(sess).await;
     let recent_work_section = build_recent_work_section(&cwd, &recent_threads).await;
     let workspace_section = build_workspace_section_with_user_root(&cwd, home_dir()).await;
+    let tooling_section = build_realtime_tool_context(sess).await;
 
     if current_thread_section.is_none()
         && recent_work_section.is_none()
         && workspace_section.is_none()
+        && tooling_section.is_none()
     {
         debug!("realtime startup context unavailable; skipping injection");
         return None;
@@ -80,6 +84,7 @@ pub(crate) async fn build_realtime_startup_context(
     let has_current_thread_section = current_thread_section.is_some();
     let has_recent_work_section = recent_work_section.is_some();
     let has_workspace_section = workspace_section.is_some();
+    let has_tooling_section = tooling_section.is_some();
 
     if let Some(section) = format_section(
         "Current Thread",
@@ -103,8 +108,15 @@ pub(crate) async fn build_realtime_startup_context(
         parts.push(section);
     }
     if let Some(section) = format_section(
+        "Available Tooling",
+        tooling_section,
+        TOOLING_SECTION_TOKEN_BUDGET,
+    ) {
+        parts.push(section);
+    }
+    if let Some(section) = format_section(
         "Notes",
-        Some("Built at realtime startup from the current thread history, local thread metadata, and a bounded local workspace scan. This excludes repo memory instructions, AGENTS files, project-doc prompt blends, and memory summaries.".to_string()),
+        Some("Built at realtime startup from the current thread history, local thread metadata, available MCP/tool inventory, and a bounded local workspace scan. This excludes repo memory instructions, AGENTS files, project-doc prompt blends, and memory summaries.".to_string()),
         NOTES_SECTION_TOKEN_BUDGET,
     ) {
         parts.push(section);
@@ -118,6 +130,7 @@ pub(crate) async fn build_realtime_startup_context(
         has_current_thread_section,
         has_recent_work_section,
         has_workspace_section,
+        has_tooling_section,
         "built realtime startup context"
     );
     info!("realtime startup context: {context}");
