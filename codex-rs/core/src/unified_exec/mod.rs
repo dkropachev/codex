@@ -91,6 +91,8 @@ pub(crate) struct ExecCommandRequest {
     pub hook_command: String,
     pub process_id: i32,
     pub yield_time_ms: u64,
+    pub wait_until_exit: bool,
+    pub wait_timeout_ms: Option<u64>,
     pub max_output_tokens: Option<usize>,
     pub workdir: Option<AbsolutePathBuf>,
     pub network: Option<NetworkProxy>,

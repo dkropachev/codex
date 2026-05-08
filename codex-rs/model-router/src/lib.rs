@@ -188,6 +188,9 @@ pub struct CandidateRoute {
     pub id: Option<String>,
     pub model: Option<String>,
     pub model_provider: Option<String>,
+    /// Effective context window available to this route, after reserving model-specific headroom.
+    /// Candidates with an unknown limit remain eligible.
+    pub usable_context_window_tokens: Option<i64>,
     pub is_incumbent: bool,
     pub metrics: CandidateMetrics,
 }
@@ -209,9 +212,14 @@ pub fn select_candidate(
     }
     let task_class = RouterTaskClass::infer(task_key, prompt_bytes);
     let profile = task_class.profile();
+    let estimated_task_usage = estimate_task_usage(prompt_bytes, task_class);
     let mut enriched = Vec::with_capacity(candidates.len());
     for candidate in candidates {
         let metrics = infer_missing_metrics(candidate);
+        if !fits_context_window(candidate, estimated_task_usage.total_tokens) {
+            enriched.push(None);
+            continue;
+        }
         if let Some(max_latency_ms) = profile.max_latency_ms
             && metrics
                 .median_latency_ms
@@ -275,6 +283,13 @@ pub fn select_candidate(
                     .cmp(&candidates[right.index].is_incumbent)
             })
         })
+}
+
+fn fits_context_window(candidate: &CandidateRoute, estimated_total_tokens: i64) -> bool {
+    let Some(usable_context_window_tokens) = candidate.usable_context_window_tokens else {
+        return true;
+    };
+    usable_context_window_tokens > 0 && estimated_total_tokens <= usable_context_window_tokens
 }
 
 pub fn estimate_token_cost(
@@ -485,6 +500,7 @@ mod tests {
                 id: Some("incumbent".to_string()),
                 model: Some("gpt-5.4".to_string()),
                 model_provider: Some("openai".to_string()),
+                usable_context_window_tokens: Some(100_000),
                 is_incumbent: true,
                 metrics: CandidateMetrics::default(),
             },
@@ -492,6 +508,7 @@ mod tests {
                 id: Some("fast".to_string()),
                 model: Some("gpt-5.3-codex-spark".to_string()),
                 model_provider: Some("openai".to_string()),
+                usable_context_window_tokens: Some(100_000),
                 is_incumbent: false,
                 metrics: CandidateMetrics {
                     success_rate: Some(0.95),
@@ -514,6 +531,7 @@ mod tests {
                 id: Some("cheap".to_string()),
                 model: Some("gpt-5.3-codex-spark".to_string()),
                 model_provider: Some("openai".to_string()),
+                usable_context_window_tokens: Some(100_000),
                 is_incumbent: false,
                 metrics: CandidateMetrics {
                     intelligence_score: Some(0.70),
@@ -525,6 +543,7 @@ mod tests {
                 id: Some("quality".to_string()),
                 model: Some("gpt-5.5".to_string()),
                 model_provider: Some("openai".to_string()),
+                usable_context_window_tokens: Some(100_000),
                 is_incumbent: false,
                 metrics: CandidateMetrics {
                     estimated_cost_usd_micros: Some(10_000),
@@ -537,6 +556,37 @@ mod tests {
             select_candidate("module.repo_ci.learn", 100_000, &candidates)
                 .map(|selection| { (selection.index, selection.task_class) }),
             Some((1, RouterTaskClass::RareQualitySensitive))
+        );
+    }
+
+    #[test]
+    fn skips_candidate_that_cannot_fit_estimated_task_usage() {
+        let candidates = vec![
+            CandidateRoute {
+                id: Some("incumbent".to_string()),
+                model: Some("gpt-5.4".to_string()),
+                model_provider: Some("openai".to_string()),
+                usable_context_window_tokens: Some(100_000),
+                is_incumbent: true,
+                metrics: CandidateMetrics::default(),
+            },
+            CandidateRoute {
+                id: Some("fast".to_string()),
+                model: Some("gpt-5.3-codex-spark".to_string()),
+                model_provider: Some("openai".to_string()),
+                usable_context_window_tokens: Some(1_000),
+                is_incumbent: false,
+                metrics: CandidateMetrics {
+                    success_rate: Some(0.99),
+                    ..Default::default()
+                },
+            },
+        ];
+
+        assert_eq!(
+            select_candidate("module.repo_ci.triage", 8_000, &candidates)
+                .map(|selection| { (selection.index, selection.task_class) }),
+            Some((0, RouterTaskClass::LatencySensitive))
         );
     }
 }

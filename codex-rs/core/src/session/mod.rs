@@ -866,7 +866,7 @@ impl Session {
     /// `ModelClient` is session-scoped and intentionally does not depend on the full `Config`, so
     /// we precompute the comma-separated list of enabled experimental feature keys at session
     /// creation time and thread it into the client.
-    fn build_model_client_beta_features_header(config: &Config) -> Option<String> {
+    pub(crate) fn build_model_client_beta_features_header(config: &Config) -> Option<String> {
         let beta_features_header = FEATURES
             .iter()
             .filter_map(|spec| {

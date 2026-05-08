@@ -56,6 +56,10 @@ pub(crate) struct ExecCommandArgs {
     #[serde(default = "default_exec_yield_time_ms")]
     yield_time_ms: u64,
     #[serde(default)]
+    wait_until_exit: bool,
+    #[serde(default)]
+    wait_timeout_ms: Option<u64>,
+    #[serde(default)]
     max_output_tokens: Option<usize>,
     #[serde(default)]
     sandbox_permissions: SandboxPermissions,
@@ -233,6 +237,8 @@ impl ToolHandler for UnifiedExecHandler {
                     workdir,
                     tty,
                     yield_time_ms,
+                    wait_until_exit,
+                    wait_timeout_ms,
                     max_output_tokens,
                     sandbox_permissions,
                     additional_permissions,
@@ -338,6 +344,8 @@ impl ToolHandler for UnifiedExecHandler {
                             hook_command: hook_command.clone(),
                             process_id,
                             yield_time_ms,
+                            wait_until_exit,
+                            wait_timeout_ms,
                             max_output_tokens: Some(max_output_tokens),
                             workdir,
                             network: context.turn.network.clone(),

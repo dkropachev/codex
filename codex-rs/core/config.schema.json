@@ -588,6 +588,9 @@
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
+            "tool_router": {
+              "type": "boolean"
+            },
             "tool_search": {
               "type": "boolean"
             },
@@ -3132,6 +3135,9 @@
           "type": "boolean"
         },
         "tool_call_mcp_elicitation": {
+          "type": "boolean"
+        },
+        "tool_router": {
           "type": "boolean"
         },
         "tool_search": {
