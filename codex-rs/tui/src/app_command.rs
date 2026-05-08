@@ -112,10 +112,10 @@ pub(crate) enum AppCommandView<'a> {
     },
     ReloadUserConfig,
     SetRepoCiSessionConfig {
-        mode: &'a Option<RepoCiSessionMode>,
-        issue_types: &'a Option<Vec<RepoCiIssueType>>,
-        review_rounds: &'a Option<u8>,
-        long_ci: &'a Option<bool>,
+        mode: &'a Option<Option<RepoCiSessionMode>>,
+        issue_types: &'a Option<Option<Vec<RepoCiIssueType>>>,
+        review_rounds: &'a Option<Option<u8>>,
+        long_ci: &'a Option<Option<bool>>,
     },
     SetModelRouterSessionConfig {
         enabled: &'a Option<bool>,
@@ -313,10 +313,10 @@ impl AppCommand {
     }
 
     pub(crate) fn set_repo_ci_session_config(
-        mode: Option<RepoCiSessionMode>,
-        issue_types: Option<Vec<RepoCiIssueType>>,
-        review_rounds: Option<u8>,
-        long_ci: Option<bool>,
+        mode: Option<Option<RepoCiSessionMode>>,
+        issue_types: Option<Option<Vec<RepoCiIssueType>>>,
+        review_rounds: Option<Option<u8>>,
+        long_ci: Option<Option<bool>>,
     ) -> Self {
         Self(Op::SetRepoCiSessionConfig {
             mode,

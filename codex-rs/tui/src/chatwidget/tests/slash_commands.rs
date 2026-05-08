@@ -1180,7 +1180,7 @@ async fn repo_ci_slash_command_sets_session_mode() {
     assert_matches!(
         op_rx.try_recv(),
         Ok(Op::SetRepoCiSessionConfig {
-            mode: Some(codex_protocol::protocol::RepoCiSessionMode::Remote),
+            mode: Some(Some(codex_protocol::protocol::RepoCiSessionMode::Remote)),
             issue_types: None,
             review_rounds: None,
             long_ci: None,
@@ -1271,7 +1271,7 @@ async fn repo_ci_issues_slash_command_sets_session_config() {
         op_rx.try_recv(),
         Ok(Op::SetRepoCiSessionConfig {
             mode: None,
-            issue_types: Some(issue_types),
+            issue_types: Some(Some(issue_types)),
             review_rounds: None,
             long_ci: None,
         }) if issue_types == vec![
@@ -1286,6 +1286,38 @@ async fn repo_ci_issues_slash_command_sets_session_config() {
 }
 
 #[tokio::test]
+async fn repo_ci_partial_slash_command_preserves_unspecified_session_config() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+
+    submit_composer_text(&mut chat, "/repo-ci remote");
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::SetRepoCiSessionConfig {
+            mode: Some(Some(codex_protocol::protocol::RepoCiSessionMode::Remote)),
+            issue_types: None,
+            review_rounds: None,
+            long_ci: None,
+        })
+    );
+
+    submit_composer_text(&mut chat, "/repo-ci issues security");
+
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::SetRepoCiSessionConfig {
+            mode: None,
+            issue_types: Some(Some(issue_types)),
+            review_rounds: None,
+            long_ci: None,
+        }) if issue_types == vec![codex_protocol::protocol::RepoCiIssueType::Security]
+    );
+    assert_eq!(
+        chat.config.repo_ci_session_mode,
+        Some(codex_protocol::protocol::RepoCiSessionMode::Remote)
+    );
+}
+
+#[tokio::test]
 async fn repo_ci_rounds_slash_command_sets_session_config() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
 
@@ -1296,7 +1328,7 @@ async fn repo_ci_rounds_slash_command_sets_session_config() {
         Ok(Op::SetRepoCiSessionConfig {
             mode: None,
             issue_types: None,
-            review_rounds: Some(3),
+            review_rounds: Some(Some(3)),
             long_ci: None,
         })
     );
@@ -1315,7 +1347,7 @@ async fn repo_ci_long_ci_slash_command_sets_session_config() {
             mode: None,
             issue_types: None,
             review_rounds: None,
-            long_ci: Some(true),
+            long_ci: Some(Some(true)),
         })
     );
     assert_eq!(
@@ -1367,7 +1399,7 @@ async fn repo_ci_slash_command_with_task_restores_previous_session_config() {
     assert_matches!(
         op_rx.try_recv(),
         Ok(Op::SetRepoCiSessionConfig {
-            mode: Some(codex_protocol::protocol::RepoCiSessionMode::Remote),
+            mode: Some(Some(codex_protocol::protocol::RepoCiSessionMode::Remote)),
             issue_types: None,
             review_rounds: None,
             long_ci: None,

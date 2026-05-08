@@ -209,6 +209,32 @@ mod conversation_start_prompt_serde {
     }
 }
 
+mod double_option_serde {
+    use serde::Deserialize;
+    use serde::Deserializer;
+    use serde::Serialize;
+    use serde::Serializer;
+
+    pub(crate) fn deserialize<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+    where
+        T: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        serde_with::rust::double_option::deserialize(deserializer)
+    }
+
+    pub(crate) fn serialize<T, S>(
+        value: &Option<Option<T>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        T: Serialize,
+        S: Serializer,
+    {
+        serde_with::rust::double_option::serialize(value, serializer)
+    }
+}
+
 #[derive(
     Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash, JsonSchema, TS, Ord, PartialOrd,
 )]
@@ -746,19 +772,40 @@ pub enum Op {
     /// enable/disable state) without restarting the thread.
     ReloadUserConfig,
 
-    /// Override repository CI review settings for this session.
+    /// Patch repository CI review settings for this session.
     ///
-    /// `None` values clear the session override for the corresponding field and
-    /// return to repo/user config.
+    /// Omitted fields leave the current session value unchanged. Explicit
+    /// `null` clears the session override for that field and returns to
+    /// repo/user config.
     SetRepoCiSessionConfig {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        mode: Option<RepoCiSessionMode>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        issue_types: Option<Vec<RepoCiIssueType>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        review_rounds: Option<u8>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        long_ci: Option<bool>,
+        #[serde(
+            default,
+            deserialize_with = "double_option_serde::deserialize",
+            serialize_with = "double_option_serde::serialize",
+            skip_serializing_if = "Option::is_none"
+        )]
+        mode: Option<Option<RepoCiSessionMode>>,
+        #[serde(
+            default,
+            deserialize_with = "double_option_serde::deserialize",
+            serialize_with = "double_option_serde::serialize",
+            skip_serializing_if = "Option::is_none"
+        )]
+        issue_types: Option<Option<Vec<RepoCiIssueType>>>,
+        #[serde(
+            default,
+            deserialize_with = "double_option_serde::deserialize",
+            serialize_with = "double_option_serde::serialize",
+            skip_serializing_if = "Option::is_none"
+        )]
+        review_rounds: Option<Option<u8>>,
+        #[serde(
+            default,
+            deserialize_with = "double_option_serde::deserialize",
+            serialize_with = "double_option_serde::serialize",
+            skip_serializing_if = "Option::is_none"
+        )]
+        long_ci: Option<Option<bool>>,
     },
 
     /// Override model router enablement for this session.

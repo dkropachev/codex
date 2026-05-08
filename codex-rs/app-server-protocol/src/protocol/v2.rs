@@ -4011,18 +4011,42 @@ v2_enum_from_core! {
 #[ts(export_to = "v2/")]
 pub struct ThreadRepoCiSessionConfigSetParams {
     pub thread_id: String,
-    /// Null clears the session override and returns to repo/user config.
+    /// Omit to leave unchanged; null clears the session override and returns to repo/user config.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional = nullable)]
-    pub mode: Option<RepoCiSessionMode>,
-    /// Null clears the session override and returns to repo/user config.
+    pub mode: Option<Option<RepoCiSessionMode>>,
+    /// Omit to leave unchanged; null clears the session override and returns to repo/user config.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional = nullable)]
-    pub issue_types: Option<Vec<RepoCiIssueType>>,
-    /// Null clears the session override and returns to repo/user config.
+    pub issue_types: Option<Option<Vec<RepoCiIssueType>>>,
+    /// Omit to leave unchanged; null clears the session override and returns to repo/user config.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional = nullable)]
-    pub review_rounds: Option<u8>,
-    /// Null clears the session override and returns to repo/user config.
+    pub review_rounds: Option<Option<u8>>,
+    /// Omit to leave unchanged; null clears the session override and returns to repo/user config.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional = nullable)]
-    pub long_ci: Option<bool>,
+    pub long_ci: Option<Option<bool>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

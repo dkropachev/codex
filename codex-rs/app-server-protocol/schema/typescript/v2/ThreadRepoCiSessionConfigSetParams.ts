@@ -6,18 +6,18 @@ import type { RepoCiSessionMode } from "./RepoCiSessionMode";
 
 export type ThreadRepoCiSessionConfigSetParams = { threadId: string,
 /**
- * Null clears the session override and returns to repo/user config.
+ * Omit to leave unchanged; null clears the session override and returns to repo/user config.
  */
-mode?: RepoCiSessionMode | null,
+mode?: RepoCiSessionMode | null | null,
 /**
- * Null clears the session override and returns to repo/user config.
+ * Omit to leave unchanged; null clears the session override and returns to repo/user config.
  */
-issueTypes?: Array<RepoCiIssueType> | null,
+issueTypes?: Array<RepoCiIssueType> | null | null,
 /**
- * Null clears the session override and returns to repo/user config.
+ * Omit to leave unchanged; null clears the session override and returns to repo/user config.
  */
-reviewRounds?: number | null,
+reviewRounds?: number | null | null,
 /**
- * Null clears the session override and returns to repo/user config.
+ * Omit to leave unchanged; null clears the session override and returns to repo/user config.
  */
-longCi?: boolean | null, };
+longCi?: boolean | null | null, };

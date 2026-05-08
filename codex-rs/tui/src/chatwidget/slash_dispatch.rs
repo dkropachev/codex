@@ -702,15 +702,23 @@ impl ChatWidget {
         let options = parsed.options;
         let session_message = repo_ci_session_config_message(&options);
         let session_config = RepoCiSessionConfigValues {
-            mode: options.mode.unwrap_or_default(),
-            issue_types: options.issue_types.unwrap_or_default(),
-            review_rounds: options.review_rounds.unwrap_or_default(),
-            long_ci: options.long_ci.unwrap_or_default(),
+            mode: options.mode,
+            issue_types: options.issue_types,
+            review_rounds: options.review_rounds,
+            long_ci: options.long_ci,
         };
-        self.config.repo_ci_session_mode = session_config.mode;
-        self.config.repo_ci_issue_types = session_config.issue_types.clone();
-        self.config.repo_ci_review_rounds = session_config.review_rounds;
-        self.config.repo_ci_long_ci = session_config.long_ci;
+        if let Some(mode) = session_config.mode {
+            self.config.repo_ci_session_mode = mode;
+        }
+        if let Some(issue_types) = session_config.issue_types.clone() {
+            self.config.repo_ci_issue_types = issue_types;
+        }
+        if let Some(review_rounds) = session_config.review_rounds {
+            self.config.repo_ci_review_rounds = review_rounds;
+        }
+        if let Some(long_ci) = session_config.long_ci {
+            self.config.repo_ci_long_ci = long_ci;
+        }
         self.submit_repo_ci_session_config(session_config);
         self.add_info_message(
             session_message,
@@ -1096,10 +1104,10 @@ fn parse_repo_ci_session_mode(raw: &str) -> Result<Option<RepoCiSessionMode>, St
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RepoCiSessionConfigValues {
-    mode: Option<RepoCiSessionMode>,
-    issue_types: Option<Vec<RepoCiIssueType>>,
-    review_rounds: Option<u8>,
-    long_ci: Option<bool>,
+    mode: Option<Option<RepoCiSessionMode>>,
+    issue_types: Option<Option<Vec<RepoCiIssueType>>>,
+    review_rounds: Option<Option<u8>>,
+    long_ci: Option<Option<bool>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
