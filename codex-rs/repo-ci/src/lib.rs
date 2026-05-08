@@ -1,11 +1,13 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_cicd_artifacts as cicd_artifacts;
 use codex_protocol::protocol::RepoCiIssueType;
 use serde::Deserialize;
 use serde::Serialize;
-use sha2::Digest;
-use sha2::Sha256;
+use serde_json::json;
+use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
@@ -19,12 +21,15 @@ use std::time::UNIX_EPOCH;
 mod branch_diff;
 mod inference;
 mod learning_hints;
+mod persisted_runs;
+mod plan_guardrail;
 mod remote_commit;
 mod remote_workflow;
 mod repo_ci_ai_learning;
+mod runner;
+mod workflow_history;
 
-const MANIFEST_VERSION: u32 = 2;
-const JSONL_ENV: &str = "CODEX_REPO_CI_JSONL";
+const MANIFEST_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -44,31 +49,16 @@ impl AutomationMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RunMode {
-    Fast,
-    Full,
-}
-
-impl RunMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Fast => "fast",
-            Self::Full => "full",
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoCiManifest {
     pub version: u32,
     pub repo_root: PathBuf,
     pub repo_key: String,
+    pub source_key: String,
     pub automation: AutomationMode,
     pub local_test_time_budget_sec: u64,
     pub learned_at_unix_sec: u64,
     pub learning_sources: Vec<SourceHash>,
-    #[serde(default)]
     pub inferred_issue_types: Vec<RepoCiIssueType>,
     pub prepare_steps: Vec<RepoCiStep>,
     pub fast_steps: Vec<RepoCiStep>,
@@ -90,6 +80,17 @@ pub enum SourceKind {
     BuildManifest,
     Lockfile,
     Tooling,
+}
+
+impl SourceKind {
+    fn artifact_kind(&self) -> &'static str {
+        match self {
+            Self::CiWorkflow => "ci_workflow",
+            Self::BuildManifest => "build_manifest",
+            Self::Lockfile => "lockfile",
+            Self::Tooling => "tooling",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +125,13 @@ pub struct RepoCiPaths {
     pub runner_path: PathBuf,
 }
 
+struct ResolvedRepoCiPaths {
+    paths: RepoCiPaths,
+    learning_sources: Vec<SourceHash>,
+    repo_key: String,
+    source_key: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct LearnOptions {
     pub automation: AutomationMode,
@@ -138,8 +146,20 @@ pub struct LearnedPlan {
 }
 
 pub use branch_diff::BranchDiffSnapshot;
+pub use codex_cicd_artifacts::RunArtifact as RepoCiRunArtifact;
+pub use codex_cicd_artifacts::RunArtifactStatus as RepoCiRunArtifactStatus;
+pub use codex_cicd_artifacts::RunMode;
+pub use codex_cicd_artifacts::StepRunStatus as RepoCiStepRunStatus;
+pub use codex_cicd_artifacts::StepStatus as RepoCiStepStatus;
+pub use codex_cicd_artifacts::read_run_artifact;
 pub use learning_hints::RepoCiLearningHints;
 pub use learning_hints::WorkflowRunHint;
+pub use persisted_runs::lookup_cached_passing_run;
+pub use persisted_runs::manifest_fingerprint;
+pub use persisted_runs::run_capture_persisted_with_cancellation;
+pub use persisted_runs::store_captured_run_artifact;
+pub use persisted_runs::worktree_fingerprint;
+pub use plan_guardrail::render_plan_guardrail_feedback;
 pub use remote_commit::RemoteCommitApplied;
 pub use remote_commit::RemoteCommitChangeDetails;
 pub use remote_commit::RemoteCommitDecision;
@@ -147,21 +167,28 @@ pub use remote_commit::RemoteCommitDecisionContext;
 pub use remote_commit::RemoteCommitStrategy;
 pub use remote_commit::apply_remote_commit_decision;
 pub use remote_commit::fallback_remote_commit_decision;
+pub use remote_commit::remote_commit_changed_paths;
 pub use remote_commit::remote_commit_decision_context;
 pub use remote_commit::remote_commit_decision_schema;
 pub use remote_commit::render_remote_commit_decision_prompt;
 pub use remote_workflow::RemoteRepoCiCheck;
 pub use remote_workflow::RemoteRepoCiWorkflow;
 pub use remote_workflow::RemoteRepoCiWorkflowOutcome;
+pub use remote_workflow::RemoteRepoCiWorkflowRun;
 pub use remote_workflow::RemoteRepoCiWorkflowStart;
 pub use remote_workflow::run_remote_workflow;
 pub use remote_workflow::run_started_remote_workflow;
+pub use remote_workflow::run_started_remote_workflow_with_commit_decision;
 pub use remote_workflow::start_remote_workflow;
 pub use repo_ci_ai_learning::AI_LEARN_MAX_ATTEMPTS;
 pub use repo_ci_ai_learning::RepoCiAiLearnedPlan;
 pub use repo_ci_ai_learning::render_repo_ci_learning_prompt;
 pub use repo_ci_ai_learning::render_validation_feedback;
 pub use repo_ci_ai_learning::repo_ci_ai_plan_schema;
+pub use runner::RepoCiCancellation;
+use runner::capture_runner;
+use runner::run_runner;
+pub use workflow_history::WorkflowHistoryHint;
 
 #[derive(Debug, Clone)]
 pub struct LearnOutcome {
@@ -207,7 +234,7 @@ pub enum CapturedStepEvent {
     Finished,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapturedExitStatus {
     pub code: Option<i32>,
     pub success: bool,
@@ -241,20 +268,50 @@ pub fn repo_root_for_cwd(cwd: &Path) -> Result<PathBuf> {
 }
 
 pub fn paths_for_repo(codex_home: &Path, cwd: &Path) -> Result<RepoCiPaths> {
+    Ok(resolve_paths_for_repo(codex_home, cwd)?.paths)
+}
+
+fn artifact_sources(sources: &[SourceHash]) -> Vec<cicd_artifacts::ArtifactSource> {
+    sources
+        .iter()
+        .map(|source| {
+            cicd_artifacts::ArtifactSource::new(
+                source.path.clone(),
+                source.kind.artifact_kind(),
+                source.sha256.clone(),
+            )
+        })
+        .collect()
+}
+
+fn resolve_paths_for_repo(codex_home: &Path, cwd: &Path) -> Result<ResolvedRepoCiPaths> {
     let repo_root = repo_root_for_cwd(cwd)?;
-    let repo_key = repo_key(&repo_root);
-    let state_dir = codex_home.join("repo-ci").join(repo_key);
-    Ok(RepoCiPaths {
+    let learning_sources = collect_sources(&repo_root)?;
+    let cicd_sources = artifact_sources(&learning_sources);
+    let repo_key = cicd_artifacts::repo_key(&repo_root);
+    let source_key = cicd_artifacts::source_key(&cicd_sources);
+    let state_dir = cicd_artifacts::artifact_state_dir_for_keys(codex_home, &repo_key, &source_key);
+    let paths = paths_from_state_dir(repo_root, state_dir);
+    Ok(ResolvedRepoCiPaths {
+        paths,
+        learning_sources,
+        repo_key,
+        source_key,
+    })
+}
+
+fn paths_from_state_dir(repo_root: PathBuf, state_dir: PathBuf) -> RepoCiPaths {
+    RepoCiPaths {
         repo_root,
         manifest_path: state_dir.join("manifest.json"),
         runner_path: state_dir.join("run_ci.sh"),
         state_dir,
-    })
+    }
 }
 
 pub fn learn(codex_home: &Path, cwd: &Path, options: LearnOptions) -> Result<LearnOutcome> {
-    let paths = paths_for_repo(codex_home, cwd)?;
-    let (prepare_steps, fast_steps, full_steps) = infer_steps(&paths.repo_root)?;
+    let repo_root = repo_root_for_cwd(cwd)?;
+    let (prepare_steps, fast_steps, full_steps) = infer_steps(&repo_root)?;
     learn_with_plan(
         codex_home,
         cwd,
@@ -273,16 +330,19 @@ pub fn learn_with_plan(
     options: LearnOptions,
     plan: LearnedPlan,
 ) -> Result<LearnOutcome> {
-    let paths = paths_for_repo(codex_home, cwd)?;
+    cicd_artifacts::prune_stale_artifacts(codex_home)?;
+    let resolved = resolve_paths_for_repo(codex_home, cwd)?;
+    let paths = resolved.paths;
     fs::create_dir_all(&paths.state_dir)?;
     let mut manifest = RepoCiManifest {
         version: MANIFEST_VERSION,
-        repo_key: repo_key(&paths.repo_root),
+        repo_key: resolved.repo_key,
+        source_key: resolved.source_key,
         repo_root: paths.repo_root.clone(),
         automation: options.automation,
         local_test_time_budget_sec: options.local_test_time_budget_sec,
         learned_at_unix_sec: unix_now(),
-        learning_sources: collect_sources(&paths.repo_root)?,
+        learning_sources: resolved.learning_sources,
         inferred_issue_types: infer_issue_types(&paths.repo_root),
         prepare_steps: plan.prepare_steps,
         fast_steps: plan.fast_steps,
@@ -291,10 +351,24 @@ pub fn learn_with_plan(
     };
     write_runner(&paths.runner_path, &manifest)?;
     write_manifest(&paths.manifest_path, &manifest)?;
+    touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
 
-    let prepare_run = capture_runner(&paths, "prepare")?;
+    let prepare_run = capture_runner(
+        &paths,
+        "prepare",
+        options.local_test_time_budget_sec,
+        &RepoCiCancellation::default(),
+    )?;
     let (validation_phase, validation_run) = if prepare_run.status.success {
-        (ValidationPhase::Fast, capture_runner(&paths, "fast")?)
+        (
+            ValidationPhase::Fast,
+            capture_runner(
+                &paths,
+                "fast",
+                options.local_test_time_budget_sec,
+                &RepoCiCancellation::default(),
+            )?,
+        )
     } else {
         (ValidationPhase::Prepare, prepare_run)
     };
@@ -309,6 +383,7 @@ pub fn learn_with_plan(
         }
     };
     write_manifest(&paths.manifest_path, &manifest)?;
+    touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
 
     Ok(LearnOutcome {
         paths,
@@ -320,43 +395,80 @@ pub fn learn_with_plan(
 }
 
 pub fn prepare(codex_home: &Path, cwd: &Path) -> Result<std::process::ExitStatus> {
+    cicd_artifacts::prune_stale_artifacts(codex_home)?;
     let paths = paths_for_repo(codex_home, cwd)?;
     require_runner(&paths)?;
-    run_runner(&paths, "prepare")
+    let manifest = read_manifest(&paths.manifest_path)?;
+    touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
+    run_runner(&paths, "prepare", manifest.local_test_time_budget_sec)
 }
 
 pub fn run(codex_home: &Path, cwd: &Path, mode: RunMode) -> Result<std::process::ExitStatus> {
+    cicd_artifacts::prune_stale_artifacts(codex_home)?;
     let paths = paths_for_repo(codex_home, cwd)?;
     require_runner(&paths)?;
-    run_runner(&paths, mode.as_str())
+    let manifest = read_manifest(&paths.manifest_path)?;
+    touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
+    run_runner(&paths, mode.as_str(), manifest.local_test_time_budget_sec)
 }
 
 pub fn run_capture(codex_home: &Path, cwd: &Path, mode: RunMode) -> Result<CapturedRun> {
+    run_capture_with_cancellation(codex_home, cwd, mode, RepoCiCancellation::default())
+}
+
+pub fn run_capture_with_cancellation(
+    codex_home: &Path,
+    cwd: &Path,
+    mode: RunMode,
+    cancellation: RepoCiCancellation,
+) -> Result<CapturedRun> {
+    cicd_artifacts::prune_stale_artifacts(codex_home)?;
     let paths = paths_for_repo(codex_home, cwd)?;
     require_runner(&paths)?;
-    capture_runner(&paths, mode.as_str())
+    let manifest = read_manifest(&paths.manifest_path)?;
+    touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
+    capture_runner(
+        &paths,
+        mode.as_str(),
+        manifest.local_test_time_budget_sec,
+        &cancellation,
+    )
 }
 
 pub fn status(codex_home: &Path, cwd: &Path) -> Result<StatusOutcome> {
-    let paths = paths_for_repo(codex_home, cwd)?;
-    let manifest = if paths.manifest_path.exists() {
-        Some(read_manifest(&paths.manifest_path)?)
-    } else {
-        None
-    };
-    let mut stale_sources = Vec::new();
-    if let Some(manifest) = &manifest {
-        for source in &manifest.learning_sources {
-            let current = hash_file(&paths.repo_root.join(&source.path));
-            if current.as_deref() != Some(source.sha256.as_str()) {
-                stale_sources.push(source.clone());
-            }
-        }
+    cicd_artifacts::prune_stale_artifacts(codex_home)?;
+    let resolved = resolve_paths_for_repo(codex_home, cwd)?;
+    let paths = resolved.paths;
+    if paths.manifest_path.exists() {
+        let manifest = read_manifest(&paths.manifest_path)?;
+        touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
+        let stale_sources = changed_sources(&manifest.learning_sources, &resolved.learning_sources);
+        return Ok(StatusOutcome {
+            paths,
+            manifest: Some(manifest),
+            stale_sources,
+        });
     }
+
+    for state_dir in cicd_artifacts::latest_artifact_state_dirs(codex_home, &resolved.repo_key)? {
+        let paths = paths_from_state_dir(paths.repo_root.clone(), state_dir);
+        if !paths.manifest_path.exists() {
+            continue;
+        }
+        let manifest = read_manifest(&paths.manifest_path)?;
+        touch_manifest_artifact_state(codex_home, &paths, &manifest)?;
+        let stale_sources = changed_sources(&manifest.learning_sources, &resolved.learning_sources);
+        return Ok(StatusOutcome {
+            paths,
+            manifest: Some(manifest),
+            stale_sources,
+        });
+    }
+
     Ok(StatusOutcome {
         paths,
-        manifest,
-        stale_sources,
+        manifest: None,
+        stale_sources: Vec::new(),
     })
 }
 
@@ -375,43 +487,6 @@ fn require_runner(paths: &RepoCiPaths) -> Result<()> {
     }
 }
 
-fn run_runner(paths: &RepoCiPaths, arg: &str) -> Result<std::process::ExitStatus> {
-    Command::new("bash")
-        .arg(&paths.runner_path)
-        .arg(arg)
-        .current_dir(&paths.repo_root)
-        .status()
-        .with_context(|| format!("failed to run {}", paths.runner_path.display()))
-}
-
-fn capture_runner(paths: &RepoCiPaths, arg: &str) -> Result<CapturedRun> {
-    let jsonl_path = paths.state_dir.join(format!("run-{arg}-steps.jsonl"));
-    let _ = fs::remove_file(&jsonl_path);
-    let output = Command::new("bash")
-        .arg(&paths.runner_path)
-        .arg(arg)
-        .env(JSONL_ENV, &jsonl_path)
-        .current_dir(&paths.repo_root)
-        .output()
-        .with_context(|| format!("failed to run {}", paths.runner_path.display()))?;
-    Ok(CapturedRun {
-        status: output.status.into(),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        steps: read_captured_steps(&jsonl_path)?,
-    })
-}
-
-fn read_captured_steps(path: &Path) -> Result<Vec<CapturedStep>> {
-    let Ok(data) = fs::read_to_string(path) else {
-        return Ok(Vec::new());
-    };
-    data.lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).context("failed to parse repo CI step JSONL"))
-        .collect()
-}
-
 fn write_manifest(path: &Path, manifest: &RepoCiManifest) -> Result<()> {
     let data = serde_json::to_vec_pretty(manifest)?;
     fs::write(path, data).with_context(|| format!("failed to write {}", path.display()))
@@ -422,16 +497,82 @@ fn read_manifest(path: &Path) -> Result<RepoCiManifest> {
     serde_json::from_slice(&data).with_context(|| format!("failed to parse {}", path.display()))
 }
 
+fn register_manifest_artifact_state(
+    codex_home: &Path,
+    paths: &RepoCiPaths,
+    manifest: &RepoCiManifest,
+) -> Result<()> {
+    cicd_artifacts::register_state(
+        codex_home,
+        &manifest.repo_key,
+        &manifest.source_key,
+        &paths.state_dir,
+        &artifact_sources(&manifest.learning_sources),
+        json!({
+            "repo_root": &manifest.repo_root,
+            "manifest_path": &paths.manifest_path,
+            "runner_path": &paths.runner_path,
+            "version": manifest.version,
+            "automation": manifest.automation,
+            "validation": &manifest.validation,
+        }),
+    )
+}
+
+fn touch_manifest_artifact_state(
+    codex_home: &Path,
+    paths: &RepoCiPaths,
+    manifest: &RepoCiManifest,
+) -> Result<()> {
+    register_manifest_artifact_state(codex_home, paths, manifest)?;
+    cicd_artifacts::record_artifact_hit(codex_home, &paths.state_dir)
+}
+
+fn changed_sources(
+    learned_sources: &[SourceHash],
+    current_sources: &[SourceHash],
+) -> Vec<SourceHash> {
+    let learned_by_path = learned_sources
+        .iter()
+        .map(|source| (source.path.clone(), source))
+        .collect::<BTreeMap<_, _>>();
+    let current_by_path = current_sources
+        .iter()
+        .map(|source| (source.path.clone(), source))
+        .collect::<BTreeMap<_, _>>();
+    cicd_artifacts::changed_source_paths(
+        &artifact_sources(learned_sources),
+        &artifact_sources(current_sources),
+    )
+    .into_iter()
+    .filter_map(|path| {
+        learned_by_path
+            .get(&path)
+            .or_else(|| current_by_path.get(&path))
+            .copied()
+            .cloned()
+    })
+    .collect()
+}
+
 fn collect_sources(repo_root: &Path) -> Result<Vec<SourceHash>> {
     let mut sources = Vec::new();
+    let mut seen_paths = HashSet::new();
     for (relative, kind) in source_candidates(repo_root)? {
-        if let Some(sha256) = hash_file(&repo_root.join(&relative)) {
-            sources.push(SourceHash {
-                path: relative,
-                sha256,
-                kind,
-            });
+        let absolute_path = repo_root.join(&relative);
+        let Some(sha256) = hash_file(&absolute_path) else {
+            continue;
+        };
+        if let Ok(canonical_path) = fs::canonicalize(&absolute_path)
+            && !seen_paths.insert(canonical_path)
+        {
+            continue;
         }
+        sources.push(SourceHash {
+            path: relative,
+            sha256,
+            kind,
+        });
     }
     sources.sort_by(|left, right| left.path.cmp(&right.path));
     sources.dedup_by(|left, right| left.path == right.path);
@@ -554,7 +695,6 @@ pub(crate) fn add_just_steps(
         ("lint", StepPhase::Lint),
         ("clippy", StepPhase::Lint),
         ("build", StepPhase::Build),
-        ("test", StepPhase::Test),
     ] {
         if justfile_has_recipe(justfile, recipe) {
             let ci_step = step(
@@ -566,7 +706,25 @@ pub(crate) fn add_just_steps(
             full.push(ci_step);
         }
     }
-    for recipe in ["integration", "e2e", "ui-test", "ui-tests"] {
+
+    if justfile_has_recipe(justfile, "test-unit") {
+        let ci_step = step("just-test-unit", "just test-unit", StepPhase::Test);
+        fast.push(ci_step.clone());
+        full.push(ci_step);
+    } else if justfile_has_recipe(justfile, "test") {
+        let ci_step = step("just-test", "just test", StepPhase::Test);
+        fast.push(ci_step.clone());
+        full.push(ci_step);
+    }
+
+    for recipe in [
+        "test-integration",
+        "integration",
+        "test-e2e",
+        "e2e",
+        "ui-test",
+        "ui-tests",
+    ] {
         if justfile_has_recipe(justfile, recipe) {
             full.push(step(
                 &format!("just-{recipe}"),
@@ -602,23 +760,91 @@ pub(crate) fn add_node_steps(
     let Some(package_json) = read_optional(repo_root, "package.json").ok().flatten() else {
         return;
     };
-    for (script, phase) in [
-        ("lint", StepPhase::Lint),
-        ("build", StepPhase::Build),
-        ("test", StepPhase::Test),
-    ] {
-        if package_json.contains(&format!("\"{script}\"")) {
-            let cmd = if has_file(repo_root, "pnpm-lock.yaml") {
-                format!("pnpm {script}")
-            } else if has_file(repo_root, "yarn.lock") {
-                format!("yarn {script}")
-            } else {
-                format!("npm run {script}")
-            };
-            let ci_step = step(&format!("node-{script}"), &cmd, phase.clone());
+    let scripts = package_json_scripts(&package_json);
+    for (script, phase) in [("lint", StepPhase::Lint), ("build", StepPhase::Build)] {
+        if let Some(ci_step) = node_script_step(
+            repo_root,
+            &scripts,
+            &[script],
+            &format!("node-{script}"),
+            phase,
+        ) {
             fast.push(ci_step.clone());
             full.push(ci_step);
         }
+    }
+
+    if let Some(ci_step) = node_script_step(
+        repo_root,
+        &scripts,
+        &["test:unit", "test-unit", "unit-test", "unit"],
+        "node-test-unit",
+        StepPhase::Test,
+    ) {
+        fast.push(ci_step.clone());
+        full.push(ci_step);
+    } else if let Some(ci_step) =
+        node_script_step(repo_root, &scripts, &["test"], "node-test", StepPhase::Test)
+    {
+        fast.push(ci_step.clone());
+        full.push(ci_step);
+    }
+
+    for (aliases, id) in [
+        (
+            [
+                "test:integration",
+                "test-integration",
+                "integration-test",
+                "integration",
+            ]
+            .as_slice(),
+            "node-test-integration",
+        ),
+        (
+            ["test:e2e", "test-e2e", "e2e-test", "e2e"].as_slice(),
+            "node-test-e2e",
+        ),
+    ] {
+        if let Some(ci_step) = node_script_step(repo_root, &scripts, aliases, id, StepPhase::Test) {
+            full.push(ci_step);
+        }
+    }
+}
+
+fn package_json_scripts(package_json: &str) -> HashSet<String> {
+    serde_json::from_str::<serde_json::Value>(package_json)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("scripts")
+                .and_then(serde_json::Value::as_object)
+                .map(|scripts| scripts.keys().cloned().collect())
+        })
+        .unwrap_or_default()
+}
+
+fn node_script_step(
+    repo_root: &Path,
+    scripts: &HashSet<String>,
+    aliases: &[&str],
+    id: &str,
+    phase: StepPhase,
+) -> Option<RepoCiStep> {
+    let script = aliases
+        .iter()
+        .copied()
+        .find(|script| scripts.contains(*script))?;
+    Some(step(id, &node_script_command(repo_root, script), phase))
+}
+
+fn node_script_command(repo_root: &Path, script: &str) -> String {
+    if has_file(repo_root, "pnpm-lock.yaml") {
+        format!("pnpm {script}")
+    } else if has_file(repo_root, "yarn.lock") {
+        format!("yarn {script}")
+    } else {
+        format!("npm run {script}")
     }
 }
 
@@ -680,23 +906,14 @@ pub(crate) fn has_file(repo_root: &Path, relative: &str) -> bool {
 }
 
 fn hash_file(path: &Path) -> Option<String> {
-    let data = fs::read(path).ok()?;
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    Some(format!("{:x}", hasher.finalize()))
-}
-
-fn repo_key(repo_root: &Path) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(repo_root.to_string_lossy().as_bytes());
-    let hash = format!("{:x}", hasher.finalize());
-    hash[..16].to_string()
+    cicd_artifacts::file_sha256(path)
 }
 
 fn write_runner(path: &Path, manifest: &RepoCiManifest) -> Result<()> {
     let mut script =
         String::from("#!/usr/bin/env bash\nset -euo pipefail\n\nmode=\"${1:-fast}\"\nrepo_root=");
     script.push_str(&shell_quote(&manifest.repo_root.to_string_lossy()));
+    script.push_str("\nrepo_root=\"${CODEX_REPO_CI_REPO_ROOT:-$repo_root}\"");
     script.push_str("\ncd \"$repo_root\"\n\nrecord_step() {\n  if [[ -n \"${CODEX_REPO_CI_JSONL:-}\" ]]; then\n    local id_json=\"$1\"\n    id_json=\"${id_json//\\\\/\\\\\\\\}\"\n    id_json=\"${id_json//\\\"/\\\\\\\"}\"\n    printf '{\"id\":\"%s\",\"event\":\"%s\",\"exit_code\":%s}\\n' \"$id_json\" \"$2\" \"$3\" >> \"$CODEX_REPO_CI_JSONL\"\n  fi\n}\n\nrun_step() {\n  local id=\"$1\"\n  shift\n  echo \"==> ${id}\"\n  record_step \"$id\" started null\n  set +e\n  \"$@\"\n  local status=$?\n  set -e\n  record_step \"$id\" finished \"$status\"\n  return \"$status\"\n}\n\nprepare() {\n");
     if manifest.prepare_steps.is_empty() {
         script.push_str("  :\n");
@@ -757,6 +974,26 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    #[cfg(unix)]
+    fn assert_process_exits(child_pid: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            let output = std::process::Command::new("ps")
+                .arg("-o")
+                .arg("stat=")
+                .arg("-p")
+                .arg(child_pid)
+                .output()
+                .expect("ps");
+            let process_state = String::from_utf8_lossy(&output.stdout);
+            if !output.status.success() || process_state.trim_start().starts_with('Z') {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("descendant process {child_pid} survived repo CI cleanup");
+    }
+
     #[test]
     fn learns_justfile_steps() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -780,11 +1017,142 @@ mod tests {
     }
 
     #[test]
+    fn learns_justfile_split_test_steps() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            temp.path().join("justfile"),
+            "lint:\n\tjust lint\n\nbuild:\n\tjust build\n\ntest-unit:\n\tjust test-unit\n\ntest-integration:\n\tjust test-integration\n\ntest-e2e:\n\tjust test-e2e\n",
+        )
+        .expect("write justfile");
+
+        let (_prepare, fast, full) = infer_steps(temp.path()).expect("infer steps");
+
+        assert_eq!(
+            fast,
+            vec![
+                step("just-lint", "just lint", StepPhase::Lint),
+                step("just-build", "just build", StepPhase::Build),
+                step("just-test-unit", "just test-unit", StepPhase::Test),
+            ]
+        );
+        assert_eq!(
+            full,
+            vec![
+                step("just-lint", "just lint", StepPhase::Lint),
+                step("just-build", "just build", StepPhase::Build),
+                step("just-test-unit", "just test-unit", StepPhase::Test),
+                step(
+                    "just-test-integration",
+                    "just test-integration",
+                    StepPhase::Test,
+                ),
+                step("just-test-e2e", "just test-e2e", StepPhase::Test),
+            ]
+        );
+    }
+
+    #[test]
+    fn learns_node_split_test_scripts() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            temp.path().join("package.json"),
+            r#"{
+              "scripts": {
+                "lint": "eslint .",
+                "build": "vite build",
+                "test:unit": "vitest run",
+                "test:integration": "vitest run integration",
+                "test:e2e": "playwright test"
+              }
+            }"#,
+        )
+        .expect("write package.json");
+
+        let (prepare, fast, full) = infer_steps(temp.path()).expect("infer steps");
+
+        assert_eq!(prepare, Vec::<RepoCiStep>::new());
+        assert_eq!(
+            fast,
+            vec![
+                step("node-lint", "npm run lint", StepPhase::Lint),
+                step("node-build", "npm run build", StepPhase::Build),
+                step("node-test-unit", "npm run test:unit", StepPhase::Test),
+            ]
+        );
+        assert_eq!(
+            full,
+            vec![
+                step("node-lint", "npm run lint", StepPhase::Lint),
+                step("node-build", "npm run build", StepPhase::Build),
+                step("node-test-unit", "npm run test:unit", StepPhase::Test),
+                step(
+                    "node-test-integration",
+                    "npm run test:integration",
+                    StepPhase::Test,
+                ),
+                step("node-test-e2e", "npm run test:e2e", StepPhase::Test),
+            ]
+        );
+    }
+
+    #[test]
+    fn workflows_take_priority_over_makefile_steps() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(temp.path().join(".github/workflows")).expect("workflow dir");
+        fs::write(
+            temp.path().join("Makefile"),
+            "lint:\n\t@echo make lint\n\nbuild:\n\t@echo make build\n\ntest:\n\t@echo make test\n",
+        )
+        .expect("write makefile");
+        fs::write(
+            temp.path().join(".github/workflows/ci.yml"),
+            r#"
+name: CI
+jobs:
+  test:
+    steps:
+      - run: make lint-ci
+      - run: make build-ci
+      - run: make test-unit
+      - run: make test-integration
+      - run: make test-e2e
+"#,
+        )
+        .expect("write workflow");
+
+        let (prepare, fast, full) = infer_steps(temp.path()).expect("infer steps");
+
+        assert_eq!(prepare, Vec::<RepoCiStep>::new());
+        assert_eq!(
+            fast,
+            vec![
+                step("workflow-lint", "make lint-ci", StepPhase::Lint),
+                step("workflow-build", "make build-ci", StepPhase::Build),
+                step("workflow-test-unit", "make test-unit", StepPhase::Test),
+            ]
+        );
+        assert_eq!(
+            full,
+            vec![
+                step("workflow-lint", "make lint-ci", StepPhase::Lint),
+                step("workflow-build", "make build-ci", StepPhase::Build),
+                step("workflow-test-unit", "make test-unit", StepPhase::Test),
+                step(
+                    "workflow-test-integration",
+                    "make test-integration",
+                    StepPhase::Test,
+                ),
+                step("workflow-test-e2e", "make test-e2e", StepPhase::Test),
+            ]
+        );
+    }
+
+    #[test]
     fn learns_makefile_steps_for_scala_repo() {
         let temp = tempfile::tempdir().expect("tempdir");
         fs::write(
             temp.path().join("Makefile"),
-            "lint:\n\t@echo lint\n\nbuild:\n\t@echo build\n\ntest-unit:\n\t@echo unit\n\ntest-integration:\n\t@echo integration\n",
+            "lint:\n\t@echo lint\n\nbuild:\n\t@echo build\n\ntest-unit:\n\t@echo unit\n\ntest-integration:\n\t@echo integration\n\ntest-e2e:\n\t@echo e2e\n",
         )
         .expect("write makefile");
         fs::write(temp.path().join("build.sbt"), "lazy val root = project").expect("write sbt");
@@ -811,6 +1179,7 @@ mod tests {
                     "make test-integration",
                     StepPhase::Test,
                 ),
+                step("make-test-e2e", "make test-e2e", StepPhase::Test),
             ]
         );
     }
@@ -863,6 +1232,90 @@ mod tests {
                 PathBuf::from("build.sbt"),
                 PathBuf::from("project/plugins.sbt"),
             ]
+        );
+    }
+
+    #[test]
+    fn manifest_fingerprint_changes_when_steps_change() {
+        let mut manifest = RepoCiManifest {
+            version: MANIFEST_VERSION,
+            repo_root: PathBuf::from("/tmp/repo"),
+            repo_key: "repo".to_string(),
+            source_key: "source".to_string(),
+            automation: AutomationMode::Local,
+            local_test_time_budget_sec: 300,
+            learned_at_unix_sec: 1,
+            learning_sources: vec![SourceHash {
+                path: PathBuf::from("Cargo.toml"),
+                sha256: "abc".to_string(),
+                kind: SourceKind::BuildManifest,
+            }],
+            inferred_issue_types: Vec::new(),
+            prepare_steps: Vec::new(),
+            fast_steps: Vec::new(),
+            full_steps: Vec::new(),
+            validation: ValidationStatus::NotRun,
+        };
+        let first = manifest_fingerprint(&manifest);
+
+        manifest
+            .fast_steps
+            .push(step("test", "cargo test", StepPhase::Test));
+
+        assert_ne!(first, manifest_fingerprint(&manifest));
+    }
+
+    #[test]
+    fn artifact_write_read_and_cached_pass_lookup() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).expect("create repo");
+        let outcome = learn_with_plan(
+            &codex_home,
+            &repo,
+            LearnOptions {
+                automation: AutomationMode::Local,
+                local_test_time_budget_sec: 300,
+            },
+            LearnedPlan {
+                prepare_steps: Vec::new(),
+                fast_steps: vec![step("ok", "true", StepPhase::Test)],
+                full_steps: Vec::new(),
+            },
+        )
+        .expect("learn");
+        let run = CapturedRun {
+            status: CapturedExitStatus {
+                code: Some(0),
+                success: true,
+            },
+            stdout: "ok\n".to_string(),
+            stderr: String::new(),
+            steps: vec![CapturedStep {
+                id: "ok".to_string(),
+                event: CapturedStepEvent::Finished,
+                exit_code: Some(0),
+            }],
+        };
+
+        let artifact = store_captured_run_artifact(
+            &codex_home,
+            &outcome.paths,
+            &outcome.manifest,
+            RunMode::Fast,
+            &run,
+            std::time::Duration::from_millis(/*millis*/ 12),
+        )
+        .expect("store artifact");
+
+        assert_eq!(
+            read_run_artifact(&codex_home, &artifact.artifact_id).expect("read"),
+            artifact
+        );
+        assert_eq!(
+            lookup_cached_passing_run(&codex_home, &repo, RunMode::Fast).expect("cache"),
+            Some(artifact)
         );
     }
 
@@ -968,7 +1421,10 @@ mod tests {
         let manifest = RepoCiManifest {
             version: MANIFEST_VERSION,
             repo_root: repo.clone(),
-            repo_key: repo_key(&repo),
+            repo_key: cicd_artifacts::repo_key(&repo),
+            source_key: cicd_artifacts::source_key(&artifact_sources(
+                &collect_sources(&repo).expect("sources"),
+            )),
             automation: AutomationMode::LocalAndRemote,
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
@@ -980,11 +1436,173 @@ mod tests {
             validation: ValidationStatus::NotRun,
         };
         write_manifest(&paths.manifest_path, &manifest).expect("write manifest");
+        register_manifest_artifact_state(&codex_home, &paths, &manifest).expect("register state");
 
         fs::write(repo.join("Cargo.toml"), "[package]\nname = \"y\"\n").expect("update cargo");
 
         let status = status(&codex_home, &repo).expect("status");
         assert_eq!(status.stale_sources, manifest.learning_sources);
+    }
+
+    #[test]
+    fn tracks_added_source_hashes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).expect("create repo");
+        fs::write(repo.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
+        let paths = paths_for_repo(&codex_home, &repo).expect("paths");
+        fs::create_dir_all(&paths.state_dir).expect("state dir");
+        let manifest = RepoCiManifest {
+            version: MANIFEST_VERSION,
+            repo_root: repo.clone(),
+            repo_key: cicd_artifacts::repo_key(&repo),
+            source_key: cicd_artifacts::source_key(&artifact_sources(
+                &collect_sources(&repo).expect("sources"),
+            )),
+            automation: AutomationMode::LocalAndRemote,
+            local_test_time_budget_sec: 300,
+            learned_at_unix_sec: 1,
+            learning_sources: collect_sources(&repo).expect("sources"),
+            inferred_issue_types: default_issue_types(),
+            prepare_steps: vec![],
+            fast_steps: vec![],
+            full_steps: vec![],
+            validation: ValidationStatus::NotRun,
+        };
+        write_manifest(&paths.manifest_path, &manifest).expect("write manifest");
+        register_manifest_artifact_state(&codex_home, &paths, &manifest).expect("register state");
+
+        fs::write(repo.join("Cargo.lock"), "# lock\n").expect("write lockfile");
+
+        let status = status(&codex_home, &repo).expect("status");
+        let paths = status
+            .stale_sources
+            .into_iter()
+            .map(|source| source.path)
+            .collect::<Vec<_>>();
+        assert_eq!(paths, vec![PathBuf::from("Cargo.lock")]);
+    }
+
+    #[test]
+    fn tracks_removed_source_hashes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).expect("create repo");
+        fs::write(repo.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
+        fs::write(repo.join("Cargo.lock"), "# lock\n").expect("write lockfile");
+        let paths = paths_for_repo(&codex_home, &repo).expect("paths");
+        fs::create_dir_all(&paths.state_dir).expect("state dir");
+        let learning_sources = collect_sources(&repo).expect("sources");
+        let manifest = RepoCiManifest {
+            version: MANIFEST_VERSION,
+            repo_root: repo.clone(),
+            repo_key: cicd_artifacts::repo_key(&repo),
+            source_key: cicd_artifacts::source_key(&artifact_sources(&learning_sources)),
+            automation: AutomationMode::LocalAndRemote,
+            local_test_time_budget_sec: 300,
+            learned_at_unix_sec: 1,
+            learning_sources,
+            inferred_issue_types: default_issue_types(),
+            prepare_steps: vec![],
+            fast_steps: vec![],
+            full_steps: vec![],
+            validation: ValidationStatus::NotRun,
+        };
+        write_manifest(&paths.manifest_path, &manifest).expect("write manifest");
+        register_manifest_artifact_state(&codex_home, &paths, &manifest).expect("register state");
+
+        fs::remove_file(repo.join("Cargo.lock")).expect("remove lockfile");
+
+        let status = status(&codex_home, &repo).expect("status");
+        let paths = status
+            .stale_sources
+            .into_iter()
+            .map(|source| source.path)
+            .collect::<Vec<_>>();
+        assert_eq!(paths, vec![PathBuf::from("Cargo.lock")]);
+    }
+
+    #[test]
+    fn status_updates_last_hit_when_using_stale_source_artifact() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).expect("create repo");
+        fs::write(repo.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
+        let paths = paths_for_repo(&codex_home, &repo).expect("paths");
+        fs::create_dir_all(&paths.state_dir).expect("state dir");
+        let learning_sources = collect_sources(&repo).expect("sources");
+        let manifest = RepoCiManifest {
+            version: MANIFEST_VERSION,
+            repo_root: repo.clone(),
+            repo_key: cicd_artifacts::repo_key(&repo),
+            source_key: cicd_artifacts::source_key(&artifact_sources(&learning_sources)),
+            automation: AutomationMode::LocalAndRemote,
+            local_test_time_budget_sec: 300,
+            learned_at_unix_sec: 1,
+            learning_sources,
+            inferred_issue_types: default_issue_types(),
+            prepare_steps: vec![],
+            fast_steps: vec![],
+            full_steps: vec![],
+            validation: ValidationStatus::NotRun,
+        };
+        write_manifest(&paths.manifest_path, &manifest).expect("write manifest");
+        register_manifest_artifact_state(&codex_home, &paths, &manifest).expect("register state");
+        assert_eq!(
+            cicd_artifacts::artifact_last_hit_unix_sec(&codex_home, &paths.state_dir)
+                .expect("last hit"),
+            None
+        );
+
+        fs::write(repo.join("Cargo.toml"), "[package]\nname = \"y\"\n").expect("update cargo");
+
+        let status = status(&codex_home, &repo).expect("status");
+        assert!(status.manifest.is_some());
+        assert!(
+            cicd_artifacts::artifact_last_hit_unix_sec(&codex_home, &paths.state_dir)
+                .expect("last hit")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn status_ignores_unregistered_scope_artifacts() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).expect("create repo");
+        fs::write(repo.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
+        let repo_key = cicd_artifacts::repo_key(&repo);
+        let unregistered_dir = cicd_artifacts::repo_artifacts_dir(&codex_home, &repo_key);
+        fs::create_dir_all(&unregistered_dir).expect("unregistered dir");
+        fs::write(unregistered_dir.join("manifest.json"), "not json\n")
+            .expect("unregistered manifest");
+
+        let status = status(&codex_home, &repo).expect("status");
+
+        assert!(status.manifest.is_none());
+    }
+
+    #[test]
+    fn paths_for_repo_does_not_record_artifact_hits() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).expect("create repo");
+        fs::write(repo.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("write cargo");
+        let paths = paths_for_repo(&codex_home, &repo).expect("paths");
+        fs::create_dir_all(&paths.state_dir).expect("state dir");
+
+        let _ = paths_for_repo(&codex_home, &repo).expect("paths");
+
+        assert_eq!(
+            cicd_artifacts::artifact_last_hit_unix_sec(&codex_home, &paths.state_dir)
+                .expect("last hit"),
+            None
+        );
     }
 
     #[test]
@@ -1004,6 +1622,7 @@ mod tests {
             version: MANIFEST_VERSION,
             repo_root: repo,
             repo_key: "repo".to_string(),
+            source_key: "source".to_string(),
             automation: AutomationMode::Local,
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
@@ -1016,7 +1635,13 @@ mod tests {
         };
         write_runner(&paths.runner_path, &manifest).expect("write runner");
 
-        let run = capture_runner(&paths, "fast").expect("capture");
+        let run = capture_runner(
+            &paths,
+            "fast",
+            manifest.local_test_time_budget_sec,
+            &RepoCiCancellation::default(),
+        )
+        .expect("capture");
 
         assert!(
             run.status.success,
@@ -1041,31 +1666,229 @@ mod tests {
     }
 
     #[test]
-    fn reads_legacy_manifest_without_inferred_issue_types() {
+    fn capture_runner_times_out_and_records_started_step() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let manifest_path = temp.path().join("manifest.json");
-        fs::write(
-            &manifest_path,
-            serde_json::json!({
-                "version": 1,
-                "repo_root": temp.path(),
-                "repo_key": "repo",
-                "automation": "local",
-                "local_test_time_budget_sec": 300,
-                "learned_at_unix_sec": 1,
-                "learning_sources": [],
-                "prepare_steps": [],
-                "fast_steps": [],
-                "full_steps": [],
-                "validation": "not_run"
-            })
-            .to_string(),
+        let repo = temp.path().join("repo");
+        let state_dir = temp.path().join("state");
+        fs::create_dir(&repo).expect("create repo");
+        fs::create_dir(&state_dir).expect("create state");
+        let paths = RepoCiPaths {
+            repo_root: repo.clone(),
+            state_dir,
+            manifest_path: temp.path().join("manifest.json"),
+            runner_path: temp.path().join("run_ci.sh"),
+        };
+        let manifest = RepoCiManifest {
+            version: MANIFEST_VERSION,
+            repo_root: repo,
+            repo_key: "repo".to_string(),
+            source_key: "source".to_string(),
+            automation: AutomationMode::Local,
+            local_test_time_budget_sec: 1,
+            learned_at_unix_sec: 1,
+            learning_sources: vec![],
+            inferred_issue_types: default_issue_types(),
+            prepare_steps: vec![],
+            fast_steps: vec![step("slow", "sleep 30", StepPhase::Test)],
+            full_steps: vec![],
+            validation: ValidationStatus::NotRun,
+        };
+        write_runner(&paths.runner_path, &manifest).expect("write runner");
+
+        let run = capture_runner(
+            &paths,
+            "fast",
+            manifest.local_test_time_budget_sec,
+            &RepoCiCancellation::default(),
         )
-        .expect("write manifest");
+        .expect("capture");
 
-        let manifest = read_manifest(&manifest_path).expect("read manifest");
+        assert_eq!(
+            run.status,
+            CapturedExitStatus {
+                code: None,
+                success: false
+            }
+        );
+        assert!(
+            run.stderr.contains("repo CI fast timed out after 1s"),
+            "{}",
+            run.stderr
+        );
+        assert_eq!(
+            run.steps,
+            vec![CapturedStep {
+                id: "slow".to_string(),
+                event: CapturedStepEvent::Started,
+                exit_code: None,
+            }]
+        );
+    }
 
-        assert_eq!(manifest.inferred_issue_types, Vec::<RepoCiIssueType>::new());
+    #[cfg(unix)]
+    #[test]
+    fn capture_runner_timeout_kills_descendant_processes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo = temp.path().join("repo");
+        let state_dir = temp.path().join("state");
+        fs::create_dir(&repo).expect("create repo");
+        fs::create_dir(&state_dir).expect("create state");
+        let child_pid_path = repo.join("child.pid");
+        let slow_command = format!("sleep 30 & echo $! > {} ; wait", child_pid_path.display());
+        let paths = RepoCiPaths {
+            repo_root: repo.clone(),
+            state_dir,
+            manifest_path: temp.path().join("manifest.json"),
+            runner_path: temp.path().join("run_ci.sh"),
+        };
+        let manifest = RepoCiManifest {
+            version: MANIFEST_VERSION,
+            repo_root: repo,
+            repo_key: "repo".to_string(),
+            source_key: "source".to_string(),
+            automation: AutomationMode::Local,
+            local_test_time_budget_sec: 1,
+            learned_at_unix_sec: 1,
+            learning_sources: vec![],
+            inferred_issue_types: default_issue_types(),
+            prepare_steps: vec![],
+            fast_steps: vec![step("slow", &slow_command, StepPhase::Test)],
+            full_steps: vec![],
+            validation: ValidationStatus::NotRun,
+        };
+        write_runner(&paths.runner_path, &manifest).expect("write runner");
+
+        let run = capture_runner(
+            &paths,
+            "fast",
+            manifest.local_test_time_budget_sec,
+            &RepoCiCancellation::default(),
+        )
+        .expect("capture");
+
+        assert!(!run.status.success);
+        let child_pid = fs::read_to_string(&child_pid_path)
+            .expect("read child pid")
+            .trim()
+            .to_string();
+        assert_process_exits(&child_pid);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn capture_runner_cancellation_kills_descendant_processes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo = temp.path().join("repo");
+        let state_dir = temp.path().join("state");
+        fs::create_dir(&repo).expect("create repo");
+        fs::create_dir(&state_dir).expect("create state");
+        let child_pid_path = repo.join("child.pid");
+        let slow_command = format!("sleep 30 & echo $! > {} ; wait", child_pid_path.display());
+        let paths = RepoCiPaths {
+            repo_root: repo.clone(),
+            state_dir,
+            manifest_path: temp.path().join("manifest.json"),
+            runner_path: temp.path().join("run_ci.sh"),
+        };
+        let manifest = RepoCiManifest {
+            version: MANIFEST_VERSION,
+            repo_root: repo,
+            repo_key: "repo".to_string(),
+            source_key: "source".to_string(),
+            automation: AutomationMode::Local,
+            local_test_time_budget_sec: 300,
+            learned_at_unix_sec: 1,
+            learning_sources: vec![],
+            inferred_issue_types: default_issue_types(),
+            prepare_steps: vec![],
+            fast_steps: vec![step("slow", &slow_command, StepPhase::Test)],
+            full_steps: vec![],
+            validation: ValidationStatus::NotRun,
+        };
+        write_runner(&paths.runner_path, &manifest).expect("write runner");
+
+        let cancellation = RepoCiCancellation::default();
+        let cancellation_for_thread = cancellation.clone();
+        let child_pid_path_for_thread = child_pid_path.clone();
+        let cancel_thread = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while std::time::Instant::now() < deadline {
+                if child_pid_path_for_thread.exists() {
+                    cancellation_for_thread.cancel();
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            cancellation_for_thread.cancel();
+        });
+        let run = capture_runner(
+            &paths,
+            "fast",
+            manifest.local_test_time_budget_sec,
+            &cancellation,
+        )
+        .expect("capture");
+        cancel_thread.join().expect("cancel thread");
+
+        assert!(!run.status.success);
+        assert!(
+            run.stderr.contains("repo CI fast was cancelled"),
+            "{}",
+            run.stderr
+        );
+        let child_pid = fs::read_to_string(&child_pid_path)
+            .expect("read child pid")
+            .trim()
+            .to_string();
+        assert_process_exits(&child_pid);
+    }
+
+    #[test]
+    fn shared_runner_uses_current_repo_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let learned_repo = temp.path().join("learned");
+        let current_repo = temp.path().join("current");
+        let state_dir = temp.path().join("state");
+        fs::create_dir(&learned_repo).expect("create learned repo");
+        fs::create_dir(&current_repo).expect("create current repo");
+        fs::create_dir(&state_dir).expect("create state");
+        fs::write(current_repo.join("marker"), "").expect("write marker");
+        let paths = RepoCiPaths {
+            repo_root: current_repo,
+            state_dir,
+            manifest_path: temp.path().join("manifest.json"),
+            runner_path: temp.path().join("run_ci.sh"),
+        };
+        let manifest = RepoCiManifest {
+            version: MANIFEST_VERSION,
+            repo_root: learned_repo,
+            repo_key: "repo".to_string(),
+            source_key: "source".to_string(),
+            automation: AutomationMode::Local,
+            local_test_time_budget_sec: 300,
+            learned_at_unix_sec: 1,
+            learning_sources: vec![],
+            inferred_issue_types: default_issue_types(),
+            prepare_steps: vec![],
+            fast_steps: vec![step("current-root", "test -f marker", StepPhase::Test)],
+            full_steps: vec![],
+            validation: ValidationStatus::NotRun,
+        };
+        write_runner(&paths.runner_path, &manifest).expect("write runner");
+
+        let run = capture_runner(
+            &paths,
+            "fast",
+            manifest.local_test_time_budget_sec,
+            &RepoCiCancellation::default(),
+        )
+        .expect("capture");
+
+        assert!(
+            run.status.success,
+            "stdout:\n{}\nstderr:\n{}",
+            run.stdout, run.stderr
+        );
     }
 
     #[test]
