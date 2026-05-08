@@ -8,4 +8,5 @@ mod mappers;
 mod serde_helpers;
 pub mod thread_history;
 pub mod v1;
+#[path = "v2/mod.rs"]
 pub mod v2;

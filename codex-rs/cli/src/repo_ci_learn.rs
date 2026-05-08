@@ -38,6 +38,9 @@ pub(crate) async fn learn_repo_ci_with_ai(
         learning_hints.workflow_run_hints.len(),
         learning_hints.workflow_history_hints.len()
     );
+    if options.learning_instruction.is_some() {
+        eprintln!("repo-ci learn: applying custom learner instruction");
+    }
 
     for attempt in 1..=AI_LEARN_MAX_ATTEMPTS {
         eprintln!(
@@ -46,6 +49,7 @@ pub(crate) async fn learn_repo_ci_with_ai(
         let prompt = codex_repo_ci::render_repo_ci_learning_prompt(
             &repo_root,
             &learning_hints,
+            options.learning_instruction.as_deref(),
             options.local_test_time_budget_sec,
             attempt,
             prior_plan.as_ref(),
@@ -111,6 +115,25 @@ pub(crate) async fn learn_repo_ci_with_ai(
     Err(anyhow!(
         "repo-ci learner could not produce a passing runner after {AI_LEARN_MAX_ATTEMPTS} attempts"
     ))
+}
+
+pub(crate) async fn normalize_repo_ci_learning_instruction_with_ai(
+    root_config_overrides: &CliConfigOverrides,
+    repo_root: &Path,
+    instruction: &str,
+    timeout: Duration,
+) -> Result<String> {
+    let prompt = codex_repo_ci::render_learning_instruction_validation_prompt(instruction);
+    let validation: codex_repo_ci::RepoCiLearningInstructionValidation = run_repo_ci_exec_json(
+        root_config_overrides,
+        repo_root,
+        &prompt,
+        codex_repo_ci::learning_instruction_validation_schema(),
+        "repo-ci learner instruction validation",
+        timeout,
+    )
+    .await?;
+    validation.into_instruction()
 }
 
 async fn run_exec_for_plan(

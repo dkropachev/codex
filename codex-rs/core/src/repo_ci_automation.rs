@@ -17,6 +17,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ImplementMode;
 use codex_protocol::protocol::RepoCiIssueType;
 use codex_protocol::protocol::RepoCiPhase;
 use codex_protocol::protocol::RepoCiScope;
@@ -167,8 +168,11 @@ fn repo_ci_owned_changed_paths(
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EffectiveRepoCiConfig {
     automation: RepoCiAutomationToml,
+    repo_ci_checks_enabled: bool,
+    implement_enabled: bool,
     local_test_time_budget_sec: u64,
     long_ci: bool,
+    learning_instruction: Option<String>,
     max_local_fix_rounds: u8,
     max_remote_fix_rounds: u8,
     review_issue_types: Vec<RepoCiIssueType>,
@@ -188,8 +192,11 @@ impl EffectiveRepoCiConfig {
             automation: scope
                 .automation
                 .unwrap_or(RepoCiAutomationToml::LocalAndRemote),
+            repo_ci_checks_enabled: true,
+            implement_enabled: true,
             local_test_time_budget_sec: scope.local_test_time_budget_sec.unwrap_or(300),
             long_ci,
+            learning_instruction: scope.learning_instruction.clone(),
             max_local_fix_rounds: scope.max_local_fix_rounds.unwrap_or(3),
             max_remote_fix_rounds: scope.max_remote_fix_rounds.unwrap_or(2),
             review_issue_types,
@@ -209,10 +216,13 @@ impl EffectiveRepoCiConfig {
         }
         Some(Self {
             automation: session_mode_to_automation(mode),
+            repo_ci_checks_enabled: true,
+            implement_enabled: true,
             local_test_time_budget_sec: base
                 .and_then(|scope| scope.local_test_time_budget_sec)
                 .unwrap_or(300),
             long_ci,
+            learning_instruction: base.and_then(|scope| scope.learning_instruction.clone()),
             max_local_fix_rounds: base
                 .and_then(|scope| scope.max_local_fix_rounds)
                 .unwrap_or(3),
@@ -227,21 +237,25 @@ impl EffectiveRepoCiConfig {
     }
 
     fn local_enabled(&self) -> bool {
-        matches!(
-            self.automation,
-            RepoCiAutomationToml::Local | RepoCiAutomationToml::LocalAndRemote
-        )
+        self.repo_ci_checks_enabled
+            && matches!(
+                self.automation,
+                RepoCiAutomationToml::Local | RepoCiAutomationToml::LocalAndRemote
+            )
     }
 
     fn remote_enabled(&self) -> bool {
-        matches!(
-            self.automation,
-            RepoCiAutomationToml::Remote | RepoCiAutomationToml::LocalAndRemote
-        )
+        self.repo_ci_checks_enabled
+            && matches!(
+                self.automation,
+                RepoCiAutomationToml::Remote | RepoCiAutomationToml::LocalAndRemote
+            )
     }
 
     fn review_enabled(&self) -> bool {
-        !self.review_issue_types.is_empty() && self.max_review_fix_rounds > 0
+        self.implement_enabled
+            && !self.review_issue_types.is_empty()
+            && self.max_review_fix_rounds > 0
     }
 
     fn local_run_mode(&self) -> codex_repo_ci::RunMode {
@@ -438,6 +452,7 @@ fn format_review_item_lines(lines: impl Iterator<Item = String>) -> String {
 enum RepoCiLearningRequirement {
     Initial,
     Stale(Vec<PathBuf>),
+    LearningInstructionChanged,
 }
 
 impl RepoCiLearningRequirement {
@@ -451,6 +466,9 @@ impl RepoCiLearningRequirement {
                 "Repo CI relearning started because tracked learning sources changed: {}.",
                 format_learning_paths(paths)
             ),
+            Self::LearningInstructionChanged => {
+                "Repo CI relearning started because the learner instruction changed.".to_string()
+            }
         }
     }
 
@@ -462,6 +480,10 @@ impl RepoCiLearningRequirement {
             Self::Stale(_) => {
                 "Repo CI relearning passed and validated an updated local runner.".to_string()
             }
+            Self::LearningInstructionChanged => {
+                "Repo CI relearning passed and validated the updated learner instruction."
+                    .to_string()
+            }
         }
     }
 
@@ -469,6 +491,7 @@ impl RepoCiLearningRequirement {
         match self {
             Self::Initial => format!("Repo CI learning failed: {err:#}"),
             Self::Stale(_) => format!("Repo CI relearning failed: {err:#}"),
+            Self::LearningInstructionChanged => format!("Repo CI relearning failed: {err:#}"),
         }
     }
 }
@@ -487,16 +510,6 @@ pub(crate) async fn maybe_run_after_agent(
     if current_snapshot == state.initial_snapshot {
         return None;
     }
-    if ensure_repo_ci_learned(sess, turn_context, &config, cancellation_token)
-        .await
-        .is_err()
-    {
-        return None;
-    }
-    if let Some(refreshed_config) = effective_config(turn_context) {
-        config = refreshed_config;
-    }
-
     let mut review_tracker = RepoCiReviewIssueTracker::default();
     let mut ran_review = false;
     let mut review_summary_state = RepoCiState::Passed;
@@ -626,6 +639,24 @@ pub(crate) async fn maybe_run_after_agent(
                 .await;
             }
         };
+    }
+
+    if (config.local_enabled() || config.remote_enabled())
+        && ensure_repo_ci_learned(sess, turn_context, &config, cancellation_token)
+            .await
+            .is_err()
+    {
+        send_final_review_summary!();
+        return None;
+    }
+    if (config.local_enabled() || config.remote_enabled())
+        && let Some(refreshed_config) = effective_config(turn_context)
+    {
+        config = refreshed_config;
+    }
+    if !config.local_enabled() && !config.remote_enabled() {
+        send_final_review_summary!();
+        return None;
     }
 
     send_status(
@@ -1139,7 +1170,9 @@ async fn ensure_repo_ci_learned(
     cancellation_token: &CancellationToken,
 ) -> Result<()> {
     let status = codex_repo_ci::status(&turn_context.config.codex_home, &turn_context.cwd)?;
-    let Some(requirement) = repo_ci_learning_requirement(&status) else {
+    let Some(requirement) =
+        repo_ci_learning_requirement(&status, config.learning_instruction.as_deref())
+    else {
         return Ok(());
     };
     let result = async {
@@ -1161,11 +1194,12 @@ async fn ensure_repo_ci_learned(
         .await;
 
         for attempt in 1..=codex_repo_ci::AI_LEARN_MAX_ATTEMPTS {
-            let prompt = codex_repo_ci::render_repo_ci_learning_prompt(
-                &repo_root,
-                &learning_hints,
-                config.local_test_time_budget_sec,
-                attempt,
+                let prompt = codex_repo_ci::render_repo_ci_learning_prompt(
+                    &repo_root,
+                    &learning_hints,
+                    config.learning_instruction.as_deref(),
+                    config.local_test_time_budget_sec,
+                    attempt,
                 prior_plan.as_ref(),
                 failure_feedback.as_deref(),
             );
@@ -1193,6 +1227,7 @@ async fn ensure_repo_ci_learned(
                 let options = codex_repo_ci::LearnOptions {
                     automation: automation_to_repo_ci(config.automation),
                     local_test_time_budget_sec: config.local_test_time_budget_sec,
+                    learning_instruction: config.learning_instruction.clone(),
                 };
                 move || {
                     codex_repo_ci::learn_with_plan_with_cancellation(
@@ -1352,9 +1387,17 @@ fn format_remote_commit_applied(applied: &codex_repo_ci::RemoteCommitApplied) ->
 
 fn repo_ci_learning_requirement(
     status: &codex_repo_ci::StatusOutcome,
+    learning_instruction: Option<&str>,
 ) -> Option<RepoCiLearningRequirement> {
     if status.manifest.is_none() {
         return Some(RepoCiLearningRequirement::Initial);
+    }
+    if status
+        .manifest
+        .as_ref()
+        .is_some_and(|manifest| manifest.learning_instruction.as_deref() != learning_instruction)
+    {
+        return Some(RepoCiLearningRequirement::LearningInstructionChanged);
     }
     if status.stale_sources.is_empty() {
         None
@@ -1714,6 +1757,36 @@ where
         cancellation_token,
     )
     .await
+}
+
+pub(crate) async fn validate_repo_ci_learning_instruction(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    instruction: &str,
+    cancellation_token: &CancellationToken,
+) -> Result<String> {
+    let prompt = codex_repo_ci::render_learning_instruction_validation_prompt(instruction);
+    let validation: codex_repo_ci::RepoCiLearningInstructionValidation =
+        run_repo_ci_read_only_subagent_json(
+            sess,
+            turn_context,
+            ModelRouterSource::Module("repo_ci.learn.instructions"),
+            SubAgentSource::Other("repo_ci_learn".to_string()),
+            prompt,
+            codex_repo_ci::learning_instruction_validation_schema(),
+            cancellation_token,
+        )
+        .await?;
+    validation.into_instruction()
+}
+
+pub(crate) fn effective_repo_ci_learning_instruction(turn_context: &TurnContext) -> Option<String> {
+    turn_context
+        .config
+        .repo_ci
+        .as_ref()
+        .and_then(|repo_ci| scoped_repo_ci_config(&turn_context.cwd, repo_ci))
+        .and_then(|scope| scope.learning_instruction)
 }
 
 async fn run_repo_ci_read_only_subagent_json<T>(
@@ -2099,10 +2172,18 @@ fn effective_config(turn_context: &TurnContext) -> Option<EffectiveRepoCiConfig>
     if repo_ci_suppressed_for_session_source(&turn_context.session_source) {
         return None;
     }
+    let implement = turn_context.config.implement.as_ref();
+    let explicit_implement_enabled = implement.and_then(|config| config.enabled);
+    let implicit_mode = implement
+        .and_then(|config| config.mode)
+        .is_some_and(|mode| mode == ImplementMode::Implicit);
+    let implement_active_without_repo_ci = explicit_implement_enabled == Some(true)
+        && (!implicit_mode || turn_context.implement_requested);
     if !turn_context
         .config
         .features
         .enabled(codex_features::Feature::RepoCi)
+        && !implement_active_without_repo_ci
     {
         return None;
     }
@@ -2123,7 +2204,7 @@ fn effective_config(turn_context: &TurnContext) -> Option<EffectiveRepoCiConfig>
         })
         .or_else(|| inferred_issue_types(turn_context))
         .unwrap_or_else(codex_repo_ci::default_issue_types);
-    let review_rounds = turn_context
+    let legacy_review_rounds = turn_context
         .repo_ci_review_rounds
         .or(turn_context.config.repo_ci_review_rounds)
         .or_else(|| {
@@ -2131,32 +2212,75 @@ fn effective_config(turn_context: &TurnContext) -> Option<EffectiveRepoCiConfig>
                 .as_ref()
                 .and_then(|scope| scope.max_review_fix_rounds)
         });
+    let implement_enabled = explicit_implement_enabled;
+    let review_rounds = implement
+        .and_then(|config| config.max_cycles)
+        .or_else(|| {
+            explicit_implement_enabled
+                .is_none()
+                .then_some(legacy_review_rounds)
+                .flatten()
+        })
+        .unwrap_or(2);
     let long_ci = turn_context
         .repo_ci_long_ci
         .or(turn_context.config.repo_ci_long_ci)
         .or_else(|| scoped_config.as_ref().and_then(|scope| scope.long_ci))
         .unwrap_or(false);
-    if let Some(mode) = turn_context.repo_ci_session_mode {
-        return EffectiveRepoCiConfig::from_session_mode(
+    let mut config = if let Some(mode) = turn_context.repo_ci_session_mode {
+        EffectiveRepoCiConfig::from_session_mode(
             mode,
             scoped_config.as_ref(),
-            review_issue_types,
-            review_rounds,
+            review_issue_types.clone(),
+            Some(review_rounds),
             long_ci,
-        );
-    }
-    if let Some(mode) = turn_context.config.repo_ci_session_mode {
-        return EffectiveRepoCiConfig::from_session_mode(
+        )
+    } else if let Some(mode) = turn_context.config.repo_ci_session_mode {
+        EffectiveRepoCiConfig::from_session_mode(
             mode,
             scoped_config.as_ref(),
-            review_issue_types,
-            review_rounds,
+            review_issue_types.clone(),
+            Some(review_rounds),
             long_ci,
-        );
+        )
+    } else {
+        scoped_config.as_ref().and_then(|scope| {
+            EffectiveRepoCiConfig::from_scope(scope, review_issue_types.clone(), long_ci)
+        })
+    };
+    let legacy_implement_enabled = config.is_some();
+    let implement_enabled = if implicit_mode && !turn_context.implement_requested {
+        false
+    } else {
+        implement_enabled.unwrap_or(legacy_implement_enabled)
+    };
+    if let Some(config) = config.as_mut() {
+        config.implement_enabled = implement_enabled;
+        config.max_review_fix_rounds = review_rounds;
+    } else if implement_enabled {
+        let base = scoped_config.as_ref();
+        config = Some(EffectiveRepoCiConfig {
+            automation: base
+                .and_then(|scope| scope.automation)
+                .unwrap_or(RepoCiAutomationToml::LocalAndRemote),
+            repo_ci_checks_enabled: false,
+            implement_enabled: true,
+            local_test_time_budget_sec: base
+                .and_then(|scope| scope.local_test_time_budget_sec)
+                .unwrap_or(300),
+            long_ci,
+            learning_instruction: base.and_then(|scope| scope.learning_instruction.clone()),
+            max_local_fix_rounds: base
+                .and_then(|scope| scope.max_local_fix_rounds)
+                .unwrap_or(3),
+            max_remote_fix_rounds: base
+                .and_then(|scope| scope.max_remote_fix_rounds)
+                .unwrap_or(2),
+            review_issue_types,
+            max_review_fix_rounds: review_rounds,
+        });
     }
-    scoped_config
-        .as_ref()
-        .and_then(|scope| EffectiveRepoCiConfig::from_scope(scope, review_issue_types, long_ci))
+    config
 }
 
 fn repo_ci_suppressed_for_session_source(source: &SessionSource) -> bool {
@@ -2209,6 +2333,10 @@ fn merge_repo_ci_scope(defaults: &RepoCiScopeToml, scope: &RepoCiScopeToml) -> R
         max_remote_fix_rounds: scope
             .max_remote_fix_rounds
             .or(defaults.max_remote_fix_rounds),
+        learning_instruction: scope
+            .learning_instruction
+            .clone()
+            .or_else(|| defaults.learning_instruction.clone()),
         review_issue_types: scope
             .review_issue_types
             .clone()
@@ -3059,8 +3187,11 @@ mod tests {
     fn review_empty_issue_types_disable_review_phase() {
         let config = EffectiveRepoCiConfig {
             automation: RepoCiAutomationToml::Local,
+            repo_ci_checks_enabled: true,
+            implement_enabled: true,
             local_test_time_budget_sec: 300,
             long_ci: false,
+            learning_instruction: None,
             max_local_fix_rounds: 3,
             max_remote_fix_rounds: 2,
             review_issue_types: Vec::new(),
@@ -3074,8 +3205,11 @@ mod tests {
     fn review_zero_rounds_disable_review_phase() {
         let config = EffectiveRepoCiConfig {
             automation: RepoCiAutomationToml::Local,
+            repo_ci_checks_enabled: true,
+            implement_enabled: true,
             local_test_time_budget_sec: 300,
             long_ci: false,
+            learning_instruction: None,
             max_local_fix_rounds: 3,
             max_remote_fix_rounds: 2,
             review_issue_types: codex_repo_ci::default_issue_types(),
@@ -3083,6 +3217,44 @@ mod tests {
         };
 
         assert!(!config.review_enabled());
+    }
+
+    #[test]
+    fn implement_disabled_turns_off_review_phase() {
+        let config = EffectiveRepoCiConfig {
+            automation: RepoCiAutomationToml::Local,
+            repo_ci_checks_enabled: true,
+            implement_enabled: false,
+            local_test_time_budget_sec: 300,
+            long_ci: false,
+            learning_instruction: None,
+            max_local_fix_rounds: 3,
+            max_remote_fix_rounds: 2,
+            review_issue_types: codex_repo_ci::default_issue_types(),
+            max_review_fix_rounds: 2,
+        };
+
+        assert!(!config.review_enabled());
+    }
+
+    #[test]
+    fn implement_only_disables_repo_ci_checks() {
+        let config = EffectiveRepoCiConfig {
+            automation: RepoCiAutomationToml::LocalAndRemote,
+            repo_ci_checks_enabled: false,
+            implement_enabled: true,
+            local_test_time_budget_sec: 300,
+            long_ci: false,
+            learning_instruction: None,
+            max_local_fix_rounds: 3,
+            max_remote_fix_rounds: 2,
+            review_issue_types: codex_repo_ci::default_issue_types(),
+            max_review_fix_rounds: 2,
+        };
+
+        assert!(config.review_enabled());
+        assert!(!config.local_enabled());
+        assert!(!config.remote_enabled());
     }
 
     #[test]
@@ -3150,8 +3322,11 @@ mod tests {
     fn targeted_review_prompt_lists_selected_and_excluded_issue_types() {
         let config = EffectiveRepoCiConfig {
             automation: RepoCiAutomationToml::Local,
+            repo_ci_checks_enabled: true,
+            implement_enabled: true,
             local_test_time_budget_sec: 300,
             long_ci: false,
+            learning_instruction: None,
             max_local_fix_rounds: 3,
             max_remote_fix_rounds: 2,
             review_issue_types: vec![RepoCiIssueType::Correctness, RepoCiIssueType::Security],
@@ -3568,7 +3743,7 @@ mod tests {
             stale_sources: Vec::new(),
         };
         assert_eq!(
-            repo_ci_learning_requirement(&missing),
+            repo_ci_learning_requirement(&missing, None),
             Some(RepoCiLearningRequirement::Initial)
         );
 
@@ -3583,6 +3758,7 @@ mod tests {
                 local_test_time_budget_sec: 300,
                 learned_at_unix_sec: 1,
                 learning_sources: Vec::new(),
+                learning_instruction: None,
                 inferred_issue_types: Vec::new(),
                 prepare_steps: Vec::new(),
                 fast_steps: Vec::new(),
@@ -3596,10 +3772,14 @@ mod tests {
             }],
         };
         assert_eq!(
-            repo_ci_learning_requirement(&stale),
+            repo_ci_learning_requirement(&stale, None),
             Some(RepoCiLearningRequirement::Stale(vec![
                 Path::new("Cargo.toml").to_path_buf()
             ]))
+        );
+        assert_eq!(
+            repo_ci_learning_requirement(&stale, Some("skip integration tests")),
+            Some(RepoCiLearningRequirement::LearningInstructionChanged)
         );
     }
 
@@ -3615,8 +3795,11 @@ mod tests {
             &repo_root,
             &EffectiveRepoCiConfig {
                 automation: RepoCiAutomationToml::Local,
+                repo_ci_checks_enabled: true,
+                implement_enabled: true,
                 local_test_time_budget_sec: 300,
                 long_ci: false,
+                learning_instruction: None,
                 max_local_fix_rounds: 3,
                 max_remote_fix_rounds: 2,
                 review_issue_types: Vec::new(),

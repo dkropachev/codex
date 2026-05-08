@@ -17,6 +17,7 @@ use crate::ValidationPhase;
 
 pub const AI_LEARN_MAX_ATTEMPTS: usize = 5;
 const MAX_FEEDBACK_BYTES: usize = 16_000;
+pub const MAX_LEARNING_INSTRUCTION_CHARS: usize = 1_200;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +26,40 @@ pub struct RepoCiAiLearnedPlan {
     pub prepare_steps: Vec<RepoCiStep>,
     pub fast_steps: Vec<RepoCiStep>,
     pub full_steps: Vec<RepoCiStep>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoCiLearningInstructionValidation {
+    pub accepted: bool,
+    pub normalized_instruction: String,
+    pub rejection_reason: String,
+}
+
+impl RepoCiLearningInstructionValidation {
+    pub fn into_instruction(self) -> Result<String> {
+        if !self.accepted {
+            let reason = self.rejection_reason.trim();
+            if reason.is_empty() {
+                return Err(anyhow!("repo-ci learner instruction was rejected"));
+            }
+            return Err(anyhow!(
+                "repo-ci learner instruction was rejected: {reason}"
+            ));
+        }
+        let instruction = normalize_learning_instruction_text(&self.normalized_instruction);
+        if instruction.is_empty() {
+            return Err(anyhow!(
+                "repo-ci learner instruction validation returned an empty instruction"
+            ));
+        }
+        if instruction.chars().count() > MAX_LEARNING_INSTRUCTION_CHARS {
+            return Err(anyhow!(
+                "repo-ci learner instruction must be at most {MAX_LEARNING_INSTRUCTION_CHARS} characters"
+            ));
+        }
+        Ok(instruction)
+    }
 }
 
 impl RepoCiAiLearnedPlan {
@@ -51,6 +86,7 @@ impl RepoCiAiLearnedPlan {
 pub fn render_repo_ci_learning_prompt(
     repo_root: &Path,
     learning_hints: &RepoCiLearningHints,
+    learning_instruction: Option<&str>,
     local_test_time_budget_sec: u64,
     attempt: usize,
     prior_plan: Option<&RepoCiAiLearnedPlan>,
@@ -61,6 +97,7 @@ pub fn render_repo_ci_learning_prompt(
         repo_root.display(),
         local_test_time_budget_sec,
     );
+    prompt.push_str(&render_custom_learning_instruction(learning_instruction));
     prompt.push_str(&render_learning_hints(learning_hints));
     if let Some(plan) = prior_plan
         && let Ok(plan_json) = serde_json::to_string_pretty(plan)
@@ -81,6 +118,26 @@ pub fn render_repo_ci_learning_prompt(
     }
     prompt.push_str(&format!("\nThis is repair attempt {attempt}.\n"));
     prompt
+}
+
+pub fn render_learning_instruction_validation_prompt(raw_instruction: &str) -> String {
+    format!(
+        "Validate and normalize this repo-ci learner instruction blob.\n\nUser instruction:\n```text\n{}\n```\n\nRules:\n- Accept learner directives about command selection, environment assumptions, wrappers, versions, files to prefer or ignore, or validation setup.\n- Reject instructions unrelated to repo-ci learning.\n- Reject vague instructions that do not contain enough information for the learner to apply them.\n- Reject secret-bearing, destructive, or policy-bypassing instructions.\n- If accepted, normalizedInstruction must be one concise, non-contradictory blob, at most {MAX_LEARNING_INSTRUCTION_CHARS} characters, with all details needed to apply it. It may contain several short sentences.\n- Do not add facts that are not present in the user's instruction.\n- If rejected, normalizedInstruction must be empty and rejectionReason must explain what is missing.\nReturn strict JSON only.",
+        raw_instruction.trim()
+    )
+}
+
+pub fn learning_instruction_validation_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "accepted": { "type": "boolean" },
+            "normalizedInstruction": { "type": "string" },
+            "rejectionReason": { "type": "string" }
+        },
+        "required": ["accepted", "normalizedInstruction", "rejectionReason"]
+    })
 }
 
 pub fn repo_ci_ai_plan_schema() -> serde_json::Value {
@@ -169,6 +226,25 @@ fn render_learning_hints(learning_hints: &RepoCiLearningHints) -> String {
         );
     }
     prompt
+}
+
+fn render_custom_learning_instruction(instruction: Option<&str>) -> String {
+    let mut rendered = String::from("\nCustom learner instruction:\n");
+    let Some(instruction) = instruction
+        .map(str::trim)
+        .filter(|instruction| !instruction.is_empty())
+    else {
+        rendered.push_str("- (none)\n");
+        return rendered;
+    };
+    rendered.push_str("- ");
+    rendered.push_str(instruction);
+    rendered.push('\n');
+    rendered
+}
+
+fn normalize_learning_instruction_text(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn render_step_hint_section(title: &str, steps: &[RepoCiStep]) -> String {
@@ -571,6 +647,31 @@ mod tests {
     }
 
     #[test]
+    fn learner_instruction_validation_normalizes_concise_text() {
+        let validation = RepoCiLearningInstructionValidation {
+            accepted: true,
+            normalized_instruction: "  Use Docker image rust:1.82   for validation.  ".to_string(),
+            rejection_reason: String::new(),
+        };
+
+        assert_eq!(
+            validation.into_instruction().expect("valid instruction"),
+            "Use Docker image rust:1.82 for validation."
+        );
+    }
+
+    #[test]
+    fn learner_instruction_validation_rejects_negative_decision() {
+        let validation = RepoCiLearningInstructionValidation {
+            accepted: false,
+            normalized_instruction: String::new(),
+            rejection_reason: "unrelated to repo-ci learning".to_string(),
+        };
+
+        assert!(validation.into_instruction().is_err());
+    }
+
+    #[test]
     fn learn_prompt_includes_strong_repo_signals() {
         let hints = RepoCiLearningHints {
             prepare_steps: vec![],
@@ -603,11 +704,23 @@ mod tests {
                 url: Some("https://github.com/owner/repo/actions/runs/1".to_string()),
             }],
         };
-
-        let prompt =
-            render_repo_ci_learning_prompt(Path::new("/tmp/repo"), &hints, 120, 1, None, None);
+        let prompt = render_repo_ci_learning_prompt(
+            Path::new("/tmp/repo"),
+            &hints,
+            Some("Do not consider the Makefile when choosing validation commands."),
+            120,
+            1,
+            None,
+            None,
+        );
 
         assert!(prompt.contains("Strong repo signals:"));
+        let custom_index = prompt
+            .find("Custom learner instruction:")
+            .expect("custom instruction");
+        let strong_index = prompt.find("Strong repo signals:").expect("strong signals");
+        assert!(custom_index < strong_index);
+        assert!(prompt.contains("Do not consider the Makefile when choosing validation commands."));
         let workflow_index = prompt.find("Workflow run hints:").expect("workflow hints");
         let inferred_index = prompt
             .find("Inferred fast-step candidates:")
@@ -644,6 +757,7 @@ mod tests {
                 local_test_time_budget_sec: 120,
                 learned_at_unix_sec: 0,
                 learning_sources: vec![],
+                learning_instruction: None,
                 inferred_issue_types: vec![],
                 prepare_steps: vec![RepoCiStep {
                     id: "prepare".to_string(),

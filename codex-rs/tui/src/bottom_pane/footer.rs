@@ -88,6 +88,7 @@ pub(crate) struct FooterProps {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CollaborationModeIndicator {
     Plan,
+    Codex,
     #[allow(dead_code)] // Hidden by current mode filtering; kept for future UI re-enablement.
     PairProgramming,
     #[allow(dead_code)] // Hidden by current mode filtering; kept for future UI re-enablement.
@@ -144,6 +145,7 @@ impl CollaborationModeIndicator {
         };
         match self {
             CollaborationModeIndicator::Plan => format!("Plan mode{suffix}"),
+            CollaborationModeIndicator::Codex => format!("Codex config mode{suffix}"),
             CollaborationModeIndicator::PairProgramming => {
                 format!("Pair Programming mode{suffix}")
             }
@@ -155,6 +157,7 @@ impl CollaborationModeIndicator {
         let label = self.label(show_cycle_hint);
         match self {
             CollaborationModeIndicator::Plan => Span::from(label).magenta(),
+            CollaborationModeIndicator::Codex => Span::from(label).cyan(),
             CollaborationModeIndicator::PairProgramming => Span::from(label).cyan(),
             CollaborationModeIndicator::Execute => Span::from(label).dim(),
         }
@@ -1727,6 +1730,13 @@ mod tests {
             /*width*/ 120,
             &props,
             Some(CollaborationModeIndicator::Plan),
+        );
+
+        snapshot_footer_with_mode_indicator(
+            "footer_codex_mode_indicator_wide",
+            /*width*/ 120,
+            &props,
+            Some(CollaborationModeIndicator::Codex),
         );
 
         snapshot_footer_with_mode_indicator(

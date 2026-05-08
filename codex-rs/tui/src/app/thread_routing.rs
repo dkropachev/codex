@@ -722,6 +722,16 @@ impl App {
                     .await?;
                 Ok(true)
             }
+            AppCommandView::CodexConfigIntent { intent, context } => {
+                app_server
+                    .thread_codex_config_intent_submit(
+                        thread_id,
+                        intent.to_string(),
+                        context.clone(),
+                    )
+                    .await?;
+                Ok(true)
+            }
             AppCommandView::ReloadUserConfig => {
                 app_server.reload_user_config().await?;
                 self.refresh_in_memory_config_from_disk().await?;
@@ -732,6 +742,9 @@ impl App {
                 issue_types,
                 review_rounds,
                 long_ci,
+                implement_enabled,
+                implement_mode,
+                implement_max_cycles,
             } => {
                 app_server
                     .thread_repo_ci_session_config_set(
@@ -740,6 +753,9 @@ impl App {
                         issue_types.clone(),
                         *review_rounds,
                         *long_ci,
+                        *implement_enabled,
+                        *implement_mode,
+                        *implement_max_cycles,
                     )
                     .await?;
                 Ok(true)

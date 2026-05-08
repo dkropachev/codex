@@ -394,7 +394,7 @@ pub struct RealtimeResponseDone {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub enum RealtimeEvent {
     SessionUpdated {
-        session_id: String,
+        realtime_session_id: String,
         instructions: Option<String>,
     },
     InputAudioSpeechStarted(RealtimeInputAudioSpeechStarted),
@@ -772,6 +772,18 @@ pub enum Op {
     /// enable/disable state) without restarting the thread.
     ReloadUserConfig,
 
+    /// Ask Codex to interpret and apply a user-facing configuration intent.
+    ///
+    /// This is the typed backing operation for `/codex <request>`. The caller
+    /// may include source-of-truth context from its own command registries;
+    /// core supplements it with the embedded Codex guide, CLI help, and a
+    /// scratch workspace before starting the model turn.
+    CodexConfigIntent {
+        intent: String,
+        #[serde(default)]
+        context: Option<String>,
+    },
+
     /// Patch repository CI review settings for this session.
     ///
     /// Omitted fields leave the current session value unchanged. Explicit
@@ -806,6 +818,27 @@ pub enum Op {
             skip_serializing_if = "Option::is_none"
         )]
         long_ci: Option<Option<bool>>,
+        #[serde(
+            default,
+            deserialize_with = "double_option_serde::deserialize",
+            serialize_with = "double_option_serde::serialize",
+            skip_serializing_if = "Option::is_none"
+        )]
+        implement_enabled: Option<Option<bool>>,
+        #[serde(
+            default,
+            deserialize_with = "double_option_serde::deserialize",
+            serialize_with = "double_option_serde::serialize",
+            skip_serializing_if = "Option::is_none"
+        )]
+        implement_mode: Option<Option<ImplementMode>>,
+        #[serde(
+            default,
+            deserialize_with = "double_option_serde::deserialize",
+            serialize_with = "double_option_serde::serialize",
+            skip_serializing_if = "Option::is_none"
+        )]
+        implement_max_cycles: Option<Option<u8>>,
     },
 
     /// Override model router enablement for this session.
@@ -977,6 +1010,7 @@ impl Op {
             Self::ListMcpTools => "list_mcp_tools",
             Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
             Self::ReloadUserConfig => "reload_user_config",
+            Self::CodexConfigIntent { .. } => "codex_config_intent",
             Self::SetRepoCiSessionConfig { .. } => "set_repo_ci_session_config",
             Self::SetModelRouterSessionConfig { .. } => "set_model_router_session_config",
             Self::ListSkills { .. } => "list_skills",
@@ -1691,6 +1725,8 @@ pub enum HookEventName {
     PreToolUse,
     PermissionRequest,
     PostToolUse,
+    PreCompact,
+    PostCompact,
     SessionStart,
     UserPromptSubmit,
     Stop,
@@ -1726,10 +1762,21 @@ pub enum HookSource {
     Project,
     Mdm,
     SessionFlags,
+    Plugin,
+    CloudRequirements,
     LegacyManagedConfigFile,
     LegacyManagedConfigMdm,
     #[default]
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum HookTrustStatus {
+    Managed,
+    Untrusted,
+    Trusted,
+    Modified,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -2183,6 +2230,13 @@ pub enum RepoCiSessionMode {
     LocalAndRemote,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ImplementMode {
+    Auto,
+    Implicit,
+}
+
 #[derive(
     Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, JsonSchema, TS,
 )]
@@ -2213,6 +2267,12 @@ pub struct RepoCiTurnOverrides {
     pub review_rounds: Option<Option<u8>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub long_ci: Option<Option<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub implement_enabled: Option<Option<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub implement_mode: Option<Option<ImplementMode>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub implement_max_cycles: Option<Option<u8>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -2804,6 +2864,44 @@ pub enum SessionSource {
     SubAgent(SubAgentSource),
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum ThreadSource {
+    User,
+    Subagent,
+    MemoryConsolidation,
+}
+
+impl ThreadSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Subagent => "subagent",
+            Self::MemoryConsolidation => "memory_consolidation",
+        }
+    }
+}
+
+impl fmt::Display for ThreadSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ThreadSource {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "user" => Ok(Self::User),
+            "subagent" => Ok(Self::Subagent),
+            "memory_consolidation" => Ok(Self::MemoryConsolidation),
+            _ => Err("unknown thread source"),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]

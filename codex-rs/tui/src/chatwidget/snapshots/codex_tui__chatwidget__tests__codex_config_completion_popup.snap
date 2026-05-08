@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Leave Codex config mode?
+
+› 1. Exit Codex config mode     Return to Default mode for normal work.
+  2. Stay in Codex config mode  Continue configuring Codex.
+
+  Press enter to confirm or esc to go back

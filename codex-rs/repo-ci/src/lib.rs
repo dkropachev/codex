@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use codex_cicd_artifacts as cicd_artifacts;
 use codex_protocol::protocol::RepoCiIssueType;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -30,7 +31,7 @@ mod resource_monitor;
 mod runner;
 mod workflow_history;
 
-const MANIFEST_VERSION: u32 = 4;
+const MANIFEST_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -60,6 +61,13 @@ pub struct RepoCiManifest {
     pub local_test_time_budget_sec: u64,
     pub learned_at_unix_sec: u64,
     pub learning_sources: Vec<SourceHash>,
+    #[serde(
+        default,
+        alias = "learning_instructions",
+        deserialize_with = "deserialize_learning_instruction",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub learning_instruction: Option<String>,
     pub inferred_issue_types: Vec<RepoCiIssueType>,
     pub prepare_steps: Vec<RepoCiStep>,
     pub fast_steps: Vec<RepoCiStep>,
@@ -137,6 +145,33 @@ struct ResolvedRepoCiPaths {
 pub struct LearnOptions {
     pub automation: AutomationMode,
     pub local_test_time_budget_sec: u64,
+    pub learning_instruction: Option<String>,
+}
+
+fn deserialize_learning_instruction<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum LearningInstruction {
+        Blob(String),
+        LegacyList(Vec<String>),
+    }
+
+    let value = Option::<LearningInstruction>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(LearningInstruction::Blob(value)) => normalize_learning_instruction(value),
+        Some(LearningInstruction::LegacyList(values)) => {
+            normalize_learning_instruction(values.join(" "))
+        }
+        None => None,
+    })
+}
+
+fn normalize_learning_instruction(value: String) -> Option<String> {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,7 +220,11 @@ pub use remote_workflow::run_started_remote_workflow_with_commit_decision;
 pub use remote_workflow::run_started_remote_workflow_with_commit_decision_and_progress;
 pub use remote_workflow::start_remote_workflow;
 pub use repo_ci_ai_learning::AI_LEARN_MAX_ATTEMPTS;
+pub use repo_ci_ai_learning::MAX_LEARNING_INSTRUCTION_CHARS;
 pub use repo_ci_ai_learning::RepoCiAiLearnedPlan;
+pub use repo_ci_ai_learning::RepoCiLearningInstructionValidation;
+pub use repo_ci_ai_learning::learning_instruction_validation_schema;
+pub use repo_ci_ai_learning::render_learning_instruction_validation_prompt;
 pub use repo_ci_ai_learning::render_repo_ci_learning_prompt;
 pub use repo_ci_ai_learning::render_validation_feedback;
 pub use repo_ci_ai_learning::repo_ci_ai_plan_schema;
@@ -272,6 +311,32 @@ pub fn repo_root_for_cwd(cwd: &Path) -> Result<PathBuf> {
         }
     }
     Ok(cwd.to_path_buf())
+}
+
+pub fn github_repo_slug(repo_root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(repo_root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    normalize_github_remote(String::from_utf8_lossy(&output.stdout).trim())
+}
+
+fn normalize_github_remote(url: &str) -> Option<String> {
+    let url = url.trim().trim_end_matches('/').trim_end_matches(".git");
+    if let Some(rest) = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("http://github.com/"))
+        .or_else(|| url.strip_prefix("ssh://git@github.com/"))
+        .or_else(|| url.strip_prefix("git://github.com/"))
+    {
+        return Some(rest.trim_matches('/').to_string());
+    }
+    url.strip_prefix("git@github.com:")
+        .map(|rest| rest.trim_matches('/').to_string())
 }
 
 pub fn paths_for_repo(codex_home: &Path, cwd: &Path) -> Result<RepoCiPaths> {
@@ -366,6 +431,7 @@ pub fn learn_with_plan_with_cancellation(
         local_test_time_budget_sec: options.local_test_time_budget_sec,
         learned_at_unix_sec: unix_now(),
         learning_sources: resolved.learning_sources,
+        learning_instruction: options.learning_instruction.clone(),
         inferred_issue_types: infer_issue_types(&paths.repo_root),
         prepare_steps: plan.prepare_steps,
         fast_steps: plan.fast_steps,
@@ -1339,6 +1405,7 @@ jobs:
                 sha256: "abc".to_string(),
                 kind: SourceKind::BuildManifest,
             }],
+            learning_instruction: None,
             inferred_issue_types: Vec::new(),
             prepare_steps: Vec::new(),
             fast_steps: Vec::new(),
@@ -1355,6 +1422,67 @@ jobs:
     }
 
     #[test]
+    fn manifest_missing_learning_instruction_defaults_empty() {
+        let mut value = json!({
+            "version": MANIFEST_VERSION - 1,
+            "repo_root": "/tmp/repo",
+            "repo_key": "repo",
+            "source_key": "source",
+            "automation": "local",
+            "local_test_time_budget_sec": 300,
+            "learned_at_unix_sec": 1,
+            "learning_sources": [],
+            "inferred_issue_types": [],
+            "prepare_steps": [],
+            "fast_steps": [],
+            "full_steps": [],
+            "validation": "NotRun"
+        });
+
+        let decoded: RepoCiManifest = serde_json::from_value(value.clone())
+            .expect("deserialize manifest without instruction");
+
+        assert_eq!(decoded.learning_instruction, None);
+
+        value["learning_instructions"] =
+            json!(["Use Docker image rust:1.82.", "Skip integration tests."]);
+        let decoded: RepoCiManifest =
+            serde_json::from_value(value).expect("deserialize manifest with legacy instructions");
+
+        assert_eq!(
+            decoded.learning_instruction,
+            Some("Use Docker image rust:1.82. Skip integration tests.".to_string())
+        );
+    }
+
+    #[test]
+    fn manifest_learning_instruction_serializes_as_singular_blob() {
+        let manifest = RepoCiManifest {
+            version: MANIFEST_VERSION - 1,
+            repo_root: PathBuf::from("/tmp/repo"),
+            repo_key: "repo".to_string(),
+            source_key: "source".to_string(),
+            automation: AutomationMode::Local,
+            local_test_time_budget_sec: 300,
+            learned_at_unix_sec: 1,
+            learning_sources: Vec::new(),
+            learning_instruction: Some("Use Docker image rust:1.82.".to_string()),
+            inferred_issue_types: Vec::new(),
+            prepare_steps: Vec::new(),
+            fast_steps: Vec::new(),
+            full_steps: Vec::new(),
+            validation: ValidationStatus::NotRun,
+        };
+        let value = serde_json::to_value(manifest).expect("serialize manifest");
+
+        assert_eq!(
+            value.get("learning_instruction"),
+            Some(&json!("Use Docker image rust:1.82."))
+        );
+        assert!(value.get("learning_instructions").is_none());
+    }
+
+    #[test]
     fn artifact_write_read_and_cached_pass_lookup() {
         let temp = tempfile::tempdir().expect("tempdir");
         let codex_home = temp.path().join("codex-home");
@@ -1366,6 +1494,7 @@ jobs:
             LearnOptions {
                 automation: AutomationMode::Local,
                 local_test_time_budget_sec: 300,
+                learning_instruction: None,
             },
             LearnedPlan {
                 prepare_steps: Vec::new(),
@@ -1424,6 +1553,7 @@ jobs:
             LearnOptions {
                 automation: AutomationMode::Local,
                 local_test_time_budget_sec: 300,
+                learning_instruction: None,
             },
             LearnedPlan {
                 prepare_steps: vec![],
@@ -1469,6 +1599,7 @@ jobs:
             LearnOptions {
                 automation: AutomationMode::Local,
                 local_test_time_budget_sec: 300,
+                learning_instruction: None,
             },
             LearnedPlan {
                 prepare_steps: vec![step("nope", "false", StepPhase::Prepare)],
@@ -1521,6 +1652,7 @@ jobs:
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
             learning_sources: collect_sources(&repo).expect("sources"),
+            learning_instruction: None,
             inferred_issue_types: default_issue_types(),
             prepare_steps: vec![],
             fast_steps: vec![],
@@ -1556,6 +1688,7 @@ jobs:
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
             learning_sources: collect_sources(&repo).expect("sources"),
+            learning_instruction: None,
             inferred_issue_types: default_issue_types(),
             prepare_steps: vec![],
             fast_steps: vec![],
@@ -1596,6 +1729,7 @@ jobs:
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
             learning_sources,
+            learning_instruction: None,
             inferred_issue_types: default_issue_types(),
             prepare_steps: vec![],
             fast_steps: vec![],
@@ -1635,6 +1769,7 @@ jobs:
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
             learning_sources,
+            learning_instruction: None,
             inferred_issue_types: default_issue_types(),
             prepare_steps: vec![],
             fast_steps: vec![],
@@ -1697,6 +1832,7 @@ jobs:
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
             learning_sources: learning_sources.clone(),
+            learning_instruction: None,
             inferred_issue_types: default_issue_types(),
             prepare_steps: vec![],
             fast_steps: vec![step("test", "cargo test", StepPhase::Test)],
@@ -1755,6 +1891,7 @@ jobs:
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
             learning_sources: vec![],
+            learning_instruction: None,
             inferred_issue_types: default_issue_types(),
             prepare_steps: vec![],
             fast_steps: vec![step("ok", "true", StepPhase::Test)],
@@ -1816,6 +1953,7 @@ jobs:
             local_test_time_budget_sec: 1,
             learned_at_unix_sec: 1,
             learning_sources: vec![],
+            learning_instruction: None,
             inferred_issue_types: default_issue_types(),
             prepare_steps: vec![],
             fast_steps: vec![step("slow", "sleep 30", StepPhase::Test)],
@@ -1879,6 +2017,7 @@ jobs:
             local_test_time_budget_sec: 1,
             learned_at_unix_sec: 1,
             learning_sources: vec![],
+            learning_instruction: None,
             inferred_issue_types: default_issue_types(),
             prepare_steps: vec![],
             fast_steps: vec![step("slow", &slow_command, StepPhase::Test)],
@@ -1928,6 +2067,7 @@ jobs:
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
             learning_sources: vec![],
+            learning_instruction: None,
             inferred_issue_types: default_issue_types(),
             prepare_steps: vec![],
             fast_steps: vec![step("slow", &slow_command, StepPhase::Test)],
@@ -1997,6 +2137,7 @@ jobs:
             local_test_time_budget_sec: 300,
             learned_at_unix_sec: 1,
             learning_sources: vec![],
+            learning_instruction: None,
             inferred_issue_types: default_issue_types(),
             prepare_steps: vec![],
             fast_steps: vec![step("current-root", "test -f marker", StepPhase::Test)],

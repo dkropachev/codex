@@ -313,6 +313,18 @@ client_request_definitions! {
         params: v2::ThreadRepoCiSessionConfigSetParams,
         response: v2::ThreadRepoCiSessionConfigSetResponse,
     },
+    ThreadCodexConfigIntentSubmit => "thread/codexConfigIntent/submit" {
+        params: v2::ThreadCodexConfigIntentSubmitParams,
+        response: v2::ThreadCodexConfigIntentSubmitResponse,
+    },
+    RepoCiLearningInstructionRead => "repoCiLearningInstruction/read" {
+        params: v2::RepoCiLearningInstructionReadParams,
+        response: v2::RepoCiLearningInstructionReadResponse,
+    },
+    RepoCiLearningInstructionWrite => "repoCiLearningInstruction/write" {
+        params: v2::RepoCiLearningInstructionWriteParams,
+        response: v2::RepoCiLearningInstructionWriteResponse,
+    },
     ThreadModelRouterSessionConfigSet => "thread/modelRouterSessionConfig/set" {
         params: v2::ThreadModelRouterSessionConfigSetParams,
         response: v2::ThreadModelRouterSessionConfigSetResponse,
@@ -391,6 +403,30 @@ client_request_definitions! {
     PluginRead => "plugin/read" {
         params: v2::PluginReadParams,
         response: v2::PluginReadResponse,
+    },
+    PluginSkillRead => "plugin/skill/read" {
+        params: v2::PluginSkillReadParams,
+        response: v2::PluginSkillReadResponse,
+    },
+    PluginShareSave => "plugin/share/save" {
+        params: v2::PluginShareSaveParams,
+        response: v2::PluginShareSaveResponse,
+    },
+    PluginShareUpdateTargets => "plugin/share/updateTargets" {
+        params: v2::PluginShareUpdateTargetsParams,
+        response: v2::PluginShareUpdateTargetsResponse,
+    },
+    PluginShareList => "plugin/share/list" {
+        params: v2::PluginShareListParams,
+        response: v2::PluginShareListResponse,
+    },
+    PluginShareDelete => "plugin/share/delete" {
+        params: v2::PluginShareDeleteParams,
+        response: v2::PluginShareDeleteResponse,
+    },
+    HooksList => "hooks/list" {
+        params: v2::HooksListParams,
+        response: v2::HooksListResponse,
     },
     AppsList => "app/list" {
         params: v2::AppsListParams,
@@ -504,6 +540,10 @@ client_request_definitions! {
         params: v2::ModelListParams,
         response: v2::ModelListResponse,
     },
+    ModelProviderCapabilitiesRead => "modelProvider/capabilities/read" {
+        params: v2::ModelProviderCapabilitiesReadParams,
+        response: v2::ModelProviderCapabilitiesReadResponse,
+    },
     ExperimentalFeatureList => "experimentalFeature/list" {
         params: v2::ExperimentalFeatureListParams,
         response: v2::ExperimentalFeatureListResponse,
@@ -553,6 +593,10 @@ client_request_definitions! {
     WindowsSandboxSetupStart => "windowsSandbox/setupStart" {
         params: v2::WindowsSandboxSetupStartParams,
         response: v2::WindowsSandboxSetupStartResponse,
+    },
+    WindowsSandboxReadiness => "windowsSandbox/readiness" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::WindowsSandboxReadinessResponse,
     },
 
     LoginAccount => "account/login/start" {
@@ -605,6 +649,22 @@ client_request_definitions! {
     CommandExecResize => "command/exec/resize" {
         params: v2::CommandExecResizeParams,
         response: v2::CommandExecResizeResponse,
+    },
+    ProcessSpawn => "process/spawn" {
+        params: v2::ProcessSpawnParams,
+        response: v2::ProcessSpawnResponse,
+    },
+    ProcessWriteStdin => "process/writeStdin" {
+        params: v2::ProcessWriteStdinParams,
+        response: v2::ProcessWriteStdinResponse,
+    },
+    ProcessKill => "process/kill" {
+        params: v2::ProcessKillParams,
+        response: v2::ProcessKillResponse,
+    },
+    ProcessResizePty => "process/resizePty" {
+        params: v2::ProcessResizePtyParams,
+        response: v2::ProcessResizePtyResponse,
     },
 
     ConfigRead => "config/read" {
@@ -1072,6 +1132,8 @@ server_notification_definitions! {
     PlanDelta => "item/plan/delta" (v2::PlanDeltaNotification),
     /// Stream base64-encoded stdout/stderr chunks for a running `command/exec` session.
     CommandExecOutputDelta => "command/exec/outputDelta" (v2::CommandExecOutputDeltaNotification),
+    ProcessOutputDelta => "process/outputDelta" (v2::ProcessOutputDeltaNotification),
+    ProcessExited => "process/exited" (v2::ProcessExitedNotification),
     CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
     TerminalInteraction => "item/commandExecution/terminalInteraction" (v2::TerminalInteractionNotification),
     FileChangeOutputDelta => "item/fileChange/outputDelta" (v2::FileChangeOutputDeltaNotification),
@@ -1082,6 +1144,7 @@ server_notification_definitions! {
     McpServerStatusUpdated => "mcpServer/startupStatus/updated" (v2::McpServerStatusUpdatedNotification),
     AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
+    RemoteControlStatusChanged => "remoteControl/status/changed" (v2::RemoteControlStatusChangedNotification),
     AppListUpdated => "app/list/updated" (v2::AppListUpdatedNotification),
     ExternalAgentConfigImportCompleted => "externalAgentConfig/import/completed" (v2::ExternalAgentConfigImportCompletedNotification),
     FsChanged => "fs/changed" (v2::FsChangedNotification),
@@ -1479,6 +1542,7 @@ mod tests {
             response: v2::ThreadStartResponse {
                 thread: v2::Thread {
                     id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+                    session_id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
                     forked_from_id: None,
                     preview: "first prompt".to_string(),
                     ephemeral: true,
@@ -1490,6 +1554,7 @@ mod tests {
                     cwd: cwd.clone(),
                     cli_version: "0.0.0".to_string(),
                     source: v2::SessionSource::Exec,
+                    thread_source: None,
                     agent_nickname: None,
                     agent_role: None,
                     git_info: None,
@@ -1510,6 +1575,7 @@ mod tests {
                     )
                     .into(),
                 ),
+                active_permission_profile: None,
                 reasoning_effort: None,
             },
         };
@@ -1523,6 +1589,7 @@ mod tests {
                 "response": {
                     "thread": {
                         "id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                        "sessionId": "67e55044-10b1-426f-9247-bb680e5fe0c8",
                         "forkedFromId": null,
                         "preview": "first prompt",
                         "ephemeral": true,
@@ -1536,6 +1603,7 @@ mod tests {
                         "cwd": absolute_path_string("tmp"),
                         "cliVersion": "0.0.0",
                         "source": "exec",
+                        "threadSource": null,
                         "agentNickname": null,
                         "agentRole": null,
                         "gitInfo": null,
@@ -1555,6 +1623,7 @@ mod tests {
                     "permissionProfile": {
                         "type": "disabled"
                     },
+                    "activePermissionProfile": null,
                     "reasoningEffort": null
                 }
             }),
@@ -1605,7 +1674,9 @@ mod tests {
     fn serialize_account_login_chatgpt() -> Result<()> {
         let request = ClientRequest::LoginAccount {
             request_id: RequestId::Integer(3),
-            params: v2::LoginAccountParams::Chatgpt,
+            params: v2::LoginAccountParams::Chatgpt {
+                codex_streamlined_login: false,
+            },
         };
         assert_eq!(
             json!({
@@ -1885,6 +1956,9 @@ mod tests {
                 ])),
                 review_rounds: Some(Some(3)),
                 long_ci: Some(Some(true)),
+                implement_enabled: Some(Some(true)),
+                implement_mode: Some(Some(v2::ImplementMode::Implicit)),
+                implement_max_cycles: Some(Some(4)),
             },
         };
         assert_eq!(
@@ -1896,7 +1970,10 @@ mod tests {
                     "mode": "remote",
                     "issueTypes": ["correctness", "security"],
                     "reviewRounds": 3,
-                    "longCi": true
+                    "longCi": true,
+                    "implementEnabled": true,
+                    "implementMode": "implicit",
+                    "implementMaxCycles": 4
                 }
             }),
             serde_json::to_value(&request)?,
@@ -1922,6 +1999,34 @@ mod tests {
         assert_eq!(params.issue_types, Some(None));
         assert_eq!(params.review_rounds, None);
         assert_eq!(params.long_ci, None);
+        assert_eq!(params.implement_enabled, None);
+        assert_eq!(params.implement_mode, None);
+        assert_eq!(params.implement_max_cycles, None);
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_codex_config_intent_submit() -> Result<()> {
+        let request = ClientRequest::ThreadCodexConfigIntentSubmit {
+            request_id: RequestId::Integer(10),
+            params: v2::ThreadCodexConfigIntentSubmitParams {
+                thread_id: "thr_123".to_string(),
+                intent: "prefer nextest for repo-ci learning".to_string(),
+                context: Some("slash commands: /repo-ci".to_string()),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/codexConfigIntent/submit",
+                "id": 10,
+                "params": {
+                    "threadId": "thr_123",
+                    "intent": "prefer nextest for repo-ci learning",
+                    "context": "slash commands: /repo-ci"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
         Ok(())
     }
 
@@ -1956,7 +2061,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(Some("You are on a call".to_string())),
-                session_id: Some("sess_456".to_string()),
+                realtime_session_id: Some("sess_456".to_string()),
                 transport: None,
                 voice: Some(RealtimeVoice::Marin),
             },
@@ -1969,7 +2074,7 @@ mod tests {
                     "threadId": "thr_123",
                     "outputModality": "audio",
                     "prompt": "You are on a call",
-                    "sessionId": "sess_456",
+                    "realtimeSessionId": "sess_456",
                     "transport": null,
                     "voice": "marin"
                 }
@@ -1987,7 +2092,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: None,
-                session_id: None,
+                realtime_session_id: None,
                 transport: None,
                 voice: None,
             },
@@ -1999,7 +2104,7 @@ mod tests {
                 "params": {
                     "threadId": "thr_123",
                     "outputModality": "audio",
-                    "sessionId": null,
+                    "realtimeSessionId": null,
                     "transport": null,
                     "voice": null
                 }
@@ -2013,7 +2118,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(None),
-                session_id: None,
+                realtime_session_id: None,
                 transport: None,
                 voice: None,
             },
@@ -2026,7 +2131,7 @@ mod tests {
                     "threadId": "thr_123",
                     "outputModality": "audio",
                     "prompt": null,
-                    "sessionId": null,
+                    "realtimeSessionId": null,
                     "transport": null,
                     "voice": null
                 }
@@ -2040,7 +2145,7 @@ mod tests {
             "params": {
                 "threadId": "thr_123",
                 "outputModality": "audio",
-                "sessionId": null,
+                "realtimeSessionId": null,
                 "transport": null,
                 "voice": null
             }
@@ -2057,7 +2162,7 @@ mod tests {
                 "threadId": "thr_123",
                 "outputModality": "audio",
                 "prompt": null,
-                "sessionId": null,
+                "realtimeSessionId": null,
                 "transport": null,
                 "voice": null
             }
@@ -2142,7 +2247,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(Some("You are on a call".to_string())),
-                session_id: None,
+                realtime_session_id: None,
                 transport: None,
                 voice: None,
             },
@@ -2225,7 +2330,7 @@ mod tests {
         let notification =
             ServerNotification::ThreadRealtimeStarted(v2::ThreadRealtimeStartedNotification {
                 thread_id: "thr_123".to_string(),
-                session_id: Some("sess_456".to_string()),
+                realtime_session_id: Some("sess_456".to_string()),
                 version: RealtimeConversationVersion::V1,
             });
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&notification);

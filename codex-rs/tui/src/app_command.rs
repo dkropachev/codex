@@ -111,11 +111,18 @@ pub(crate) enum AppCommandView<'a> {
         response: &'a RequestPermissionsResponse,
     },
     ReloadUserConfig,
+    CodexConfigIntent {
+        intent: &'a str,
+        context: &'a Option<String>,
+    },
     SetRepoCiSessionConfig {
         mode: &'a Option<Option<RepoCiSessionMode>>,
         issue_types: &'a Option<Option<Vec<RepoCiIssueType>>>,
         review_rounds: &'a Option<Option<u8>>,
         long_ci: &'a Option<Option<bool>>,
+        implement_enabled: &'a Option<Option<bool>>,
+        implement_mode: &'a Option<Option<codex_protocol::protocol::ImplementMode>>,
+        implement_max_cycles: &'a Option<Option<u8>>,
     },
     SetModelRouterSessionConfig {
         enabled: &'a Option<bool>,
@@ -312,17 +319,30 @@ impl AppCommand {
         Self(Op::ReloadUserConfig)
     }
 
+    pub(crate) fn codex_config_intent(intent: String, context: String) -> Self {
+        Self(Op::CodexConfigIntent {
+            intent,
+            context: Some(context),
+        })
+    }
+
     pub(crate) fn set_repo_ci_session_config(
         mode: Option<Option<RepoCiSessionMode>>,
         issue_types: Option<Option<Vec<RepoCiIssueType>>>,
         review_rounds: Option<Option<u8>>,
         long_ci: Option<Option<bool>>,
+        implement_enabled: Option<Option<bool>>,
+        implement_mode: Option<Option<codex_protocol::protocol::ImplementMode>>,
+        implement_max_cycles: Option<Option<u8>>,
     ) -> Self {
         Self(Op::SetRepoCiSessionConfig {
             mode,
             issue_types,
             review_rounds,
             long_ci,
+            implement_enabled,
+            implement_mode,
+            implement_max_cycles,
         })
     }
 
@@ -478,11 +498,17 @@ impl AppCommand {
                 issue_types,
                 review_rounds,
                 long_ci,
+                implement_enabled,
+                implement_mode,
+                implement_max_cycles,
             } => AppCommandView::SetRepoCiSessionConfig {
                 mode,
                 issue_types,
                 review_rounds,
                 long_ci,
+                implement_enabled,
+                implement_mode,
+                implement_max_cycles,
             },
             Op::SetModelRouterSessionConfig { enabled } => {
                 AppCommandView::SetModelRouterSessionConfig { enabled }
@@ -507,6 +533,9 @@ impl AppCommand {
                 AppCommandView::RequestPermissionsResponse { id, response }
             }
             Op::ReloadUserConfig => AppCommandView::ReloadUserConfig,
+            Op::CodexConfigIntent { intent, context } => {
+                AppCommandView::CodexConfigIntent { intent, context }
+            }
             Op::ListSkills { cwds, force_reload } => AppCommandView::ListSkills {
                 cwds,
                 force_reload: *force_reload,
