@@ -24,8 +24,107 @@ fn deserialize_stdio_command_server_config() {
     );
     assert!(cfg.enabled);
     assert!(!cfg.required);
+    assert_eq!(cfg.process_reuse_scope, McpServerProcessReuseScope::Cwd);
     assert!(cfg.enabled_tools.is_none());
     assert!(cfg.disabled_tools.is_none());
+}
+
+#[test]
+fn deserialize_process_reuse_scope_values() {
+    for (value, expected) in [
+        ("none", McpServerProcessReuseScope::None),
+        ("cwd", McpServerProcessReuseScope::Cwd),
+        ("project", McpServerProcessReuseScope::Project),
+        ("repo", McpServerProcessReuseScope::Repo),
+        ("user", McpServerProcessReuseScope::User),
+    ] {
+        let cfg: McpServerConfig = toml::from_str(&format!(
+            r#"
+                command = "echo"
+                cwd = "/tmp"
+                process_reuse_scope = "{value}"
+            "#
+        ))
+        .expect("process_reuse_scope should deserialize");
+
+        assert_eq!(cfg.process_reuse_scope, expected);
+    }
+}
+
+#[test]
+fn serialize_round_trips_process_reuse_scope_values() {
+    for value in ["none", "project", "repo", "user"] {
+        let cfg: McpServerConfig = toml::from_str(&format!(
+            r#"
+                command = "echo"
+                cwd = "/tmp"
+                process_reuse_scope = "{value}"
+            "#
+        ))
+        .expect("should deserialize process_reuse_scope");
+
+        let serialized = toml::to_string(&cfg).expect("should serialize MCP config");
+        assert!(serialized.contains(&format!("process_reuse_scope = \"{value}\"")));
+
+        let round_tripped: McpServerConfig =
+            toml::from_str(&serialized).expect("should deserialize serialized MCP config");
+        assert_eq!(round_tripped, cfg);
+    }
+
+    let cfg: McpServerConfig = toml::from_str(
+        r#"
+            command = "echo"
+            process_reuse_scope = "cwd"
+        "#,
+    )
+    .expect("should deserialize default process_reuse_scope");
+    let serialized = toml::to_string(&cfg).expect("should serialize MCP config");
+    assert!(!serialized.contains("process_reuse_scope"));
+}
+
+#[test]
+fn deserialize_rejects_http_process_reuse_non_default_scope() {
+    let err = toml::from_str::<McpServerConfig>(
+        r#"
+            url = "https://example.com/mcp"
+            process_reuse_scope = "user"
+        "#,
+    )
+    .expect_err("http MCP should reject non-default process_reuse_scope");
+
+    assert!(
+        err.to_string()
+            .contains("process_reuse_scope is ignored for streamable_http"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn deserialize_rejects_user_scope_without_stable_stdio_cwd() {
+    let err = toml::from_str::<McpServerConfig>(
+        r#"
+            command = "echo"
+            process_reuse_scope = "user"
+        "#,
+    )
+    .expect_err("user process reuse should require cwd");
+    assert!(
+        err.to_string().contains("requires an explicit stdio cwd"),
+        "unexpected error: {err}"
+    );
+
+    let err = toml::from_str::<McpServerConfig>(
+        r#"
+            command = "echo"
+            cwd = "relative"
+            process_reuse_scope = "user"
+        "#,
+    )
+    .expect_err("user process reuse should require absolute cwd");
+    assert!(
+        err.to_string().contains("requires an absolute stdio cwd"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
@@ -386,6 +485,7 @@ fn deserialize_ignores_unknown_server_fields() {
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            process_reuse_scope: McpServerProcessReuseScope::Cwd,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,

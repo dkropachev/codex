@@ -234,7 +234,7 @@ impl Session {
             turn_context.sub_id.clone(),
             self.get_tx_event(),
             turn_context.permission_profile(),
-            McpRuntimeEnvironment::new(
+            config.mcp_runtime_environment(
                 turn_context
                     .environment
                     .clone()
@@ -245,6 +245,9 @@ impl Session {
             codex_apps_tools_cache_key(auth.as_ref()),
             tool_plugin_provenance,
             auth.as_ref(),
+            config
+                .features
+                .enabled(codex_features::Feature::McpProcessReuse),
         )
         .await;
         {

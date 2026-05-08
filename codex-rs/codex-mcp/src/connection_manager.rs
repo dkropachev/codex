@@ -17,7 +17,6 @@ use crate::codex_apps::CodexAppsToolsCacheContext;
 use crate::codex_apps::CodexAppsToolsCacheKey;
 use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
 use crate::elicitation::ElicitationRequestManager;
-use crate::elicitation::ElicitationReviewerHandle;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
 use crate::rmcp_client::AsyncManagedClient;
@@ -71,9 +70,7 @@ use url::Url;
 pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     server_origins: HashMap<String, String>,
-    host_owned_codex_apps_enabled: bool,
     elicitation_requests: ElicitationRequestManager,
-    startup_cancellation_token: CancellationToken,
 }
 
 impl McpConnectionManager {
@@ -84,13 +81,10 @@ impl McpConnectionManager {
         Self {
             clients: HashMap::new(),
             server_origins: HashMap::new(),
-            host_owned_codex_apps_enabled: false,
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
                 permission_profile.get().clone(),
-                /*reviewer*/ None,
             ),
-            startup_cancellation_token: CancellationToken::new(),
         }
     }
 
@@ -98,30 +92,8 @@ impl McpConnectionManager {
         !self.clients.is_empty()
     }
 
-    /// Drain all MCP clients from this manager and return a future that stops
-    /// them and terminates their stdio server processes.
-    pub fn begin_shutdown(&mut self) -> impl std::future::Future<Output = ()> + Send + 'static {
-        self.startup_cancellation_token.cancel();
-        let clients = std::mem::take(&mut self.clients);
-        self.server_origins.clear();
-        async move {
-            for client in clients.into_values() {
-                client.shutdown().await;
-            }
-        }
-    }
-
-    /// Stop all MCP clients owned by this manager and terminate stdio server processes.
-    pub async fn shutdown(&mut self) {
-        self.begin_shutdown().await;
-    }
-
     pub fn server_origin(&self, server_name: &str) -> Option<&str> {
         self.server_origins.get(server_name).map(String::as_str)
-    }
-
-    pub fn is_host_owned_codex_apps_server(&self, server_name: &str) -> bool {
-        self.host_owned_codex_apps_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME
     }
 
     pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {
@@ -136,14 +108,6 @@ impl McpConnectionManager {
         }
     }
 
-    pub fn elicitations_auto_deny(&self) -> bool {
-        self.elicitation_requests.auto_deny()
-    }
-
-    pub fn set_elicitations_auto_deny(&self, auto_deny: bool) {
-        self.elicitation_requests.set_auto_deny(auto_deny);
-    }
-
     #[allow(clippy::new_ret_no_self, clippy::too_many_arguments)]
     pub async fn new(
         mcp_servers: &HashMap<String, McpServerConfig>,
@@ -156,20 +120,16 @@ impl McpConnectionManager {
         runtime_environment: McpRuntimeEnvironment,
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
-        host_owned_codex_apps_enabled: bool,
         tool_plugin_provenance: ToolPluginProvenance,
         auth: Option<&CodexAuth>,
-        elicitation_reviewer: Option<ElicitationReviewerHandle>,
+        mcp_process_reuse_enabled: bool,
     ) -> (Self, CancellationToken) {
         let cancel_token = CancellationToken::new();
         let mut clients = HashMap::new();
         let mut server_origins = HashMap::new();
         let mut join_set = JoinSet::new();
-        let elicitation_requests = ElicitationRequestManager::new(
-            approval_policy.value(),
-            initial_permission_profile,
-            elicitation_reviewer,
-        );
+        let elicitation_requests =
+            ElicitationRequestManager::new(approval_policy.value(), initial_permission_profile);
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
         let codex_apps_auth_provider = auth
@@ -222,6 +182,8 @@ impl McpConnectionManager {
                 Arc::clone(&tool_plugin_provenance),
                 runtime_environment.clone(),
                 runtime_auth_provider,
+                codex_home.clone(),
+                mcp_process_reuse_enabled && server_name != CODEX_APPS_MCP_SERVER_NAME,
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
@@ -261,9 +223,7 @@ impl McpConnectionManager {
         let manager = Self {
             clients,
             server_origins,
-            host_owned_codex_apps_enabled,
             elicitation_requests: elicitation_requests.clone(),
-            startup_cancellation_token: cancel_token.clone(),
         };
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
@@ -649,13 +609,6 @@ impl McpConnectionManager {
             .client()
             .await
             .context("failed to get client")
-    }
-}
-
-impl Drop for McpConnectionManager {
-    fn drop(&mut self) {
-        self.startup_cancellation_token.cancel();
-        self.clients.clear();
     }
 }
 

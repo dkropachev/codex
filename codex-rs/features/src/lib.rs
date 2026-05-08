@@ -190,6 +190,8 @@ pub enum Feature {
     ImageGeneration,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
+    /// Reuse local stdio MCP server processes through a per-user broker.
+    McpProcessReuse,
     /// Prompt for missing skill env var dependencies.
     SkillEnvVarDependencyPrompt,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
@@ -1010,6 +1012,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "skill_mcp_dependency_install",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::McpProcessReuse,
+        key: "mcp_process_reuse",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::SkillEnvVarDependencyPrompt,

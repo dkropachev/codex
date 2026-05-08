@@ -34,9 +34,9 @@ use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use serde_json::Value;
 
-use crate::mcp_connection_manager::McpConnectionManager;
-use crate::mcp_connection_manager::McpRuntimeEnvironment;
-use crate::mcp_connection_manager::codex_apps_tools_cache_key;
+use crate::codex_apps::codex_apps_tools_cache_key;
+use crate::connection_manager::McpConnectionManager;
+use crate::runtime::McpRuntimeEnvironment;
 
 pub const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
@@ -114,6 +114,8 @@ pub struct McpConfig {
     /// ChatGPT auth is checked separately at runtime before the built-in apps
     /// MCP server is added.
     pub apps_enabled: bool,
+    /// Whether local stdio MCP servers may be reused through the user broker.
+    pub mcp_process_reuse_enabled: bool,
     /// User-configured and plugin-provided MCP servers keyed by server name.
     pub configured_mcp_servers: HashMap<String, McpServerConfig>,
     /// Plugin metadata used to attribute MCP tools/connectors to plugin display names.
@@ -240,6 +242,7 @@ pub async fn read_mcp_resource(
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance(config),
         auth,
+        config.mcp_process_reuse_enabled,
     )
     .await;
 
@@ -305,6 +308,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance,
         auth,
+        config.mcp_process_reuse_enabled,
     )
     .await;
 
@@ -401,6 +405,7 @@ fn codex_apps_mcp_server_config(config: &McpConfig) -> McpServerConfig {
         enabled: true,
         required: false,
         supports_parallel_tool_calls: false,
+        process_reuse_scope: codex_config::types::McpServerProcessReuseScope::Cwd,
         disabled_reason: None,
         startup_timeout_sec: Some(Duration::from_secs(30)),
         tool_timeout_sec: None,

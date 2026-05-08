@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_config::default_project_root_markers;
 use codex_exec_server::Environment;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SandboxPolicy;
@@ -40,6 +41,7 @@ pub struct SandboxState {
 pub struct McpRuntimeEnvironment {
     environment: Arc<Environment>,
     fallback_cwd: PathBuf,
+    project_root_markers: Vec<String>,
 }
 
 impl McpRuntimeEnvironment {
@@ -47,7 +49,13 @@ impl McpRuntimeEnvironment {
         Self {
             environment,
             fallback_cwd,
+            project_root_markers: default_project_root_markers(),
         }
+    }
+
+    pub fn with_project_root_markers(mut self, project_root_markers: Vec<String>) -> Self {
+        self.project_root_markers = project_root_markers;
+        self
     }
 
     pub(crate) fn environment(&self) -> Arc<Environment> {
@@ -56,6 +64,10 @@ impl McpRuntimeEnvironment {
 
     pub(crate) fn fallback_cwd(&self) -> PathBuf {
         self.fallback_cwd.clone()
+    }
+
+    pub(crate) fn project_root_markers(&self) -> &[String] {
+        &self.project_root_markers
     }
 }
 

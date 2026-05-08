@@ -302,6 +302,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         enabled: true,
         required: false,
         supports_parallel_tool_calls: false,
+        process_reuse_scope: codex_config::types::McpServerProcessReuseScope::Cwd,
         disabled_reason: None,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
@@ -536,6 +537,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                     "name": name,
                     "enabled": cfg.enabled,
                     "disabled_reason": cfg.disabled_reason.as_ref().map(ToString::to_string),
+                    "process_reuse_scope": cfg.process_reuse_scope.as_str(),
                     "transport": transport,
                     "startup_timeout_sec": cfg
                         .startup_timeout_sec
@@ -557,8 +559,8 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         return Ok(());
     }
 
-    let mut stdio_rows: Vec<[String; 7]> = Vec::new();
-    let mut http_rows: Vec<[String; 5]> = Vec::new();
+    let mut stdio_rows: Vec<[String; 8]> = Vec::new();
+    let mut http_rows: Vec<[String; 6]> = Vec::new();
 
     for (name, cfg) in entries {
         match &cfg.transport {
@@ -592,6 +594,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                     args_display,
                     env_display,
                     cwd_display,
+                    cfg.process_reuse_scope.as_str().to_string(),
                     status,
                     auth_status,
                 ]);
@@ -613,6 +616,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                     name.clone(),
                     url.clone(),
                     bearer_token_display,
+                    cfg.process_reuse_scope.as_str().to_string(),
                     status,
                     auth_status,
                 ]);
@@ -627,6 +631,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
             "Args".len(),
             "Env".len(),
             "Cwd".len(),
+            "Reuse".len(),
             "Status".len(),
             "Auth".len(),
         ];
@@ -637,12 +642,13 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         }
 
         println!(
-            "{name:<name_w$}  {command:<cmd_w$}  {args:<args_w$}  {env:<env_w$}  {cwd:<cwd_w$}  {status:<status_w$}  {auth:<auth_w$}",
+            "{name:<name_w$}  {command:<cmd_w$}  {args:<args_w$}  {env:<env_w$}  {cwd:<cwd_w$}  {reuse:<reuse_w$}  {status:<status_w$}  {auth:<auth_w$}",
             name = "Name",
             command = "Command",
             args = "Args",
             env = "Env",
             cwd = "Cwd",
+            reuse = "Reuse",
             status = "Status",
             auth = "Auth",
             name_w = widths[0],
@@ -650,27 +656,30 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
             args_w = widths[2],
             env_w = widths[3],
             cwd_w = widths[4],
-            status_w = widths[5],
-            auth_w = widths[6],
+            reuse_w = widths[5],
+            status_w = widths[6],
+            auth_w = widths[7],
         );
 
         for row in &stdio_rows {
             println!(
-                "{name:<name_w$}  {command:<cmd_w$}  {args:<args_w$}  {env:<env_w$}  {cwd:<cwd_w$}  {status:<status_w$}  {auth:<auth_w$}",
+                "{name:<name_w$}  {command:<cmd_w$}  {args:<args_w$}  {env:<env_w$}  {cwd:<cwd_w$}  {reuse:<reuse_w$}  {status:<status_w$}  {auth:<auth_w$}",
                 name = row[0].as_str(),
                 command = row[1].as_str(),
                 args = row[2].as_str(),
                 env = row[3].as_str(),
                 cwd = row[4].as_str(),
-                status = row[5].as_str(),
-                auth = row[6].as_str(),
+                reuse = row[5].as_str(),
+                status = row[6].as_str(),
+                auth = row[7].as_str(),
                 name_w = widths[0],
                 cmd_w = widths[1],
                 args_w = widths[2],
                 env_w = widths[3],
                 cwd_w = widths[4],
-                status_w = widths[5],
-                auth_w = widths[6],
+                reuse_w = widths[5],
+                status_w = widths[6],
+                auth_w = widths[7],
             );
         }
     }
@@ -684,6 +693,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
             "Name".len(),
             "Url".len(),
             "Bearer Token Env Var".len(),
+            "Reuse".len(),
             "Status".len(),
             "Auth".len(),
         ];
@@ -694,32 +704,36 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         }
 
         println!(
-            "{name:<name_w$}  {url:<url_w$}  {token:<token_w$}  {status:<status_w$}  {auth:<auth_w$}",
+            "{name:<name_w$}  {url:<url_w$}  {token:<token_w$}  {reuse:<reuse_w$}  {status:<status_w$}  {auth:<auth_w$}",
             name = "Name",
             url = "Url",
             token = "Bearer Token Env Var",
+            reuse = "Reuse",
             status = "Status",
             auth = "Auth",
             name_w = widths[0],
             url_w = widths[1],
             token_w = widths[2],
-            status_w = widths[3],
-            auth_w = widths[4],
+            reuse_w = widths[3],
+            status_w = widths[4],
+            auth_w = widths[5],
         );
 
         for row in &http_rows {
             println!(
-                "{name:<name_w$}  {url:<url_w$}  {token:<token_w$}  {status:<status_w$}  {auth:<auth_w$}",
+                "{name:<name_w$}  {url:<url_w$}  {token:<token_w$}  {reuse:<reuse_w$}  {status:<status_w$}  {auth:<auth_w$}",
                 name = row[0].as_str(),
                 url = row[1].as_str(),
                 token = row[2].as_str(),
-                status = row[3].as_str(),
-                auth = row[4].as_str(),
+                reuse = row[3].as_str(),
+                status = row[4].as_str(),
+                auth = row[5].as_str(),
                 name_w = widths[0],
                 url_w = widths[1],
                 token_w = widths[2],
-                status_w = widths[3],
-                auth_w = widths[4],
+                reuse_w = widths[3],
+                status_w = widths[4],
+                auth_w = widths[5],
             );
         }
     }
@@ -776,6 +790,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
             "name": get_args.name,
             "enabled": server.enabled,
             "disabled_reason": server.disabled_reason.as_ref().map(ToString::to_string),
+            "process_reuse_scope": server.process_reuse_scope.as_str(),
             "transport": transport,
             "enabled_tools": server.enabled_tools.clone(),
             "disabled_tools": server.disabled_tools.clone(),
@@ -801,6 +816,10 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
 
     println!("{}", get_args.name);
     println!("  enabled: {}", server.enabled);
+    println!(
+        "  process_reuse_scope: {}",
+        server.process_reuse_scope.as_str()
+    );
     let format_tool_list = |tools: &Option<Vec<String>>| -> String {
         match tools {
             Some(list) if list.is_empty() => "[]".to_string(),

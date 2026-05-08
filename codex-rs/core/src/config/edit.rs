@@ -199,6 +199,7 @@ mod document_helpers {
     use codex_config::types::AppToolApproval;
     use codex_config::types::McpServerConfig;
     use codex_config::types::McpServerEnvVar;
+    use codex_config::types::McpServerProcessReuseScope;
     use codex_config::types::McpServerToolConfig;
     use codex_config::types::McpServerTransportConfig;
     use codex_config::types::ToolSuggestDisabledTool;
@@ -304,6 +305,9 @@ mod document_helpers {
         }
         if config.supports_parallel_tool_calls {
             entry["supports_parallel_tool_calls"] = value(true);
+        }
+        if !McpServerProcessReuseScope::is_default(&config.process_reuse_scope) {
+            entry["process_reuse_scope"] = value(config.process_reuse_scope.as_str());
         }
         if let Some(timeout) = config.startup_timeout_sec {
             entry["startup_timeout_sec"] = value(timeout.as_secs_f64());

@@ -15,6 +15,7 @@ use crate::AppToolApproval;
 use crate::CONFIG_TOML_FILE;
 use crate::McpServerConfig;
 use crate::McpServerEnvVar;
+use crate::McpServerProcessReuseScope;
 use crate::McpServerTransportConfig;
 
 pub async fn load_global_mcp_servers(
@@ -183,6 +184,9 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
     }
     if config.supports_parallel_tool_calls {
         entry["supports_parallel_tool_calls"] = value(true);
+    }
+    if !McpServerProcessReuseScope::is_default(&config.process_reuse_scope) {
+        entry["process_reuse_scope"] = value(config.process_reuse_scope.as_str());
     }
     if let Some(timeout) = config.startup_timeout_sec {
         entry["startup_timeout_sec"] = value(timeout.as_secs_f64());

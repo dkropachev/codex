@@ -904,6 +904,7 @@ fn blocking_replace_mcp_servers_round_trips() {
             enabled: true,
             required: false,
             supports_parallel_tool_calls: true,
+            process_reuse_scope: codex_config::types::McpServerProcessReuseScope::Repo,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -933,6 +934,7 @@ fn blocking_replace_mcp_servers_round_trips() {
             enabled: false,
             required: false,
             supports_parallel_tool_calls: false,
+            process_reuse_scope: codex_config::types::McpServerProcessReuseScope::Cwd,
             disabled_reason: None,
             startup_timeout_sec: Some(std::time::Duration::from_secs(5)),
             tool_timeout_sec: None,
@@ -970,6 +972,7 @@ command = \"cmd\"
 args = [\"--flag\"]
 env_vars = [\"FOO\"]
 supports_parallel_tool_calls = true
+process_reuse_scope = \"repo\"
 enabled_tools = [\"one\", \"two\"]
 
 [mcp_servers.stdio.env]
@@ -999,6 +1002,7 @@ fn blocking_replace_mcp_servers_serializes_tool_approval_overrides() {
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            process_reuse_scope: codex_config::types::McpServerProcessReuseScope::Cwd,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -1063,6 +1067,7 @@ foo = { command = "cmd" }
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            process_reuse_scope: codex_config::types::McpServerProcessReuseScope::Cwd,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -1117,6 +1122,7 @@ foo = { command = "cmd" } # keep me
             enabled: false,
             required: false,
             supports_parallel_tool_calls: false,
+            process_reuse_scope: codex_config::types::McpServerProcessReuseScope::Cwd,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -1170,6 +1176,7 @@ foo = { command = "cmd", args = ["--flag"] } # keep me
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            process_reuse_scope: codex_config::types::McpServerProcessReuseScope::Cwd,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -1224,6 +1231,7 @@ foo = { command = "cmd" }
             enabled: false,
             required: false,
             supports_parallel_tool_calls: false,
+            process_reuse_scope: codex_config::types::McpServerProcessReuseScope::Cwd,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,

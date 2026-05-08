@@ -23,6 +23,7 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
         apps_enabled: false,
+        mcp_process_reuse_enabled: false,
         configured_mcp_servers: HashMap::new(),
         plugin_capability_summaries: Vec::new(),
     }
@@ -64,6 +65,7 @@ fn mcp_prompt_auto_approval_honors_unrestricted_managed_profiles() {
         },
     ));
 }
+
 #[test]
 fn tool_plugin_provenance_collects_app_and_mcp_sources() {
     let provenance = ToolPluginProvenance::from_capability_summaries(&[
@@ -177,6 +179,7 @@ async fn effective_mcp_servers_preserve_user_servers_and_add_codex_apps() {
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            process_reuse_scope: codex_config::types::McpServerProcessReuseScope::Cwd,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -201,6 +204,7 @@ async fn effective_mcp_servers_preserve_user_servers_and_add_codex_apps() {
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            process_reuse_scope: codex_config::types::McpServerProcessReuseScope::Cwd,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
