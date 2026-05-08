@@ -91,10 +91,12 @@ pub(crate) async fn build_prompt_input_from_session(
     let base_instructions = sess.get_base_instructions().await;
     let prompt = build_prompt(
         prompt_input,
+        sess,
         router.as_ref(),
         turn_context.as_ref(),
         base_instructions,
-    );
+    )
+    .await;
 
     Ok(prompt.get_formatted_input())
 }

@@ -182,8 +182,8 @@ policy = "drain"
 
 `[model_router]` enables adaptive routing for internal Codex model calls.
 There are no static source rules. The router treats the current model config as
-the implicit incumbent, keeps explicit candidates, and can add candidates
-discovered from configured providers and registered accounts.
+the implicit incumbent, automatically adds candidates from currently available
+models, and keeps explicit candidates as optional overrides.
 
 ```toml
 [model_router]
@@ -192,6 +192,8 @@ discovery = "curated"
 subscription_pricing = "amortized_scarce"
 savings_reference = "implicit_incumbent"
 
+# Optional. When omitted, Codex uses the available model catalog for the
+# current provider and scores those candidates automatically.
 [[model_router.candidates]]
 id = "spark"
 model = "gpt-5.3-codex-spark"
@@ -221,7 +223,10 @@ then scores that route alongside candidates for the current task class. A
 candidate may set `model`, `model_provider`, `service_tier`, `reasoning_effort`,
 `account_pool`, `account`, optional observed metrics such as
 `intelligence_score`, `success_rate`, and `median_latency_ms`, and optional
-token prices.
+token prices. When model discovery reports a context window for a candidate,
+the router excludes that candidate if the estimated request would not fit in the
+model's effective context window. Candidates with unknown context limits remain
+eligible.
 `reasoning_effort = "inherit"` keeps the reasoning level from the parent or
 default config. `account_pool` references an existing
 `[account_pool.pools.<name>]`; `account` routes to one account id under

@@ -41,9 +41,11 @@ use crate::ResponseEvent;
 use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::context::ContextualUserFragment;
 use crate::context::RepoCiFollowup;
+use crate::model_router::AvailableRouterModel;
 use crate::model_router::ModelRouterSource;
 use crate::model_router::apply_model_router;
 use crate::model_router::auth_manager_for_config;
+use crate::model_router::available_router_models;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 
@@ -1339,7 +1341,7 @@ where
     T: for<'de> Deserialize<'de>,
 {
     let mut sub_agent_config =
-        repo_ci_phase_config(turn_context, model_router_source, prompt.len());
+        repo_ci_phase_config(sess, turn_context, model_router_source, prompt.len());
     if let Err(err) = sub_agent_config
         .web_search_mode
         .set(WebSearchMode::Disabled)
@@ -1409,7 +1411,7 @@ where
     T: for<'de> Deserialize<'de>,
 {
     let mut sub_agent_config =
-        repo_ci_phase_config(turn_context, model_router_source, prompt.len());
+        repo_ci_phase_config(sess, turn_context, model_router_source, prompt.len());
     if let Err(err) = sub_agent_config
         .web_search_mode
         .set(WebSearchMode::Disabled)
@@ -1451,14 +1453,17 @@ where
 }
 
 fn repo_ci_phase_config(
+    sess: &Arc<Session>,
     turn_context: &TurnContext,
     model_router_source: ModelRouterSource,
     prompt_bytes: usize,
 ) -> crate::config::Config {
+    let available_models = available_router_models(&sess.services.models_manager);
     repo_ci_phase_config_from_base(
         turn_context.config.as_ref().clone(),
         model_router_source,
         prompt_bytes,
+        &available_models,
     )
 }
 
@@ -1466,8 +1471,14 @@ fn repo_ci_phase_config_from_base(
     mut config: crate::config::Config,
     model_router_source: ModelRouterSource,
     prompt_bytes: usize,
+    available_models: &[AvailableRouterModel],
 ) -> crate::config::Config {
-    if let Err(err) = apply_model_router(&mut config, model_router_source, prompt_bytes) {
+    if let Err(err) = apply_model_router(
+        &mut config,
+        model_router_source,
+        prompt_bytes,
+        available_models,
+    ) {
         warn!("failed to apply repo CI model router: {err}");
     }
     config
@@ -2161,6 +2172,7 @@ async fn run_model_triage(
 ) -> Result<TriageResult> {
     let triage_prompt = triage_prompt_text(input);
     let policy_config = repo_ci_phase_config(
+        sess,
         turn_context,
         ModelRouterSource::Module("repo_ci.triage"),
         triage_prompt.len(),
@@ -2864,8 +2876,12 @@ mod tests {
             }],
             ..Default::default()
         });
-        let config =
-            repo_ci_phase_config_from_base(base, ModelRouterSource::Module("repo_ci.triage"), 10);
+        let config = repo_ci_phase_config_from_base(
+            base,
+            ModelRouterSource::Module("repo_ci.triage"),
+            10,
+            &[],
+        );
 
         assert_eq!(config.model.as_deref(), Some("triage-model"));
         assert_eq!(config.service_tier, Some(ServiceTier::Flex));
@@ -2883,8 +2899,12 @@ mod tests {
             }],
             ..Default::default()
         });
-        let config =
-            repo_ci_phase_config_from_base(base, ModelRouterSource::Module("repo_ci.review"), 10);
+        let config = repo_ci_phase_config_from_base(
+            base,
+            ModelRouterSource::Module("repo_ci.review"),
+            10,
+            &[],
+        );
 
         assert_eq!(config.model.as_deref(), Some("review-model"));
     }
@@ -2902,7 +2922,7 @@ mod tests {
             ..Default::default()
         });
         let config =
-            repo_ci_phase_config_from_base(base, ModelRouterSource::Module("repo_ci.fix"), 10);
+            repo_ci_phase_config_from_base(base, ModelRouterSource::Module("repo_ci.fix"), 10, &[]);
 
         assert_eq!(config.model.as_deref(), Some("fix-model"));
     }

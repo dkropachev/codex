@@ -188,6 +188,8 @@ pub enum Feature {
     ExternalMigration,
     /// Allow the model to invoke the built-in image generation tool.
     ImageGeneration,
+    /// Expose a single model-visible tool that routes to the full internal tool surface.
+    ToolRouter,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Reuse local stdio MCP server processes through a per-user broker.
@@ -1008,6 +1010,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "image_generation",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ToolRouter,
+        key: "tool_router",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::SkillMcpDependencyInstall,

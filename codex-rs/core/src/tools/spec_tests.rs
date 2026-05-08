@@ -431,6 +431,19 @@ async fn test_build_specs_gpt5_codex_default() {
 }
 
 #[tokio::test]
+async fn tool_router_feature_exposes_only_router_to_model() {
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ToolRouter);
+    assert_model_tools(
+        "gpt-5.4",
+        &features,
+        Some(WebSearchMode::Cached),
+        &["tool_router"],
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn test_build_specs_gpt51_codex_default() {
     let features = Features::with_defaults();
     assert_default_model_tools(

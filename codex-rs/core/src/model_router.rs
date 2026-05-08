@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+mod auto_candidates;
+
 use codex_config::config_toml::AccountPoolDefinitionToml;
 use codex_config::config_toml::AccountPoolPolicyToml;
 use codex_config::config_toml::AccountPoolToml;
@@ -14,6 +16,8 @@ use codex_model_router::TokenPrice;
 use codex_model_router::estimate_task_usage;
 use codex_model_router::estimate_token_cost;
 use codex_model_router::select_candidate;
+use codex_models_manager::manager::SharedModelsManager;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SubAgentSource;
 
 use crate::config::Config;
@@ -49,6 +53,7 @@ pub(crate) fn apply_model_router(
     config: &mut Config,
     source: ModelRouterSource,
     prompt_bytes: usize,
+    available_models: &[AvailableRouterModel],
 ) -> Result<(), String> {
     let Some(model_router) = config.model_router.as_ref() else {
         return Ok(());
@@ -58,14 +63,15 @@ pub(crate) fn apply_model_router(
     }
 
     let task_key = source.task_key();
-    let routes = build_candidate_routes(config, &task_key, prompt_bytes);
+    let candidate_set = build_candidate_set(config, &task_key, prompt_bytes, available_models);
     tracing::debug!(
         task_key = task_key,
         candidates = model_router.candidates.len(),
+        auto_candidates = candidate_set.auto_candidate_count,
         "evaluating model router"
     );
 
-    let Some(selection) = select_candidate(&task_key, prompt_bytes, &routes) else {
+    let Some(selection) = select_candidate(&task_key, prompt_bytes, &candidate_set.routes) else {
         return Ok(());
     };
     tracing::debug!(
@@ -78,7 +84,7 @@ pub(crate) fn apply_model_router(
     if selection.index == 0 {
         return Ok(());
     }
-    let Some(candidate) = model_router.candidates.get(selection.index - 1) else {
+    let Some(candidate) = candidate_set.candidates.get(selection.index - 1) else {
         return Err(format!(
             "model_router selected missing candidate index {}",
             selection.index
@@ -111,24 +117,108 @@ fn config_account_pool_default(config: &Config) -> Option<String> {
         .or_else(|| account_pool.pools.keys().next().cloned())
 }
 
-fn build_candidate_routes(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AvailableRouterModel {
+    model: String,
+    context_window: Option<i64>,
+    max_context_window: Option<i64>,
+    effective_context_window_percent: i64,
+}
+
+impl AvailableRouterModel {
+    fn from_model_info(model_info: &ModelInfo) -> Self {
+        Self {
+            model: model_info.slug.clone(),
+            context_window: model_info.context_window,
+            max_context_window: model_info.max_context_window,
+            effective_context_window_percent: model_info.effective_context_window_percent,
+        }
+    }
+
+    fn without_context(model: String) -> Self {
+        Self {
+            model,
+            context_window: None,
+            max_context_window: None,
+            effective_context_window_percent: 100,
+        }
+    }
+
+    fn usable_context_window_tokens(&self, config: &Config) -> Option<i64> {
+        let context_window = if let Some(config_context_window) = config.model_context_window {
+            self.max_context_window
+                .map_or(config_context_window, |max_context_window| {
+                    config_context_window.min(max_context_window)
+                })
+        } else {
+            self.context_window.or(self.max_context_window)?
+        };
+        let usable = context_window.saturating_mul(self.effective_context_window_percent) / 100;
+        (usable > 0).then_some(usable)
+    }
+}
+
+pub(crate) fn available_router_models(
+    models_manager: &SharedModelsManager,
+) -> Vec<AvailableRouterModel> {
+    let remote_models = models_manager.try_get_remote_models().unwrap_or_else(|err| {
+        tracing::debug!(error = %err, "failed to read available model metadata for model router");
+        Vec::new()
+    });
+    let available_presets = models_manager.build_available_models(remote_models.clone());
+    available_presets
+        .into_iter()
+        .map(|preset| {
+            remote_models
+                .iter()
+                .find(|model_info| model_info.slug == preset.model)
+                .map(AvailableRouterModel::from_model_info)
+                .unwrap_or_else(|| AvailableRouterModel::without_context(preset.model))
+        })
+        .collect()
+}
+
+struct CandidateSet {
+    routes: Vec<CandidateRoute>,
+    candidates: Vec<ModelRouterCandidateToml>,
+    auto_candidate_count: usize,
+}
+
+fn build_candidate_set(
     config: &Config,
     task_key: &str,
     prompt_bytes: usize,
-) -> Vec<CandidateRoute> {
+    available_models: &[AvailableRouterModel],
+) -> CandidateSet {
     let Some(model_router) = config.model_router.as_ref() else {
-        return Vec::new();
+        return CandidateSet {
+            routes: Vec::new(),
+            candidates: Vec::new(),
+            auto_candidate_count: 0,
+        };
     };
-    let mut routes = Vec::with_capacity(model_router.candidates.len() + 1);
+    let auto_candidates =
+        auto_candidates::candidates_from_available_models(config, available_models);
+    let auto_candidate_count = auto_candidates.len();
+    let mut candidates = Vec::with_capacity(model_router.candidates.len() + auto_candidate_count);
+    candidates.extend(model_router.candidates.iter().cloned());
+    candidates.extend(auto_candidates);
+
+    let mut routes = Vec::with_capacity(candidates.len() + 1);
     routes.push(CandidateRoute {
         id: Some("incumbent".to_string()),
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
+        usable_context_window_tokens: usable_context_window_tokens(
+            config,
+            config.model.as_deref(),
+            available_models,
+        ),
         is_incumbent: true,
         metrics: CandidateMetrics::default(),
     });
     let task_class = RouterTaskClass::infer(task_key, prompt_bytes);
-    routes.extend(model_router.candidates.iter().map(|candidate| {
+    routes.extend(candidates.iter().map(|candidate| {
         CandidateRoute {
             id: candidate.id.clone(),
             model: candidate.model.clone().or_else(|| config.model.clone()),
@@ -136,11 +226,42 @@ fn build_candidate_routes(
                 .model_provider
                 .clone()
                 .or_else(|| Some(config.model_provider_id.clone())),
+            usable_context_window_tokens: usable_context_window_tokens(
+                config,
+                candidate.model.as_deref().or(config.model.as_deref()),
+                available_models,
+            ),
             is_incumbent: false,
             metrics: candidate_metrics(candidate, task_class, prompt_bytes),
         }
     }));
-    routes
+    CandidateSet {
+        routes,
+        candidates,
+        auto_candidate_count,
+    }
+}
+
+fn usable_context_window_tokens(
+    config: &Config,
+    model: Option<&str>,
+    available_models: &[AvailableRouterModel],
+) -> Option<i64> {
+    let Some(model) = model else {
+        return configured_usable_context_window_tokens(config);
+    };
+    available_models
+        .iter()
+        .find(|available_model| available_model.model == model)
+        .and_then(|available_model| available_model.usable_context_window_tokens(config))
+        .or_else(|| configured_usable_context_window_tokens(config))
+}
+
+fn configured_usable_context_window_tokens(config: &Config) -> Option<i64> {
+    config
+        .model_context_window
+        .map(|context_window| context_window.saturating_mul(95) / 100)
+        .filter(|context_window| *context_window > 0)
 }
 
 fn candidate_metrics(
@@ -270,7 +391,7 @@ mod tests {
     use crate::config;
 
     #[tokio::test]
-    async fn no_candidates_leaves_incumbent_unchanged() {
+    async fn no_available_models_leaves_incumbent_unchanged() {
         let mut config = config::test_config().await;
         config.model = Some("parent-model".to_string());
         config.model_router = Some(ModelRouterToml {
@@ -283,10 +404,55 @@ mod tests {
             &mut config,
             ModelRouterSource::SubAgent(SubAgentSource::Review),
             80,
+            &[],
         )
         .expect("router should apply");
 
         assert_eq!(config.model.as_deref(), Some("parent-model"));
+    }
+
+    #[tokio::test]
+    async fn no_explicit_candidates_uses_available_models() {
+        let mut config = config::test_config().await;
+        config.model = Some("gpt-5.4".to_string());
+        config.model_router = Some(ModelRouterToml {
+            enabled: true,
+            candidates: Vec::new(),
+            ..Default::default()
+        });
+        let available_models = vec![available_model("gpt-5.3-codex-spark")];
+
+        apply_model_router(
+            &mut config,
+            ModelRouterSource::Module("repo_ci.triage"),
+            80,
+            &available_models,
+        )
+        .expect("router should apply");
+
+        assert_eq!(config.model.as_deref(), Some("gpt-5.3-codex-spark"));
+    }
+
+    #[tokio::test]
+    async fn tool_router_source_uses_model_router_to_select_available_spark() {
+        let mut config = config::test_config().await;
+        config.model = Some("gpt-5.4".to_string());
+        config.model_router = Some(ModelRouterToml {
+            enabled: true,
+            candidates: Vec::new(),
+            ..Default::default()
+        });
+        let available_models = vec![available_model("gpt-5.3-codex-spark")];
+
+        apply_model_router(
+            &mut config,
+            ModelRouterSource::Module("tool_router.resolve"),
+            80,
+            &available_models,
+        )
+        .expect("router should apply");
+
+        assert_eq!(config.model.as_deref(), Some("gpt-5.3-codex-spark"));
     }
 
     #[tokio::test]
@@ -305,8 +471,13 @@ mod tests {
             ..Default::default()
         });
 
-        apply_model_router(&mut config, ModelRouterSource::Module("repo_ci.triage"), 80)
-            .expect("router should apply");
+        apply_model_router(
+            &mut config,
+            ModelRouterSource::Module("repo_ci.triage"),
+            80,
+            &[],
+        )
+        .expect("router should apply");
 
         assert_eq!(config.model.as_deref(), Some("gpt-5.3-codex-spark"));
         assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::Low));
@@ -373,10 +544,37 @@ mod tests {
             &mut config,
             ModelRouterSource::SubAgent(SubAgentSource::Review),
             80,
+            &[],
         )
         .expect("router should apply");
 
         assert_eq!(config.model.as_deref(), Some("gpt-5.5"));
+    }
+
+    #[tokio::test]
+    async fn skips_available_model_when_prompt_exceeds_context_window() {
+        let mut config = config::test_config().await;
+        config.model = Some("gpt-5.4".to_string());
+        config.model_router = Some(ModelRouterToml {
+            enabled: true,
+            candidates: Vec::new(),
+            ..Default::default()
+        });
+        let available_models = vec![available_model_with_context(
+            "gpt-5.3-codex-spark",
+            Some(1_000),
+            Some(1_000),
+        )];
+
+        apply_model_router(
+            &mut config,
+            ModelRouterSource::Module("repo_ci.triage"),
+            8_000,
+            &available_models,
+        )
+        .expect("router should apply");
+
+        assert_eq!(config.model.as_deref(), Some("gpt-5.4"));
     }
 
     #[tokio::test]
@@ -398,10 +596,28 @@ mod tests {
             &mut config,
             ModelRouterSource::SubAgent(SubAgentSource::Review),
             1,
+            &[],
         )
         .expect_err("unknown provider should fail");
 
         assert!(err.contains("unknown model_provider"));
         assert_eq!(config.model.as_deref(), Some("parent-model"));
+    }
+
+    fn available_model(model: &str) -> AvailableRouterModel {
+        available_model_with_context(model, Some(272_000), Some(272_000))
+    }
+
+    fn available_model_with_context(
+        model: &str,
+        context_window: Option<i64>,
+        max_context_window: Option<i64>,
+    ) -> AvailableRouterModel {
+        AvailableRouterModel {
+            model: model.to_string(),
+            context_window,
+            max_context_window,
+            effective_context_window_percent: 95,
+        }
     }
 }
