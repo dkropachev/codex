@@ -3,14 +3,7 @@ use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
 fn windows_shell_guidance_description() -> String {
-    format!(
-        "\n\n{REPO_CI_SHELL_GUIDANCE}\n\n{}",
-        windows_shell_guidance()
-    )
-}
-
-fn repo_ci_shell_guidance_description() -> String {
-    format!("\n\n{REPO_CI_SHELL_GUIDANCE}")
+    format!("\n\n{}", windows_shell_guidance())
 }
 
 #[test]
@@ -37,7 +30,6 @@ Examples of valid command strings:
 - The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
 - Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
             .to_string()
-            + &repo_ci_shell_guidance_description()
     };
 
     let properties = BTreeMap::from([
@@ -114,7 +106,6 @@ fn exec_command_tool_matches_expected_spec() {
     } else {
         "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
             .to_string()
-            + &repo_ci_shell_guidance_description()
     };
 
     let mut properties = BTreeMap::from([
@@ -282,7 +273,6 @@ Examples of valid command strings:
 - The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
 - Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
             .to_string()
-            + &repo_ci_shell_guidance_description()
     };
 
     assert_eq!(
@@ -358,7 +348,6 @@ Examples of valid command strings:
         r#"Runs a shell command and returns its output.
 - Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#
             .to_string()
-            + &repo_ci_shell_guidance_description()
     };
 
     let mut properties = BTreeMap::from([

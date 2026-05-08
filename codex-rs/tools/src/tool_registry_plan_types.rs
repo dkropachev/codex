@@ -26,7 +26,6 @@ pub enum ToolHandlerKind {
     Plan,
     RequestPermissions,
     RequestUserInput,
-    RepoCi,
     ResumeAgentV1,
     SendInputV1,
     SendMessageV2,

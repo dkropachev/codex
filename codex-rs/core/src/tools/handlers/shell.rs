@@ -12,7 +12,6 @@ use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
 use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
-use crate::tools::ci_command_guard::redirect_for_ci_command;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -244,17 +243,13 @@ impl ToolHandler for ShellHandler {
             ToolPayload::Function { arguments } => {
                 let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
                 let params: ShellToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
-                let hook_command = codex_shell_command::parse_command::shlex_join(&params.command);
-                if let Some(message) = redirect_for_ci_command(turn.as_ref(), &hook_command) {
-                    return Err(FunctionCallError::RespondToModel(message));
-                }
                 let prefix_rule = params.prefix_rule.clone();
                 let exec_params =
                     Self::to_exec_params(&params, turn.as_ref(), session.conversation_id);
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.display(),
                     exec_params,
-                    hook_command,
+                    hook_command: codex_shell_command::parse_command::shlex_join(&params.command),
                     additional_permissions: params.additional_permissions.clone(),
                     prefix_rule,
                     session,
@@ -267,16 +262,12 @@ impl ToolHandler for ShellHandler {
                 .await
             }
             ToolPayload::LocalShell { params } => {
-                let hook_command = codex_shell_command::parse_command::shlex_join(&params.command);
-                if let Some(message) = redirect_for_ci_command(turn.as_ref(), &hook_command) {
-                    return Err(FunctionCallError::RespondToModel(message));
-                }
                 let exec_params =
                     Self::to_exec_params(&params, turn.as_ref(), session.conversation_id);
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.display(),
                     exec_params,
-                    hook_command,
+                    hook_command: codex_shell_command::parse_command::shlex_join(&params.command),
                     additional_permissions: None,
                     prefix_rule: None,
                     session,
@@ -371,9 +362,6 @@ impl ToolHandler for ShellCommandHandler {
 
         let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
         let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
-        if let Some(message) = redirect_for_ci_command(turn.as_ref(), &params.command) {
-            return Err(FunctionCallError::RespondToModel(message));
-        }
         let workdir = turn.resolve_path(params.workdir.clone());
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),

@@ -1,4 +1,3 @@
-pub(crate) mod ci_command_guard;
 pub(crate) mod code_mode;
 pub(crate) mod context;
 pub(crate) mod events;
