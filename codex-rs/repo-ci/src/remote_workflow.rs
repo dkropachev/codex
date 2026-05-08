@@ -1,8 +1,11 @@
 use crate::remote_commit::RemoteCommitApplied;
 use crate::remote_commit::RemoteCommitDecision;
+use crate::remote_commit::RemoteCommitStrategy;
 use crate::remote_commit::apply_remote_commit_decision;
 use crate::remote_commit::fallback_remote_commit_decision;
 use crate::remote_commit::git_status_short;
+use crate::remote_commit::remote_commit_changed_paths;
+use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use serde::Deserialize;
@@ -10,13 +13,18 @@ use std::path::Path;
 use std::process::Command;
 use std::process::ExitStatus;
 use std::process::Output;
+use std::process::Stdio;
+use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
+use std::time::Instant;
 
 const GITHUB_RETRY_ATTEMPTS: usize = 3;
 const GITHUB_RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
 const MAX_COMMAND_OUTPUT_BYTES: usize = 12_000;
 const MAX_STATUS_LINES: usize = 12;
+const REMOTE_CHECK_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const REMOTE_WATCH_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -66,6 +74,32 @@ pub struct RemoteRepoCiWorkflow {
     pr: GhPr,
 }
 
+#[derive(Clone, Default)]
+pub struct RemoteRepoCiProgress {
+    on_checks: Option<Arc<dyn Fn(Vec<RemoteRepoCiCheck>) + Send + Sync + 'static>>,
+}
+
+impl RemoteRepoCiProgress {
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    pub fn on_checks<F>(on_checks: F) -> Self
+    where
+        F: Fn(Vec<RemoteRepoCiCheck>) + Send + Sync + 'static,
+    {
+        Self {
+            on_checks: Some(Arc::new(on_checks)),
+        }
+    }
+
+    fn emit_checks(&self, checks: Vec<RemoteRepoCiCheck>) {
+        if let Some(on_checks) = &self.on_checks {
+            on_checks(checks);
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteRepoCiWorkflowStart {
     Skipped(String),
@@ -99,24 +133,45 @@ pub fn run_started_remote_workflow(
     cwd: &Path,
     workflow: &RemoteRepoCiWorkflow,
 ) -> Result<RemoteRepoCiWorkflowOutcome> {
-    Ok(run_started_remote_workflow_with_commit_decision(cwd, workflow, None)?.outcome)
+    let owned_paths = remote_commit_changed_paths(cwd)?;
+    Ok(
+        run_started_remote_workflow_with_commit_decision(cwd, workflow, None, &owned_paths)?
+            .outcome,
+    )
 }
 
 pub fn run_started_remote_workflow_with_commit_decision(
     cwd: &Path,
     workflow: &RemoteRepoCiWorkflow,
     commit_decision: Option<&RemoteCommitDecision>,
+    owned_paths: &[String],
 ) -> Result<RemoteRepoCiWorkflowRun> {
-    let prepared_commit = prepare_remote_commit(cwd, commit_decision)?;
+    run_started_remote_workflow_with_commit_decision_and_progress(
+        cwd,
+        workflow,
+        commit_decision,
+        owned_paths,
+        RemoteRepoCiProgress::none(),
+    )
+}
+
+pub fn run_started_remote_workflow_with_commit_decision_and_progress(
+    cwd: &Path,
+    workflow: &RemoteRepoCiWorkflow,
+    commit_decision: Option<&RemoteCommitDecision>,
+    owned_paths: &[String],
+    progress: RemoteRepoCiProgress,
+) -> Result<RemoteRepoCiWorkflowRun> {
+    let prepared_commit = prepare_remote_commit(cwd, commit_decision, owned_paths)?;
     ensure_clean_worktree(cwd)?;
     let pushed_head = local_head(cwd)?;
-    push_pr_head(cwd, &workflow.pr)?;
-    ensure_remote_ref_matches_head(cwd, &workflow.pr, &pushed_head)?;
-    let watch_output = run_gh_output_with_retry(
+    push_pr_head(
         cwd,
-        &["pr", "checks", "--watch", "--fail-fast"],
-        "watch GitHub PR checks",
+        &workflow.pr,
+        PushMode::for_prepared_commit(&prepared_commit),
     )?;
+    ensure_remote_ref_matches_head(cwd, &workflow.pr, &pushed_head)?;
+    let watch_output = run_gh_watch_with_progress(cwd, progress)?;
     if watch_output.status.success() {
         ensure_clean_worktree(cwd)?;
         ensure_local_head_matches(cwd, &pushed_head)?;
@@ -205,16 +260,53 @@ fn current_pr(cwd: &Path) -> Result<Option<GhPr>> {
     Err(last_error.unwrap_or_else(|| anyhow!("retry loop did not run for `{command_display}`")))
 }
 
-fn push_pr_head(cwd: &Path, pr: &GhPr) -> Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PushMode {
+    FastForwardOnly,
+    ForceWithLease,
+}
+
+impl PushMode {
+    fn for_prepared_commit(prepared_commit: &Option<RemoteCommitApplied>) -> Self {
+        if prepared_commit
+            .as_ref()
+            .is_some_and(|applied| applied.strategy == RemoteCommitStrategy::AmendPriorCommit)
+        {
+            Self::ForceWithLease
+        } else {
+            Self::FastForwardOnly
+        }
+    }
+}
+
+fn push_pr_head(cwd: &Path, pr: &GhPr, mode: PushMode) -> Result<()> {
     let remote = remote_target(cwd, pr);
     let mut push_ref = String::from("HEAD:");
     push_ref.push_str(&pr.head_ref_name);
-    run_command_with_retry(
-        cwd,
-        "git",
-        &["push", &remote, &push_ref],
-        "push PR head to GitHub",
-    )?;
+    let lease_arg = match mode {
+        PushMode::FastForwardOnly => None,
+        PushMode::ForceWithLease => {
+            let expected = remote_head_for_remote(cwd, &remote, pr)?.ok_or_else(|| {
+                anyhow!(
+                    "Repo CI remote checks cannot force-with-lease push because {} was not found on {}",
+                    remote_head_ref(pr),
+                    remote
+                )
+            })?;
+            Some(format!(
+                "--force-with-lease={}:{}",
+                remote_head_ref(pr),
+                expected
+            ))
+        }
+    };
+    let mut args = vec!["push"];
+    if let Some(lease_arg) = lease_arg.as_deref() {
+        args.push(lease_arg);
+    }
+    args.push(&remote);
+    args.push(&push_ref);
+    run_command_with_retry(cwd, "git", &args, "push PR head to GitHub")?;
     Ok(())
 }
 
@@ -306,6 +398,7 @@ fn remote_head_ref(pr: &GhPr) -> String {
 fn prepare_remote_commit(
     cwd: &Path,
     commit_decision: Option<&RemoteCommitDecision>,
+    owned_paths: &[String],
 ) -> Result<Option<RemoteCommitApplied>> {
     let fallback;
     let decision = match commit_decision {
@@ -315,7 +408,7 @@ fn prepare_remote_commit(
             &fallback
         }
     };
-    apply_remote_commit_decision(cwd, decision)
+    apply_remote_commit_decision(cwd, decision, owned_paths)
 }
 
 fn local_head(cwd: &Path) -> Result<String> {
@@ -335,11 +428,15 @@ fn ensure_local_head_matches(cwd: &Path, expected: &str) -> Result<()> {
 
 fn remote_head(cwd: &Path, pr: &GhPr) -> Result<Option<String>> {
     let remote = remote_target(cwd, pr);
+    remote_head_for_remote(cwd, &remote, pr)
+}
+
+fn remote_head_for_remote(cwd: &Path, remote: &str, pr: &GhPr) -> Result<Option<String>> {
     let head_ref = remote_head_ref(pr);
     let output = run_command_with_retry(
         cwd,
         "git",
-        &["ls-remote", &remote, &head_ref],
+        &["ls-remote", remote, &head_ref],
         "resolve pushed PR head",
     )?;
     Ok(String::from_utf8_lossy(&output.stdout)
@@ -370,6 +467,45 @@ fn pr_checks(cwd: &Path) -> Result<Vec<RemoteRepoCiCheck>> {
         "load GitHub PR checks",
     )?;
     Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+fn run_gh_watch_with_progress(cwd: &Path, progress: RemoteRepoCiProgress) -> Result<Output> {
+    let args = ["pr", "checks", "--watch", "--fail-fast"];
+    let command_display = format!("gh {}", args.join(" "));
+    let mut child = Command::new("gh")
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| {
+            anyhow!("watch GitHub PR checks failed: could not run `{command_display}`: {err}")
+        })?;
+
+    let mut last_poll = Instant::now()
+        .checked_sub(REMOTE_CHECK_POLL_INTERVAL)
+        .unwrap_or_else(Instant::now);
+    loop {
+        if last_poll.elapsed() >= REMOTE_CHECK_POLL_INTERVAL {
+            if let Ok(checks) = pr_checks(cwd) {
+                progress.emit_checks(checks);
+            }
+            last_poll = Instant::now();
+        }
+
+        if child
+            .try_wait()
+            .context("failed to wait for GitHub PR checks")?
+            .is_some()
+        {
+            return child
+                .wait_with_output()
+                .with_context(|| format!("failed to collect `{command_display}` output"));
+        }
+
+        sleep(REMOTE_WATCH_POLL_INTERVAL);
+    }
 }
 
 fn ensure_clean_worktree(cwd: &Path) -> Result<()> {
@@ -577,8 +713,9 @@ mod tests {
     fn remote_workflow_prepares_dirty_tree_with_fallback_commit() {
         let (_temp, repo_root) = init_repo();
         fs::write(repo_root.join("base.txt"), "base\nchanged\n").expect("write change");
+        let owned_paths = vec!["base.txt".to_string()];
 
-        let applied = prepare_remote_commit(&repo_root, None)
+        let applied = prepare_remote_commit(&repo_root, None, &owned_paths)
             .expect("prepare commit")
             .expect("dirty tree should be committed");
 
@@ -601,6 +738,43 @@ mod tests {
             .output()
             .expect("git log");
         assert!(String::from_utf8_lossy(&log.stdout).contains("repo-ci: prepare remote retry"));
+    }
+
+    #[test]
+    fn amended_commit_push_uses_force_with_lease() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let remote_root = temp.path().join("origin.git");
+        fs::create_dir(&remote_root).expect("create remote dir");
+        run_git(&remote_root, &["init", "--bare"]);
+
+        let repo_root = temp.path().join("repo");
+        fs::create_dir(&repo_root).expect("create repo");
+        run_git(&repo_root, &["init"]);
+        run_git(&repo_root, &["config", "user.email", "repo-ci@example.com"]);
+        run_git(&repo_root, &["config", "user.name", "Repo CI"]);
+        fs::write(repo_root.join("base.txt"), "base\n").expect("write base");
+        run_git(&repo_root, &["add", "base.txt"]);
+        run_git(&repo_root, &["commit", "-m", "base"]);
+        run_git(
+            &repo_root,
+            &["remote", "add", "origin", remote_root.to_str().unwrap()],
+        );
+        run_git(&repo_root, &["push", "origin", "HEAD:feature"]);
+
+        fs::write(repo_root.join("base.txt"), "base\namended\n").expect("write amended");
+        run_git(&repo_root, &["commit", "--amend", "-am", "base"]);
+        let pr = local_origin_pr("feature");
+
+        push_pr_head(&repo_root, &pr, PushMode::ForceWithLease)
+            .expect("force-with-lease push should update amended head");
+
+        let local = local_head(&repo_root).expect("local head");
+        assert_eq!(
+            remote_head(&repo_root, &pr)
+                .expect("remote head")
+                .as_deref(),
+            Some(local.as_str())
+        );
     }
 
     #[test]

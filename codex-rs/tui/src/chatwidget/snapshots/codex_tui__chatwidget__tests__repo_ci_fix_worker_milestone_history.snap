@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+expression: rendered
+---
+• Repo CI fix workers applied 2 grouped fix(es) touching 2 file(s): updated
+  config | adjusted tests
