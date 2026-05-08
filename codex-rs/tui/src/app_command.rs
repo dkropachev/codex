@@ -117,6 +117,9 @@ pub(crate) enum AppCommandView<'a> {
         review_rounds: &'a Option<u8>,
         long_ci: &'a Option<bool>,
     },
+    SetModelPolicySessionConfig {
+        enabled: &'a Option<bool>,
+    },
     ListSkills {
         cwds: &'a [PathBuf],
         force_reload: bool,
@@ -323,6 +326,10 @@ impl AppCommand {
         })
     }
 
+    pub(crate) fn set_model_policy_session_config(enabled: Option<bool>) -> Self {
+        Self(Op::SetModelPolicySessionConfig { enabled })
+    }
+
     pub(crate) fn list_skills(cwds: Vec<PathBuf>, force_reload: bool) -> Self {
         Self(Op::ListSkills { cwds, force_reload })
     }
@@ -477,6 +484,9 @@ impl AppCommand {
                 review_rounds,
                 long_ci,
             },
+            Op::SetModelPolicySessionConfig { enabled } => {
+                AppCommandView::SetModelPolicySessionConfig { enabled }
+            }
             Op::ResolveElicitation {
                 server_name,
                 request_id,

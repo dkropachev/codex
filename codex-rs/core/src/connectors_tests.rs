@@ -29,6 +29,10 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::LazyLock;
+use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use tempfile::tempdir;
 
 fn annotations(destructive_hint: Option<bool>, open_world_hint: Option<bool>) -> ToolAnnotations {
@@ -137,6 +141,27 @@ fn with_accessible_connectors_cache_cleared<R>(f: impl FnOnce() -> R) -> R {
     };
     let result = f();
     let mut cache_guard = ACCESSIBLE_CONNECTORS_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *cache_guard = previous;
+    result
+}
+
+static TOOL_SUGGEST_DIRECTORY_TEST_LOCK: LazyLock<StdMutex<()>> =
+    LazyLock::new(|| StdMutex::new(()));
+
+fn with_tool_suggest_directory_failure_cache_cleared<R>(f: impl FnOnce() -> R) -> R {
+    let _guard = TOOL_SUGGEST_DIRECTORY_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let previous = {
+        let mut cache_guard = TOOL_SUGGEST_DIRECTORY_FAILURE_CACHE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache_guard.take()
+    };
+    let result = f();
+    let mut cache_guard = TOOL_SUGGEST_DIRECTORY_FAILURE_CACHE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *cache_guard = previous;
@@ -1110,6 +1135,58 @@ discoverables = [
         tool_suggest_connector_ids(&config).await,
         HashSet::from(["connector_2128aebfecb84f64a069897515042a44".to_string()])
     );
+}
+
+#[tokio::test]
+async fn tool_suggest_directory_failures_are_backed_off() {
+    with_tool_suggest_directory_failure_cache_cleared(|| async {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let cache_key = AllConnectorsCacheKey::new(
+            "https://example.com".to_string(),
+            Some("account".to_string()),
+            Some("user".to_string()),
+            /*is_workspace_account*/ false,
+        );
+
+        let first_attempts = Arc::clone(&attempts);
+        let first = list_directory_connectors_for_tool_suggest_with_fetch(
+            cache_key.clone(),
+            /*is_workspace_account*/ false,
+            move |_| {
+                let attempts = Arc::clone(&first_attempts);
+                async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    anyhow::bail!("boom");
+                }
+            },
+        )
+        .await;
+
+        assert!(first.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+
+        let second_attempts = Arc::clone(&attempts);
+        let second = list_directory_connectors_for_tool_suggest_with_fetch(
+            cache_key,
+            /*is_workspace_account*/ false,
+            move |_| {
+                let attempts = Arc::clone(&second_attempts);
+                async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    Ok(serde_json::from_value(serde_json::json!({
+                        "apps": [],
+                        "nextToken": null
+                    }))
+                    .expect("directory list response"))
+                }
+            },
+        )
+        .await;
+
+        assert!(second.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    })
+    .await;
 }
 
 #[test]

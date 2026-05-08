@@ -171,6 +171,7 @@ pub(super) async fn user_input_or_turn_inner(
                     personality,
                     app_server_client_name: None,
                     app_server_client_version: None,
+                    model_policy_enabled_override: None,
                     repo_ci_session_mode: None,
                     repo_ci_issue_types: None,
                     repo_ci_review_rounds: None,
@@ -227,6 +228,7 @@ pub(super) async fn user_input_or_turn_inner(
                     personality,
                     app_server_client_name: None,
                     app_server_client_version: None,
+                    model_policy_enabled_override: None,
                     repo_ci_session_mode: None,
                     repo_ci_issue_types: None,
                     repo_ci_review_rounds: None,
@@ -1191,6 +1193,18 @@ pub(super) async fn submission_loop(
                             repo_ci_issue_types: Some(issue_types),
                             repo_ci_review_rounds: Some(review_rounds),
                             repo_ci_long_ci: Some(long_ci),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
+                    false
+                }
+                Op::SetModelPolicySessionConfig { enabled } => {
+                    override_turn_context(
+                        &sess,
+                        sub.id.clone(),
+                        SessionSettingsUpdate {
+                            model_policy_enabled_override: Some(enabled),
                             ..Default::default()
                         },
                     )

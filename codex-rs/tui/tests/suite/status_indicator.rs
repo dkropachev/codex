@@ -22,3 +22,18 @@ fn ansi_escape_line_strips_escape_sequences() {
 
     assert_eq!(combined, "RED");
 }
+
+#[test]
+fn ansi_escape_line_strips_osc_sequences() {
+    let osc_hyperlink = "\x1b]8;;https://github.com\x07github.com\x1b]8;;\x07";
+
+    let line = ansi_escape_line(osc_hyperlink);
+
+    let combined: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.to_string())
+        .collect();
+
+    assert_eq!(combined, "github.com");
+}
