@@ -139,11 +139,12 @@ pub(crate) use selection_tabs::SelectionTab;
 /// Keeping a single value ensures Ctrl+C and Ctrl+D behave identically.
 pub(crate) const QUIT_SHORTCUT_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// Whether Ctrl+C/Ctrl+D require a second press to quit.
+/// Whether idle Ctrl+C/Ctrl+D require a second press to quit.
 ///
 /// This UX experiment was enabled by default, but requiring a double press to quit feels janky in
 /// practice (especially for users accustomed to shells and other TUIs). Disable it for now while we
-/// rethink a better quit/interrupt design.
+/// rethink a better quit/interrupt design. Active work can still arm a temporary force-quit
+/// shortcut after Ctrl+C interrupts the turn.
 pub(crate) const DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED: bool = false;
 
 /// The result of offering a cancellation key to a bottom-pane surface.
@@ -529,9 +530,9 @@ impl BottomPane {
     /// itself). If no view is active, Ctrl+C cancels active history search before falling back to
     /// clearing draft composer input.
     ///
-    /// This method may show the quit shortcut hint as a user-visible acknowledgement that Ctrl+C
-    /// was received, but it does not decide whether the process should exit; `ChatWidget` owns the
-    /// quit/interrupt state machine and uses the result to decide what happens next.
+    /// This method does not decide whether the process should exit or show the quit shortcut hint;
+    /// `ChatWidget` owns the quit/interrupt state machine and uses the result to decide what
+    /// happens next.
     pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
         if let Some(view) = self.view_stack.last_mut() {
             let event = view.on_ctrl_c();
@@ -541,7 +542,6 @@ impl BottomPane {
                 if view_complete {
                     self.pop_active_view_with_completion(completion);
                 }
-                self.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')));
                 self.request_redraw();
             }
             event
@@ -553,7 +553,6 @@ impl BottomPane {
         } else {
             self.view_stack.pop();
             self.clear_composer_for_ctrl_c();
-            self.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')));
             self.request_redraw();
             CancellationEvent::Handled
         }
@@ -726,10 +725,6 @@ impl BottomPane {
     /// after [`QUIT_SHORTCUT_TIMEOUT`] so the hint disappears even if the user
     /// stops typing and no other events trigger a draw.
     pub(crate) fn show_quit_shortcut_hint(&mut self, key: KeyBinding) {
-        if !DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
-            return;
-        }
-
         self.composer
             .show_quit_shortcut_hint(key, self.has_input_focus);
         let frame_requester = self.frame_requester.clone();
