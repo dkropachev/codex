@@ -15,6 +15,7 @@ pub struct ToolRouterLedgerEntry {
     pub model_provider: String,
     pub toolset_hash: String,
     pub router_schema_version: i64,
+    pub model_response_ordinal: i64,
     pub guidance_version: i64,
     pub guidance_tokens: i64,
     pub format_description_tokens: i64,
@@ -29,6 +30,7 @@ pub struct ToolRouterLedgerEntry {
     pub original_output_tokens: i64,
     pub truncated_output_tokens: i64,
     pub outcome: Option<String>,
+    pub request_shape_json: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,23 +56,6 @@ pub struct ToolRouterGuidanceRecord {
     pub guidance_text: String,
     pub guidance_tokens: i64,
     pub source: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolRouterTuneObservation {
-    pub model_slug: String,
-    pub model_provider: String,
-    pub toolset_hash: String,
-    pub router_schema_version: i64,
-    pub affected_call_count: i64,
-    pub fallback_call_count: i64,
-    pub fallback_prompt_tokens: i64,
-    pub fallback_completion_tokens: i64,
-    pub invalid_route_errors: i64,
-    pub guidance_tokens: i64,
-    pub format_description_tokens: i64,
-    pub visible_router_schema_tokens: i64,
-    pub hidden_tool_schema_tokens: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,6 +119,7 @@ impl StateRuntime {
                 model_provider,
                 toolset_hash,
                 router_schema_version,
+                model_response_ordinal,
                 guidance_version,
                 guidance_tokens,
                 format_description_tokens,
@@ -147,9 +133,10 @@ impl StateRuntime {
                 returned_output_tokens,
                 original_output_tokens,
                 truncated_output_tokens,
-                outcome
+                outcome,
+                request_shape_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(now_ms)
@@ -160,6 +147,7 @@ impl StateRuntime {
         .bind(entry.model_provider)
         .bind(entry.toolset_hash)
         .bind(entry.router_schema_version)
+        .bind(entry.model_response_ordinal)
         .bind(entry.guidance_version)
         .bind(entry.guidance_tokens)
         .bind(entry.format_description_tokens)
@@ -174,6 +162,7 @@ impl StateRuntime {
         .bind(entry.original_output_tokens)
         .bind(entry.truncated_output_tokens)
         .bind(entry.outcome)
+        .bind(entry.request_shape_json)
         .execute(self.pool.as_ref())
         .await?;
         Ok(())
@@ -253,66 +242,6 @@ impl StateRuntime {
         .execute(self.pool.as_ref())
         .await?;
         Ok(())
-    }
-
-    pub async fn tool_router_tune_observations(
-        &self,
-        window: ToolRouterDiagnosticsWindow,
-        model_slug: Option<&str>,
-    ) -> anyhow::Result<Vec<ToolRouterTuneObservation>> {
-        let since_created_at_ms = match window {
-            ToolRouterDiagnosticsWindow::AllTime => i64::MIN,
-            ToolRouterDiagnosticsWindow::SinceCreatedAtMs(value) => value,
-        };
-        let rows = sqlx::query(
-            r#"
-            SELECT
-                model_slug,
-                model_provider,
-                toolset_hash,
-                router_schema_version,
-                COUNT(*) AS affected_call_count,
-                COALESCE(SUM(CASE WHEN route_kind IN ('model_router', 'model_router_script', 'spark', 'spark_script') THEN 1 ELSE 0 END), 0) AS fallback_call_count,
-                COALESCE(SUM(CASE WHEN route_kind IN ('model_router', 'model_router_script', 'spark', 'spark_script') THEN spark_prompt_tokens ELSE 0 END), 0) AS fallback_prompt_tokens,
-                COALESCE(SUM(CASE WHEN route_kind IN ('model_router', 'model_router_script', 'spark', 'spark_script') THEN spark_completion_tokens ELSE 0 END), 0) AS fallback_completion_tokens,
-                COALESCE(SUM(CASE WHEN route_kind = 'error' THEN 1 ELSE 0 END), 0) AS invalid_route_errors,
-                COALESCE(MAX(guidance_tokens), 0) AS guidance_tokens,
-                COALESCE(MAX(format_description_tokens), 0) AS format_description_tokens,
-                COALESCE(MAX(visible_router_schema_tokens), 0) AS visible_router_schema_tokens,
-                COALESCE(MAX(hidden_tool_schema_tokens), 0) AS hidden_tool_schema_tokens
-            FROM tool_router_ledger
-            WHERE created_at_ms >= ?
-              AND model_slug != ''
-              AND (? IS NULL OR model_slug = ?)
-            GROUP BY model_slug, model_provider, toolset_hash, router_schema_version
-            ORDER BY affected_call_count DESC, fallback_call_count DESC
-            "#,
-        )
-        .bind(since_created_at_ms)
-        .bind(model_slug)
-        .bind(model_slug)
-        .fetch_all(self.pool.as_ref())
-        .await?;
-
-        rows.into_iter()
-            .map(|row| {
-                Ok(ToolRouterTuneObservation {
-                    model_slug: row.try_get("model_slug")?,
-                    model_provider: row.try_get("model_provider")?,
-                    toolset_hash: row.try_get("toolset_hash")?,
-                    router_schema_version: row.try_get("router_schema_version")?,
-                    affected_call_count: row.try_get("affected_call_count")?,
-                    fallback_call_count: row.try_get("fallback_call_count")?,
-                    fallback_prompt_tokens: row.try_get("fallback_prompt_tokens")?,
-                    fallback_completion_tokens: row.try_get("fallback_completion_tokens")?,
-                    invalid_route_errors: row.try_get("invalid_route_errors")?,
-                    guidance_tokens: row.try_get("guidance_tokens")?,
-                    format_description_tokens: row.try_get("format_description_tokens")?,
-                    visible_router_schema_tokens: row.try_get("visible_router_schema_tokens")?,
-                    hidden_tool_schema_tokens: row.try_get("hidden_tool_schema_tokens")?,
-                })
-            })
-            .collect::<anyhow::Result<Vec<_>>>()
     }
 
     pub async fn lookup_tool_router_rule(
@@ -639,6 +568,7 @@ mod tests {
                 model_provider: "openai".to_string(),
                 toolset_hash: "abc123".to_string(),
                 router_schema_version: 1,
+                model_response_ordinal: 2,
                 guidance_version: 1,
                 guidance_tokens: 9,
                 format_description_tokens: 20,
@@ -653,6 +583,7 @@ mod tests {
                 original_output_tokens: 9,
                 truncated_output_tokens: 7,
                 outcome: Some("ok".to_string()),
+                request_shape_json: None,
             })
             .await
             .expect("record ledger entry");
@@ -665,13 +596,17 @@ mod tests {
                 model_provider,
                 toolset_hash,
                 router_schema_version,
+                model_response_ordinal,
                 guidance_version,
                 guidance_tokens,
                 format_description_tokens,
                 visible_router_schema_tokens,
                 hidden_tool_schema_tokens,
                 spark_prompt_tokens,
-                spark_completion_tokens
+                spark_completion_tokens,
+                returned_output_tokens,
+                original_output_tokens,
+                truncated_output_tokens
             FROM tool_router_ledger
             WHERE call_id = ?
             "#,
@@ -681,46 +616,85 @@ mod tests {
         .await
         .expect("ledger row");
 
+        #[derive(Debug, PartialEq, Eq)]
+        struct LedgerRow {
+            selected_tools_json: String,
+            model_slug: String,
+            model_provider: String,
+            toolset_hash: String,
+            router_schema_version: i64,
+            model_response_ordinal: i64,
+            guidance_version: i64,
+            guidance_tokens: i64,
+            format_description_tokens: i64,
+            visible_router_schema_tokens: i64,
+            hidden_tool_schema_tokens: i64,
+            spark_prompt_tokens: i64,
+            spark_completion_tokens: i64,
+            returned_output_tokens: i64,
+            original_output_tokens: i64,
+            truncated_output_tokens: i64,
+        }
+
         assert_eq!(
-            (
-                row.try_get::<String, _>("selected_tools_json")
+            LedgerRow {
+                selected_tools_json: row
+                    .try_get("selected_tools_json")
                     .expect("selected tools"),
-                row.try_get::<String, _>("model_slug").expect("model slug"),
-                row.try_get::<String, _>("model_provider")
-                    .expect("model provider"),
-                row.try_get::<String, _>("toolset_hash")
-                    .expect("toolset hash"),
-                row.try_get::<i64, _>("router_schema_version")
+                model_slug: row.try_get("model_slug").expect("model slug"),
+                model_provider: row.try_get("model_provider").expect("model provider"),
+                toolset_hash: row.try_get("toolset_hash").expect("toolset hash"),
+                router_schema_version: row
+                    .try_get("router_schema_version")
                     .expect("router schema version"),
-                row.try_get::<i64, _>("guidance_version")
-                    .expect("guidance version"),
-                row.try_get::<i64, _>("guidance_tokens")
-                    .expect("guidance tokens"),
-                row.try_get::<i64, _>("format_description_tokens")
+                model_response_ordinal: row
+                    .try_get("model_response_ordinal")
+                    .expect("model response ordinal"),
+                guidance_version: row.try_get("guidance_version").expect("guidance version"),
+                guidance_tokens: row.try_get("guidance_tokens").expect("guidance tokens"),
+                format_description_tokens: row
+                    .try_get("format_description_tokens")
                     .expect("format description tokens"),
-                row.try_get::<i64, _>("visible_router_schema_tokens")
+                visible_router_schema_tokens: row
+                    .try_get("visible_router_schema_tokens")
                     .expect("visible schema tokens"),
-                row.try_get::<i64, _>("hidden_tool_schema_tokens")
+                hidden_tool_schema_tokens: row
+                    .try_get("hidden_tool_schema_tokens")
                     .expect("hidden schema tokens"),
-                row.try_get::<i64, _>("spark_prompt_tokens")
+                spark_prompt_tokens: row
+                    .try_get("spark_prompt_tokens")
                     .expect("spark prompt tokens"),
-                row.try_get::<i64, _>("spark_completion_tokens")
+                spark_completion_tokens: row
+                    .try_get("spark_completion_tokens")
                     .expect("spark completion tokens"),
-            ),
-            (
-                r#"["exec_command"]"#.to_string(),
-                "gpt-test".to_string(),
-                "openai".to_string(),
-                "abc123".to_string(),
-                1,
-                1,
-                9,
-                20,
-                10,
-                100,
-                11,
-                3,
-            )
+                returned_output_tokens: row
+                    .try_get("returned_output_tokens")
+                    .expect("returned output tokens"),
+                original_output_tokens: row
+                    .try_get("original_output_tokens")
+                    .expect("original output tokens"),
+                truncated_output_tokens: row
+                    .try_get("truncated_output_tokens")
+                    .expect("truncated output tokens"),
+            },
+            LedgerRow {
+                selected_tools_json: r#"["exec_command"]"#.to_string(),
+                model_slug: "gpt-test".to_string(),
+                model_provider: "openai".to_string(),
+                toolset_hash: "abc123".to_string(),
+                router_schema_version: 1,
+                model_response_ordinal: 2,
+                guidance_version: 1,
+                guidance_tokens: 9,
+                format_description_tokens: 20,
+                visible_router_schema_tokens: 10,
+                hidden_tool_schema_tokens: 100,
+                spark_prompt_tokens: 11,
+                spark_completion_tokens: 3,
+                returned_output_tokens: 7,
+                original_output_tokens: 9,
+                truncated_output_tokens: 7,
+            }
         );
     }
 
@@ -745,8 +719,10 @@ mod tests {
         assert!(columns.contains("spark_completion_tokens"));
         assert!(columns.contains("model_slug"));
         assert!(columns.contains("toolset_hash"));
+        assert!(columns.contains("model_response_ordinal"));
         assert!(columns.contains("guidance_tokens"));
         assert!(columns.contains("format_description_tokens"));
+        assert!(columns.contains("request_shape_json"));
         assert!(!columns.contains("estimated_schema_tokens_saved"));
         assert!(!columns.contains("net_tokens_saved"));
     }
@@ -1029,6 +1005,7 @@ mod tests {
             model_provider: "openai".to_string(),
             toolset_hash: "abc123".to_string(),
             router_schema_version: 1,
+            model_response_ordinal: 2,
             guidance_version: 1,
             guidance_tokens: 9,
             format_description_tokens: 20,
@@ -1043,6 +1020,7 @@ mod tests {
             original_output_tokens: 7,
             truncated_output_tokens: 7,
             outcome: outcome.map(str::to_string),
+            request_shape_json: None,
         }
     }
 }
