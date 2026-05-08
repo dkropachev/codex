@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 mod auto_candidates;
+mod failover;
 
 use codex_config::config_toml::AccountPoolDefinitionToml;
 use codex_config::config_toml::AccountPoolPolicyToml;
@@ -11,6 +12,7 @@ use codex_login::AuthManager;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_model_router::CandidateMetrics;
 use codex_model_router::CandidateRoute;
+use codex_model_router::ModelRouterCandidateIdentity;
 use codex_model_router::RouterTaskClass;
 use codex_model_router::TokenPrice;
 use codex_model_router::estimate_task_usage;
@@ -19,8 +21,15 @@ use codex_model_router::select_candidate;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SubAgentSource;
+use codex_state::ModelRouterMetricOverlay;
+use codex_state::StateRuntime;
 
 use crate::config::Config;
+
+pub(crate) use failover::ModelRouterAppliedRoute;
+pub(crate) use failover::ModelRouterRouteExclusion;
+pub(crate) use failover::model_router_failure_scope;
+use failover::selectable_routes;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ModelRouterSource {
@@ -49,21 +58,91 @@ impl ModelRouterSource {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn apply_model_router(
     config: &mut Config,
     source: ModelRouterSource,
     prompt_bytes: usize,
     available_models: &[AvailableRouterModel],
 ) -> Result<(), String> {
+    apply_model_router_with_exclusions(config, source, prompt_bytes, available_models, &[])?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn apply_model_router_with_exclusions(
+    config: &mut Config,
+    source: ModelRouterSource,
+    prompt_bytes: usize,
+    available_models: &[AvailableRouterModel],
+    exclusions: &[ModelRouterRouteExclusion],
+) -> Result<Option<ModelRouterAppliedRoute>, String> {
+    apply_model_router_with_overlays_and_exclusions(
+        config,
+        source,
+        prompt_bytes,
+        available_models,
+        &[],
+        exclusions,
+    )
+}
+
+pub(crate) async fn apply_model_router_with_state(
+    config: &mut Config,
+    source: ModelRouterSource,
+    prompt_bytes: usize,
+    available_models: &[AvailableRouterModel],
+    state_db: Option<&StateRuntime>,
+) -> Result<(), String> {
+    apply_model_router_with_state_and_exclusions(
+        config,
+        source,
+        prompt_bytes,
+        available_models,
+        state_db,
+        &[],
+    )
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn apply_model_router_with_state_and_exclusions(
+    config: &mut Config,
+    source: ModelRouterSource,
+    prompt_bytes: usize,
+    available_models: &[AvailableRouterModel],
+    state_db: Option<&StateRuntime>,
+    exclusions: &[ModelRouterRouteExclusion],
+) -> Result<Option<ModelRouterAppliedRoute>, String> {
+    let overlays = load_metric_overlays(config, state_db).await;
+    apply_model_router_with_overlays_and_exclusions(
+        config,
+        source,
+        prompt_bytes,
+        available_models,
+        &overlays,
+        exclusions,
+    )
+}
+
+fn apply_model_router_with_overlays_and_exclusions(
+    config: &mut Config,
+    source: ModelRouterSource,
+    prompt_bytes: usize,
+    available_models: &[AvailableRouterModel],
+    overlays: &[ModelRouterMetricOverlay],
+    exclusions: &[ModelRouterRouteExclusion],
+) -> Result<Option<ModelRouterAppliedRoute>, String> {
     let Some(model_router) = config.model_router.as_ref() else {
-        return Ok(());
+        return Ok(None);
     };
     if !model_router.enabled {
-        return Ok(());
+        return Ok(None);
     }
 
     let task_key = source.task_key();
-    let candidate_set = build_candidate_set(config, &task_key, prompt_bytes, available_models);
+    let candidate_set =
+        build_candidate_set(config, &task_key, prompt_bytes, available_models, overlays);
     tracing::debug!(
         task_key = task_key,
         candidates = model_router.candidates.len(),
@@ -71,29 +150,66 @@ pub(crate) fn apply_model_router(
         "evaluating model router"
     );
 
-    let Some(selection) = select_candidate(&task_key, prompt_bytes, &candidate_set.routes) else {
-        return Ok(());
+    let selectable_routes = selectable_routes(config, &candidate_set, exclusions);
+    let filtered_routes = selectable_routes
+        .iter()
+        .map(|route| route.route.clone())
+        .collect::<Vec<_>>();
+    let Some(selection) = select_candidate(&task_key, prompt_bytes, &filtered_routes) else {
+        return Ok(None);
     };
+    let selected_route_index = selection.index;
+    let selected_route = selectable_routes
+        .get(selected_route_index)
+        .ok_or_else(|| format!("model_router selected missing filtered route index {selected_route_index}"))?;
+    let selected_index = selected_route.index;
     tracing::debug!(
         task_key = task_key,
-        selected_index = selection.index,
+        selected_index,
         score = selection.score,
         task_class = ?selection.task_class,
         "selected model router candidate"
     );
-    if selection.index == 0 {
-        return Ok(());
+    let applied_route = ModelRouterAppliedRoute {
+        task_key,
+        route: selected_route.key.clone(),
+    };
+    if selected_index == 0 {
+        return Ok(Some(applied_route));
     }
-    let Some(candidate) = candidate_set.candidates.get(selection.index - 1) else {
+    let Some(candidate) = candidate_set.candidates.get(selected_index - 1) else {
         return Err(format!(
-            "model_router selected missing candidate index {}",
-            selection.index
+            "model_router selected missing candidate index {selected_index}"
         ));
     };
     let mut router_config = config.clone();
     apply_candidate(&mut router_config, candidate)?;
     *config = router_config;
-    Ok(())
+    Ok(Some(applied_route))
+}
+
+async fn load_metric_overlays(
+    config: &Config,
+    state_db: Option<&StateRuntime>,
+) -> Vec<ModelRouterMetricOverlay> {
+    let Some(state_db) = state_db else {
+        return Vec::new();
+    };
+    let Some(model_router) = config.model_router.as_ref() else {
+        return Vec::new();
+    };
+    let mut overlays = Vec::new();
+    for candidate in &model_router.candidates {
+        let identity = model_router_candidate_identity_key(candidate);
+        match state_db.lookup_model_router_metric_overlay(&identity).await {
+            Ok(Some(overlay)) => overlays.push(overlay),
+            Ok(None) => {}
+            Err(err) => {
+                tracing::debug!(candidate_identity = identity, error = %err, "failed to load model router metric overlay");
+            }
+        }
+    }
+    overlays
 }
 
 pub(crate) fn auth_manager_for_config(
@@ -189,6 +305,7 @@ fn build_candidate_set(
     task_key: &str,
     prompt_bytes: usize,
     available_models: &[AvailableRouterModel],
+    overlays: &[ModelRouterMetricOverlay],
 ) -> CandidateSet {
     let Some(model_router) = config.model_router.as_ref() else {
         return CandidateSet {
@@ -219,6 +336,7 @@ fn build_candidate_set(
     });
     let task_class = RouterTaskClass::infer(task_key, prompt_bytes);
     routes.extend(candidates.iter().map(|candidate| {
+        let overlay = overlay_for_candidate(candidate, overlays);
         CandidateRoute {
             id: candidate.id.clone(),
             model: candidate.model.clone().or_else(|| config.model.clone()),
@@ -232,7 +350,7 @@ fn build_candidate_set(
                 available_models,
             ),
             is_incumbent: false,
-            metrics: candidate_metrics(candidate, task_class, prompt_bytes),
+            metrics: candidate_metrics(candidate, task_class, prompt_bytes, overlay),
         }
     }));
     CandidateSet {
@@ -268,8 +386,9 @@ fn candidate_metrics(
     candidate: &ModelRouterCandidateToml,
     task_class: RouterTaskClass,
     prompt_bytes: usize,
+    overlay: Option<&ModelRouterMetricOverlay>,
 ) -> CandidateMetrics {
-    let estimated_cost_usd_micros = token_price_from_candidate(candidate).map(|price| {
+    let explicit_estimated_cost_usd_micros = token_price_from_candidate(candidate).map(|price| {
         estimate_token_cost(
             &estimate_task_usage(prompt_bytes, task_class),
             &price,
@@ -278,14 +397,52 @@ fn candidate_metrics(
         .usd_micros
     });
     CandidateMetrics {
-        intelligence_score: candidate.intelligence_score,
-        success_rate: candidate.success_rate,
-        median_latency_ms: candidate.median_latency_ms,
-        estimated_cost_usd_micros,
+        intelligence_score: candidate
+            .intelligence_score
+            .or_else(|| overlay.and_then(|overlay| overlay.intelligence_score)),
+        success_rate: candidate
+            .success_rate
+            .or_else(|| overlay.and_then(|overlay| overlay.success_rate)),
+        median_latency_ms: candidate
+            .median_latency_ms
+            .or_else(|| overlay.and_then(|overlay| overlay.median_latency_ms)),
+        estimated_cost_usd_micros: explicit_estimated_cost_usd_micros
+            .or_else(|| overlay.and_then(|overlay| overlay.estimated_cost_usd_micros)),
     }
 }
 
-fn token_price_from_candidate(candidate: &ModelRouterCandidateToml) -> Option<TokenPrice> {
+fn overlay_for_candidate<'a>(
+    candidate: &ModelRouterCandidateToml,
+    overlays: &'a [ModelRouterMetricOverlay],
+) -> Option<&'a ModelRouterMetricOverlay> {
+    let identity = model_router_candidate_identity_key(candidate);
+    overlays
+        .iter()
+        .find(|overlay| overlay.candidate_identity == identity)
+}
+
+pub(crate) fn model_router_candidate_identity(
+    candidate: &ModelRouterCandidateToml,
+) -> ModelRouterCandidateIdentity {
+    ModelRouterCandidateIdentity {
+        id: candidate.id.clone(),
+        model: candidate.model.clone(),
+        model_provider: candidate.model_provider.clone(),
+        service_tier: candidate.service_tier.map(|value| format!("{value:?}")),
+        reasoning_effort: candidate.reasoning_effort.map(|value| format!("{value:?}")),
+        account_pool: candidate.account_pool.clone(),
+        account: candidate.account.clone(),
+    }
+}
+
+pub(crate) fn model_router_candidate_identity_key(candidate: &ModelRouterCandidateToml) -> String {
+    serde_json::to_string(&model_router_candidate_identity(candidate))
+        .unwrap_or_else(|_| "{}".to_string())
+}
+
+pub(crate) fn token_price_from_candidate(
+    candidate: &ModelRouterCandidateToml,
+) -> Option<TokenPrice> {
     let has_price = candidate.input_price_per_million.is_some()
         || candidate.cached_input_price_per_million.is_some()
         || candidate.output_price_per_million.is_some()
@@ -306,7 +463,7 @@ fn token_price_from_candidate(candidate: &ModelRouterCandidateToml) -> Option<To
     })
 }
 
-fn apply_candidate(
+pub(crate) fn apply_candidate(
     config: &mut Config,
     candidate: &ModelRouterCandidateToml,
 ) -> Result<(), String> {
@@ -386,6 +543,9 @@ mod tests {
     use codex_login::AuthManager;
     use codex_protocol::config_types::ServiceTier;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_state::ModelRouterMetricOverlay;
+    use codex_state::StateRuntime;
+    use tempfile::TempDir;
 
     use super::*;
     use crate::config;
@@ -604,6 +764,91 @@ mod tests {
         assert_eq!(config.model.as_deref(), Some("parent-model"));
     }
 
+    #[tokio::test]
+    async fn explicit_toml_metrics_beat_applied_overlays() {
+        let (_codex_home, runtime) = state_runtime().await;
+        let mut config = config::test_config().await;
+        config.model = Some("gpt-5.4".to_string());
+        let candidate = ModelRouterCandidateToml {
+            id: Some("spark".to_string()),
+            model: Some("gpt-5.3-codex-spark".to_string()),
+            intelligence_score: Some(0.1),
+            success_rate: Some(1.0),
+            median_latency_ms: Some(1_000),
+            ..Default::default()
+        };
+        runtime
+            .upsert_model_router_metric_overlay(ModelRouterMetricOverlay {
+                candidate_identity: model_router_candidate_identity_key(&candidate),
+                intelligence_score: Some(0.99),
+                success_rate: Some(1.0),
+                median_latency_ms: Some(1_000),
+                estimated_cost_usd_micros: None,
+                source_report_id: "report".to_string(),
+                config_fingerprint: "fingerprint".to_string(),
+            })
+            .await
+            .expect("upsert overlay");
+        config.model_router = Some(ModelRouterToml {
+            enabled: true,
+            candidates: vec![candidate],
+            ..Default::default()
+        });
+
+        apply_model_router_with_state(
+            &mut config,
+            ModelRouterSource::Module("repo_ci.review"),
+            80,
+            &[],
+            Some(runtime.as_ref()),
+        )
+        .await
+        .expect("router should apply");
+
+        assert_eq!(config.model.as_deref(), Some("gpt-5.4"));
+    }
+
+    #[tokio::test]
+    async fn applied_overlays_beat_inferred_defaults() {
+        let (_codex_home, runtime) = state_runtime().await;
+        let mut config = config::test_config().await;
+        config.model = Some("gpt-5.4".to_string());
+        let candidate = ModelRouterCandidateToml {
+            id: Some("unknown-fast".to_string()),
+            model: Some("local-fast".to_string()),
+            ..Default::default()
+        };
+        runtime
+            .upsert_model_router_metric_overlay(ModelRouterMetricOverlay {
+                candidate_identity: model_router_candidate_identity_key(&candidate),
+                intelligence_score: Some(0.95),
+                success_rate: Some(0.99),
+                median_latency_ms: Some(1_000),
+                estimated_cost_usd_micros: Some(1),
+                source_report_id: "report".to_string(),
+                config_fingerprint: "fingerprint".to_string(),
+            })
+            .await
+            .expect("upsert overlay");
+        config.model_router = Some(ModelRouterToml {
+            enabled: true,
+            candidates: vec![candidate],
+            ..Default::default()
+        });
+
+        apply_model_router_with_state(
+            &mut config,
+            ModelRouterSource::Module("repo_ci.triage"),
+            80,
+            &[],
+            Some(runtime.as_ref()),
+        )
+        .await
+        .expect("router should apply");
+
+        assert_eq!(config.model.as_deref(), Some("local-fast"));
+    }
+
     fn available_model(model: &str) -> AvailableRouterModel {
         available_model_with_context(model, Some(272_000), Some(272_000))
     }
@@ -619,5 +864,13 @@ mod tests {
             max_context_window,
             effective_context_window_percent: 95,
         }
+    }
+
+    async fn state_runtime() -> (TempDir, std::sync::Arc<StateRuntime>) {
+        let codex_home = TempDir::new().expect("temp dir");
+        let runtime = StateRuntime::init(codex_home.path().to_path_buf(), "openai".to_string())
+            .await
+            .expect("state runtime");
+        (codex_home, runtime)
     }
 }
