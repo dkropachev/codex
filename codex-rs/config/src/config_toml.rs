@@ -322,6 +322,9 @@ pub struct ConfigToml {
     /// store at this endpoint instead of the local filesystem/SQLite store.
     pub experimental_thread_store_endpoint: Option<String>,
 
+    /// Experimental / do not use. Selects the backing store for thread data.
+    pub experimental_thread_store: Option<ThreadStoreToml>,
+
     /// Experimental / do not use. When set, app-server fetches thread-scoped
     /// config from a remote service at this endpoint.
     pub experimental_thread_config_endpoint: Option<String>,
@@ -737,6 +740,9 @@ pub struct AgentsToml {
     #[schemars(range(min = 1))]
     pub job_max_runtime_seconds: Option<u64>,
 
+    /// Whether interrupted turns should leave a model-visible marker.
+    pub interrupt_message: Option<bool>,
+
     /// User-defined role declarations keyed by role name.
     ///
     /// Example:
@@ -748,6 +754,20 @@ pub struct AgentsToml {
     /// ```
     #[serde(default, flatten)]
     pub roles: BTreeMap<String, AgentRoleToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[schemars(deny_unknown_fields)]
+pub enum ThreadStoreToml {
+    Local,
+    Remote {
+        endpoint: String,
+    },
+    #[cfg(debug_assertions)]
+    InMemory {
+        id: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]

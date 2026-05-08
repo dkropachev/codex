@@ -1,5 +1,7 @@
 ---
 source: tui/src/chatwidget/tests/slash_commands.rs
+assertion_line: 1207
 expression: rendered
 ---
-• Usage: /repo-ci setup | /repo-ci learn | /repo-ci retry | /repo-ci <inherit|off|local|remote|local-and-remote> | /repo-ci issues <inherit|none|comma-list> | /repo-ci rounds <inherit|N> | /repo-ci long-ci <inherit|on|off> Use /repo-ci setup to enable repo CI for this repo, /repo-ci retry to rerun the workflow, or use the other forms to change only the current session.
+• Usage: /repo-ci setup | /repo-ci learn | /repo-ci retry | /repo-ci <options> [task]
+Options: <inherit|off|local|remote|local-and-remote> [issues <inherit|none|comma-list>] [rounds <inherit|N>] [long-ci <inherit|on|off>] Use /repo-ci <options> to configure this session, or append task text to run repo CI for that task only.

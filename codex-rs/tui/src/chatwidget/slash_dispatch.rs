@@ -10,6 +10,7 @@ use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands;
 use codex_protocol::protocol::RepoCiIssueType;
 use codex_protocol::protocol::RepoCiSessionMode;
+use codex_protocol::protocol::RepoCiTurnOverrides;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -31,7 +32,7 @@ const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
     "'/side' is unavailable while code review is running.";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
 const MODEL_POLICY_USAGE: &str = "Usage: /model-policy <enable|disable|inherit>";
-const REPO_CI_USAGE: &str = "Usage: /repo-ci setup | /repo-ci learn | /repo-ci retry | /repo-ci <inherit|off|local|remote|local-and-remote> | /repo-ci issues <inherit|none|comma-list> | /repo-ci rounds <inherit|N> | /repo-ci long-ci <inherit|on|off>";
+const REPO_CI_USAGE: &str = "Usage: /repo-ci setup | /repo-ci learn | /repo-ci retry | /repo-ci <options> [task]\nOptions: <inherit|off|local|remote|local-and-remote> [issues <inherit|none|comma-list>] [rounds <inherit|N>] [long-ci <inherit|on|off>]";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -99,6 +100,83 @@ impl ChatWidget {
         };
 
         self.request_side_conversation(parent_thread_id, /*user_message*/ None);
+    }
+
+    fn dispatch_bare_goal_command(&mut self) {
+        let Some(thread_id) = self.thread_id else {
+            self.add_error_message("'/goal' is unavailable before the session starts.".to_string());
+            return;
+        };
+
+        self.app_event_tx
+            .send(AppEvent::OpenThreadGoalMenu { thread_id });
+        self.take_remote_image_urls();
+        self.bottom_pane.drain_pending_submission_state();
+    }
+
+    fn dispatch_goal_command_with_args(&mut self, args: String) {
+        let Some(thread_id) = self.thread_id else {
+            self.add_error_message("'/goal' is unavailable before the session starts.".to_string());
+            return;
+        };
+
+        match args.trim().to_ascii_lowercase().as_str() {
+            "clear" => {
+                self.app_event_tx
+                    .send(AppEvent::ClearThreadGoal { thread_id });
+            }
+            "pause" => {
+                self.app_event_tx.send(AppEvent::SetThreadGoalStatus {
+                    thread_id,
+                    status: AppThreadGoalStatus::Paused,
+                });
+            }
+            "unpause" | "resume" => {
+                self.app_event_tx.send(AppEvent::SetThreadGoalStatus {
+                    thread_id,
+                    status: AppThreadGoalStatus::Active,
+                });
+            }
+            _ => {
+                self.app_event_tx.send(AppEvent::SetThreadGoalObjective {
+                    thread_id,
+                    objective: args,
+                    mode: crate::app_event::ThreadGoalSetMode::ConfirmIfExists,
+                });
+            }
+        }
+    }
+
+    fn queue_prepared_slash_command_with_args(
+        &mut self,
+        cmd: SlashCommand,
+        args: String,
+        text_elements: Vec<TextElement>,
+        source: SlashCommandDispatchSource,
+    ) {
+        let prefix = format!("/{} ", cmd.command());
+        let offset = prefix.len();
+        let rebased_elements = text_elements
+            .into_iter()
+            .map(|elem| {
+                elem.map_range(|range| ByteRange {
+                    start: range.start + offset,
+                    end: range.end + offset,
+                })
+            })
+            .collect();
+        let user_message = UserMessage {
+            text: format!("{prefix}{args}"),
+            local_images: Vec::new(),
+            remote_image_urls: Vec::new(),
+            text_elements: rebased_elements,
+            mention_bindings: Vec::new(),
+        };
+        if source == SlashCommandDispatchSource::Live {
+            self.take_remote_image_urls();
+            self.bottom_pane.drain_pending_submission_state();
+        }
+        self.queue_user_message_with_options(user_message, QueuedInputAction::ParseSlash);
     }
 
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
@@ -205,6 +283,9 @@ impl ChatWidget {
             SlashCommand::Plan => {
                 self.apply_plan_slash_command();
             }
+            SlashCommand::Goal => {
+                self.dispatch_bare_goal_command();
+            }
             SlashCommand::Collab => {
                 if !self.collaboration_modes_enabled() {
                     self.add_info_message(
@@ -298,7 +379,7 @@ impl ChatWidget {
                 self.add_info_message(
                     REPO_CI_USAGE.to_string(),
                     Some(
-                        "Use /repo-ci setup to enable repo CI for this repo, /repo-ci retry to rerun the workflow, or use the other forms to change only the current session."
+                        "Use /repo-ci <options> to configure this session, or append task text to run repo CI for that task only."
                             .to_string(),
                     ),
                 );
@@ -529,6 +610,126 @@ impl ChatWidget {
         }
     }
 
+    fn dispatch_repo_ci_command_with_args(
+        &mut self,
+        args: String,
+        text_elements: Vec<TextElement>,
+        local_images: Vec<LocalImageAttachment>,
+        remote_image_urls: Vec<String>,
+        mention_bindings: Vec<MentionBinding>,
+        source: SlashCommandDispatchSource,
+    ) {
+        let trimmed = args.trim();
+        if matches!(trimmed, "setup" | "enable") {
+            self.submit_op(AppCommand::run_user_shell_command(repo_ci_setup_command(
+                &self.config,
+            )));
+            self.add_info_message(
+                "Starting repo CI setup for this repository.".to_string(),
+                Some(
+                    "This runs `repo-ci enable --cwd` and then `repo-ci learn --cwd` in a user shell."
+                        .to_string(),
+                ),
+            );
+            return;
+        }
+        if trimmed == "learn" {
+            self.submit_op(AppCommand::run_user_shell_command(repo_ci_learn_command(
+                &self.config,
+            )));
+            self.add_info_message(
+                "Starting repo CI learning for this repository.".to_string(),
+                Some("This runs `repo-ci learn --cwd` in a user shell.".to_string()),
+            );
+            return;
+        }
+        if matches!(trimmed, "retry" | "workflow") {
+            self.submit_op(AppCommand::run_user_shell_command(
+                repo_ci_workflow_command(&self.config),
+            ));
+            self.add_info_message(
+                "Retrying the repo CI workflow for this repository.".to_string(),
+                Some(
+                    "This runs `repo-ci workflow --cwd`, which re-learns if needed, reruns local repo CI, and starts remote PR checks after verifying the changes are committed."
+                        .to_string(),
+                ),
+            );
+            return;
+        }
+
+        let parsed = match parse_repo_ci_command(trimmed) {
+            Ok(parsed) => parsed,
+            Err(message) => {
+                self.add_error_message(message);
+                self.add_info_message(REPO_CI_USAGE.to_string(), /*hint*/ None);
+                return;
+            }
+        };
+
+        if let Some(task) = parsed.task {
+            if !self.is_session_configured() {
+                self.queue_prepared_slash_command_with_args(
+                    SlashCommand::RepoCi,
+                    args,
+                    text_elements,
+                    source,
+                );
+                return;
+            }
+
+            let task_elements =
+                Self::slash_command_args_elements(&task.text, task.offset, &text_elements);
+            let user_message = self.prepared_inline_user_message(
+                task.text,
+                task_elements,
+                local_images,
+                remote_image_urls,
+                mention_bindings,
+                source,
+            );
+            self.submit_user_message_with_repo_ci(
+                user_message,
+                RepoCiTurnOverrides {
+                    mode: parsed.options.mode,
+                    issue_types: parsed.options.issue_types,
+                    review_rounds: parsed.options.review_rounds,
+                    long_ci: parsed.options.long_ci,
+                },
+            );
+            return;
+        }
+
+        let options = parsed.options;
+        let session_message = repo_ci_session_config_message(&options);
+        let session_config = RepoCiSessionConfigValues {
+            mode: options.mode.unwrap_or_default(),
+            issue_types: options.issue_types.unwrap_or_default(),
+            review_rounds: options.review_rounds.unwrap_or_default(),
+            long_ci: options.long_ci.unwrap_or_default(),
+        };
+        self.config.repo_ci_session_mode = session_config.mode;
+        self.config.repo_ci_issue_types = session_config.issue_types.clone();
+        self.config.repo_ci_review_rounds = session_config.review_rounds;
+        self.config.repo_ci_long_ci = session_config.long_ci;
+        self.submit_repo_ci_session_config(session_config);
+        self.add_info_message(
+            session_message,
+            Some(
+                "This override lasts until the session ends or you run /repo-ci inherit."
+                    .to_string(),
+            ),
+        );
+    }
+
+    fn submit_repo_ci_session_config(&mut self, config: RepoCiSessionConfigValues) {
+        self.submit_op(AppCommand::set_repo_ci_session_config(
+            config.mode,
+            config.issue_types,
+            config.review_rounds,
+            config.long_ci,
+        ));
+    }
+
     fn dispatch_prepared_command_with_args(
         &mut self,
         cmd: SlashCommand,
@@ -619,6 +820,18 @@ impl ChatWidget {
                 );
                 self.request_side_conversation(parent_thread_id, Some(user_message));
             }
+            SlashCommand::Goal if !trimmed.is_empty() => {
+                if self.thread_id.is_none() {
+                    self.queue_prepared_slash_command_with_args(
+                        SlashCommand::Goal,
+                        args,
+                        text_elements,
+                        source,
+                    );
+                } else {
+                    self.dispatch_goal_command_with_args(args);
+                }
+            }
             SlashCommand::Review if !trimmed.is_empty() => {
                 self.submit_op(AppCommand::review(ReviewRequest {
                     target: ReviewTarget::Custom { instructions: args },
@@ -634,130 +847,13 @@ impl ChatWidget {
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot { path: args });
             }
             SlashCommand::RepoCi if !trimmed.is_empty() => {
-                if matches!(trimmed, "setup" | "enable") {
-                    self.submit_op(AppCommand::run_user_shell_command(repo_ci_setup_command(
-                        &self.config,
-                    )));
-                    self.add_info_message(
-                        "Starting repo CI setup for this repository.".to_string(),
-                        Some(
-                            "This runs `repo-ci enable --cwd` and then `repo-ci learn --cwd` in a user shell."
-                                .to_string(),
-                        ),
-                    );
-                    return;
-                }
-                if trimmed == "learn" {
-                    self.submit_op(AppCommand::run_user_shell_command(repo_ci_learn_command(
-                        &self.config,
-                    )));
-                    self.add_info_message(
-                        "Starting repo CI learning for this repository.".to_string(),
-                        Some("This runs `repo-ci learn --cwd` in a user shell.".to_string()),
-                    );
-                    return;
-                }
-                if matches!(trimmed, "retry" | "workflow") {
-                    self.submit_op(AppCommand::run_user_shell_command(
-                        repo_ci_workflow_command(&self.config),
-                    ));
-                    self.add_info_message(
-                        "Retrying the repo CI workflow for this repository.".to_string(),
-                        Some(
-                            "This runs `repo-ci workflow --cwd`, which re-learns if needed, reruns local repo CI, and starts remote PR checks after verifying the changes are committed."
-                                .to_string(),
-                        ),
-                    );
-                    return;
-                }
-                if let Some(raw_issue_types) = trimmed.strip_prefix("issues ") {
-                    let issue_types = match parse_repo_ci_issue_types(raw_issue_types) {
-                        Ok(issue_types) => issue_types,
-                        Err(message) => {
-                            self.add_error_message(message);
-                            self.add_info_message(REPO_CI_USAGE.to_string(), /*hint*/ None);
-                            return;
-                        }
-                    };
-                    self.submit_op(AppCommand::set_repo_ci_session_config(
-                        /*mode*/ None,
-                        issue_types.clone(),
-                        /*review_rounds*/ None,
-                        /*long_ci*/ None,
-                    ));
-                    self.add_info_message(
-                        repo_ci_issue_types_message(issue_types.as_deref()),
-                        Some(
-                            "This override lasts until the session ends or you run /repo-ci issues inherit."
-                                .to_string(),
-                        ),
-                    );
-                    return;
-                }
-                if let Some(raw_rounds) = trimmed.strip_prefix("rounds ") {
-                    let review_rounds = match parse_repo_ci_review_rounds(raw_rounds) {
-                        Ok(review_rounds) => review_rounds,
-                        Err(message) => {
-                            self.add_error_message(message);
-                            self.add_info_message(REPO_CI_USAGE.to_string(), /*hint*/ None);
-                            return;
-                        }
-                    };
-                    self.submit_op(AppCommand::set_repo_ci_session_config(
-                        /*mode*/ None,
-                        /*issue_types*/ None,
-                        review_rounds,
-                        /*long_ci*/ None,
-                    ));
-                    self.add_info_message(
-                        repo_ci_review_rounds_message(review_rounds),
-                        Some(
-                            "This override lasts until the session ends or you run /repo-ci rounds inherit."
-                                .to_string(),
-                        ),
-                    );
-                    return;
-                }
-                if let Some(raw_long_ci) = trimmed.strip_prefix("long-ci ") {
-                    let long_ci = match parse_repo_ci_long_ci(raw_long_ci) {
-                        Ok(long_ci) => long_ci,
-                        Err(message) => {
-                            self.add_error_message(message);
-                            self.add_info_message(REPO_CI_USAGE.to_string(), /*hint*/ None);
-                            return;
-                        }
-                    };
-                    self.submit_op(AppCommand::set_repo_ci_session_config(
-                        /*mode*/ None, /*issue_types*/ None, /*review_rounds*/ None,
-                        long_ci,
-                    ));
-                    self.add_info_message(
-                        repo_ci_long_ci_message(long_ci),
-                        Some(
-                            "This override lasts until the session ends or you run /repo-ci long-ci inherit."
-                                .to_string(),
-                        ),
-                    );
-                    return;
-                }
-                let mode = match parse_repo_ci_session_mode(trimmed) {
-                    Ok(mode) => mode,
-                    Err(message) => {
-                        self.add_error_message(message);
-                        self.add_info_message(REPO_CI_USAGE.to_string(), /*hint*/ None);
-                        return;
-                    }
-                };
-                self.submit_op(AppCommand::set_repo_ci_session_config(
-                    mode, /*issue_types*/ None, /*review_rounds*/ None,
-                    /*long_ci*/ None,
-                ));
-                self.add_info_message(
-                    repo_ci_session_mode_message(mode),
-                    Some(
-                        "This override lasts until the session ends or you run /repo-ci inherit."
-                            .to_string(),
-                    ),
+                self.dispatch_repo_ci_command_with_args(
+                    args,
+                    text_elements,
+                    local_images,
+                    remote_image_urls,
+                    mention_bindings,
+                    source,
                 );
             }
             SlashCommand::ModelPolicy if !trimmed.is_empty() => {
@@ -871,6 +967,7 @@ impl ChatWidget {
             connectors_enabled: self.connectors_enabled(),
             plugins_command_enabled: self.config.features.enabled(Feature::Plugins),
             fast_command_enabled: self.fast_mode_enabled(),
+            goal_command_enabled: self.config.features.enabled(Feature::Goals),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
             realtime_conversation_enabled: self.realtime_conversation_enabled(),
             audio_device_selection_enabled: self.realtime_audio_device_selection_enabled(),
@@ -885,6 +982,7 @@ impl ChatWidget {
         }
         match cmd {
             SlashCommand::Fast
+            | SlashCommand::Goal
             | SlashCommand::Status
             | SlashCommand::Limits
             | SlashCommand::DebugConfig
@@ -996,6 +1094,119 @@ fn parse_repo_ci_session_mode(raw: &str) -> Result<Option<RepoCiSessionMode>, St
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RepoCiSessionConfigValues {
+    mode: Option<RepoCiSessionMode>,
+    issue_types: Option<Vec<RepoCiIssueType>>,
+    review_rounds: Option<u8>,
+    long_ci: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct RepoCiOptionPatch {
+    mode: Option<Option<RepoCiSessionMode>>,
+    issue_types: Option<Option<Vec<RepoCiIssueType>>>,
+    review_rounds: Option<Option<u8>>,
+    long_ci: Option<Option<bool>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RepoCiInlineTask {
+    text: String,
+    offset: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RepoCiParsedCommand {
+    options: RepoCiOptionPatch,
+    task: Option<RepoCiInlineTask>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RepoCiCommandToken<'a> {
+    text: &'a str,
+    start: usize,
+}
+
+fn parse_repo_ci_command(raw: &str) -> Result<RepoCiParsedCommand, String> {
+    let tokens = repo_ci_command_tokens(raw);
+    let mut options = RepoCiOptionPatch::default();
+    let mut index = 0;
+
+    while let Some(token) = tokens.get(index) {
+        match token.text.to_ascii_lowercase().as_str() {
+            "issues" => {
+                let Some(value) = tokens.get(index + 1) else {
+                    return Err("Missing repo CI issue type list after `issues`.".to_string());
+                };
+                options.issue_types = Some(parse_repo_ci_issue_types(value.text)?);
+                index += 2;
+            }
+            "rounds" => {
+                let Some(value) = tokens.get(index + 1) else {
+                    return Err("Missing repo CI review round count after `rounds`.".to_string());
+                };
+                options.review_rounds = Some(parse_repo_ci_review_rounds(value.text)?);
+                index += 2;
+            }
+            "long-ci" => {
+                let Some(value) = tokens.get(index + 1) else {
+                    return Err("Missing repo CI long CI setting after `long-ci`.".to_string());
+                };
+                options.long_ci = Some(parse_repo_ci_long_ci(value.text)?);
+                index += 2;
+            }
+            "inherit" | "default" | "config" | "off" | "disable" | "disabled" | "local"
+            | "remote" | "local-and-remote" | "both" => {
+                options.mode = Some(parse_repo_ci_session_mode(token.text)?);
+                index += 1;
+            }
+            _ if index == 0 => {
+                return Err(format!("Unknown repo CI option `{}`.", token.text));
+            }
+            _ => break,
+        }
+    }
+
+    if options.mode.is_none()
+        && options.issue_types.is_none()
+        && options.review_rounds.is_none()
+        && options.long_ci.is_none()
+    {
+        return Err(REPO_CI_USAGE.to_string());
+    }
+
+    let task = tokens.get(index).map(|token| RepoCiInlineTask {
+        text: raw[token.start..].to_string(),
+        offset: token.start,
+    });
+    Ok(RepoCiParsedCommand { options, task })
+}
+
+fn repo_ci_command_tokens(raw: &str) -> Vec<RepoCiCommandToken<'_>> {
+    let mut tokens = Vec::new();
+    let mut token_start = None;
+    for (index, ch) in raw.char_indices() {
+        if ch.is_whitespace() {
+            if let Some(start) = token_start.take() {
+                tokens.push(RepoCiCommandToken {
+                    text: &raw[start..index],
+                    start,
+                });
+            }
+        } else if token_start.is_none() {
+            token_start = Some(index);
+        }
+    }
+    if let Some(start) = token_start {
+        tokens.push(RepoCiCommandToken {
+            text: &raw[start..],
+            start,
+        });
+    }
+    tokens
+}
+
 fn parse_model_policy_enabled(raw: &str) -> Result<Option<bool>, String> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "enable" | "enabled" | "on" => Ok(Some(true)),
@@ -1022,6 +1233,23 @@ fn repo_ci_session_mode_message(mode: Option<RepoCiSessionMode>) -> String {
         Some(RepoCiSessionMode::LocalAndRemote) => {
             "Repo CI runs local and remote checks for this session.".to_string()
         }
+    }
+}
+
+fn repo_ci_session_config_message(options: &RepoCiOptionPatch) -> String {
+    match (
+        options.mode,
+        options.issue_types.as_ref(),
+        options.review_rounds,
+        options.long_ci,
+    ) {
+        (Some(mode), None, None, None) => repo_ci_session_mode_message(mode),
+        (None, Some(issue_types), None, None) => {
+            repo_ci_issue_types_message(issue_types.as_deref())
+        }
+        (None, None, Some(review_rounds), None) => repo_ci_review_rounds_message(review_rounds),
+        (None, None, None, Some(long_ci)) => repo_ci_long_ci_message(long_ci),
+        _ => "Repo CI session config updated.".to_string(),
     }
 }
 
@@ -1083,7 +1311,8 @@ fn parse_repo_ci_issue_types(raw: &str) -> Result<Option<Vec<RepoCiIssueType>>, 
 
 fn parse_repo_ci_review_rounds(raw: &str) -> Result<Option<u8>, String> {
     let trimmed = raw.trim();
-    if matches!(trimmed, "inherit" | "default" | "config") {
+    let normalized = trimmed.to_ascii_lowercase();
+    if matches!(normalized.as_str(), "inherit" | "default" | "config") {
         return Ok(None);
     }
     trimmed
