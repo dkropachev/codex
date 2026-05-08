@@ -42,6 +42,7 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Limits,
     DebugConfig,
     Title,
     Statusline,
@@ -91,6 +92,7 @@ impl SlashCommand {
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Limits => "show current ChatGPT usage limits",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
@@ -155,7 +157,11 @@ impl SlashCommand {
     pub fn available_in_side_conversation(self) -> bool {
         matches!(
             self,
-            SlashCommand::Copy | SlashCommand::Diff | SlashCommand::Mention | SlashCommand::Status
+            SlashCommand::Copy
+                | SlashCommand::Diff
+                | SlashCommand::Mention
+                | SlashCommand::Status
+                | SlashCommand::Limits
         )
     }
 
@@ -189,6 +195,7 @@ impl SlashCommand {
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Status
+            | SlashCommand::Limits
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop

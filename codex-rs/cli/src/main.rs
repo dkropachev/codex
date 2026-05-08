@@ -12,8 +12,10 @@ use codex_cli::SeatbeltCommand;
 use codex_cli::WindowsCommand;
 use codex_cli::read_agent_identity_from_stdin;
 use codex_cli::read_api_key_from_stdin;
+use codex_cli::run_list_accounts;
 use codex_cli::run_login_status;
 use codex_cli::run_login_with_agent_identity;
+use codex_cli::run_login_with_account_refresh;
 use codex_cli::run_login_with_api_key;
 use codex_cli::run_login_with_chatgpt;
 use codex_cli::run_login_with_device_code;
@@ -39,6 +41,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
 
+mod account_usage;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod app_cmd;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -114,6 +117,9 @@ enum Subcommand {
 
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
+
+    /// Manage configured accounts and account pools.
+    Account(AccountCommand),
 
     /// Manage external MCP servers for Codex.
     Mcp(McpCli),
@@ -380,6 +386,10 @@ struct LoginCommand {
     #[arg(long = "device-auth")]
     use_device_code: bool,
 
+    /// Store ChatGPT credentials under a named account.
+    #[arg(long = "account", value_name = "ID")]
+    account: Option<String>,
+
     /// EXPERIMENTAL: Use custom OAuth issuer base URL (advanced)
     /// Override the OAuth issuer base URL (advanced)
     #[arg(long = "experimental_issuer", value_name = "URL", hide = true)]
@@ -403,6 +413,50 @@ enum LoginSubcommand {
 struct LogoutCommand {
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
+
+    /// Remove credentials for a named account.
+    #[arg(long = "account", value_name = "ID", conflicts_with = "all")]
+    account: Option<String>,
+
+    /// Remove default credentials and all named-account credentials.
+    #[arg(long = "all")]
+    all: bool,
+}
+
+#[derive(Debug, Parser)]
+struct AccountCommand {
+    #[clap(skip)]
+    config_overrides: CliConfigOverrides,
+
+    #[command(subcommand)]
+    subcommand: AccountSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum AccountSubcommand {
+    /// List default, named, and configured logical pool accounts.
+    List(AccountListCommand),
+
+    /// Show ChatGPT Codex usage limits for default, named, and pool accounts.
+    Limits,
+
+    /// Refresh ChatGPT tokens and usage snapshots for an account or pool.
+    Refresh(AccountRefreshCommand),
+}
+
+#[derive(Debug, Parser)]
+struct AccountListCommand {
+    #[arg(long = "json")]
+    json: bool,
+}
+
+#[derive(Debug, Parser)]
+struct AccountRefreshCommand {
+    #[arg(value_name = "ID", conflicts_with = "pool")]
+    id: Option<String>,
+
+    #[arg(long = "pool", value_name = "POOL_ID")]
+    pool: Option<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -956,6 +1010,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     } else if login_cli.use_device_code {
                         run_login_with_device_code(
                             login_cli.config_overrides,
+                            login_cli.account,
                             login_cli.issuer_base_url,
                             login_cli.client_id,
                         )
@@ -966,6 +1021,10 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                         );
                         std::process::exit(1);
                     } else if login_cli.with_api_key {
+                        if login_cli.account.is_some() {
+                            eprintln!("--account cannot be used with --with-api-key");
+                            std::process::exit(1);
+                        }
                         let api_key = read_api_key_from_stdin();
                         run_login_with_api_key(login_cli.config_overrides, api_key).await;
                     } else if login_cli.with_agent_identity {
@@ -973,7 +1032,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                         run_login_with_agent_identity(login_cli.config_overrides, agent_identity)
                             .await;
                     } else {
-                        run_login_with_chatgpt(login_cli.config_overrides).await;
+                        run_login_with_chatgpt(login_cli.config_overrides, login_cli.account).await;
                     }
                 }
             }
@@ -988,7 +1047,39 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 &mut logout_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            run_logout(logout_cli.config_overrides).await;
+            run_logout(
+                logout_cli.config_overrides,
+                logout_cli.account,
+                logout_cli.all,
+            )
+            .await;
+        }
+        Some(Subcommand::Account(mut account_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "account",
+            )?;
+            prepend_config_flags(
+                &mut account_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            match account_cli.subcommand {
+                AccountSubcommand::List(list) => {
+                    run_list_accounts(account_cli.config_overrides, list.json).await;
+                }
+                AccountSubcommand::Limits => {
+                    account_usage::run_account_limits(account_cli.config_overrides).await?;
+                }
+                AccountSubcommand::Refresh(refresh) => {
+                    run_login_with_account_refresh(
+                        account_cli.config_overrides,
+                        refresh.id,
+                        refresh.pool,
+                    )
+                    .await;
+                }
+            }
         }
         Some(Subcommand::Completion(completion_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -1722,6 +1813,97 @@ mod tests {
         };
 
         finalize_fork_interactive(interactive, root_overrides, session_id, last, all, fork_cli)
+    }
+
+    #[test]
+    fn login_accepts_named_device_auth_account() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "login", "--account", "work", "--device-auth"])
+                .expect("parse should succeed");
+
+        let Some(Subcommand::Login(login)) = cli.subcommand else {
+            panic!("expected login subcommand");
+        };
+
+        assert_eq!(login.account.as_deref(), Some("work"));
+        assert!(login.use_device_code);
+    }
+
+    #[test]
+    fn logout_account_conflicts_with_all_accounts() {
+        let err = MultitoolCli::try_parse_from(["codex", "logout", "--account", "work", "--all"])
+            .expect_err("conflicting account logout flags should be rejected");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn account_list_json_parses() {
+        let cli = MultitoolCli::try_parse_from(["codex", "account", "list", "--json"])
+            .expect("parse should succeed");
+
+        let Some(Subcommand::Account(AccountCommand {
+            subcommand: AccountSubcommand::List(list),
+            ..
+        })) = cli.subcommand
+        else {
+            panic!("expected account list subcommand");
+        };
+
+        assert!(list.json);
+    }
+
+    #[test]
+    fn account_refresh_accepts_account_or_pool_but_not_both() {
+        let account_cli = MultitoolCli::try_parse_from(["codex", "account", "refresh", "work"])
+            .expect("parse should succeed");
+        let Some(Subcommand::Account(AccountCommand {
+            subcommand: AccountSubcommand::Refresh(account_refresh),
+            ..
+        })) = account_cli.subcommand
+        else {
+            panic!("expected account refresh subcommand");
+        };
+        assert_eq!(account_refresh.id.as_deref(), Some("work"));
+        assert_eq!(account_refresh.pool, None);
+
+        let pool_cli =
+            MultitoolCli::try_parse_from(["codex", "account", "refresh", "--pool", "codex-pro"])
+                .expect("parse should succeed");
+        let Some(Subcommand::Account(AccountCommand {
+            subcommand: AccountSubcommand::Refresh(pool_refresh),
+            ..
+        })) = pool_cli.subcommand
+        else {
+            panic!("expected account refresh subcommand");
+        };
+        assert_eq!(pool_refresh.id, None);
+        assert_eq!(pool_refresh.pool.as_deref(), Some("codex-pro"));
+
+        let err = MultitoolCli::try_parse_from([
+            "codex",
+            "account",
+            "refresh",
+            "work",
+            "--pool",
+            "codex-pro",
+        ])
+        .expect_err("conflicting account refresh target flags should be rejected");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn account_limits_parses() {
+        let cli = MultitoolCli::try_parse_from(["codex", "account", "limits"])
+            .expect("parse should succeed");
+
+        let Some(Subcommand::Account(AccountCommand {
+            subcommand: AccountSubcommand::Limits,
+            ..
+        })) = cli.subcommand
+        else {
+            panic!("expected account limits subcommand");
+        };
     }
 
     #[test]

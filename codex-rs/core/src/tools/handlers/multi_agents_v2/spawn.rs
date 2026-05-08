@@ -5,10 +5,13 @@ use crate::agent::control::render_input_preview;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
+use crate::model_policy::ModelPolicySource;
+use crate::model_policy::apply_model_policy;
 use crate::session::turn_context::TurnEnvironment;
 use codex_protocol::AgentPath;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SessionSource;
 
 pub(crate) struct Handler;
 
@@ -85,9 +88,6 @@ impl ToolHandler for Handler {
                 .await
                 .map_err(FunctionCallError::RespondToModel)?;
         }
-        apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
-        apply_spawn_agent_overrides(&mut config, child_depth);
-
         let spawn_source = thread_spawn_source(
             session.conversation_id,
             &turn.session_source,
@@ -95,6 +95,20 @@ impl ToolHandler for Handler {
             role_name,
             Some(args.task_name.clone()),
         )?;
+        if args.model.is_none()
+            && args.reasoning_effort.is_none()
+            && let SessionSource::SubAgent(source) = spawn_source.clone()
+            && let Err(err) = apply_model_policy(
+                &mut config,
+                ModelPolicySource::SubAgent(source),
+                prompt.len(),
+            )
+        {
+            tracing::warn!("failed to apply spawn_agent model policy: {err}");
+        }
+        apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
+        apply_spawn_agent_overrides(&mut config, child_depth);
+
         let result = session
             .services
             .agent_control

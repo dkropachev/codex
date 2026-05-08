@@ -1556,7 +1556,7 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - `account/login/cancel` — cancel a pending managed ChatGPT login by `loginId`.
 - `account/logout` — sign out; triggers `account/updated`.
 - `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, or `null`) and includes the current ChatGPT `planType` when available.
-- `account/rateLimits/read` — fetch ChatGPT rate limits; updates arrive via `account/rateLimits/updated` (notify).
+- `account/rateLimits/read` — fetch ChatGPT rate limits; updates arrive via `account/rateLimits/updated` (notify). When an account pool is active, this also refreshes pool member usage.
 - `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change.
 - `account/sendAddCreditsNudgeEmail` — ask ChatGPT to email the workspace owner about depleted credits or a reached usage limit.
 - `mcpServer/oauthLogin/completed` (notify) — emitted after a `mcpServer/oauth/login` flow finishes for a server; payload includes `{ name, success, error? }`.
@@ -1577,12 +1577,15 @@ Response examples:
 { "id": 1, "result": { "account": null, "requiresOpenaiAuth": true } }  // OpenAI auth required (typical for OpenAI-hosted models)
 { "id": 1, "result": { "account": { "type": "apiKey" }, "requiresOpenaiAuth": true } }
 { "id": 1, "result": { "account": { "type": "chatgpt", "email": "user@example.com", "planType": "pro" }, "requiresOpenaiAuth": true } }
+{ "id": 1, "result": { "account": { "type": "chatgptPool", "id": "codex-pro", "activeAccountId": "work-pro", "members": [{ "id": "work-pro", "email": "work@example.com", "planType": "pro", "active": true, "unavailableReason": null, "regularRemaining": 42, "sparkRemaining": 100, "lastError": null }] }, "requiresOpenaiAuth": true } }
 ```
 
 Field notes:
 
 - `refreshToken` (bool): set `true` to force a token refresh.
 - `requiresOpenaiAuth` reflects the active provider; when `false`, Codex can run without OpenAI credentials.
+- `chatgptPool` is returned when `[account_pool]` is active. `id` is the pool id, `activeAccountId` is the currently selected member when known, and `members` describes each configured account.
+- Pool member fields are `id`, `email`, `planType`, `active`, `unavailableReason`, `regularRemaining`, `sparkRemaining`, and `lastError`.
 
 ### 2) Log in with an API key
 
@@ -1661,6 +1664,7 @@ Field notes:
 - `windowDurationMins` is the quota window length.
 - `resetsAt` is a Unix timestamp (seconds) for the next reset.
 - `rateLimitReachedType` identifies the backend-classified limit state when one has been reached.
+- With an active ChatGPT account pool, `account/rateLimits/read` refreshes pool member usage before returning the current account rate limits.
 
 ### 8) Notify a workspace owner about a limit
 

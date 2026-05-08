@@ -71,6 +71,11 @@ impl ModelProvider for AmazonBedrockModelProvider {
     }
 
     async fn api_provider(&self) -> Result<Provider> {
+        self.api_provider_for_auth(/*auth*/ None).await
+    }
+
+    async fn api_provider_for_auth(&self, auth: Option<&CodexAuth>) -> Result<Provider> {
+        let _ = auth;
         let region = resolve_region(&self.aws).await?;
         let mut api_provider_info = self.info.clone();
         api_provider_info.base_url = Some(base_url(&region)?);
@@ -78,6 +83,11 @@ impl ModelProvider for AmazonBedrockModelProvider {
     }
 
     async fn api_auth(&self) -> Result<SharedAuthProvider> {
+        self.api_auth_for_auth(/*auth*/ None).await
+    }
+
+    async fn api_auth_for_auth(&self, auth: Option<&CodexAuth>) -> Result<SharedAuthProvider> {
+        let _ = auth;
         resolve_provider_auth(&self.aws).await
     }
 

@@ -21,6 +21,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
+use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
@@ -203,6 +204,7 @@ pub enum ShellModelOutput {
 pub struct TestCodexBuilder {
     config_mutators: Vec<Box<ConfigMutator>>,
     auth: CodexAuth,
+    use_config_auth_manager: bool,
     pre_build_hooks: Vec<Box<PreBuildHook>>,
     workspace_setups: Vec<Box<WorkspaceSetup>>,
     home: Option<Arc<TempDir>>,
@@ -221,6 +223,11 @@ impl TestCodexBuilder {
 
     pub fn with_auth(mut self, auth: CodexAuth) -> Self {
         self.auth = auth;
+        self
+    }
+
+    pub fn with_config_auth_manager(mut self) -> Self {
+        self.use_config_auth_manager = true;
         self
     }
 
@@ -400,7 +407,19 @@ impl TestCodexBuilder {
         environment_manager: Arc<codex_exec_server::EnvironmentManager>,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
-        let thread_manager = if config.model_catalog.is_some() {
+        let thread_manager = if self.use_config_auth_manager {
+            codex_core::test_support::set_thread_manager_test_mode(/*enabled*/ true);
+            let auth_manager =
+                AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
+            ThreadManager::new(
+                &config,
+                auth_manager,
+                SessionSource::Exec,
+                CollaborationModesConfig::default(),
+                Arc::clone(&environment_manager),
+                /*analytics_events_client*/ None,
+            )
+        } else if config.model_catalog.is_some() {
             ThreadManager::new(
                 &config,
                 codex_core::test_support::auth_manager_from_auth(auth.clone()),
@@ -920,6 +939,7 @@ pub fn test_codex() -> TestCodexBuilder {
     TestCodexBuilder {
         config_mutators: vec![],
         auth: CodexAuth::from_api_key("dummy"),
+        use_config_auth_manager: false,
         pre_build_hooks: vec![],
         workspace_setups: vec![],
         home: None,

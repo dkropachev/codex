@@ -523,6 +523,11 @@ fn otel_export_routing_policy_routes_api_request_auth_observability() {
             Some("managed"),
             Some("refresh_token"),
             "/responses",
+            &codex_otel::AccountRouteTelemetry {
+                account_id: Some("work-pro".to_string()),
+                account_pool_id: Some("codex-pro".to_string()),
+                account_pool_member_id: Some("work-pro".to_string()),
+            },
             Some("req-401"),
             Some("ray-401"),
             Some("missing_authorization_header"),
@@ -585,6 +590,22 @@ fn otel_export_routing_policy_routes_api_request_auth_observability() {
         Some("/responses")
     );
     assert_eq!(
+        request_log_attrs.get("auth.account_id").map(String::as_str),
+        Some("work-pro")
+    );
+    assert_eq!(
+        request_log_attrs
+            .get("auth.account_pool_id")
+            .map(String::as_str),
+        Some("codex-pro")
+    );
+    assert_eq!(
+        request_log_attrs
+            .get("auth.account_pool_member_id")
+            .map(String::as_str),
+        Some("work-pro")
+    );
+    assert_eq!(
         request_log_attrs.get("auth.error").map(String::as_str),
         Some("missing_authorization_header")
     );
@@ -635,6 +656,18 @@ fn otel_export_routing_policy_routes_api_request_auth_observability() {
     assert_eq!(
         request_trace_attrs.get("endpoint").map(String::as_str),
         Some("/responses")
+    );
+    assert_eq!(
+        request_trace_attrs
+            .get("auth.account_id")
+            .map(String::as_str),
+        Some("work-pro")
+    );
+    assert_eq!(
+        request_trace_attrs
+            .get("auth.account_pool_id")
+            .map(String::as_str),
+        Some("codex-pro")
     );
     assert_eq!(
         request_trace_attrs
@@ -697,6 +730,7 @@ fn otel_export_routing_policy_routes_websocket_connect_auth_observability() {
             Some("reload"),
             "/responses",
             /*connection_reused*/ false,
+            &codex_otel::AccountRouteTelemetry::default(),
             Some("req-ws-401"),
             Some("ray-ws-401"),
             Some("missing_authorization_header"),
@@ -807,6 +841,7 @@ fn otel_export_routing_policy_routes_websocket_request_transport_observability()
             std::time::Duration::from_millis(23),
             Some("stream error"),
             /*connection_reused*/ true,
+            &codex_otel::AccountRouteTelemetry::default(),
         );
     });
 

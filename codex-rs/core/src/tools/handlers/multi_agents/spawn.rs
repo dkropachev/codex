@@ -6,7 +6,10 @@ use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
+use crate::model_policy::ModelPolicySource;
+use crate::model_policy::apply_model_policy;
 use crate::session::turn_context::TurnEnvironment;
+use codex_protocol::protocol::SessionSource;
 
 pub(crate) struct Handler;
 
@@ -80,6 +83,24 @@ impl ToolHandler for Handler {
                 .await
                 .map_err(FunctionCallError::RespondToModel)?;
         }
+        let spawn_source = thread_spawn_source(
+            session.conversation_id,
+            &turn.session_source,
+            child_depth,
+            role_name,
+            /*task_name*/ None,
+        )?;
+        if args.model.is_none()
+            && args.reasoning_effort.is_none()
+            && let SessionSource::SubAgent(source) = spawn_source.clone()
+            && let Err(err) = apply_model_policy(
+                &mut config,
+                ModelPolicySource::SubAgent(source),
+                prompt.len(),
+            )
+        {
+            tracing::warn!("failed to apply spawn_agent model policy: {err}");
+        }
         apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
         apply_spawn_agent_overrides(&mut config, child_depth);
 
@@ -87,13 +108,7 @@ impl ToolHandler for Handler {
             session.services.agent_control.spawn_agent_with_metadata(
                 config,
                 input_items,
-                Some(thread_spawn_source(
-                    session.conversation_id,
-                    &turn.session_source,
-                    child_depth,
-                    role_name,
-                    /*task_name*/ None,
-                )?),
+                Some(spawn_source),
                 SpawnAgentOptions {
                     fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
                     fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),

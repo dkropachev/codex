@@ -103,10 +103,15 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
         hide_agent_type_model_reasoning: false,
         include_usage_hint: true,
         usage_hint_text: None,
-        max_concurrent_threads_per_session: None,
+        max_concurrent_threads_per_session: Some(3),
     });
 
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
+    let ToolSpec::Function(ResponsesApiTool {
+        description,
+        parameters,
+        ..
+    }) = tool
+    else {
         panic!("spawn_agent should be a function tool");
     };
     assert_eq!(
@@ -120,6 +125,7 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
 
     assert!(properties.contains_key("fork_context"));
     assert!(!properties.contains_key("fork_turns"));
+    assert!(description.contains("`max_concurrent_threads_per_session = 3`"));
     assert_eq!(
         properties
             .get("model")
