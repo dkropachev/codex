@@ -24,6 +24,8 @@ use crate::CapturedExitStatus;
 use crate::CapturedRun;
 use crate::CapturedStep;
 use crate::RepoCiPaths;
+use crate::resource_monitor;
+use crate::resource_monitor::ResourceMonitor;
 
 const JSONL_ENV: &str = "CODEX_REPO_CI_JSONL";
 const REPO_ROOT_ENV: &str = "CODEX_REPO_CI_REPO_ROOT";
@@ -76,7 +78,14 @@ pub(crate) fn run_runner(
     arg: &str,
     local_test_time_budget_sec: u64,
 ) -> Result<ExitStatus> {
-    let mut runner = spawn_runner(paths, arg, None, RunnerStdio::Inherit)?;
+    let mut runner = spawn_runner(
+        paths,
+        arg,
+        /*jsonl_path*/ None,
+        RunnerStdio::Inherit,
+        /*run_id*/ None,
+        /*compose_project_name*/ None,
+    )?;
     match wait_for_runner(
         &mut runner,
         arg,
@@ -116,8 +125,25 @@ pub(crate) fn capture_runner_with_progress(
     let now_micros = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_micros());
+    let run_id = resource_monitor::run_id_for_capture(arg, now_micros);
+    let compose_project_name = std::env::var("COMPOSE_PROJECT_NAME")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| run_id.clone());
     let jsonl_path = run_dir.join(format!("{arg}-{}-{}.jsonl", std::process::id(), now_micros));
-    let mut runner = spawn_runner(paths, arg, Some(&jsonl_path), RunnerStdio::Capture)?;
+    let mut runner = spawn_runner(
+        paths,
+        arg,
+        /*jsonl_path*/ Some(&jsonl_path),
+        RunnerStdio::Capture,
+        /*run_id*/ Some(&run_id),
+        /*compose_project_name*/ Some(&compose_project_name),
+    )?;
+    let mut resource_monitor = ResourceMonitor::start(
+        run_id,
+        /*compose_project_name*/ Some(compose_project_name),
+        runner.child.id(),
+    );
     let stdout = runner
         .child
         .stdout
@@ -136,9 +162,14 @@ pub(crate) fn capture_runner_with_progress(
         arg,
         local_test_time_budget_sec,
         cancellation,
-        || step_reader.read_available(),
+        || {
+            step_reader.read_available()?;
+            resource_monitor.poll();
+            Ok(())
+        },
     )?;
     step_reader.read_to_end()?;
+    let resource_usage = resource_monitor.finish();
     let stdout = join_pipe_reader(stdout_reader, "stdout")?;
     let mut stderr = join_pipe_reader(stderr_reader, "stderr")?;
     let status = match completion {
@@ -160,6 +191,7 @@ pub(crate) fn capture_runner_with_progress(
         stdout: String::from_utf8_lossy(&stdout).to_string(),
         stderr: String::from_utf8_lossy(&stderr).to_string(),
         steps: read_captured_steps(&jsonl_path)?,
+        resource_usage: Some(resource_usage),
     };
     let _ = fs::remove_file(&jsonl_path);
     Ok(run)
@@ -297,6 +329,8 @@ fn spawn_runner(
     arg: &str,
     jsonl_path: Option<&Path>,
     stdio: RunnerStdio,
+    run_id: Option<&str>,
+    compose_project_name: Option<&str>,
 ) -> Result<ManagedRunner> {
     let mut command = bash_command();
     command
@@ -306,6 +340,14 @@ fn spawn_runner(
         .current_dir(&paths.repo_root);
     if let Some(jsonl_path) = jsonl_path {
         command.env(JSONL_ENV, path_for_bash(jsonl_path));
+    }
+    if let Some(run_id) = run_id {
+        command.env("CODEX_REPO_CI_RUN_ID", run_id);
+        if let Some(compose_project_name) = compose_project_name
+            && !std::env::var_os("COMPOSE_PROJECT_NAME").is_some_and(|value| !value.is_empty())
+        {
+            command.env("COMPOSE_PROJECT_NAME", compose_project_name);
+        }
     }
     let kill_mode = match stdio {
         RunnerStdio::Inherit => RunnerKillMode::Process,

@@ -20,6 +20,7 @@ use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
 use codex_model_provider::create_model_provider;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::NetworkPermissions;
@@ -263,6 +264,11 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
 
     let (mut session, mut turn_context_raw) = make_session_and_context().await;
     turn_context_raw.codex_linux_sandbox_exe = codex_linux_sandbox_exe_or_skip!();
+    if cfg!(windows) {
+        // This test covers guardian approval plumbing; Windows sandbox behavior
+        // has dedicated coverage and is not needed for this assertion.
+        turn_context_raw.windows_sandbox_level = WindowsSandboxLevel::Disabled;
+    }
     turn_context_raw
         .approval_policy
         .set(AskForApproval::OnRequest)
