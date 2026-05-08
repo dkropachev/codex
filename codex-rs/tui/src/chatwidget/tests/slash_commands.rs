@@ -1325,6 +1325,92 @@ async fn repo_ci_long_ci_slash_command_sets_session_config() {
 }
 
 #[tokio::test]
+async fn repo_ci_slash_command_with_task_applies_config_for_one_turn() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    submit_composer_text(&mut chat, "/repo-ci local fix the failing tests");
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserInputWithTurnContext { items, repo_ci, .. } => {
+            assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "fix the failing tests".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+            assert_eq!(
+                repo_ci,
+                Some(codex_protocol::protocol::RepoCiTurnOverrides {
+                    mode: Some(Some(codex_protocol::protocol::RepoCiSessionMode::Local)),
+                    issue_types: None,
+                    review_rounds: None,
+                    long_ci: None,
+                })
+            );
+        }
+        other => panic!("expected repo-ci task user turn, got {other:?}"),
+    }
+    assert_eq!(
+        recall_latest_after_clearing(&mut chat),
+        "/repo-ci local fix the failing tests"
+    );
+}
+
+#[tokio::test]
+async fn repo_ci_slash_command_with_task_restores_previous_session_config() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    submit_composer_text(&mut chat, "/repo-ci remote");
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::SetRepoCiSessionConfig {
+            mode: Some(codex_protocol::protocol::RepoCiSessionMode::Remote),
+            issue_types: None,
+            review_rounds: None,
+            long_ci: None,
+        })
+    );
+
+    submit_composer_text(&mut chat, "/repo-ci local rounds 2 fix the failing tests");
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserInputWithTurnContext { items, repo_ci, .. } => {
+            assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "fix the failing tests".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+            assert_eq!(
+                repo_ci,
+                Some(codex_protocol::protocol::RepoCiTurnOverrides {
+                    mode: Some(Some(codex_protocol::protocol::RepoCiSessionMode::Local)),
+                    issue_types: None,
+                    review_rounds: Some(Some(2)),
+                    long_ci: None,
+                })
+            );
+        }
+        other => panic!("expected repo-ci task user turn, got {other:?}"),
+    }
+    let remaining_ops = std::iter::from_fn(|| op_rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        remaining_ops
+            .iter()
+            .all(|op| !matches!(op, Op::SetRepoCiSessionConfig { .. })),
+        "repo-ci task should not restore by submitting session config ops: {remaining_ops:?}"
+    );
+    assert_eq!(
+        chat.config.repo_ci_session_mode,
+        Some(codex_protocol::protocol::RepoCiSessionMode::Remote)
+    );
+}
+
+#[tokio::test]
 async fn model_policy_slash_command_sets_session_config() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
 

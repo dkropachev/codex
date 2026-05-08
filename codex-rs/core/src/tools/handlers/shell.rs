@@ -521,7 +521,7 @@ impl ShellHandler {
                 command: &exec_params.command,
                 approval_policy: turn.approval_policy.value(),
                 permission_profile: turn.permission_profile(),
-                file_system_sandbox_policy: &file_system_sandbox_policy,
+                file_system_sandbox_policy,
                 sandbox_cwd: turn.cwd.as_path(),
                 sandbox_permissions: if effective_additional_permissions.permissions_preapproved {
                     codex_protocol::models::SandboxPermissions::UseDefault

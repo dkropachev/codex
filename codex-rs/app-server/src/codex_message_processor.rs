@@ -216,6 +216,7 @@ use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
+use codex_app_server_protocol::TurnRepoCiConfigParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -345,6 +346,7 @@ use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RealtimeVoicesList;
+use codex_protocol::protocol::RepoCiTurnOverrides;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::ReviewDelivery as CoreReviewDelivery;
 use codex_protocol::protocol::ReviewRequest;
@@ -7214,7 +7216,9 @@ impl CodexMessageProcessor {
             .map(V2UserInput::into_core)
             .collect();
 
-        let has_any_overrides = params.cwd.is_some()
+        let repo_ci = params.repo_ci.map(Self::repo_ci_turn_overrides_from_params);
+
+        let has_persistent_overrides = params.cwd.is_some()
             || params.approval_policy.is_some()
             || params.approvals_reviewer.is_some()
             || params.sandbox_policy.is_some()
@@ -7225,6 +7229,7 @@ impl CodexMessageProcessor {
             || params.summary.is_some()
             || collaboration_mode.is_some()
             || params.personality.is_some();
+        let has_any_overrides = has_persistent_overrides || repo_ci.is_some();
 
         if params.sandbox_policy.is_some() && params.permission_profile.is_some() {
             self.send_invalid_request_error(
@@ -7251,7 +7256,7 @@ impl CodexMessageProcessor {
         // If any overrides are provided, validate them synchronously so the
         // request can fail before accepting user input. The actual update is
         // still queued together with the input below to preserve submission order.
-        if has_any_overrides {
+        if has_persistent_overrides {
             let result = thread
                 .validate_turn_context_overrides(CodexThreadTurnContextOverrides {
                     cwd: cwd.clone(),
@@ -7297,6 +7302,7 @@ impl CodexMessageProcessor {
                 service_tier,
                 collaboration_mode,
                 personality,
+                repo_ci,
             }
         } else {
             Op::UserInput {
@@ -7346,6 +7352,24 @@ impl CodexMessageProcessor {
                 self.track_error_response(&request_id, &error, /*error_type*/ None);
                 self.outgoing.send_error(request_id, error).await;
             }
+        }
+    }
+
+    fn repo_ci_turn_overrides_from_params(params: TurnRepoCiConfigParams) -> RepoCiTurnOverrides {
+        RepoCiTurnOverrides {
+            mode: params
+                .mode
+                .map(|mode| mode.map(codex_app_server_protocol::RepoCiSessionMode::to_core)),
+            issue_types: params.issue_types.map(|issue_types| {
+                issue_types.map(|values| {
+                    values
+                        .into_iter()
+                        .map(codex_app_server_protocol::RepoCiIssueType::to_core)
+                        .collect()
+                })
+            }),
+            review_rounds: params.review_rounds,
+            long_ci: params.long_ci,
         }
     }
 

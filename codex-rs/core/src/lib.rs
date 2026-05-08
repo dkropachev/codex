@@ -26,6 +26,11 @@ mod codex_delegate;
 mod command_canonicalization;
 mod commit_attribution;
 pub mod config;
+pub mod config_loader {
+    pub use codex_config::loader::load_config_layers_state;
+    pub use codex_config::loader::project_trust_key;
+    pub use codex_config::*;
+}
 pub mod connectors;
 pub mod context;
 mod context_manager;

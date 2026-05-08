@@ -17,9 +17,9 @@
 //!
 //! The bottom pane exposes a single "task running" indicator that drives the spinner and interrupt
 //! hints. This module treats that indicator as derived UI-busy state: it is set while an agent turn
-//! is in progress and while MCP server startup is in progress. Those lifecycles are tracked
-//! independently (`agent_turn_running` and `mcp_startup_status`) and synchronized via
-//! `update_task_running_state`.
+//! is in progress, review mode is active, or MCP server startup is in progress. Those lifecycles are
+//! tracked independently (`agent_turn_running`, `is_review_mode`, and `mcp_startup_status`) and
+//! synchronized via `update_task_running_state`.
 //!
 //! For preamble-capable models, assistant output may include commentary before
 //! the final answer. During streaming we hide the status row to avoid duplicate
@@ -207,6 +207,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RepoCiTurnOverrides;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -2013,10 +2014,11 @@ impl ChatWidget {
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
-    /// both the agent turn lifecycle and MCP startup lifecycle.
+    /// the agent turn lifecycle, review lifecycle, and MCP startup lifecycle.
     fn update_task_running_state(&mut self) {
-        self.bottom_pane
-            .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+        self.bottom_pane.set_task_running(
+            self.agent_turn_running || self.is_review_mode || self.mcp_startup_status.is_some(),
+        );
         self.refresh_status_surfaces();
     }
 
@@ -2870,6 +2872,7 @@ impl ChatWidget {
         self.pending_status_indicator_restore = false;
         self.user_turn_pending_start = false;
         self.agent_turn_running = false;
+        self.clear_review_mode_for_turn_end();
         self.goal_status_active_turn_started_at = None;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
@@ -3227,6 +3230,13 @@ impl ChatWidget {
         }
     }
 
+    fn clear_review_mode_for_turn_end(&mut self) {
+        if self.is_review_mode {
+            self.is_review_mode = false;
+            self.restore_pre_review_token_info();
+        }
+    }
+
     pub(crate) fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
         if let Some(mut snapshot) = snapshot {
             let limit_id = snapshot
@@ -3334,6 +3344,7 @@ impl ChatWidget {
         // Reset running state and clear streaming buffers.
         self.user_turn_pending_start = false;
         self.agent_turn_running = false;
+        self.clear_review_mode_for_turn_end();
         self.goal_status_active_turn_started_at = None;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
@@ -6182,6 +6193,19 @@ impl ChatWidget {
         );
     }
 
+    fn submit_user_message_with_repo_ci(
+        &mut self,
+        user_message: UserMessage,
+        repo_ci: RepoCiTurnOverrides,
+    ) {
+        let _accepted = self.submit_user_message_with_history_shell_escape_and_repo_ci(
+            user_message,
+            UserMessageHistoryRecord::UserMessageText,
+            ShellEscapePolicy::Allow,
+            Some(repo_ci),
+        );
+    }
+
     fn submit_user_message_with_history_record(
         &mut self,
         user_message: UserMessage,
@@ -6213,6 +6237,21 @@ impl ChatWidget {
         user_message: UserMessage,
         history_record: UserMessageHistoryRecord,
         shell_escape_policy: ShellEscapePolicy,
+    ) -> (bool, Option<AppCommand>) {
+        self.submit_user_message_with_history_shell_escape_and_repo_ci(
+            user_message,
+            history_record,
+            shell_escape_policy,
+            /*repo_ci*/ None,
+        )
+    }
+
+    fn submit_user_message_with_history_shell_escape_and_repo_ci(
+        &mut self,
+        user_message: UserMessage,
+        history_record: UserMessageHistoryRecord,
+        shell_escape_policy: ShellEscapePolicy,
+        repo_ci: Option<RepoCiTurnOverrides>,
     ) -> (bool, Option<AppCommand>) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
@@ -6443,22 +6482,45 @@ impl ChatWidget {
             None => None,
         };
         let permission_profile = Some(self.config.permissions.permission_profile());
-        let op = AppCommand::user_turn(
-            items,
-            self.config.cwd.to_path_buf(),
-            self.config.permissions.approval_policy.value(),
-            self.config
-                .permissions
-                .legacy_sandbox_policy(self.config.cwd.as_path()),
-            permission_profile,
-            effective_mode.model().to_string(),
-            effective_mode.reasoning_effort(),
-            /*summary*/ None,
-            service_tier,
-            /*final_output_json_schema*/ None,
-            collaboration_mode,
-            personality,
-        );
+        let op = if let Some(repo_ci) = repo_ci {
+            AppCommand::user_input_with_turn_context(
+                items,
+                Some(self.config.cwd.to_path_buf()),
+                Some(self.config.permissions.approval_policy.value()),
+                Some(self.config.approvals_reviewer),
+                Some(
+                    self.config
+                        .permissions
+                        .legacy_sandbox_policy(self.config.cwd.as_path()),
+                ),
+                permission_profile,
+                Some(effective_mode.model().to_string()),
+                Some(effective_mode.reasoning_effort()),
+                /*summary*/ None,
+                service_tier,
+                /*final_output_json_schema*/ None,
+                collaboration_mode,
+                personality,
+                Some(repo_ci),
+            )
+        } else {
+            AppCommand::user_turn(
+                items,
+                self.config.cwd.to_path_buf(),
+                self.config.permissions.approval_policy.value(),
+                self.config
+                    .permissions
+                    .legacy_sandbox_policy(self.config.cwd.as_path()),
+                permission_profile,
+                effective_mode.model().to_string(),
+                effective_mode.reasoning_effort(),
+                /*summary*/ None,
+                service_tier,
+                /*final_output_json_schema*/ None,
+                collaboration_mode,
+                personality,
+            )
+        };
 
         if !self.submit_op(op.clone()) {
             return (false, None);
@@ -7873,10 +7935,10 @@ impl ChatWidget {
         if self.pre_review_token_info.is_none() {
             self.pre_review_token_info = Some(self.token_info.clone());
         }
-        if !from_replay && !self.bottom_pane.is_task_running() {
-            self.bottom_pane.set_task_running(/*running*/ true);
-        }
         self.is_review_mode = true;
+        if !from_replay {
+            self.update_task_running_state();
+        }
         let banner = format!(">> Code review started: {hint} <<");
         self.add_to_history(history_cell::new_review_status_line(banner));
         self.request_redraw();
@@ -7888,6 +7950,7 @@ impl ChatWidget {
         self.flush_active_cell();
         self.is_review_mode = false;
         self.restore_pre_review_token_info();
+        self.update_task_running_state();
         self.add_to_history(history_cell::new_review_status_line(
             "<< Code review finished >>".to_string(),
         ));

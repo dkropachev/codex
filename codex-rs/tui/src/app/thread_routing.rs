@@ -589,9 +589,62 @@ impl App {
                             collaboration_mode.clone(),
                             *personality,
                             final_output_json_schema.clone(),
+                            /*repo_ci*/ None,
                         )
                         .await?;
                 }
+                Ok(true)
+            }
+            AppCommandView::UserInputWithTurnContext {
+                items,
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                permission_profile,
+                model,
+                effort,
+                summary,
+                service_tier,
+                final_output_json_schema,
+                collaboration_mode,
+                personality,
+                repo_ci,
+            } => {
+                if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
+                    app_server
+                        .turn_steer(thread_id, turn_id, items.to_vec())
+                        .await?;
+                    return Ok(true);
+                }
+                let config = self.chat_widget.config_ref();
+                app_server
+                    .turn_start(
+                        thread_id,
+                        items.to_vec(),
+                        cwd.clone().unwrap_or_else(|| config.cwd.to_path_buf()),
+                        approval_policy.unwrap_or(config.permissions.approval_policy.value()),
+                        approvals_reviewer.unwrap_or(config.approvals_reviewer),
+                        sandbox_policy.clone().unwrap_or_else(|| {
+                            config
+                                .permissions
+                                .legacy_sandbox_policy(config.cwd.as_path())
+                        }),
+                        permission_profile
+                            .clone()
+                            .or_else(|| Some(config.permissions.permission_profile())),
+                        model
+                            .clone()
+                            .unwrap_or_else(|| config.model.clone().unwrap_or_default()),
+                        effort.as_ref().and_then(|effort| *effort),
+                        *summary,
+                        *service_tier,
+                        collaboration_mode.clone(),
+                        *personality,
+                        final_output_json_schema.clone(),
+                        repo_ci.clone(),
+                    )
+                    .await?;
                 Ok(true)
             }
             AppCommandView::ListSkills { cwds, force_reload } => {

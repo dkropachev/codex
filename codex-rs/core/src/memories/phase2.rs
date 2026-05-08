@@ -306,7 +306,7 @@ mod agent {
         let root = memory_root(&config.codex_home);
         let mut agent_config = config.as_ref().clone();
 
-        agent_config.cwd = root.clone();
+        agent_config.cwd = root;
         // Consolidation threads must never feed back into phase-1 memory generation.
         agent_config.ephemeral = true;
         agent_config.memories.generate_memories = false;
@@ -326,7 +326,7 @@ mod agent {
             .disable(Feature::SkillMcpDependencyInstall);
 
         // Sandbox policy
-        let writable_roots = vec![root];
+        let writable_roots = Vec::new();
         // The consolidation agent only needs local memory-root write access and no network.
         let consolidation_sandbox_policy = SandboxPolicy::WorkspaceWrite {
             writable_roots,

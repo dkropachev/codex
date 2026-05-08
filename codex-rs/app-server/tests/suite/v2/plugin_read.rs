@@ -51,7 +51,10 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+// Plugin read can load connector metadata and codex_apps MCP tool state for
+// plugin app auth summaries, which is slower after many app-server tests have
+// run in the same process.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[tokio::test]
 async fn plugin_read_rejects_missing_read_source() -> Result<()> {

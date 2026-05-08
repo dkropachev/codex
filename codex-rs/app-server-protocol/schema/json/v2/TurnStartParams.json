@@ -494,6 +494,30 @@
         }
       ]
     },
+    "RepoCiIssueType": {
+      "enum": [
+        "correctness",
+        "reliability",
+        "performance",
+        "scalability",
+        "security",
+        "maintainability",
+        "testability",
+        "observability",
+        "compatibility",
+        "uxConfigCli"
+      ],
+      "type": "string"
+    },
+    "RepoCiSessionMode": {
+      "enum": [
+        "off",
+        "local",
+        "remote",
+        "localAndRemote"
+      ],
+      "type": "string"
+    },
     "SandboxPolicy": {
       "oneOf": [
         {
@@ -664,6 +688,51 @@
         "cwd",
         "environmentId"
       ],
+      "type": "object"
+    },
+    "TurnRepoCiConfigParams": {
+      "properties": {
+        "issueTypes": {
+          "items": {
+            "$ref": "#/definitions/RepoCiIssueType"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "longCi": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/RepoCiSessionMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reviewRounds": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "UserInput": {
