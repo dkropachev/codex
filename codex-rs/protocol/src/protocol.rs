@@ -178,7 +178,9 @@ pub enum ConversationStartTransport {
     Webrtc { sdp: String },
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[derive(
+    Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, JsonSchema, TS,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum RealtimeOutputModality {
     Text,
@@ -740,6 +742,19 @@ pub enum Op {
     /// enable/disable state) without restarting the thread.
     ReloadUserConfig,
 
+    /// Override repository CI review settings for this session.
+    ///
+    /// `None` values clear the session override for the corresponding field and
+    /// return to repo/user config.
+    SetRepoCiSessionConfig {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<RepoCiSessionMode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        issue_types: Option<Vec<RepoCiIssueType>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        review_rounds: Option<u8>,
+    },
+
     /// Request the list of skills for the provided `cwd` values or the session default.
     ListSkills {
         /// Working directories to scope repo skills discovery.
@@ -901,6 +916,7 @@ impl Op {
             Self::ListMcpTools => "list_mcp_tools",
             Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
             Self::ReloadUserConfig => "reload_user_config",
+            Self::SetRepoCiSessionConfig { .. } => "set_repo_ci_session_config",
             Self::ListSkills { .. } => "list_skills",
             Self::Compact => "compact",
             Self::DropMemories => "drop_memories",
@@ -1396,6 +1412,9 @@ pub enum EventMsg {
 
     /// Warning issued by the guardian automatic approval reviewer.
     GuardianWarning(WarningEvent),
+
+    /// Structured lifecycle update for automatic repository CI checks.
+    RepoCiStatus(RepoCiStatusEvent),
 
     /// Realtime conversation lifecycle start event.
     RealtimeConversationStarted(RealtimeConversationStartedEvent),
@@ -2049,6 +2068,77 @@ impl ErrorEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct WarningEvent {
     pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum RepoCiPhase {
+    Learning,
+    Local,
+    Remote,
+    Triage,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum RepoCiState {
+    Started,
+    Passed,
+    Failed,
+    Skipped,
+    Ignored,
+    Retrying,
+    Exhausted,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum RepoCiScope {
+    Local,
+    Remote,
+    None,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RepoCiStatusEvent {
+    pub phase: RepoCiPhase,
+    pub state: RepoCiState,
+    pub scope: RepoCiScope,
+    pub attempt: Option<u8>,
+    pub max_attempts: Option<u8>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RepoCiSessionMode {
+    Off,
+    Local,
+    Remote,
+    LocalAndRemote,
+}
+
+#[derive(
+    Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, JsonSchema, TS,
+)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case")]
+pub enum RepoCiIssueType {
+    Correctness,
+    Reliability,
+    Performance,
+    Scalability,
+    Security,
+    Maintainability,
+    Testability,
+    Observability,
+    Compatibility,
+    #[serde(rename = "ux-config-cli")]
+    #[ts(rename = "ux-config-cli")]
+    UxConfigCli,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
