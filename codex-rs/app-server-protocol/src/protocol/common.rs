@@ -1880,6 +1880,7 @@ mod tests {
                     v2::RepoCiIssueType::Security,
                 ]),
                 review_rounds: Some(3),
+                long_ci: Some(true),
             },
         };
         assert_eq!(
@@ -1890,7 +1891,8 @@ mod tests {
                     "threadId": "thr_123",
                     "mode": "remote",
                     "issueTypes": ["correctness", "security"],
-                    "reviewRounds": 3
+                    "reviewRounds": 3,
+                    "longCi": true
                 }
             }),
             serde_json::to_value(&request)?,

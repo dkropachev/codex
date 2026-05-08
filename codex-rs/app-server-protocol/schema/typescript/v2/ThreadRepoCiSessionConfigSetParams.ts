@@ -16,4 +16,8 @@ issueTypes?: Array<RepoCiIssueType> | null,
 /**
  * Null clears the session override and returns to repo/user config.
  */
-reviewRounds?: number | null, };
+reviewRounds?: number | null,
+/**
+ * Null clears the session override and returns to repo/user config.
+ */
+longCi?: boolean | null, };

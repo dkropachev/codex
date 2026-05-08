@@ -174,6 +174,7 @@ pub(super) async fn user_input_or_turn_inner(
                     repo_ci_session_mode: None,
                     repo_ci_issue_types: None,
                     repo_ci_review_rounds: None,
+                    repo_ci_long_ci: None,
                 },
                 None,
             )
@@ -227,6 +228,7 @@ pub(super) async fn user_input_or_turn_inner(
                     repo_ci_session_mode: None,
                     repo_ci_issue_types: None,
                     repo_ci_review_rounds: None,
+                    repo_ci_long_ci: None,
                 },
                 responsesapi_client_metadata,
             )
@@ -1176,6 +1178,7 @@ pub(super) async fn submission_loop(
                     mode,
                     issue_types,
                     review_rounds,
+                    long_ci,
                 } => {
                     override_turn_context(
                         &sess,
@@ -1184,6 +1187,7 @@ pub(super) async fn submission_loop(
                             repo_ci_session_mode: Some(mode),
                             repo_ci_issue_types: Some(issue_types),
                             repo_ci_review_rounds: Some(review_rounds),
+                            repo_ci_long_ci: Some(long_ci),
                             ..Default::default()
                         },
                     )

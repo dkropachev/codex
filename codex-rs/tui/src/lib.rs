@@ -856,6 +856,7 @@ pub async fn run_main(
         repo_ci_session_mode: cli.repo_ci.map(Into::into),
         repo_ci_issue_types,
         repo_ci_review_rounds: cli.repo_ci_review_rounds,
+        repo_ci_long_ci: cli.repo_ci_long_ci.then_some(true),
         additional_writable_roots: additional_dirs,
         ..Default::default()
     };

@@ -98,6 +98,7 @@ pub(crate) enum AppCommandView<'a> {
         mode: &'a Option<RepoCiSessionMode>,
         issue_types: &'a Option<Vec<RepoCiIssueType>>,
         review_rounds: &'a Option<u8>,
+        long_ci: &'a Option<bool>,
     },
     ListSkills {
         cwds: &'a [PathBuf],
@@ -257,11 +258,13 @@ impl AppCommand {
         mode: Option<RepoCiSessionMode>,
         issue_types: Option<Vec<RepoCiIssueType>>,
         review_rounds: Option<u8>,
+        long_ci: Option<bool>,
     ) -> Self {
         Self(Op::SetRepoCiSessionConfig {
             mode,
             issue_types,
             review_rounds,
+            long_ci,
         })
     }
 
@@ -378,10 +381,12 @@ impl AppCommand {
                 mode,
                 issue_types,
                 review_rounds,
+                long_ci,
             } => AppCommandView::SetRepoCiSessionConfig {
                 mode,
                 issue_types,
                 review_rounds,
+                long_ci,
             },
             Op::ResolveElicitation {
                 server_name,

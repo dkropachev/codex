@@ -37,6 +37,13 @@
         "null"
       ]
     },
+    "longCi": {
+      "description": "Null clears the session override and returns to repo/user config.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "mode": {
       "anyOf": [
         {

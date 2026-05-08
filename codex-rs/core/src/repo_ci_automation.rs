@@ -129,6 +129,7 @@ fn parse_status_paths(stdout: &[u8]) -> Vec<String> {
 struct EffectiveRepoCiConfig {
     automation: RepoCiAutomationToml,
     local_test_time_budget_sec: u64,
+    long_ci: bool,
     max_local_fix_rounds: u8,
     max_remote_fix_rounds: u8,
     review_issue_types: Vec<RepoCiIssueType>,
@@ -139,6 +140,7 @@ impl EffectiveRepoCiConfig {
     fn from_scope(
         scope: &RepoCiScopeToml,
         review_issue_types: Vec<RepoCiIssueType>,
+        long_ci: bool,
     ) -> Option<Self> {
         if scope.enabled != Some(true) {
             return None;
@@ -148,6 +150,7 @@ impl EffectiveRepoCiConfig {
                 .automation
                 .unwrap_or(RepoCiAutomationToml::LocalAndRemote),
             local_test_time_budget_sec: scope.local_test_time_budget_sec.unwrap_or(300),
+            long_ci,
             max_local_fix_rounds: scope.max_local_fix_rounds.unwrap_or(3),
             max_remote_fix_rounds: scope.max_remote_fix_rounds.unwrap_or(2),
             review_issue_types,
@@ -160,6 +163,7 @@ impl EffectiveRepoCiConfig {
         base: Option<&RepoCiScopeToml>,
         review_issue_types: Vec<RepoCiIssueType>,
         review_rounds: Option<u8>,
+        long_ci: bool,
     ) -> Option<Self> {
         if mode == RepoCiSessionMode::Off {
             return None;
@@ -169,6 +173,7 @@ impl EffectiveRepoCiConfig {
             local_test_time_budget_sec: base
                 .and_then(|scope| scope.local_test_time_budget_sec)
                 .unwrap_or(300),
+            long_ci,
             max_local_fix_rounds: base
                 .and_then(|scope| scope.max_local_fix_rounds)
                 .unwrap_or(3),
@@ -205,10 +210,12 @@ impl EffectiveRepoCiConfig {
 #[serde(rename_all = "camelCase")]
 struct RepoCiReviewOutput {
     findings: Vec<RepoCiReviewFinding>,
+    #[serde(default)]
+    disregarded_findings: Vec<RepoCiDisregardedFinding>,
     summary: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct RepoCiReviewFinding {
     title: String,
@@ -218,6 +225,76 @@ struct RepoCiReviewFinding {
     absolute_file_path: Option<PathBuf>,
     #[serde(default)]
     location_hint: Option<String>,
+}
+
+impl RepoCiReviewFinding {
+    fn key(&self) -> String {
+        review_item_key(self.issue_type, &self.title, &self.location())
+    }
+
+    fn location(&self) -> String {
+        self.absolute_file_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .or_else(|| self.location_hint.clone())
+            .unwrap_or_else(|| "repo".to_string())
+    }
+
+    fn summary_line(&self) -> String {
+        format!(
+            "- [{}] {} ({})",
+            repo_ci_issue_type_slug(self.issue_type),
+            self.title,
+            self.location()
+        )
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RepoCiDisregardedFinding {
+    title: String,
+    body: String,
+    issue_type: RepoCiIssueType,
+    #[serde(default)]
+    absolute_file_path: Option<PathBuf>,
+    #[serde(default)]
+    location_hint: Option<String>,
+    reason: String,
+}
+
+impl RepoCiDisregardedFinding {
+    fn key(&self) -> String {
+        review_item_key(self.issue_type, &self.title, &self.location())
+    }
+
+    fn location(&self) -> String {
+        self.absolute_file_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .or_else(|| self.location_hint.clone())
+            .unwrap_or_else(|| "repo".to_string())
+    }
+
+    fn summary_line(&self) -> String {
+        format!(
+            "- [{}] {} ({}) - {}: {}",
+            repo_ci_issue_type_slug(self.issue_type),
+            self.title,
+            self.location(),
+            self.reason,
+            truncate_middle(&self.body, 240)
+        )
+    }
+}
+
+fn review_item_key(issue_type: RepoCiIssueType, title: &str, location: &str) -> String {
+    format!(
+        "{}|{}|{}",
+        repo_ci_issue_type_slug(issue_type),
+        title.trim(),
+        location
+    )
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -232,6 +309,73 @@ struct RepoCiFixGroup {
     key: String,
     owned_paths: Vec<PathBuf>,
     findings: Vec<RepoCiReviewFinding>,
+}
+
+#[derive(Debug, Default)]
+struct RepoCiReviewIssueTracker {
+    active: BTreeMap<String, RepoCiReviewFinding>,
+    resolved: BTreeMap<String, RepoCiReviewFinding>,
+    disregarded: BTreeMap<String, RepoCiDisregardedFinding>,
+}
+
+impl RepoCiReviewIssueTracker {
+    fn record_review(
+        &mut self,
+        review: &RepoCiReviewOutput,
+        selected_issue_types: &[RepoCiIssueType],
+    ) {
+        let next_active = review
+            .findings
+            .iter()
+            .map(|finding| (finding.key(), finding.clone()))
+            .collect::<BTreeMap<_, _>>();
+        for (key, finding) in &self.active {
+            if !next_active.contains_key(key) {
+                self.resolved
+                    .entry(key.clone())
+                    .or_insert_with(|| finding.clone());
+            }
+        }
+        self.active = next_active;
+
+        for finding in review
+            .disregarded_findings
+            .iter()
+            .filter(|finding| !selected_issue_types.contains(&finding.issue_type))
+        {
+            self.disregarded
+                .entry(finding.key())
+                .or_insert_with(|| finding.clone());
+        }
+    }
+
+    fn summary_message(&self) -> Option<String> {
+        if self.resolved.is_empty() && self.disregarded.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "Repo CI targeted review summary.\n\nResolved issues:\n{}\n\nDisregarded by issue-type filter:\n{}",
+            format_review_item_lines(
+                self.resolved
+                    .values()
+                    .map(RepoCiReviewFinding::summary_line)
+            ),
+            format_review_item_lines(
+                self.disregarded
+                    .values()
+                    .map(RepoCiDisregardedFinding::summary_line),
+            )
+        ))
+    }
+}
+
+fn format_review_item_lines(lines: impl Iterator<Item = String>) -> String {
+    let lines = lines.collect::<Vec<_>>();
+    if lines.is_empty() {
+        "- (none)".to_string()
+    } else {
+        lines.join("\n")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,10 +440,16 @@ pub(crate) async fn maybe_run_after_agent(
         config = refreshed_config;
     }
 
+    let mut review_tracker = RepoCiReviewIssueTracker::default();
+    let mut ran_review = false;
+    let mut review_summary_state = RepoCiState::Passed;
+    let mut review_summary_attempt = None;
     if config.review_enabled() {
+        ran_review = true;
         for attempt in 1..=config.max_review_fix_rounds {
+            let review_snapshot = codex_repo_ci::BranchDiffSnapshot::capture(&turn_context.cwd);
             let review =
-                match run_targeted_review(sess, turn_context, &config, &current_snapshot).await {
+                match run_targeted_review(sess, turn_context, &config, &review_snapshot).await {
                     Ok(review) => review,
                     Err(err) => {
                         send_status(
@@ -313,10 +463,14 @@ pub(crate) async fn maybe_run_after_agent(
                             format!("Repo CI targeted review failed: {err:#}"),
                         )
                         .await;
+                        review_summary_state = RepoCiState::Failed;
+                        review_summary_attempt = Some(attempt);
                         break;
                     }
                 };
+            review_tracker.record_review(&review, &config.review_issue_types);
             if review.findings.is_empty() {
+                review_summary_attempt = Some(attempt);
                 break;
             }
             if attempt == config.max_review_fix_rounds {
@@ -330,6 +484,15 @@ pub(crate) async fn maybe_run_after_agent(
                     Some(config.max_review_fix_rounds),
                     "Repo CI targeted review still found issues after the configured review rounds."
                         .to_string(),
+                )
+                .await;
+                send_review_resolution_summary(
+                    sess,
+                    turn_context,
+                    &review_tracker,
+                    RepoCiState::Exhausted,
+                    Some(attempt),
+                    Some(config.max_review_fix_rounds),
                 )
                 .await;
                 return Some(review_findings_prompt(&review));
@@ -348,6 +511,15 @@ pub(crate) async fn maybe_run_after_agent(
                         format!("Repo CI fix workers failed: {err:#}"),
                     )
                     .await;
+                    send_review_resolution_summary(
+                        sess,
+                        turn_context,
+                        &review_tracker,
+                        RepoCiState::Failed,
+                        Some(attempt),
+                        Some(config.max_review_fix_rounds),
+                    )
+                    .await;
                     return Some(review_findings_prompt(&review));
                 }
             };
@@ -364,6 +536,22 @@ pub(crate) async fn maybe_run_after_agent(
             .await;
             current_snapshot = WorktreeSnapshot::capture(&turn_context.cwd);
         }
+    }
+
+    macro_rules! send_final_review_summary {
+        () => {
+            if ran_review {
+                send_review_resolution_summary(
+                    sess,
+                    turn_context,
+                    &review_tracker,
+                    review_summary_state.clone(),
+                    review_summary_attempt,
+                    Some(config.max_review_fix_rounds),
+                )
+                .await;
+            }
+        };
     }
 
     send_status(
@@ -398,6 +586,7 @@ pub(crate) async fn maybe_run_after_agent(
                 format!("Repo CI failed to start: {err:#}"),
             )
             .await;
+            send_final_review_summary!();
             return None;
         }
         Err(err) => {
@@ -412,6 +601,7 @@ pub(crate) async fn maybe_run_after_agent(
                 format!("Repo CI task failed: {err:#}"),
             )
             .await;
+            send_final_review_summary!();
             return None;
         }
     };
@@ -474,6 +664,7 @@ pub(crate) async fn maybe_run_after_agent(
                 )
                 .await;
                 state.initial_snapshot = current_snapshot.clone();
+                send_final_review_summary!();
                 return None;
             }
             if state.local_fix_rounds >= config.max_local_fix_rounds {
@@ -491,6 +682,7 @@ pub(crate) async fn maybe_run_after_agent(
                     ),
                 )
                 .await;
+                send_final_review_summary!();
                 return None;
             }
             state.local_fix_rounds = state.local_fix_rounds.saturating_add(1);
@@ -508,6 +700,7 @@ pub(crate) async fn maybe_run_after_agent(
                 ),
             )
             .await;
+            send_final_review_summary!();
             return Some(repair_prompt(
                 "local",
                 &output,
@@ -519,6 +712,7 @@ pub(crate) async fn maybe_run_after_agent(
     }
 
     if !config.remote_enabled() || state.remote_completed {
+        send_final_review_summary!();
         return None;
     }
 
@@ -542,6 +736,7 @@ pub(crate) async fn maybe_run_after_agent(
                 reason,
             )
             .await;
+            send_final_review_summary!();
             return None;
         }
         Ok(Err(err)) => {
@@ -556,6 +751,7 @@ pub(crate) async fn maybe_run_after_agent(
                 format!("Repo CI remote checks failed before push: {err:#}"),
             )
             .await;
+            send_final_review_summary!();
             return None;
         }
         Err(err) => {
@@ -570,6 +766,7 @@ pub(crate) async fn maybe_run_after_agent(
                 format!("Repo CI remote preflight task failed: {err:#}"),
             )
             .await;
+            send_final_review_summary!();
             return None;
         }
     };
@@ -578,6 +775,7 @@ pub(crate) async fn maybe_run_after_agent(
         .await
         .is_err()
     {
+        send_final_review_summary!();
         return None;
     }
     current_snapshot = WorktreeSnapshot::capture(&turn_context.cwd);
@@ -612,6 +810,7 @@ pub(crate) async fn maybe_run_after_agent(
                 format!("Repo CI remote checks failed to run: {err:#}"),
             )
             .await;
+            send_final_review_summary!();
             return None;
         }
         Err(err) => {
@@ -626,6 +825,7 @@ pub(crate) async fn maybe_run_after_agent(
                 format!("Repo CI remote task failed: {err:#}"),
             )
             .await;
+            send_final_review_summary!();
             return None;
         }
     };
@@ -644,6 +844,7 @@ pub(crate) async fn maybe_run_after_agent(
                 reason,
             )
             .await;
+            send_final_review_summary!();
             None
         }
         RemoteRepoCiOutcome::Passed => {
@@ -660,6 +861,7 @@ pub(crate) async fn maybe_run_after_agent(
                 "Repo CI remote checks passed.".to_string(),
             )
             .await;
+            send_final_review_summary!();
             None
         }
         RemoteRepoCiOutcome::Failed {
@@ -695,6 +897,7 @@ pub(crate) async fn maybe_run_after_agent(
                     ),
                 )
                 .await;
+                send_final_review_summary!();
                 return None;
             }
             if state.remote_fix_rounds >= config.max_remote_fix_rounds {
@@ -712,6 +915,7 @@ pub(crate) async fn maybe_run_after_agent(
                     ),
                 )
                 .await;
+                send_final_review_summary!();
                 return None;
             }
             state.remote_fix_rounds = state.remote_fix_rounds.saturating_add(1);
@@ -729,6 +933,7 @@ pub(crate) async fn maybe_run_after_agent(
                 ),
             )
             .await;
+            send_final_review_summary!();
             Some(repair_prompt(
                 "remote",
                 &output,
@@ -1013,7 +1218,7 @@ async fn run_targeted_review(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     config: &EffectiveRepoCiConfig,
-    snapshot: &WorktreeSnapshot,
+    snapshot: &codex_repo_ci::BranchDiffSnapshot,
 ) -> Result<RepoCiReviewOutput> {
     send_status(
         sess,
@@ -1102,12 +1307,7 @@ async fn run_review_fix_workers(
 fn group_review_findings(findings: &[RepoCiReviewFinding]) -> Vec<RepoCiFixGroup> {
     let mut groups = HashMap::<String, RepoCiFixGroup>::new();
     for finding in findings {
-        let key = finding
-            .absolute_file_path
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .or_else(|| finding.location_hint.clone())
-            .unwrap_or_else(|| "repo".to_string());
+        let key = finding.location();
         let entry = groups.entry(key.clone()).or_insert_with(|| RepoCiFixGroup {
             key: key.clone(),
             owned_paths: Vec::new(),
@@ -1289,7 +1489,10 @@ where
     Ok(serde_json::from_str(json_text)?)
 }
 
-fn targeted_review_prompt(config: &EffectiveRepoCiConfig, snapshot: &WorktreeSnapshot) -> String {
+fn targeted_review_prompt(
+    config: &EffectiveRepoCiConfig,
+    snapshot: &codex_repo_ci::BranchDiffSnapshot,
+) -> String {
     let selected = config
         .review_issue_types
         .iter()
@@ -1302,7 +1505,8 @@ fn targeted_review_prompt(config: &EffectiveRepoCiConfig, snapshot: &WorktreeSna
         .map(repo_ci_issue_type_slug)
         .collect::<Vec<_>>();
     format!(
-        "Review the current repository changes and return strict JSON only.\n\nIn scope issue types:\n- {}\n\nExplicitly out of scope issue types:\n- {}\n\nRules:\n- Only report issues in the selected scope.\n- Do not expand into every possible review category.\n- Prefer absolute file paths in findings.\n- Use locationHint only when you cannot provide a specific file path.\n- Inspect the workspace as needed before answering.\n\nChanged paths:\n```text\n{}\n```\n\nDiff summary:\n```text\n{}\n```",
+        "Review the current branch changes and return strict JSON only.\n\nReview scope:\n{}\n\nIn scope issue types:\n- {}\n\nExplicitly out of scope issue types:\n- {}\n\nRules:\n- Review the whole branch diff, not only the latest turn or uncommitted files.\n- Put actionable issues from the selected scope in findings.\n- Put real issues excluded only by the issue-type filter in disregardedFindings with a short reason.\n- Do not duplicate an issue between findings and disregardedFindings.\n- Do not expand into every possible review category.\n- Prefer absolute file paths in findings and disregardedFindings.\n- Use locationHint only when you cannot provide a specific file path.\n- Inspect the workspace as needed before answering.\n\nBranch changed paths:\n```text\n{}\n```\n\nBranch diff summary:\n```text\n{}\n```",
+        snapshot.scope_description(),
         selected.join("\n- "),
         excluded.join("\n- "),
         if snapshot.changed_paths.is_empty() {
@@ -1335,12 +1539,7 @@ fn review_fix_prompt(group: &RepoCiFixGroup) -> String {
                 repo_ci_issue_type_slug(finding.issue_type),
                 finding.title,
                 finding.body,
-                finding
-                    .absolute_file_path
-                    .as_ref()
-                    .map(|path| path.display().to_string())
-                    .or_else(|| finding.location_hint.clone())
-                    .unwrap_or_else(|| "repo".to_string())
+                finding.location()
             )
         })
         .collect::<Vec<_>>()
@@ -1351,6 +1550,10 @@ fn review_fix_prompt(group: &RepoCiFixGroup) -> String {
 }
 
 fn review_output_schema() -> serde_json::Value {
+    let issue_types = all_repo_ci_issue_types()
+        .into_iter()
+        .map(repo_ci_issue_type_slug)
+        .collect::<Vec<_>>();
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -1366,16 +1569,35 @@ fn review_output_schema() -> serde_json::Value {
                         "body": { "type": "string" },
                         "issueType": {
                             "type": "string",
-                            "enum": all_repo_ci_issue_types().into_iter().map(repo_ci_issue_type_slug).collect::<Vec<_>>()
+                            "enum": issue_types
                         },
                         "absoluteFilePath": { "type": ["string", "null"] },
                         "locationHint": { "type": ["string", "null"] }
                     },
                     "required": ["title", "body", "issueType", "absoluteFilePath", "locationHint"]
                 }
+            },
+            "disregardedFindings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "title": { "type": "string" },
+                        "body": { "type": "string" },
+                        "issueType": {
+                            "type": "string",
+                            "enum": all_repo_ci_issue_types().into_iter().map(repo_ci_issue_type_slug).collect::<Vec<_>>()
+                        },
+                        "absoluteFilePath": { "type": ["string", "null"] },
+                        "locationHint": { "type": ["string", "null"] },
+                        "reason": { "type": "string" }
+                    },
+                    "required": ["title", "body", "issueType", "absoluteFilePath", "locationHint", "reason"]
+                }
             }
         },
-        "required": ["summary", "findings"]
+        "required": ["summary", "findings", "disregardedFindings"]
     })
 }
 
@@ -1403,12 +1625,7 @@ fn review_findings_prompt(review: &RepoCiReviewOutput) -> ResponseItem {
                 "- [{}] {}: {}\n  {}",
                 repo_ci_issue_type_slug(finding.issue_type),
                 finding.title,
-                finding
-                    .absolute_file_path
-                    .as_ref()
-                    .map(|path| path.display().to_string())
-                    .or_else(|| finding.location_hint.clone())
-                    .unwrap_or_else(|| "repo".to_string()),
+                finding.location(),
                 finding.body
             )
         })
@@ -1505,12 +1722,18 @@ fn effective_config(turn_context: &TurnContext) -> Option<EffectiveRepoCiConfig>
         .repo_ci_review_rounds
         .or(turn_context.config.repo_ci_review_rounds)
         .or_else(|| scoped_config.and_then(|scope| scope.max_review_fix_rounds));
+    let long_ci = turn_context
+        .repo_ci_long_ci
+        .or(turn_context.config.repo_ci_long_ci)
+        .or_else(|| scoped_config.and_then(|scope| scope.long_ci))
+        .unwrap_or(false);
     if let Some(mode) = turn_context.repo_ci_session_mode {
         return EffectiveRepoCiConfig::from_session_mode(
             mode,
             scoped_config,
             review_issue_types,
             review_rounds,
+            long_ci,
         );
     }
     if let Some(mode) = turn_context.config.repo_ci_session_mode {
@@ -1519,9 +1742,11 @@ fn effective_config(turn_context: &TurnContext) -> Option<EffectiveRepoCiConfig>
             scoped_config,
             review_issue_types,
             review_rounds,
+            long_ci,
         );
     }
-    scoped_config.and_then(|scope| EffectiveRepoCiConfig::from_scope(scope, review_issue_types))
+    scoped_config
+        .and_then(|scope| EffectiveRepoCiConfig::from_scope(scope, review_issue_types, long_ci))
 }
 
 fn scoped_repo_ci_config<'a>(
@@ -1634,12 +1859,22 @@ fn run_local_repo_ci(
     if !config.local_enabled() {
         return Ok(LocalRepoCiOutcome::Skipped);
     }
-    let run = codex_repo_ci::run_capture(codex_home, cwd, codex_repo_ci::RunMode::Fast)?;
+    let run_mode = if config.long_ci {
+        codex_repo_ci::RunMode::Full
+    } else {
+        codex_repo_ci::RunMode::Fast
+    };
+    let runner_label = if config.long_ci {
+        "local full runner"
+    } else {
+        "local fast runner"
+    };
+    let run = codex_repo_ci::run_capture(codex_home, cwd, run_mode)?;
     if run.status.success {
         Ok(LocalRepoCiOutcome::Passed)
     } else {
         Ok(LocalRepoCiOutcome::Failed {
-            output: format_run_output("local fast runner", &run.stdout, &run.stderr, &run.steps),
+            output: format_run_output(runner_label, &run.stdout, &run.stderr, &run.steps),
         })
     }
 }
@@ -2098,6 +2333,29 @@ fn truncate_middle(value: &str, max_bytes: usize) -> String {
     )
 }
 
+async fn send_review_resolution_summary(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    tracker: &RepoCiReviewIssueTracker,
+    state: RepoCiState,
+    attempt: Option<u8>,
+    max_attempts: Option<u8>,
+) {
+    if let Some(message) = tracker.summary_message() {
+        send_status(
+            sess,
+            turn_context,
+            RepoCiPhase::Triage,
+            state,
+            RepoCiScope::Local,
+            attempt,
+            max_attempts,
+            message,
+        )
+        .await;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn send_status(
     sess: &Arc<Session>,
@@ -2253,6 +2511,7 @@ mod tests {
             Some(&scope),
             codex_repo_ci::default_issue_types(),
             None,
+            false,
         )
         .expect("session override enables repo ci");
 
@@ -2265,6 +2524,7 @@ mod tests {
         let config = EffectiveRepoCiConfig {
             automation: RepoCiAutomationToml::Local,
             local_test_time_budget_sec: 300,
+            long_ci: false,
             max_local_fix_rounds: 3,
             max_remote_fix_rounds: 2,
             review_issue_types: Vec::new(),
@@ -2279,6 +2539,7 @@ mod tests {
         let config = EffectiveRepoCiConfig {
             automation: RepoCiAutomationToml::Local,
             local_test_time_budget_sec: 300,
+            long_ci: false,
             max_local_fix_rounds: 3,
             max_remote_fix_rounds: 2,
             review_issue_types: codex_repo_ci::default_issue_types(),
@@ -2302,6 +2563,7 @@ mod tests {
                 Some(&scope),
                 codex_repo_ci::default_issue_types(),
                 None,
+                false,
             ),
             None
         );
@@ -2319,19 +2581,24 @@ mod tests {
         let config = EffectiveRepoCiConfig {
             automation: RepoCiAutomationToml::Local,
             local_test_time_budget_sec: 300,
+            long_ci: false,
             max_local_fix_rounds: 3,
             max_remote_fix_rounds: 2,
             review_issue_types: vec![RepoCiIssueType::Correctness, RepoCiIssueType::Security],
             max_review_fix_rounds: 2,
         };
-        let snapshot = WorktreeSnapshot {
-            digest: "abc".to_string(),
+        let snapshot = codex_repo_ci::BranchDiffSnapshot {
+            base_ref: Some("origin/main".to_string()),
+            merge_base: Some("abc".to_string()),
             changed_paths: vec!["src/main.rs".to_string()],
             diff_summary: "1 file changed".to_string(),
         };
 
         let prompt = targeted_review_prompt(&config, &snapshot);
 
+        assert!(prompt.contains("Review the whole branch diff"));
+        assert!(prompt.contains("Whole branch diff against `origin/main` using merge base `abc`"));
+        assert!(prompt.contains("disregardedFindings"));
         assert!(prompt.contains("- correctness"));
         assert!(prompt.contains("- security"));
         for excluded in [
@@ -2349,6 +2616,89 @@ mod tests {
                 "expected excluded issue type in prompt: {excluded}\n{prompt}"
             );
         }
+    }
+
+    fn review_finding(title: &str, issue_type: RepoCiIssueType, path: &str) -> RepoCiReviewFinding {
+        RepoCiReviewFinding {
+            title: title.to_string(),
+            body: "body".to_string(),
+            issue_type,
+            absolute_file_path: Some(PathBuf::from(path)),
+            location_hint: None,
+        }
+    }
+
+    fn disregarded_finding(
+        title: &str,
+        issue_type: RepoCiIssueType,
+        path: &str,
+    ) -> RepoCiDisregardedFinding {
+        RepoCiDisregardedFinding {
+            title: title.to_string(),
+            body: "body".to_string(),
+            issue_type,
+            absolute_file_path: Some(PathBuf::from(path)),
+            location_hint: None,
+            reason: "outside configured issue-type filter".to_string(),
+        }
+    }
+
+    #[test]
+    fn review_tracker_records_resolved_and_disregarded_filtered_issues() {
+        let mut tracker = RepoCiReviewIssueTracker::default();
+        let resolved = review_finding(
+            "same-day timestamp bounds are rejected",
+            RepoCiIssueType::Correctness,
+            "/tmp/repo/src/config.rs",
+        );
+        let still_active = review_finding(
+            "retry error hides failure output",
+            RepoCiIssueType::Reliability,
+            "/tmp/repo/src/retry.rs",
+        );
+        let disregarded = disregarded_finding(
+            "missing debug context",
+            RepoCiIssueType::Observability,
+            "/tmp/repo/src/logging.rs",
+        );
+        let selected_issue_type = disregarded_finding(
+            "selected issue type should not be disregarded",
+            RepoCiIssueType::Correctness,
+            "/tmp/repo/src/config.rs",
+        );
+        let selected_issue_types = [RepoCiIssueType::Correctness, RepoCiIssueType::Reliability];
+
+        tracker.record_review(
+            &RepoCiReviewOutput {
+                findings: vec![resolved.clone(), still_active.clone()],
+                disregarded_findings: vec![disregarded.clone(), selected_issue_type],
+                summary: "first pass".to_string(),
+            },
+            &selected_issue_types,
+        );
+        tracker.record_review(
+            &RepoCiReviewOutput {
+                findings: vec![still_active],
+                disregarded_findings: Vec::new(),
+                summary: "second pass".to_string(),
+            },
+            &selected_issue_types,
+        );
+
+        assert_eq!(
+            tracker.resolved.values().cloned().collect::<Vec<_>>(),
+            vec![resolved]
+        );
+        assert_eq!(
+            tracker.disregarded.values().cloned().collect::<Vec<_>>(),
+            vec![disregarded]
+        );
+        let summary = tracker.summary_message().expect("summary");
+        assert!(summary.contains("Resolved issues:"));
+        assert!(summary.contains("same-day timestamp bounds are rejected"));
+        assert!(summary.contains("Disregarded by issue-type filter:"));
+        assert!(summary.contains("missing debug context"));
+        assert!(!summary.contains("selected issue type should not be disregarded"));
     }
 
     #[test]
@@ -2614,6 +2964,7 @@ mod tests {
             &EffectiveRepoCiConfig {
                 automation: RepoCiAutomationToml::Local,
                 local_test_time_budget_sec: 300,
+                long_ci: false,
                 max_local_fix_rounds: 3,
                 max_remote_fix_rounds: 2,
                 review_issue_types: Vec::new(),

@@ -258,6 +258,36 @@ async fn live_app_server_repo_ci_status_updates_status_header() {
 }
 
 #[tokio::test]
+async fn live_app_server_repo_ci_status_splits_multiline_summary_details() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::RepoCiStatus(RepoCiStatusNotification {
+            thread_id: "thread-1".to_string(),
+            phase: "triage".to_string(),
+            state: "passed".to_string(),
+            scope: "local".to_string(),
+            attempt: Some(2),
+            max_attempts: Some(2),
+            message: "Repo CI targeted review summary.\n\nResolved issues:\n- [correctness] same-day timestamp bounds (/tmp/repo/src/config.rs)\n\nDisregarded by issue-type filter:\n- [observability] missing debug context (/tmp/repo/src/logging.rs) - outside configured issue-type filter".to_string(),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Repo CI targeted review summary.");
+    assert_eq!(
+        status.details(),
+        Some(
+            "Resolved issues:\n- [correctness] same-day timestamp bounds (/tmp/repo/src/config.rs)\n\nDisregarded by issue-type filter:\n- [observability] missing debug context (/tmp/repo/src/logging.rs) - outside configured issue-type filter"
+        )
+    );
+}
+
+#[tokio::test]
 async fn live_app_server_config_warning_prefixes_summary() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

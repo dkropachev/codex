@@ -90,6 +90,7 @@ pub(crate) struct SessionConfiguration {
     pub(super) repo_ci_session_mode: Option<RepoCiSessionMode>,
     pub(super) repo_ci_issue_types: Option<Vec<RepoCiIssueType>>,
     pub(super) repo_ci_review_rounds: Option<u8>,
+    pub(super) repo_ci_long_ci: Option<bool>,
 }
 
 impl SessionConfiguration {
@@ -225,6 +226,9 @@ impl SessionConfiguration {
         if let Some(repo_ci_review_rounds) = updates.repo_ci_review_rounds {
             next_configuration.repo_ci_review_rounds = repo_ci_review_rounds;
         }
+        if let Some(repo_ci_long_ci) = updates.repo_ci_long_ci {
+            next_configuration.repo_ci_long_ci = repo_ci_long_ci;
+        }
         Ok(next_configuration)
     }
 }
@@ -251,6 +255,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) repo_ci_session_mode: Option<Option<RepoCiSessionMode>>,
     pub(crate) repo_ci_issue_types: Option<Option<Vec<RepoCiIssueType>>>,
     pub(crate) repo_ci_review_rounds: Option<Option<u8>>,
+    pub(crate) repo_ci_long_ci: Option<Option<bool>>,
 }
 
 pub(crate) struct AppServerClientMetadata {
