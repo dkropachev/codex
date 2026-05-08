@@ -18,12 +18,13 @@ pub(crate) async fn learn_repo_ci_with_ai(
     options: LearnOptions,
 ) -> Result<LearnOutcome> {
     let repo_root = codex_repo_ci::repo_root_for_cwd(cwd)?;
+    eprintln!("repo-ci learn: repository {}", repo_root.display());
+    eprintln!("repo-ci learn: collecting repository and GitHub Actions hints");
     let learning_hints = codex_repo_ci::collect_learning_hints(&repo_root)?;
     let exec_timeout = repo_ci_exec_timeout(options.local_test_time_budget_sec);
     let mut prior_plan = None;
     let mut failure_feedback = None;
 
-    eprintln!("repo-ci learn: repository {}", repo_root.display());
     eprintln!(
         "repo-ci learn: local validation budget {}s; AI discovery timeout {}s per attempt",
         options.local_test_time_budget_sec,
