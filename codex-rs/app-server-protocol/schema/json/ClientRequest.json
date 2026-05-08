@@ -3616,7 +3616,7 @@
       ],
       "type": "object"
     },
-    "ThreadModelPolicySessionConfigSetParams": {
+    "ThreadModelRouterSessionConfigSetParams": {
       "properties": {
         "enabled": {
           "description": "Null clears the session override and returns to repo/user config.",
@@ -4775,13 +4775,13 @@
         },
         "method": {
           "enum": [
-            "thread/modelPolicySessionConfig/set"
+            "thread/modelRouterSessionConfig/set"
           ],
-          "title": "Thread/modelPolicySessionConfig/setRequestMethod",
+          "title": "Thread/modelRouterSessionConfig/setRequestMethod",
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/ThreadModelPolicySessionConfigSetParams"
+          "$ref": "#/definitions/ThreadModelRouterSessionConfigSetParams"
         }
       },
       "required": [
@@ -4789,7 +4789,7 @@
         "method",
         "params"
       ],
-      "title": "Thread/modelPolicySessionConfig/setRequest",
+      "title": "Thread/modelRouterSessionConfig/setRequest",
       "type": "object"
     },
     {

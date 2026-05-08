@@ -5,8 +5,8 @@ use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ThreadModelPolicySessionConfigSetParams;
-use codex_app_server_protocol::ThreadModelPolicySessionConfigSetResponse;
+use codex_app_server_protocol::ThreadModelRouterSessionConfigSetParams;
+use codex_app_server_protocol::ThreadModelRouterSessionConfigSetResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use std::path::Path;
@@ -16,13 +16,13 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test]
-async fn thread_model_policy_session_config_set_accepts_loaded_thread() -> Result<()> {
+async fn thread_model_router_session_config_set_accepts_loaded_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(
         codex_home.path(),
         &server.uri(),
-        /*with_model_policy*/ true,
+        /*with_model_router*/ true,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -42,8 +42,8 @@ async fn thread_model_policy_session_config_set_accepts_loaded_thread() -> Resul
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
     let set_id = mcp
-        .send_thread_model_policy_session_config_set_request(
-            ThreadModelPolicySessionConfigSetParams {
+        .send_thread_model_router_session_config_set_request(
+            ThreadModelRouterSessionConfigSetParams {
                 thread_id: thread.id,
                 enabled: Some(false),
             },
@@ -54,21 +54,21 @@ async fn thread_model_policy_session_config_set_accepts_loaded_thread() -> Resul
         mcp.read_stream_until_response_message(RequestId::Integer(set_id)),
     )
     .await??;
-    let _: ThreadModelPolicySessionConfigSetResponse =
-        to_response::<ThreadModelPolicySessionConfigSetResponse>(set_resp)?;
+    let _: ThreadModelRouterSessionConfigSetResponse =
+        to_response::<ThreadModelRouterSessionConfigSetResponse>(set_resp)?;
 
     Ok(())
 }
 
 #[tokio::test]
-async fn thread_model_policy_session_config_set_rejects_enable_without_configured_policy()
+async fn thread_model_router_session_config_set_rejects_enable_without_configured_router()
 -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(
         codex_home.path(),
         &server.uri(),
-        /*with_model_policy*/ false,
+        /*with_model_router*/ false,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -88,8 +88,8 @@ async fn thread_model_policy_session_config_set_rejects_enable_without_configure
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
     let set_id = mcp
-        .send_thread_model_policy_session_config_set_request(
-            ThreadModelPolicySessionConfigSetParams {
+        .send_thread_model_router_session_config_set_request(
+            ThreadModelRouterSessionConfigSetParams {
                 thread_id: thread.id,
                 enabled: Some(true),
             },
@@ -102,7 +102,7 @@ async fn thread_model_policy_session_config_set_rejects_enable_without_configure
     .await??;
     assert!(
         error.message.contains(
-            "cannot enable model policy for this session because no [model_policy] is configured"
+            "cannot enable model router for this session because no [model_router] is configured"
         ),
         "unexpected error: {error:?}"
     );
@@ -113,16 +113,15 @@ async fn thread_model_policy_session_config_set_rejects_enable_without_configure
 fn create_config_toml(
     codex_home: &Path,
     server_uri: &str,
-    with_model_policy: bool,
+    with_model_router: bool,
 ) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
-    let model_policy = if with_model_policy {
+    let model_router = if with_model_router {
         r#"
-[model_policy]
+[model_router]
 enabled = true
 
-[[model_policy.rules]]
-source = "*"
+[[model_router.candidates]]
 model = "gpt-5.4"
 "#
     } else {
@@ -140,7 +139,7 @@ name = "Mock provider"
 base_url = "{server_uri}/v1"
 wire_api = "responses"
 request_max_retries = 0
-{model_policy}
+{model_router}
 "#
         ),
     )
