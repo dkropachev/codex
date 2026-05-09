@@ -1,8 +1,8 @@
 [package]
 name = "codex-backend-openapi-models"
-version = "0.125.0"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [lib]
 name = "codex_backend_openapi_models"

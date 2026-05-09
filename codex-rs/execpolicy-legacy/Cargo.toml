@@ -1,8 +1,8 @@
 [package]
 name = "codex-execpolicy-legacy"
-version = "0.125.0"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "Legacy exec policy engine for validating proposed exec calls."
 
 [[bin]]
