@@ -1,8 +1,8 @@
 [package]
 name = "codex-v8-poc"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = "0.125.0"
+edition = "2024"
+license = "Apache-2.0"
 
 [lib]
 name = "codex_v8_poc"
@@ -12,7 +12,7 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-v8 = { workspace = true }
+v8 = "=146.4.0"
 
 [dev-dependencies]
-pretty_assertions = { workspace = true }
+pretty_assertions = "1.4.1"
