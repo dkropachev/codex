@@ -16459,7 +16459,7 @@
             "description": "Omit to leave unchanged; null clears the session override and returns to repo/user config."
           },
           "issueTypes": {
-            "description": "Omit to leave unchanged; null clears the session override and returns to repo/user config.",
+            "description": "Null clears the session override and returns to repo/user config.",
             "items": {
               "$ref": "#/definitions/v2/RepoCiIssueType"
             },
@@ -16469,7 +16469,7 @@
             ]
           },
           "longCi": {
-            "description": "Omit to leave unchanged; null clears the session override and returns to repo/user config.",
+            "description": "Null clears the session override and returns to repo/user config.",
             "type": [
               "boolean",
               "null"
@@ -16478,23 +16478,16 @@
           "mode": {
             "anyOf": [
               {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/RepoCiSessionMode"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "$ref": "#/definitions/v2/RepoCiSessionMode"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Omit to leave unchanged; null clears the session override and returns to repo/user config."
+            "description": "Null clears the session override and returns to repo/user config."
           },
           "reviewRounds": {
-            "description": "Omit to leave unchanged; null clears the session override and returns to repo/user config.",
+            "description": "Null clears the session override and returns to repo/user config.",
             "format": "uint8",
             "minimum": 0.0,
             "type": [

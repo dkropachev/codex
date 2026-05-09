@@ -8,7 +8,6 @@ use crate::environment_selection::selected_primary_environment;
 use crate::environment_selection::validate_environment_selections;
 use crate::file_watcher::FileWatcher;
 use crate::mcp::McpManager;
-use crate::model_router::auth_manager_for_config;
 use crate::plugins::PluginsManager;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
@@ -1045,7 +1044,6 @@ impl ThreadManagerState {
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
-        let auth_manager = auth_manager_for_config(&config, &auth_manager);
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         let environment =
             selected_primary_environment(self.environment_manager.as_ref(), &environments)?;
