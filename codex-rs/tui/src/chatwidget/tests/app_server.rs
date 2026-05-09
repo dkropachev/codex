@@ -235,7 +235,7 @@ async fn live_app_server_guardian_warning_notification_renders_message() {
 
 #[tokio::test]
 async fn live_app_server_repo_ci_status_updates_status_header() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.handle_server_notification(
         ServerNotification::RepoCiStatus(RepoCiStatusNotification {
@@ -255,7 +255,6 @@ async fn live_app_server_repo_ci_status_updates_status_header() {
         .status_widget()
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Repo CI local checks started.");
-    assert!(drain_insert_history(&mut rx).is_empty());
 }
 
 #[tokio::test]

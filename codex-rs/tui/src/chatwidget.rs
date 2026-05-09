@@ -207,6 +207,10 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot;
+<<<<<<< HEAD
+=======
+use codex_protocol::protocol::RepoCiTurnOverrides;
+>>>>>>> parent of 07b12c170f (repo-ci: surface progress updates)
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -9761,7 +9765,6 @@ impl ChatWidget {
         });
     }
 
-    #[allow(dead_code)]
     pub(crate) fn open_auto_review_denials_popup(&mut self) {
         if self.recent_auto_review_denials.is_empty() {
             self.add_info_message(
@@ -11902,7 +11905,7 @@ impl ChatWidget {
         self.config.config_layer_stack = config.config_layer_stack.clone();
         self.config.realtime = config.realtime.clone();
         self.config.memories = config.memories.clone();
-        self.config.terminal_resize_reflow = config.terminal_resize_reflow;
+        self.config.terminal_resize_reflow = config.terminal_resize_reflow.clone();
     }
 
     pub(crate) fn open_review_popup(&mut self) {
