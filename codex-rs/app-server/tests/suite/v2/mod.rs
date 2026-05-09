@@ -52,7 +52,6 @@ mod thread_metadata_update;
 mod thread_model_router_session_config_set;
 mod thread_name_websocket;
 mod thread_read;
-mod thread_repo_ci_session_config_set;
 mod thread_resume;
 mod thread_rollback;
 mod thread_shell_command;

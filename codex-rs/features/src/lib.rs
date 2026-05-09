@@ -223,8 +223,6 @@ pub enum Feature {
     ResponsesWebsocketsV2,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
-    /// Enable repository CI learning and validation.
-    RepoCi,
 }
 
 impl Feature {
@@ -1061,12 +1059,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "workspace_dependencies",
         stage: Stage::Stable,
         default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::RepoCi,
-        key: "repo_ci",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
     },
 ];
 
