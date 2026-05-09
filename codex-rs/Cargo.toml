@@ -125,6 +125,7 @@ codex-app-server-test-client = { path = "app-server-test-client" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
+codex-backend-openapi-models = { path = "codex-backend-openapi-models" }
 codex-backend-client = { path = "backend-client" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
@@ -481,6 +482,7 @@ opt-level = 0
 codex-debug-client = { path = "debug-client" }
 codex-execpolicy-legacy = { path = "execpolicy-legacy" }
 codex-cloud-tasks = { path = "cloud-tasks" }
+codex-backend-openapi-models = { path = "codex-backend-openapi-models" }
 crossterm = { git = "https://github.com/nornagon/crossterm", rev = "87db8bfa6dc99427fd3b071681b07fc31c6ce995" }
 codex-v8-poc = { path = "v8-poc" }
 ratatui = { git = "https://github.com/nornagon/ratatui", rev = "9b2ad1298408c45918ee9f8241a6f95498cdbed2" }
