@@ -3830,7 +3830,8 @@ mod tests {
             cwd: test_path_buf("/tmp/project").abs(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
-            message_history: None,
+            history_log_id: 0,
+            history_entry_count: 0,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
         }
@@ -3957,11 +3958,7 @@ mod tests {
             /*show_fast_status*/ false,
         );
 
-        let rendered = crate::test_support::normalize_codex_version_for_snapshot(
-            render_transcript(&cell),
-            "v0.125.0",
-        )
-        .join("\n");
+        let rendered = render_transcript(&cell).join("\n");
         insta::assert_snapshot!(rendered);
     }
 

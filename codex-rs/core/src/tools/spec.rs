@@ -1,6 +1,5 @@
 use crate::shell::Shell;
 use crate::shell::ShellType;
-use crate::tools::handlers::agent_jobs::BatchJobHandler;
 use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
@@ -79,12 +78,15 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::CodeModeExecuteHandler;
     use crate::tools::handlers::CodeModeWaitHandler;
+    use crate::tools::handlers::CreateGoalHandler;
     use crate::tools::handlers::DynamicToolHandler;
-    use crate::tools::handlers::GoalHandler;
+    use crate::tools::handlers::GetGoalHandler;
     use crate::tools::handlers::ListDirHandler;
+    use crate::tools::handlers::ListMcpResourceTemplatesHandler;
+    use crate::tools::handlers::ListMcpResourcesHandler;
     use crate::tools::handlers::McpHandler;
-    use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
+    use crate::tools::handlers::ReadMcpResourceHandler;
     use crate::tools::handlers::RepoCiHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestUserInputHandler;
@@ -95,7 +97,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ToolSuggestHandler;
     use crate::tools::handlers::UnavailableToolHandler;
     use crate::tools::handlers::UnifiedExecHandler;
+    use crate::tools::handlers::UpdateGoalHandler;
     use crate::tools::handlers::ViewImageHandler;
+    use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
+    use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
     use crate::tools::handlers::multi_agents::CloseAgentHandler;
     use crate::tools::handlers::multi_agents::ResumeAgentHandler;
     use crate::tools::handlers::multi_agents::SendInputHandler;
@@ -149,15 +154,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
-    let dynamic_tool_handler = Arc::new(DynamicToolHandler);
-    let goal_handler = Arc::new(GoalHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
-    let mcp_handler = Arc::new(McpHandler);
-    let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler::from(config.shell_command_backend));
     let request_permissions_handler = Arc::new(RequestPermissionsHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
-        default_mode_request_user_input: config.default_mode_request_user_input,
+        available_modes: config.request_user_input_available_modes.clone(),
     });
     let repo_ci_handler = Arc::new(RepoCiHandler);
     let deferred_dynamic_tools = dynamic_tools
@@ -169,7 +170,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let tool_suggest_handler = Arc::new(ToolSuggestHandler);
     let code_mode_handler = Arc::new(CodeModeExecuteHandler);
     let code_mode_wait_handler = Arc::new(CodeModeWaitHandler);
-    let unavailable_tool_handler = Arc::new(UnavailableToolHandler);
     let mut existing_spec_names = plan
         .specs
         .iter()
@@ -188,9 +188,20 @@ pub(crate) fn build_specs_with_discoverable_tools(
 
     for handler in plan.handlers {
         match handler.kind {
-            ToolHandlerKind::AgentJobs => {
-                builder.register_handler(handler.name, Arc::new(BatchJobHandler));
-            }
+            ToolHandlerKind::AgentJobs => match handler.name.name.as_str() {
+                "spawn_agents_on_csv" => {
+                    builder.register_handler(handler.name, Arc::new(SpawnAgentsOnCsvHandler));
+                }
+                "report_agent_job_result" => {
+                    builder.register_handler(handler.name, Arc::new(ReportAgentJobResultHandler));
+                }
+                _ => {
+                    builder.register_handler(
+                        handler.name.clone(),
+                        Arc::new(UnavailableToolHandler::new(handler.name)),
+                    );
+                }
+            },
             ToolHandlerKind::ApplyPatch => {
                 builder.register_handler(handler.name, apply_patch_handler.clone());
             }
@@ -207,14 +218,31 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 builder.register_handler(handler.name, code_mode_wait_handler.clone());
             }
             ToolHandlerKind::DynamicTool => {
-                builder.register_handler(handler.name, dynamic_tool_handler.clone());
+                builder.register_handler(
+                    handler.name.clone(),
+                    Arc::new(DynamicToolHandler::new(handler.name)),
+                );
             }
             ToolHandlerKind::FollowupTaskV2 => {
                 builder.register_handler(handler.name, Arc::new(FollowupTaskHandlerV2));
             }
-            ToolHandlerKind::Goal => {
-                builder.register_handler(handler.name, goal_handler.clone());
-            }
+            ToolHandlerKind::Goal => match handler.name.name.as_str() {
+                codex_tools::CREATE_GOAL_TOOL_NAME => {
+                    builder.register_handler(handler.name, Arc::new(CreateGoalHandler));
+                }
+                codex_tools::GET_GOAL_TOOL_NAME => {
+                    builder.register_handler(handler.name, Arc::new(GetGoalHandler));
+                }
+                codex_tools::UPDATE_GOAL_TOOL_NAME => {
+                    builder.register_handler(handler.name, Arc::new(UpdateGoalHandler));
+                }
+                _ => {
+                    builder.register_handler(
+                        handler.name.clone(),
+                        Arc::new(UnavailableToolHandler::new(handler.name)),
+                    );
+                }
+            },
             ToolHandlerKind::ListAgentsV2 => {
                 builder.register_handler(handler.name, Arc::new(ListAgentsHandlerV2));
             }
@@ -222,11 +250,29 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 builder.register_handler(handler.name, Arc::new(ListDirHandler));
             }
             ToolHandlerKind::Mcp => {
-                builder.register_handler(handler.name, mcp_handler.clone());
+                builder.register_handler(
+                    handler.name.clone(),
+                    Arc::new(McpHandler::new(handler.name)),
+                );
             }
-            ToolHandlerKind::McpResource => {
-                builder.register_handler(handler.name, mcp_resource_handler.clone());
-            }
+            ToolHandlerKind::McpResource => match handler.name.name.as_str() {
+                "list_mcp_resources" => {
+                    builder.register_handler(handler.name, Arc::new(ListMcpResourcesHandler));
+                }
+                "list_mcp_resource_templates" => {
+                    builder
+                        .register_handler(handler.name, Arc::new(ListMcpResourceTemplatesHandler));
+                }
+                "read_mcp_resource" => {
+                    builder.register_handler(handler.name, Arc::new(ReadMcpResourceHandler));
+                }
+                _ => {
+                    builder.register_handler(
+                        handler.name.clone(),
+                        Arc::new(UnavailableToolHandler::new(handler.name)),
+                    );
+                }
+            },
             ToolHandlerKind::Plan => {
                 builder.register_handler(handler.name, plan_handler.clone());
             }
@@ -298,7 +344,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 .as_ref()
                 .is_some_and(|tools| tools.contains_key(*name))
         }) {
-            builder.register_handler(name.clone(), mcp_handler.clone());
+            builder.register_handler(name.clone(), Arc::new(McpHandler::new(name.clone().into())));
         }
     }
 
@@ -327,7 +373,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
             };
             builder.push_spec(spec);
         }
-        builder.register_handler(unavailable_tool, unavailable_tool_handler.clone());
+        builder.register_handler(
+            unavailable_tool.clone(),
+            Arc::new(UnavailableToolHandler::new(unavailable_tool)),
+        );
     }
     builder
 }

@@ -759,7 +759,7 @@ fn ensure_repo_ci_tool_allowed(
             "repo-ci tools are unavailable for this project because it is not trusted".to_string(),
         ));
     }
-    if !turn.tools_config.has_environment {
+    if !turn.tools_config.environment_mode.has_environment() {
         return Err(FunctionCallError::RespondToModel(
             "repo-ci tools are unavailable because this session has no environment".to_string(),
         ));

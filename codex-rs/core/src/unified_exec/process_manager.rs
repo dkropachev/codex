@@ -218,13 +218,13 @@ impl UnifiedExecProcessManager {
     }
 
     async fn unregister_network_approval_for_entry(entry: &ProcessEntry) {
-        if let Some(network_approval_id) = entry.network_approval_id.as_deref()
+        if let Some(network_approval) = entry.network_approval.as_ref()
             && let Some(session) = entry.session.upgrade()
         {
             session
                 .services
                 .network_approval
-                .unregister_call(network_approval_id)
+                .unregister_call(network_approval.registration_id())
                 .await;
         }
     }
@@ -234,10 +234,7 @@ impl UnifiedExecProcessManager {
         request: ExecCommandRequest,
         context: &UnifiedExecContext,
     ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
-        let cwd = request
-            .workdir
-            .clone()
-            .unwrap_or_else(|| context.turn.cwd.clone());
+        let cwd = request.cwd.clone();
         let process = self
             .open_session_with_sandbox(&request, cwd.clone(), context)
             .await;
@@ -273,9 +270,6 @@ impl UnifiedExecProcessManager {
         // turn cannot drop the last Arc and terminate the background process.
         let process_started_alive = !process.has_exited() && process.exit_code().is_none();
         if process_started_alive {
-            let network_approval_id = deferred_network_approval
-                .as_ref()
-                .map(|deferred| deferred.registration_id().to_string());
             self.store_process(
                 Arc::clone(&process),
                 context,
@@ -285,7 +279,7 @@ impl UnifiedExecProcessManager {
                 start,
                 request.process_id,
                 request.tty,
-                network_approval_id,
+                deferred_network_approval.take(),
                 Arc::clone(&transcript),
             )
             .await;
@@ -338,6 +332,7 @@ impl UnifiedExecProcessManager {
                     cwd.clone(),
                     Some(request.process_id.to_string()),
                     Arc::clone(&transcript),
+                    message.clone(),
                     message.clone(),
                     wall_time,
                 )
@@ -646,7 +641,7 @@ impl UnifiedExecProcessManager {
         started_at: Instant,
         process_id: i32,
         tty: bool,
-        network_approval_id: Option<String>,
+        network_approval: Option<DeferredNetworkApproval>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
     ) {
         let entry = ProcessEntry {
@@ -655,7 +650,7 @@ impl UnifiedExecProcessManager {
             process_id,
             hook_command,
             tty,
-            network_approval_id,
+            network_approval,
             session: Arc::downgrade(&context.session),
             last_used: started_at,
         };
@@ -856,6 +851,7 @@ impl UnifiedExecProcessManager {
             hook_command: request.hook_command.clone(),
             process_id: request.process_id,
             cwd,
+            environment: Arc::clone(&request.environment),
             env,
             exec_server_env_config: Some(exec_server_env_config),
             explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),

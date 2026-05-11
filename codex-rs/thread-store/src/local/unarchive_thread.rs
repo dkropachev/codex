@@ -90,7 +90,7 @@ pub(super) async fn unarchive_thread(
     stored_thread_from_rollout_item(
         item,
         /*archived*/ false,
-        store.config.default_model_provider_id.as_str(),
+        store.config.model_provider_id.as_str(),
     )
     .ok_or_else(|| ThreadStoreError::Internal {
         message: format!(

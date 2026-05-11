@@ -120,6 +120,10 @@ impl ExecutorProcessTransport {
         let index = PROCESS_COUNTER.fetch_add(1, Ordering::Relaxed);
         ProcessId::from(format!("mcp-stdio-{index}"))
     }
+
+    pub(super) fn process_handle(&self) -> Arc<dyn ExecProcess> {
+        Arc::clone(&self.process)
+    }
 }
 
 impl Transport<RoleClient> for ExecutorProcessTransport {

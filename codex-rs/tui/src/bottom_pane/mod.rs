@@ -17,12 +17,12 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use crate::app::app_server_requests::ResolvedAppServerRequest;
-use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::pending_input_preview::PendingInputPreview;
 use crate::bottom_pane::pending_thread_approvals::PendingThreadApprovals;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
+use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::keymap::RuntimeKeymap;
 use crate::render::renderable::FlexRenderable;
@@ -36,7 +36,6 @@ use codex_core_skills::model::SkillMetadata;
 use codex_features::Features;
 use codex_file_search::FileMatch;
 use codex_plugin::PluginCapabilitySummary;
-use codex_protocol::ThreadId;
 use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -207,7 +206,6 @@ pub(crate) struct BottomPane {
 
     app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
-    thread_id: Option<ThreadId>,
 
     has_input_focus: bool,
     enhanced_keys_supported: bool,
@@ -273,7 +271,6 @@ impl BottomPane {
             last_composer_activity_at: None,
             app_event_tx,
             frame_requester,
-            thread_id: None,
             has_input_focus,
             enhanced_keys_supported,
             disable_paste_burst,
@@ -779,16 +776,7 @@ impl BottomPane {
     }
 
     pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
-        if let Some(text) = self.composer.clear_for_ctrl_c() {
-            if let Some(thread_id) = self.thread_id {
-                self.app_event_tx
-                    .send(AppEvent::AppendMessageHistoryEntry { thread_id, text });
-            } else {
-                tracing::warn!(
-                    "failed to append Ctrl+C-cleared draft to history: no active thread id"
-                );
-            }
-        }
+        self.composer.clear_for_ctrl_c();
         self.request_redraw();
     }
 
@@ -1438,15 +1426,8 @@ impl BottomPane {
 
     // --- History helpers ---
 
-    pub(crate) fn set_history_metadata(
-        &mut self,
-        thread_id: ThreadId,
-        log_id: u64,
-        entry_count: usize,
-    ) {
-        self.thread_id = Some(thread_id);
-        self.composer
-            .set_history_metadata(thread_id, log_id, entry_count);
+    pub(crate) fn set_history_metadata(&mut self, log_id: u64, entry_count: usize) {
+        self.composer.set_history_metadata(log_id, entry_count);
     }
 
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {

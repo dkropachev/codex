@@ -5,13 +5,11 @@
 //! dispatch step and records the staged entry once the command has been handled, so
 //! slash-command recall follows the same submitted-input rule as ordinary text.
 
+use super::goal_validation::GoalObjectiveValidationSource;
 use super::*;
+use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands;
-use codex_protocol::protocol::ImplementMode;
-use codex_protocol::protocol::RepoCiIssueType;
-use codex_protocol::protocol::RepoCiSessionMode;
-use codex_protocol::protocol::RepoCiTurnOverrides;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -32,10 +30,9 @@ const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
 const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
     "'/side' is unavailable while code review is running.";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
-const MODEL_ROUTER_USAGE: &str = "Usage: /model-router <enable|disable|inherit>";
-const IMPLEMENT_USAGE: &str =
-    "Usage: /implement <enable|disable|inherit|implicit> [--max-cycles=N] [task]";
-const REPO_CI_USAGE: &str = "Usage: /repo-ci setup | /repo-ci learn | /repo-ci retry | /repo-ci instruction <show|set --instruction TEXT|clear|edit> | /repo-ci <options> [task]\nOptions: <inherit|off|local|remote|local-and-remote> [issues <inherit|none|comma-list>] [rounds <inherit|N>] [long-ci <inherit|on|off>]";
+const GOAL_USAGE: &str = "Usage: /goal <objective>";
+const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
+const RAW_USAGE: &str = "Usage: /raw [on|off]";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -45,6 +42,9 @@ impl ChatWidget {
     /// rule as normal text.
     pub(super) fn handle_slash_command_dispatch(&mut self, cmd: SlashCommand) {
         self.dispatch_command(cmd);
+        if cmd == SlashCommand::Goal {
+            self.bottom_pane.drain_pending_submission_state();
+        }
         self.bottom_pane.record_pending_slash_command_history();
     }
 
@@ -83,39 +83,6 @@ impl ChatWidget {
         }
     }
 
-    fn apply_codex_slash_command(&mut self) -> bool {
-        if self.bottom_pane.is_task_running() {
-            self.add_error_message(
-                "Cannot enter Codex mode while a task is in progress.".to_string(),
-            );
-            return false;
-        }
-        let mask = crate::codex_config_context::codex_investigate_mask(&self.config.cwd);
-        let workspace =
-            crate::codex_config_context::codex_config_workspace_for_cwd(&self.config.cwd);
-        self.set_collaboration_mask(mask);
-        self.add_info_message(
-            "Codex mode enabled.".to_string(),
-            Some(format!(
-                "Investigating read-only; scratch workspace is {}. Use /codex off to leave.",
-                workspace.display()
-            )),
-        );
-        true
-    }
-
-    fn disable_codex_slash_command(&mut self) -> bool {
-        let Some(default_mask) =
-            collaboration_modes::default_mode_mask(self.model_catalog.as_ref())
-        else {
-            self.add_info_message("Default mode unavailable right now.".to_string(), None);
-            return false;
-        };
-        self.set_collaboration_mask(default_mask);
-        self.add_info_message("Codex mode disabled.".to_string(), None);
-        true
-    }
-
     fn request_side_conversation(
         &mut self,
         parent_thread_id: ThreadId,
@@ -138,81 +105,9 @@ impl ChatWidget {
         self.request_side_conversation(parent_thread_id, /*user_message*/ None);
     }
 
-    fn dispatch_bare_goal_command(&mut self) {
-        let Some(thread_id) = self.thread_id else {
-            self.add_error_message("'/goal' is unavailable before the session starts.".to_string());
-            return;
-        };
-
+    fn emit_raw_output_mode_changed(&self, enabled: bool) {
         self.app_event_tx
-            .send(AppEvent::OpenThreadGoalMenu { thread_id });
-        self.take_remote_image_urls();
-        self.bottom_pane.drain_pending_submission_state();
-    }
-
-    fn dispatch_goal_command_with_args(&mut self, args: String) {
-        let Some(thread_id) = self.thread_id else {
-            self.add_error_message("'/goal' is unavailable before the session starts.".to_string());
-            return;
-        };
-
-        match args.trim().to_ascii_lowercase().as_str() {
-            "clear" => {
-                self.app_event_tx
-                    .send(AppEvent::ClearThreadGoal { thread_id });
-            }
-            "pause" => {
-                self.app_event_tx.send(AppEvent::SetThreadGoalStatus {
-                    thread_id,
-                    status: AppThreadGoalStatus::Paused,
-                });
-            }
-            "unpause" | "resume" => {
-                self.app_event_tx.send(AppEvent::SetThreadGoalStatus {
-                    thread_id,
-                    status: AppThreadGoalStatus::Active,
-                });
-            }
-            _ => {
-                self.app_event_tx.send(AppEvent::SetThreadGoalObjective {
-                    thread_id,
-                    objective: args,
-                    mode: crate::app_event::ThreadGoalSetMode::ConfirmIfExists,
-                });
-            }
-        }
-    }
-
-    fn queue_prepared_slash_command_with_args(
-        &mut self,
-        cmd: SlashCommand,
-        args: String,
-        text_elements: Vec<TextElement>,
-        source: SlashCommandDispatchSource,
-    ) {
-        let prefix = format!("/{} ", cmd.command());
-        let offset = prefix.len();
-        let rebased_elements = text_elements
-            .into_iter()
-            .map(|elem| {
-                elem.map_range(|range| ByteRange {
-                    start: range.start + offset,
-                    end: range.end + offset,
-                })
-            })
-            .collect();
-        let user_message = UserMessage {
-            text: format!("{prefix}{args}"),
-            local_images: Vec::new(),
-            remote_image_urls: Vec::new(),
-            text_elements: rebased_elements,
-            mention_bindings: Vec::new(),
-        };
-        if source == SlashCommandDispatchSource::Live {
-            self.take_remote_image_urls();
-            self.bottom_pane.drain_pending_submission_state();
-        }
-        self.queue_user_message_with_options(user_message, QueuedInputAction::ParseSlash);
+            .send(AppEvent::RawOutputModeChanged { enabled });
     }
 
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
@@ -290,12 +185,7 @@ impl ChatWidget {
                 self.open_model_popup();
             }
             SlashCommand::Fast => {
-                let next_tier = if matches!(self.current_service_tier(), Some(ServiceTier::Fast)) {
-                    None
-                } else {
-                    Some(ServiceTier::Fast)
-                };
-                self.set_service_tier_selection(next_tier);
+                self.toggle_fast_mode_from_ui();
             }
             SlashCommand::Realtime => {
                 if !self.realtime_conversation_enabled() {
@@ -320,7 +210,18 @@ impl ChatWidget {
                 self.apply_plan_slash_command();
             }
             SlashCommand::Goal => {
-                self.dispatch_bare_goal_command();
+                if !self.config.features.enabled(Feature::Goals) {
+                    return;
+                }
+                if let Some(thread_id) = self.thread_id {
+                    self.app_event_tx
+                        .send(AppEvent::OpenThreadGoalMenu { thread_id });
+                } else {
+                    self.add_info_message(
+                        GOAL_USAGE.to_string(),
+                        Some(GOAL_USAGE_HINT.to_string()),
+                    );
+                }
             }
             SlashCommand::Collab => {
                 if !self.collaboration_modes_enabled() {
@@ -338,11 +239,14 @@ impl ChatWidget {
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
-            SlashCommand::Approvals => {
-                self.open_permissions_popup();
-            }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
+            }
+            SlashCommand::Vim => {
+                self.toggle_vim_mode_and_notify();
+            }
+            SlashCommand::Keymap => {
+                self.open_keymap_picker();
             }
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
@@ -402,32 +306,8 @@ impl ChatWidget {
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
             }
-            SlashCommand::ModelRouter => {
-                self.add_info_message(
-                    MODEL_ROUTER_USAGE.to_string(),
-                    Some(
-                        "This override affects only the current thread and lasts until the session ends or you run /model-router inherit."
-                            .to_string(),
-                    ),
-                );
-            }
-            SlashCommand::Implement => {
-                self.add_info_message(
-                    IMPLEMENT_USAGE.to_string(),
-                    Some(
-                        "This override affects only the current thread and lasts until the session ends or you run /implement inherit."
-                            .to_string(),
-                    ),
-                );
-            }
-            SlashCommand::RepoCi => {
-                self.add_info_message(
-                    REPO_CI_USAGE.to_string(),
-                    Some(
-                        "Use /repo-ci <options> to configure this session, or append task text to run repo CI for that task only."
-                            .to_string(),
-                    ),
-                );
+            SlashCommand::AutoReview => {
+                self.open_auto_review_denials_popup();
             }
             SlashCommand::Memories => {
                 self.open_memories_popup();
@@ -438,25 +318,35 @@ impl ChatWidget {
             SlashCommand::Logout => {
                 self.app_event_tx.send(AppEvent::Logout);
             }
-            // SlashCommand::Undo => {
-            //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
-            // }
             SlashCommand::Copy => {
                 self.copy_last_agent_markdown();
+            }
+            SlashCommand::Raw => {
+                let enabled = self.toggle_raw_output_mode_and_notify();
+                self.emit_raw_output_mode_changed(enabled);
             }
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
                 let tx = self.app_event_tx.clone();
+                let runner = self.workspace_command_runner.clone();
+                let cwd = self
+                    .current_cwd
+                    .clone()
+                    .unwrap_or_else(|| self.config.cwd.to_path_buf());
                 tokio::spawn(async move {
-                    let text = match get_git_diff().await {
-                        Ok((is_git_repo, diff_text)) => {
-                            if is_git_repo {
-                                diff_text
-                            } else {
-                                "`/diff` — _not inside a git repository_".to_string()
+                    let text = match runner {
+                        Some(runner) => match get_git_diff(runner.as_ref(), &cwd).await {
+                            Ok((is_git_repo, diff_text)) => {
+                                if is_git_repo {
+                                    diff_text
+                                } else {
+                                    "`/diff` — _not inside a git repository_".to_string()
+                                }
                             }
-                        }
-                        Err(e) => format!("Failed to compute diff: {e}"),
+                            Err(e) => format!("Failed to compute diff: {e}"),
+                        },
+                        None => "Failed to compute diff: workspace command runner unavailable"
+                            .to_string(),
                     };
                     tx.send(AppEvent::DiffResult(text));
                 });
@@ -467,7 +357,10 @@ impl ChatWidget {
             SlashCommand::Skills => {
                 self.open_skills_menu();
             }
-            SlashCommand::Status | SlashCommand::Limits => {
+            SlashCommand::Hooks => {
+                self.add_hooks_output();
+            }
+            SlashCommand::Status => {
                 if self.should_prefetch_rate_limits() {
                     let request_id = self.next_status_refresh_request_id;
                     self.next_status_refresh_request_id =
@@ -482,8 +375,8 @@ impl ChatWidget {
                     );
                 }
             }
-            SlashCommand::Codex => {
-                self.apply_codex_slash_command();
+            SlashCommand::Ide => {
+                self.handle_ide_command();
             }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
@@ -534,8 +427,8 @@ impl ChatWidget {
             SlashCommand::TestApproval => {
                 use std::collections::HashMap;
 
-                use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
-                use codex_protocol::protocol::FileChange;
+                use crate::approval_events::ApplyPatchApprovalRequestEvent;
+                use crate::diff_model::FileChange;
 
                 self.on_apply_patch_approval_request(
                     "1".to_string(),
@@ -602,6 +495,12 @@ impl ChatWidget {
             return;
         }
 
+        if cmd == SlashCommand::Goal
+            && !self.goal_objective_with_pending_pastes_is_allowed(&args, &text_elements)
+        {
+            return;
+        }
+
         let Some((prepared_args, prepared_elements)) =
             self.prepare_live_inline_args(args, text_elements)
         else {
@@ -658,259 +557,6 @@ impl ChatWidget {
         }
     }
 
-    fn dispatch_repo_ci_command_with_args(
-        &mut self,
-        args: String,
-        text_elements: Vec<TextElement>,
-        local_images: Vec<LocalImageAttachment>,
-        remote_image_urls: Vec<String>,
-        mention_bindings: Vec<MentionBinding>,
-        source: SlashCommandDispatchSource,
-    ) {
-        let trimmed = args.trim();
-        if matches!(trimmed, "setup" | "enable") {
-            self.submit_op(AppCommand::run_user_shell_command(repo_ci_setup_command(
-                &self.config,
-            )));
-            self.add_info_message(
-                "Starting repo CI setup for this repository.".to_string(),
-                Some(
-                    "This runs `repo-ci enable --cwd` and then `repo-ci learn --cwd` in a user shell."
-                        .to_string(),
-                ),
-            );
-            return;
-        }
-        if trimmed == "learn" {
-            self.submit_op(AppCommand::run_user_shell_command(repo_ci_learn_command(
-                &self.config,
-            )));
-            self.add_info_message(
-                "Starting repo CI learning for this repository.".to_string(),
-                Some("This runs `repo-ci learn --cwd` in a user shell.".to_string()),
-            );
-            return;
-        }
-        if matches!(trimmed, "retry" | "workflow") {
-            self.submit_op(AppCommand::run_user_shell_command(
-                repo_ci_workflow_command(&self.config),
-            ));
-            self.add_info_message(
-                "Retrying the repo CI workflow for this repository.".to_string(),
-                Some(
-                    "This runs `repo-ci workflow --cwd`, which re-learns if needed, reruns local repo CI, and starts remote PR checks after verifying the changes are committed."
-                        .to_string(),
-                ),
-            );
-            return;
-        }
-        if trimmed == "instruction" || trimmed.starts_with("instruction ") {
-            let command = match repo_ci_instruction_command(&self.config, trimmed) {
-                Ok(command) => command,
-                Err(message) => {
-                    self.add_error_message(message);
-                    self.add_info_message(REPO_CI_USAGE.to_string(), /*hint*/ None);
-                    return;
-                }
-            };
-            self.submit_op(AppCommand::run_user_shell_command(command));
-            return;
-        }
-
-        let parsed = match parse_repo_ci_command(trimmed) {
-            Ok(parsed) => parsed,
-            Err(message) => {
-                self.add_error_message(message);
-                self.add_info_message(REPO_CI_USAGE.to_string(), /*hint*/ None);
-                return;
-            }
-        };
-
-        if let Some(task) = parsed.task {
-            if !self.is_session_configured() {
-                self.queue_prepared_slash_command_with_args(
-                    SlashCommand::RepoCi,
-                    args,
-                    text_elements,
-                    source,
-                );
-                return;
-            }
-
-            let task_elements =
-                Self::slash_command_args_elements(&task.text, task.offset, &text_elements);
-            let user_message = self.prepared_inline_user_message(
-                task.text,
-                task_elements,
-                local_images,
-                remote_image_urls,
-                mention_bindings,
-                source,
-            );
-            self.submit_user_message_with_repo_ci(
-                user_message,
-                RepoCiTurnOverrides {
-                    mode: parsed.options.mode,
-                    issue_types: parsed.options.issue_types,
-                    review_rounds: parsed.options.review_rounds,
-                    long_ci: parsed.options.long_ci,
-                    implement_enabled: None,
-                    implement_mode: None,
-                    implement_max_cycles: None,
-                },
-            );
-            return;
-        }
-
-        let options = parsed.options;
-        let session_message = repo_ci_session_config_message(&options);
-        let session_config = RepoCiSessionConfigValues {
-            mode: options.mode,
-            issue_types: options.issue_types,
-            review_rounds: options.review_rounds,
-            long_ci: options.long_ci,
-            implement_enabled: None,
-            implement_mode: None,
-            implement_max_cycles: None,
-        };
-        if let Some(mode) = session_config.mode {
-            self.config.repo_ci_session_mode = mode;
-        }
-        if let Some(issue_types) = session_config.issue_types.clone() {
-            self.config.repo_ci_issue_types = issue_types;
-        }
-        if let Some(review_rounds) = session_config.review_rounds {
-            self.config.repo_ci_review_rounds = review_rounds;
-        }
-        if let Some(long_ci) = session_config.long_ci {
-            self.config.repo_ci_long_ci = long_ci;
-        }
-        self.submit_repo_ci_session_config(session_config);
-        self.add_info_message(
-            session_message,
-            Some(
-                "This override lasts until the session ends or you run /repo-ci inherit."
-                    .to_string(),
-            ),
-        );
-    }
-
-    fn submit_repo_ci_session_config(&mut self, config: RepoCiSessionConfigValues) {
-        self.submit_op(AppCommand::set_repo_ci_session_config(
-            config.mode,
-            config.issue_types,
-            config.review_rounds,
-            config.long_ci,
-            config.implement_enabled,
-            config.implement_mode,
-            config.implement_max_cycles,
-        ));
-    }
-
-    fn dispatch_implement_command_with_args(
-        &mut self,
-        args: String,
-        text_elements: Vec<TextElement>,
-        local_images: Vec<LocalImageAttachment>,
-        remote_image_urls: Vec<String>,
-        mention_bindings: Vec<MentionBinding>,
-        source: SlashCommandDispatchSource,
-    ) {
-        let trimmed = args.trim();
-        let parsed = match parse_implement_command(trimmed) {
-            Ok(parsed) => parsed,
-            Err(message) => {
-                self.add_error_message(message);
-                self.add_info_message(IMPLEMENT_USAGE.to_string(), /*hint*/ None);
-                return;
-            }
-        };
-
-        if let Some(task) = parsed.task {
-            if parsed.options.enabled == Some(Some(false)) || parsed.options.enabled == Some(None) {
-                self.add_error_message(
-                    "Use `/implement disable` or `/implement inherit` without task text."
-                        .to_string(),
-                );
-                return;
-            }
-            if !self.is_session_configured() {
-                self.queue_prepared_slash_command_with_args(
-                    SlashCommand::Implement,
-                    args,
-                    text_elements,
-                    source,
-                );
-                return;
-            }
-
-            let task_elements =
-                Self::slash_command_args_elements(&task.text, task.offset, &text_elements);
-            let user_message = self.prepared_inline_user_message(
-                task.text,
-                task_elements,
-                local_images,
-                remote_image_urls,
-                mention_bindings,
-                source,
-            );
-            self.submit_user_message_with_repo_ci(
-                user_message,
-                RepoCiTurnOverrides {
-                    mode: None,
-                    issue_types: None,
-                    review_rounds: None,
-                    long_ci: None,
-                    implement_enabled: Some(Some(true)),
-                    implement_mode: parsed.options.mode,
-                    implement_max_cycles: parsed.options.max_cycles,
-                },
-            );
-            return;
-        }
-
-        let options = parsed.options;
-
-        if let Some(enabled) = options.enabled {
-            let implement = self
-                .config
-                .implement
-                .get_or_insert_with(codex_config::config_toml::ImplementToml::default);
-            implement.enabled = enabled;
-        }
-        if let Some(mode) = options.mode {
-            let implement = self
-                .config
-                .implement
-                .get_or_insert_with(codex_config::config_toml::ImplementToml::default);
-            implement.mode = mode;
-        }
-        if let Some(max_cycles) = options.max_cycles {
-            let implement = self
-                .config
-                .implement
-                .get_or_insert_with(codex_config::config_toml::ImplementToml::default);
-            implement.max_cycles = max_cycles;
-        }
-
-        self.submit_repo_ci_session_config(RepoCiSessionConfigValues {
-            mode: None,
-            issue_types: None,
-            review_rounds: None,
-            long_ci: None,
-            implement_enabled: options.enabled,
-            implement_mode: options.mode,
-            implement_max_cycles: options.max_cycles,
-        });
-        self.add_info_message(
-            implement_session_config_message(&options),
-            Some(
-                "This override affects only the current thread and lasts until the session ends or you run /implement inherit."
-                    .to_string(),
-            ),
-        );
-    }
-
     fn dispatch_prepared_command_with_args(
         &mut self,
         cmd: SlashCommand,
@@ -947,9 +593,37 @@ impl ChatWidget {
                     }
                 }
             }
+            SlashCommand::Ide => {
+                self.handle_ide_command_args(trimmed);
+            }
             SlashCommand::Mcp => match trimmed.to_ascii_lowercase().as_str() {
                 "verbose" => self.add_mcp_output(McpServerStatusDetail::Full),
                 _ => self.add_error_message("Usage: /mcp [verbose]".to_string()),
+            },
+            SlashCommand::Keymap => match trimmed.to_ascii_lowercase().as_str() {
+                "" => self.open_keymap_picker(),
+                "debug" => {
+                    match crate::keymap::RuntimeKeymap::from_config(&self.config.tui_keymap) {
+                        Ok(runtime_keymap) => self.open_keymap_debug(&runtime_keymap),
+                        Err(err) => {
+                            self.add_error_message(format!(
+                                "Invalid `tui.keymap` configuration: {err}"
+                            ));
+                        }
+                    }
+                }
+                _ => self.add_error_message("Usage: /keymap [debug]".to_string()),
+            },
+            SlashCommand::Raw => match trimmed.to_ascii_lowercase().as_str() {
+                "on" => {
+                    self.set_raw_output_mode_and_notify(/*enabled*/ true);
+                    self.emit_raw_output_mode_changed(/*enabled*/ true);
+                }
+                "off" => {
+                    self.set_raw_output_mode_and_notify(/*enabled*/ false);
+                    self.emit_raw_output_mode_changed(/*enabled*/ false);
+                }
+                _ => self.add_error_message(RAW_USAGE.to_string()),
             },
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
@@ -984,6 +658,94 @@ impl ChatWidget {
                     self.queue_user_message(user_message);
                 }
             }
+            SlashCommand::Goal if !trimmed.is_empty() => {
+                if !self.config.features.enabled(Feature::Goals) {
+                    return;
+                }
+                enum GoalControlCommand {
+                    Clear,
+                    SetStatus(AppThreadGoalStatus),
+                }
+                let control_command = match trimmed.to_ascii_lowercase().as_str() {
+                    "clear" => Some(GoalControlCommand::Clear),
+                    "pause" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Paused)),
+                    "resume" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Active)),
+                    _ => None,
+                };
+                if let Some(command) = control_command {
+                    let Some(thread_id) = self.thread_id else {
+                        self.add_info_message(
+                            GOAL_USAGE.to_string(),
+                            Some(
+                                "The session must start before you can change a goal.".to_string(),
+                            ),
+                        );
+                        return;
+                    };
+                    match command {
+                        GoalControlCommand::Clear => {
+                            self.app_event_tx
+                                .send(AppEvent::ClearThreadGoal { thread_id });
+                        }
+                        GoalControlCommand::SetStatus(status) => {
+                            self.app_event_tx
+                                .send(AppEvent::SetThreadGoalStatus { thread_id, status });
+                        }
+                    }
+                    if source == SlashCommandDispatchSource::Live {
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
+                    return;
+                }
+                let objective = args.trim();
+                if objective.is_empty() {
+                    self.add_error_message("Goal objective must not be empty.".to_string());
+                    self.add_info_message(
+                        GOAL_USAGE.to_string(),
+                        Some(GOAL_USAGE_HINT.to_string()),
+                    );
+                    if source == SlashCommandDispatchSource::Live {
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
+                    return;
+                }
+                let validation_source = match source {
+                    SlashCommandDispatchSource::Live => GoalObjectiveValidationSource::Live,
+                    SlashCommandDispatchSource::Queued => GoalObjectiveValidationSource::Queued,
+                };
+                if !self.goal_objective_is_allowed(objective, validation_source) {
+                    return;
+                }
+                let Some(thread_id) = self.thread_id else {
+                    if source == SlashCommandDispatchSource::Live {
+                        self.queue_user_message_with_options(
+                            UserMessage {
+                                text: format!("/goal {args}"),
+                                local_images: Vec::new(),
+                                remote_image_urls: Vec::new(),
+                                text_elements: Vec::new(),
+                                mention_bindings: Vec::new(),
+                            },
+                            QueuedInputAction::ParseSlash,
+                        );
+                        self.bottom_pane.drain_pending_submission_state();
+                    } else {
+                        self.add_info_message(
+                            GOAL_USAGE.to_string(),
+                            Some("The session must start before you can set a goal.".to_string()),
+                        );
+                    }
+                    return;
+                };
+                self.app_event_tx.send(AppEvent::SetThreadGoalObjective {
+                    thread_id,
+                    objective: objective.to_string(),
+                    mode: ThreadGoalSetMode::ConfirmIfExists,
+                });
+                if source == SlashCommandDispatchSource::Live {
+                    self.bottom_pane.drain_pending_submission_state();
+                }
+            }
             SlashCommand::Side if !trimmed.is_empty() => {
                 let Some(parent_thread_id) = self.thread_id else {
                     self.add_error_message(
@@ -1001,22 +763,9 @@ impl ChatWidget {
                 );
                 self.request_side_conversation(parent_thread_id, Some(user_message));
             }
-            SlashCommand::Goal if !trimmed.is_empty() => {
-                if self.thread_id.is_none() {
-                    self.queue_prepared_slash_command_with_args(
-                        SlashCommand::Goal,
-                        args,
-                        text_elements,
-                        source,
-                    );
-                } else {
-                    self.dispatch_goal_command_with_args(args);
-                }
-            }
             SlashCommand::Review if !trimmed.is_empty() => {
-                self.submit_op(AppCommand::review(ReviewRequest {
-                    target: ReviewTarget::Custom { instructions: args },
-                    user_facing_hint: None,
+                self.submit_op(AppCommand::review(ReviewTarget::Custom {
+                    instructions: args,
                 }));
             }
             SlashCommand::Resume if !trimmed.is_empty() => {
@@ -1027,99 +776,9 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot { path: args });
             }
-            SlashCommand::RepoCi if !trimmed.is_empty() => {
-                self.dispatch_repo_ci_command_with_args(
-                    args,
-                    text_elements,
-                    local_images,
-                    remote_image_urls,
-                    mention_bindings,
-                    source,
-                );
-            }
-            SlashCommand::Codex if !trimmed.is_empty() => {
-                if matches!(
-                    trimmed.to_ascii_lowercase().as_str(),
-                    "disable" | "off" | "cancel"
-                ) {
-                    self.disable_codex_slash_command();
-                    return;
-                }
-                if self.bottom_pane.is_task_running() {
-                    self.add_error_message(
-                        "'/codex <request>' is disabled while a task is in progress.".to_string(),
-                    );
-                    return;
-                }
-                match crate::codex_config_context::classify_codex_request(trimmed) {
-                    crate::codex_config_context::CodexRequestMode::Investigate => {
-                        self.set_collaboration_mask(
-                            crate::codex_config_context::codex_investigate_mask(&self.config.cwd),
-                        );
-                    }
-                    crate::codex_config_context::CodexRequestMode::ConfigEdit => {
-                        self.codex_config_planning_conversation.clear();
-                        self.latest_proposed_plan_markdown = None;
-                        self.set_collaboration_mask(
-                            crate::codex_config_context::codex_config_edit_mask(&self.config.cwd),
-                        );
-                    }
-                    crate::codex_config_context::CodexRequestMode::AiResolve => {
-                        self.codex_config_planning_conversation.clear();
-                        self.latest_proposed_plan_markdown = None;
-                        self.set_collaboration_mask(
-                            crate::codex_config_context::codex_ai_resolve_mask(&self.config.cwd),
-                        );
-                    }
-                }
-                let user_message = self.prepared_inline_user_message(
-                    args,
-                    text_elements,
-                    local_images,
-                    remote_image_urls,
-                    mention_bindings,
-                    source,
-                );
-                if self.is_session_configured() {
-                    self.reasoning_buffer.clear();
-                    self.full_reasoning_buffer.clear();
-                    self.set_status_header(String::from("Working"));
-                    self.submit_user_message(user_message);
-                } else {
-                    self.queue_user_message(user_message);
-                }
-            }
-            SlashCommand::Implement if !trimmed.is_empty() => {
-                self.dispatch_implement_command_with_args(
-                    args,
-                    text_elements,
-                    local_images,
-                    remote_image_urls,
-                    mention_bindings,
-                    source,
-                );
-            }
-            SlashCommand::ModelRouter if !trimmed.is_empty() => {
-                let enabled = match parse_model_router_enabled(trimmed) {
-                    Ok(enabled) => enabled,
-                    Err(message) => {
-                        self.add_error_message(message);
-                        self.add_info_message(MODEL_ROUTER_USAGE.to_string(), /*hint*/ None);
-                        return;
-                    }
-                };
-                self.submit_op(AppCommand::set_model_router_session_config(enabled));
-                self.add_info_message(
-                    model_router_session_message(enabled),
-                    Some(
-                        "This override affects only the current thread and lasts until the session ends or you run /model-router inherit."
-                            .to_string(),
-                    ),
-                );
-            }
             _ => self.dispatch_command(cmd),
         }
-        if source == SlashCommandDispatchSource::Live {
+        if source == SlashCommandDispatchSource::Live && cmd != SlashCommand::Goal {
             self.bottom_pane.drain_pending_submission_state();
         }
     }
@@ -1181,11 +840,23 @@ impl ChatWidget {
             return QueueDrain::Stop;
         }
 
-        let args_elements = Self::slash_command_args_elements(rest, rest_offset, &text_elements);
+        let trimmed_start = rest.trim_start();
+        let leading_trimmed = rest.len().saturating_sub(trimmed_start.len());
+        let trimmed_rest = trimmed_start.trim_end();
+        let args_elements = Self::slash_command_args_elements(
+            trimmed_rest,
+            rest_offset + leading_trimmed,
+            &text_elements,
+        );
+        if cmd == SlashCommand::Goal
+            && !self.goal_objective_is_allowed(trimmed_rest, GoalObjectiveValidationSource::Queued)
+        {
+            return QueueDrain::Continue;
+        }
         self.dispatch_prepared_command_with_args(
             cmd,
             PreparedSlashCommandArgs {
-                args: rest.trim().to_string(),
+                args: trimmed_rest.to_string(),
                 text_elements: args_elements,
                 local_images,
                 remote_image_urls,
@@ -1209,8 +880,8 @@ impl ChatWidget {
             collaboration_modes_enabled: self.collaboration_modes_enabled(),
             connectors_enabled: self.connectors_enabled(),
             plugins_command_enabled: self.config.features.enabled(Feature::Plugins),
-            fast_command_enabled: self.fast_mode_enabled(),
             goal_command_enabled: self.config.features.enabled(Feature::Goals),
+            fast_command_enabled: self.fast_mode_enabled(),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
             realtime_conversation_enabled: self.realtime_conversation_enabled(),
             audio_device_selection_enabled: self.realtime_audio_device_selection_enabled(),
@@ -1225,10 +896,8 @@ impl ChatWidget {
         }
         match cmd {
             SlashCommand::Fast
-            | SlashCommand::Goal
+            | SlashCommand::Ide
             | SlashCommand::Status
-            | SlashCommand::Limits
-            | SlashCommand::Codex
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop
@@ -1239,6 +908,8 @@ impl ChatWidget {
             | SlashCommand::Plugins
             | SlashCommand::Rollout
             | SlashCommand::Copy
+            | SlashCommand::Raw
+            | SlashCommand::Vim
             | SlashCommand::Diff
             | SlashCommand::Rename
             | SlashCommand::TestApproval => QueueDrain::Continue,
@@ -1255,24 +926,24 @@ impl ChatWidget {
             | SlashCommand::Settings
             | SlashCommand::Personality
             | SlashCommand::Plan
+            | SlashCommand::Goal
             | SlashCommand::Collab
             | SlashCommand::Side
+            | SlashCommand::Keymap
             | SlashCommand::Agent
             | SlashCommand::MultiAgents
-            | SlashCommand::Approvals
             | SlashCommand::Permissions
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
-            | SlashCommand::ModelRouter
-            | SlashCommand::Implement
-            | SlashCommand::RepoCi
+            | SlashCommand::AutoReview
             | SlashCommand::Memories
             | SlashCommand::Quit
             | SlashCommand::Exit
             | SlashCommand::Logout
             | SlashCommand::Mention
             | SlashCommand::Skills
+            | SlashCommand::Hooks
             | SlashCommand::Title
             | SlashCommand::Statusline
             | SlashCommand::Theme => QueueDrain::Stop,
@@ -1324,456 +995,5 @@ impl ChatWidget {
         self.add_error_message(SIDE_REVIEW_UNAVAILABLE_MESSAGE.to_string());
         self.bottom_pane.drain_pending_submission_state();
         false
-    }
-}
-
-fn parse_repo_ci_session_mode(raw: &str) -> Result<Option<RepoCiSessionMode>, String> {
-    let normalized = raw.to_ascii_lowercase();
-    match normalized.as_str() {
-        "inherit" | "default" | "config" => Ok(None),
-        "off" | "disable" | "disabled" => Ok(Some(RepoCiSessionMode::Off)),
-        "local" => Ok(Some(RepoCiSessionMode::Local)),
-        "remote" => Ok(Some(RepoCiSessionMode::Remote)),
-        "local-and-remote" | "both" => Ok(Some(RepoCiSessionMode::LocalAndRemote)),
-        other => Err(format!("Unknown repo CI mode `{other}`.")),
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct RepoCiSessionConfigValues {
-    mode: Option<Option<RepoCiSessionMode>>,
-    issue_types: Option<Option<Vec<RepoCiIssueType>>>,
-    review_rounds: Option<Option<u8>>,
-    long_ci: Option<Option<bool>>,
-    implement_enabled: Option<Option<bool>>,
-    implement_mode: Option<Option<ImplementMode>>,
-    implement_max_cycles: Option<Option<u8>>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct RepoCiOptionPatch {
-    mode: Option<Option<RepoCiSessionMode>>,
-    issue_types: Option<Option<Vec<RepoCiIssueType>>>,
-    review_rounds: Option<Option<u8>>,
-    long_ci: Option<Option<bool>>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct ImplementOptionPatch {
-    enabled: Option<Option<bool>>,
-    mode: Option<Option<ImplementMode>>,
-    max_cycles: Option<Option<u8>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ImplementParsedCommand {
-    options: ImplementOptionPatch,
-    task: Option<RepoCiInlineTask>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct RepoCiInlineTask {
-    text: String,
-    offset: usize,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct RepoCiParsedCommand {
-    options: RepoCiOptionPatch,
-    task: Option<RepoCiInlineTask>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct RepoCiCommandToken<'a> {
-    text: &'a str,
-    start: usize,
-}
-
-fn parse_repo_ci_command(raw: &str) -> Result<RepoCiParsedCommand, String> {
-    let tokens = repo_ci_command_tokens(raw);
-    let mut options = RepoCiOptionPatch::default();
-    let mut index = 0;
-
-    while let Some(token) = tokens.get(index) {
-        match token.text.to_ascii_lowercase().as_str() {
-            "issues" => {
-                let Some(value) = tokens.get(index + 1) else {
-                    return Err("Missing repo CI issue type list after `issues`.".to_string());
-                };
-                options.issue_types = Some(parse_repo_ci_issue_types(value.text)?);
-                index += 2;
-            }
-            "rounds" => {
-                let Some(value) = tokens.get(index + 1) else {
-                    return Err("Missing repo CI review round count after `rounds`.".to_string());
-                };
-                options.review_rounds = Some(parse_repo_ci_review_rounds(value.text)?);
-                index += 2;
-            }
-            "long-ci" => {
-                let Some(value) = tokens.get(index + 1) else {
-                    return Err("Missing repo CI long CI setting after `long-ci`.".to_string());
-                };
-                options.long_ci = Some(parse_repo_ci_long_ci(value.text)?);
-                index += 2;
-            }
-            "inherit" | "default" | "config" | "off" | "disable" | "disabled" | "local"
-            | "remote" | "local-and-remote" | "both" => {
-                options.mode = Some(parse_repo_ci_session_mode(token.text)?);
-                index += 1;
-            }
-            _ if index == 0 => {
-                return Err(format!("Unknown repo CI option `{}`.", token.text));
-            }
-            _ => break,
-        }
-    }
-
-    if options.mode.is_none()
-        && options.issue_types.is_none()
-        && options.review_rounds.is_none()
-        && options.long_ci.is_none()
-    {
-        return Err(REPO_CI_USAGE.to_string());
-    }
-
-    let task = tokens.get(index).map(|token| RepoCiInlineTask {
-        text: raw[token.start..].to_string(),
-        offset: token.start,
-    });
-    Ok(RepoCiParsedCommand { options, task })
-}
-
-fn repo_ci_command_tokens(raw: &str) -> Vec<RepoCiCommandToken<'_>> {
-    let mut tokens = Vec::new();
-    let mut token_start = None;
-    for (index, ch) in raw.char_indices() {
-        if ch.is_whitespace() {
-            if let Some(start) = token_start.take() {
-                tokens.push(RepoCiCommandToken {
-                    text: &raw[start..index],
-                    start,
-                });
-            }
-        } else if token_start.is_none() {
-            token_start = Some(index);
-        }
-    }
-    if let Some(start) = token_start {
-        tokens.push(RepoCiCommandToken {
-            text: &raw[start..],
-            start,
-        });
-    }
-    tokens
-}
-
-fn parse_implement_command(raw: &str) -> Result<ImplementParsedCommand, String> {
-    let tokens = repo_ci_command_tokens(raw);
-    let mut options = ImplementOptionPatch::default();
-    let mut index = 0;
-
-    while let Some(token) = tokens.get(index) {
-        let normalized = token.text.to_ascii_lowercase();
-        if let Some(raw_value) = normalized.strip_prefix("--max-cycles=") {
-            options.max_cycles = Some(parse_implement_max_cycles(raw_value)?);
-            index += 1;
-        } else if normalized == "--max-cycles" {
-            let Some(value) = tokens.get(index + 1) else {
-                return Err("Missing implement max cycle count after `--max-cycles`.".to_string());
-            };
-            options.max_cycles = Some(parse_implement_max_cycles(value.text)?);
-            index += 2;
-        } else if matches!(normalized.as_str(), "enable" | "enabled" | "on") {
-            options.enabled = Some(Some(true));
-            options.mode = Some(Some(ImplementMode::Auto));
-            index += 1;
-        } else if matches!(normalized.as_str(), "implicit" | "on-demand") {
-            options.enabled = Some(Some(true));
-            options.mode = Some(Some(ImplementMode::Implicit));
-            index += 1;
-        } else if normalized == "auto" {
-            options.enabled = Some(Some(true));
-            options.mode = Some(Some(ImplementMode::Auto));
-            index += 1;
-        } else if matches!(normalized.as_str(), "disable" | "disabled" | "off") {
-            options.enabled = Some(Some(false));
-            index += 1;
-        } else if matches!(normalized.as_str(), "inherit" | "default" | "config") {
-            options.enabled = Some(None);
-            options.mode = Some(None);
-            options.max_cycles = Some(None);
-            index += 1;
-        } else if token.text.starts_with('-') {
-            return Err(format!("Unknown implement option `{}`.", token.text));
-        } else {
-            break;
-        }
-    }
-
-    let task = tokens.get(index).map(|token| RepoCiInlineTask {
-        text: raw[token.start..].to_string(),
-        offset: token.start,
-    });
-    if options.enabled.is_none()
-        && options.mode.is_none()
-        && options.max_cycles.is_none()
-        && task.is_none()
-    {
-        return Err(IMPLEMENT_USAGE.to_string());
-    }
-    Ok(ImplementParsedCommand { options, task })
-}
-
-fn parse_implement_max_cycles(raw: &str) -> Result<Option<u8>, String> {
-    let trimmed = raw.trim();
-    let normalized = trimmed.to_ascii_lowercase();
-    if matches!(normalized.as_str(), "inherit" | "default" | "config") {
-        return Ok(None);
-    }
-    trimmed
-        .parse::<u8>()
-        .map(Some)
-        .map_err(|_| format!("Invalid implement max cycle count `{trimmed}`."))
-}
-
-fn implement_session_config_message(options: &ImplementOptionPatch) -> String {
-    match (options.enabled, options.mode, options.max_cycles) {
-        (Some(Some(true)), Some(Some(ImplementMode::Implicit)), None) => {
-            "Implement review/fix cycles now run only for /implement turns.".to_string()
-        }
-        (Some(Some(true)), Some(Some(ImplementMode::Auto)), None) => {
-            "Implement review/fix cycles now run automatically after agent edits.".to_string()
-        }
-        (Some(Some(true)), _, None) => {
-            "Implement review/fix cycles are enabled for this session.".to_string()
-        }
-        (Some(Some(false)), _, None) => {
-            "Implement review/fix cycles are disabled for this session.".to_string()
-        }
-        (Some(None), Some(None) | None, Some(None) | None) => {
-            "Implement review/fix cycles now inherit repo/user config for this session.".to_string()
-        }
-        (None, _, Some(Some(max_cycles))) => format!(
-            "Implement review/fix cycles now use {max_cycles} max cycle(s) for this session."
-        ),
-        (None, _, Some(None)) => {
-            "Implement max cycles now inherit repo/user config for this session.".to_string()
-        }
-        _ => "Implement session config updated.".to_string(),
-    }
-}
-
-fn parse_model_router_enabled(raw: &str) -> Result<Option<bool>, String> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "enable" | "enabled" | "on" => Ok(Some(true)),
-        "disable" | "disabled" | "off" => Ok(Some(false)),
-        "inherit" | "default" | "config" => Ok(None),
-        _ => Err(MODEL_ROUTER_USAGE.to_string()),
-    }
-}
-
-fn model_router_session_message(enabled: Option<bool>) -> String {
-    match enabled {
-        Some(true) => "Model router is enabled for this session.".to_string(),
-        Some(false) => "Model router is disabled for this session.".to_string(),
-        None => "Model router now inherits repo/user config for this session.".to_string(),
-    }
-}
-
-fn repo_ci_session_mode_message(mode: Option<RepoCiSessionMode>) -> String {
-    match mode {
-        None => "Repo CI now inherits repo/user config for this session.".to_string(),
-        Some(RepoCiSessionMode::Off) => "Repo CI is off for this session.".to_string(),
-        Some(RepoCiSessionMode::Local) => "Repo CI is local-only for this session.".to_string(),
-        Some(RepoCiSessionMode::Remote) => "Repo CI is remote-only for this session.".to_string(),
-        Some(RepoCiSessionMode::LocalAndRemote) => {
-            "Repo CI runs local and remote checks for this session.".to_string()
-        }
-    }
-}
-
-fn repo_ci_session_config_message(options: &RepoCiOptionPatch) -> String {
-    match (
-        options.mode,
-        options.issue_types.as_ref(),
-        options.review_rounds,
-        options.long_ci,
-    ) {
-        (Some(mode), None, None, None) => repo_ci_session_mode_message(mode),
-        (None, Some(issue_types), None, None) => {
-            repo_ci_issue_types_message(issue_types.as_deref())
-        }
-        (None, None, Some(review_rounds), None) => repo_ci_review_rounds_message(review_rounds),
-        (None, None, None, Some(long_ci)) => repo_ci_long_ci_message(long_ci),
-        _ => "Repo CI session config updated.".to_string(),
-    }
-}
-
-fn repo_ci_setup_command(config: &Config) -> String {
-    let codex = repo_ci_codex_command(config);
-    format!("{codex} repo-ci enable --cwd && {codex} repo-ci learn --cwd")
-}
-
-fn repo_ci_learn_command(config: &Config) -> String {
-    let codex = repo_ci_codex_command(config);
-    format!("{codex} repo-ci learn --cwd")
-}
-
-fn repo_ci_instruction_command(config: &Config, raw: &str) -> Result<String, String> {
-    let Some(rest) = raw.strip_prefix("instruction") else {
-        return Err(REPO_CI_USAGE.to_string());
-    };
-    let rest = rest.trim();
-    let codex = repo_ci_codex_command(config);
-    match rest {
-        "show" => Ok(format!("{codex} repo-ci instruction show --cwd")),
-        "clear" => Ok(format!("{codex} repo-ci instruction clear --cwd")),
-        "edit" => Ok(format!("{codex} repo-ci instruction edit --cwd")),
-        _ => {
-            let Some(instruction) = rest.strip_prefix("set") else {
-                return Err(REPO_CI_USAGE.to_string());
-            };
-            let instruction = instruction.trim();
-            let Some(instruction) = instruction.strip_prefix("--instruction") else {
-                return Err(REPO_CI_USAGE.to_string());
-            };
-            let instruction = strip_wrapping_quotes(instruction.trim());
-            if instruction.is_empty() {
-                return Err("Repo CI learner instruction must not be empty.".to_string());
-            }
-            Ok(format!(
-                "{codex} repo-ci instruction set --cwd --instruction {}",
-                shell_quote(instruction)
-            ))
-        }
-    }
-}
-
-fn strip_wrapping_quotes(value: &str) -> &str {
-    if value.len() >= 2
-        && let Some(quote) = value.as_bytes().first().copied()
-        && matches!(quote, b'\'' | b'\"')
-        && value.as_bytes().last().copied() == Some(quote)
-    {
-        &value[1..value.len() - 1]
-    } else {
-        value
-    }
-}
-
-fn repo_ci_workflow_command(config: &Config) -> String {
-    let codex = repo_ci_codex_command(config);
-    format!("{codex} repo-ci workflow --cwd")
-}
-
-fn repo_ci_codex_command(config: &Config) -> String {
-    config
-        .codex_self_exe
-        .as_ref()
-        .map(|path| shell_quote(path.to_string_lossy().as_ref()))
-        .unwrap_or_else(|| "codex".to_string())
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-fn parse_repo_ci_issue_types(raw: &str) -> Result<Option<Vec<RepoCiIssueType>>, String> {
-    let normalized = raw.trim().to_ascii_lowercase();
-    if matches!(normalized.as_str(), "inherit" | "default" | "config") {
-        return Ok(None);
-    }
-    if normalized == "none" {
-        return Ok(Some(Vec::new()));
-    }
-    normalized
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| match value {
-            "correctness" => Ok(RepoCiIssueType::Correctness),
-            "reliability" => Ok(RepoCiIssueType::Reliability),
-            "performance" => Ok(RepoCiIssueType::Performance),
-            "scalability" => Ok(RepoCiIssueType::Scalability),
-            "security" => Ok(RepoCiIssueType::Security),
-            "maintainability" => Ok(RepoCiIssueType::Maintainability),
-            "testability" => Ok(RepoCiIssueType::Testability),
-            "observability" => Ok(RepoCiIssueType::Observability),
-            "compatibility" => Ok(RepoCiIssueType::Compatibility),
-            "ux-config-cli" => Ok(RepoCiIssueType::UxConfigCli),
-            other => Err(format!("Unknown repo CI issue type `{other}`.")),
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map(Some)
-}
-
-fn parse_repo_ci_review_rounds(raw: &str) -> Result<Option<u8>, String> {
-    let trimmed = raw.trim();
-    let normalized = trimmed.to_ascii_lowercase();
-    if matches!(normalized.as_str(), "inherit" | "default" | "config") {
-        return Ok(None);
-    }
-    trimmed
-        .parse::<u8>()
-        .map(Some)
-        .map_err(|_| format!("Invalid repo CI review round count `{trimmed}`."))
-}
-
-fn parse_repo_ci_long_ci(raw: &str) -> Result<Option<bool>, String> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "enable" | "enabled" | "on" | "true" => Ok(Some(true)),
-        "disable" | "disabled" | "off" | "false" => Ok(Some(false)),
-        "inherit" | "default" | "config" => Ok(None),
-        other => Err(format!("Unknown repo CI long CI setting `{other}`.")),
-    }
-}
-
-fn repo_ci_issue_types_message(issue_types: Option<&[RepoCiIssueType]>) -> String {
-    match issue_types {
-        None => "Repo CI issue types now inherit repo/user config for this session.".to_string(),
-        Some([]) => "Repo CI targeted review is disabled for this session.".to_string(),
-        Some(values) => format!(
-            "Repo CI targeted review now scopes this session to {}.",
-            values
-                .iter()
-                .map(|issue_type| repo_ci_issue_type_slug(*issue_type))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    }
-}
-
-fn repo_ci_review_rounds_message(review_rounds: Option<u8>) -> String {
-    match review_rounds {
-        None => "Repo CI review rounds now inherit repo/user config for this session.".to_string(),
-        Some(review_rounds) => {
-            format!("Repo CI targeted review now uses {review_rounds} round(s) for this session.")
-        }
-    }
-}
-
-fn repo_ci_long_ci_message(long_ci: Option<bool>) -> String {
-    match long_ci {
-        None => {
-            "Repo CI long-check setting now inherits repo/user config for this session.".to_string()
-        }
-        Some(true) => "Repo CI long local checks are enabled for this session.".to_string(),
-        Some(false) => "Repo CI long local checks are disabled for this session.".to_string(),
-    }
-}
-
-fn repo_ci_issue_type_slug(issue_type: RepoCiIssueType) -> &'static str {
-    match issue_type {
-        RepoCiIssueType::Correctness => "correctness",
-        RepoCiIssueType::Reliability => "reliability",
-        RepoCiIssueType::Performance => "performance",
-        RepoCiIssueType::Scalability => "scalability",
-        RepoCiIssueType::Security => "security",
-        RepoCiIssueType::Maintainability => "maintainability",
-        RepoCiIssueType::Testability => "testability",
-        RepoCiIssueType::Observability => "observability",
-        RepoCiIssueType::Compatibility => "compatibility",
-        RepoCiIssueType::UxConfigCli => "ux-config-cli",
     }
 }

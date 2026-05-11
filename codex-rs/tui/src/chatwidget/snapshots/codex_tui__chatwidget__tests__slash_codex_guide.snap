@@ -1,6 +1,0 @@
----
-source: tui/src/chatwidget/tests/slash_commands.rs
-expression: rendered
----
-• Codex mode enabled. Investigating read-only; scratch workspace is
-  <codex-config-workspace>. Use /codex off to leave.

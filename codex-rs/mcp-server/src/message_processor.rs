@@ -2,10 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_arg0::Arg0DispatchPaths;
-use codex_core::StateDbHandle;
+use codex_core::CollaborationModesConfig;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_core::thread_store_from_config;
 use codex_exec_server::EnvironmentManager;
 use codex_login::AuthManager;
 use codex_login::default_client::USER_AGENT_SUFFIX;
@@ -54,24 +53,19 @@ impl MessageProcessor {
         arg0_paths: Arg0DispatchPaths,
         config: Arc<Config>,
         environment_manager: Arc<EnvironmentManager>,
-        state_db: Option<StateDbHandle>,
-        installation_id: String,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
         let auth_manager = AuthManager::shared_from_config(
             config.as_ref(),
             /*enable_codex_api_key_env*/ false,
-        )
-        .await;
+        );
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager,
             SessionSource::Mcp,
+            CollaborationModesConfig::default(),
             environment_manager,
             /*analytics_events_client*/ None,
-            thread_store_from_config(config.as_ref(), state_db.clone()),
-            state_db.clone(),
-            installation_id,
         ));
         Self {
             outgoing,

@@ -22,7 +22,7 @@ use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::ClientResponsePayload;
+use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
@@ -295,25 +295,19 @@ impl AnalyticsEventsClient {
         }
     }
 
-    pub fn track_response(
-        &self,
-        connection_id: u64,
-        request_id: RequestId,
-        response: ClientResponsePayload,
-    ) {
+    pub fn track_response(&self, connection_id: u64, response: ClientResponse) {
         if !matches!(
             response,
-            ClientResponsePayload::ThreadStart(_)
-                | ClientResponsePayload::ThreadResume(_)
-                | ClientResponsePayload::ThreadFork(_)
-                | ClientResponsePayload::TurnStart(_)
-                | ClientResponsePayload::TurnSteer(_)
+            ClientResponse::ThreadStart { .. }
+                | ClientResponse::ThreadResume { .. }
+                | ClientResponse::ThreadFork { .. }
+                | ClientResponse::TurnStart { .. }
+                | ClientResponse::TurnSteer { .. }
         ) {
             return;
         }
         self.record_fact(AnalyticsFact::ClientResponse {
             connection_id,
-            request_id,
             response: Box::new(response),
         });
     }

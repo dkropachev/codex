@@ -341,6 +341,7 @@ async fn run_model_tune_turn(
     let auth_manager = Some(auth_manager_for_config(config, &runtime.auth_manager));
     let client = ModelClient::new(
         auth_manager,
+        conversation_id.into(),
         conversation_id,
         runtime.installation_id.clone(),
         config.model_provider.clone(),
@@ -391,7 +392,9 @@ async fn run_model_tune_turn(
             config
                 .model_reasoning_summary
                 .unwrap_or(ReasoningSummaryConfig::Auto),
-            config.service_tier,
+            config
+                .service_tier
+                .map(|service_tier| service_tier.request_value().to_string()),
             None,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
         )

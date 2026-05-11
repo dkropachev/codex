@@ -87,9 +87,7 @@ impl ToolOrchestrator {
             use_legacy_landlock: attempt.use_legacy_landlock,
             windows_sandbox_level: attempt.windows_sandbox_level,
             windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
-            network_denial_cancellation_token: network_approval
-                .as_ref()
-                .map(ActiveNetworkApproval::cancellation_token),
+            network_denial_cancellation_token: None,
         };
         let run_result = tool
             .run(req, &attempt_with_network_approval, &attempt_tool_ctx)
@@ -111,11 +109,7 @@ impl ToolOrchestrator {
             NetworkApprovalMode::Deferred => {
                 let deferred = network_approval.into_deferred();
                 if run_result.is_err() {
-                    let finalize_result =
-                        finish_deferred_network_approval(&tool_ctx.session, deferred).await;
-                    if let Err(err) = finalize_result {
-                        return (Err(err), None);
-                    }
+                    finish_deferred_network_approval(&tool_ctx.session, deferred).await;
                     return (run_result, None);
                 }
                 (run_result, deferred)

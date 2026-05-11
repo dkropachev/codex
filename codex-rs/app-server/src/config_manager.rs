@@ -144,11 +144,8 @@ impl ConfigManager {
         &self,
         thread_config: &Config,
     ) -> std::io::Result<Config> {
-        let refreshed_config = self
+        let mut config = self
             .load_latest_config(Some(thread_config.cwd.to_path_buf()))
-            .await?;
-        let mut config = thread_config
-            .rebuild_preserving_session_layers(&refreshed_config)
             .await?;
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);

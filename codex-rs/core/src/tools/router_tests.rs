@@ -11,9 +11,9 @@ use crate::tools::registry::ToolKind;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::router_index::ToolRouterIndex;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_protocol::models::ResponseItem;
 use codex_state::ToolRouterDiagnosticsWindow;
 use codex_state::ToolRouterRequestShape;
-use codex_protocol::models::ResponseItem;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
@@ -268,11 +268,9 @@ async fn routed_inner_dispatch_records_router_source() -> anyhow::Result<()> {
 async fn route_errors_record_sanitized_request_shape() -> anyhow::Result<()> {
     let (mut session, turn) = make_session_and_context().await;
     let codex_home = tempfile::tempdir().expect("temp dir");
-    let state_db = codex_state::StateRuntime::init(
-        codex_home.path().to_path_buf(),
-        "openai".to_string(),
-    )
-    .await?;
+    let state_db =
+        codex_state::StateRuntime::init(codex_home.path().to_path_buf(), "openai".to_string())
+            .await?;
     session.services.state_db = Some(Arc::clone(&state_db));
     turn.increment_model_response_ordinal();
 
@@ -321,7 +319,10 @@ async fn route_errors_record_sanitized_request_shape() -> anyhow::Result<()> {
         .await
         .err()
         .expect("route should fail");
-    assert!(err.to_string().contains("could not deterministically route"));
+    assert!(
+        err.to_string()
+            .contains("could not deterministically route")
+    );
 
     let observations = state_db
         .tool_router_tune_observations(ToolRouterDiagnosticsWindow::AllTime, None)

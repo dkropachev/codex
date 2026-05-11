@@ -202,7 +202,7 @@ impl TurnContext {
         .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
-        .with_has_environment(self.tools_config.has_environment)
+        .with_environment_mode(self.tools_config.environment_mode)
         .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
@@ -547,7 +547,9 @@ impl Session {
         )
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
-        .with_has_environment(environment.is_some())
+        .with_environment_mode(codex_tools::ToolEnvironmentMode::from_count(
+            environments.len(),
+        ))
         .with_spawn_agent_usage_hint(per_turn_config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(per_turn_config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(per_turn_config.multi_agent_v2.hide_spawn_agent_metadata)
@@ -768,12 +770,13 @@ impl Session {
                 &per_turn_config.to_models_manager_config(),
             )
             .await;
+        let plugins_input = per_turn_config.plugins_config_input();
         let plugin_outcome = self
             .services
             .plugins_manager
-            .plugins_for_config(&per_turn_config)
+            .plugins_for_config(&plugins_input)
             .await;
-        let effective_skill_roots = plugin_outcome.effective_skill_roots();
+        let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
         let fs = environment
             .as_ref()

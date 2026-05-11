@@ -368,7 +368,7 @@ impl ToolHandler for ApplyPatchHandler {
         // Avoid building temporary ExecParams/command vectors; derive directly from inputs.
         let cwd = turn.cwd.clone();
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
-        let Some(turn_environment) = turn.environments.primary() else {
+        let Some(turn_environment) = turn.environments.first() else {
             return Err(FunctionCallError::RespondToModel(
                 "apply_patch is unavailable in this session".to_string(),
             ));
@@ -481,7 +481,7 @@ pub(crate) async fn intercept_apply_patch(
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
     let sandbox = turn
         .environments
-        .primary()
+        .first()
         .filter(|env| env.environment.is_remote())
         .map(|_| turn.file_system_sandbox_context(/*additional_permissions*/ None));
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, sandbox.as_ref())

@@ -1318,7 +1318,6 @@ impl Session {
                 content: vec![ContentItem::InputText {
                     text: continuation_prompt(&goal),
                 }],
-                phase: None,
             }],
         })
     }
@@ -1399,7 +1398,10 @@ impl Session {
 }
 
 fn should_ignore_goal_for_mode(mode: ModeKind) -> bool {
-    matches!(mode, ModeKind::Plan | ModeKind::Codex | ModeKind::CodexConfigEdit)
+    matches!(
+        mode,
+        ModeKind::Plan | ModeKind::Codex | ModeKind::CodexConfigEdit
+    )
 }
 
 // Builds the hidden developer prompt used to continue an active goal after the
@@ -1464,7 +1466,6 @@ fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
         content: vec![ContentItem::InputText {
             text: budget_limit_prompt(goal),
         }],
-        phase: None,
     }
 }
 

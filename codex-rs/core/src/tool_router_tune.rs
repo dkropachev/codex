@@ -7,6 +7,7 @@ use chrono::Utc;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::SessionTelemetry;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -116,6 +117,7 @@ impl ToolRouterIntrospectionProvider for ToolRouterModelIntrospectionProvider {
         let thread_id = ThreadId::new();
         let client = ModelClient::new(
             auth_manager,
+            SessionId::new(),
             thread_id,
             self.installation_id.clone(),
             self.config.model_provider.clone(),
@@ -169,7 +171,9 @@ impl ToolRouterIntrospectionProvider for ToolRouterModelIntrospectionProvider {
                     .model_reasoning_effort
                     .or(model_info.default_reasoning_level),
                 self.config.model_reasoning_summary.unwrap_or_default(),
-                self.config.service_tier,
+                self.config
+                    .service_tier
+                    .map(|service_tier| service_tier.request_value().to_string()),
                 None,
                 &InferenceTraceContext::disabled(),
             )

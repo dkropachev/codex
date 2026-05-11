@@ -2307,6 +2307,7 @@ fn repo_ci_suppressed_for_session_source(source: &SessionSource) -> bool {
         | SessionSource::Exec
         | SessionSource::Mcp
         | SessionSource::Custom(_)
+        | SessionSource::Internal(_)
         | SessionSource::Unknown => false,
     }
 }

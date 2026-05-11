@@ -59,7 +59,7 @@ pub(super) async fn update_thread_metadata(
     codex_rollout::state_db::reconcile_rollout(
         state_db_ctx.as_deref(),
         resolved_rollout_path.path.as_path(),
-        store.config.default_model_provider_id.as_str(),
+        store.config.model_provider_id.as_str(),
         /*builder*/ None,
         &[],
         /*archived_only*/ resolved_rollout_path.archived.then_some(true),

@@ -174,13 +174,10 @@ impl ConfigRequestProcessor {
     pub(crate) async fn model_provider_capabilities_read(
         &self,
     ) -> Result<ModelProviderCapabilitiesReadResponse, JSONRPCErrorError> {
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-        let provider = create_model_provider(config.model_provider, /*auth_manager*/ None);
-        let capabilities = provider.capabilities();
         Ok(ModelProviderCapabilitiesReadResponse {
-            namespace_tools: capabilities.namespace_tools,
-            image_generation: capabilities.image_generation,
-            web_search: capabilities.web_search,
+            namespace_tools: true,
+            image_generation: true,
+            web_search: true,
         })
     }
 

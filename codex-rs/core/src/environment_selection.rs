@@ -75,11 +75,24 @@ pub(crate) fn resolve_environment_selections(
             environment_id,
             environment,
             cwd: selected_environment.cwd.clone(),
-            shell: None,
         });
     }
 
     Ok(ResolvedTurnEnvironments { turn_environments })
+}
+
+pub(crate) fn validate_environment_selections(
+    environment_manager: &EnvironmentManager,
+    environments: &[TurnEnvironmentSelection],
+) -> CodexResult<()> {
+    resolve_environment_selections(environment_manager, environments).map(|_| ())
+}
+
+pub(crate) fn selected_primary_environment(
+    environment_manager: &EnvironmentManager,
+    environments: &[TurnEnvironmentSelection],
+) -> CodexResult<Option<Arc<codex_exec_server::Environment>>> {
+    Ok(resolve_environment_selections(environment_manager, environments)?.primary_environment())
 }
 
 #[cfg(test)]

@@ -958,7 +958,8 @@ async fn bang_shell_enter_while_task_running_submits_run_user_shell_command() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        message_history: None,
+        history_log_id: 0,
+        history_entry_count: 0,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -976,8 +977,8 @@ async fn bang_shell_enter_while_task_running_submits_run_user_shell_command() {
         other => panic!("expected RunUserShellCommand op, got {other:?}"),
     }
     assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::AppendMessageHistoryEntry { text, .. }) if text == "!echo hi"
+        op_rx.try_recv(),
+        Ok(Op::AddToHistory { text }) if text == "!echo hi"
     );
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }

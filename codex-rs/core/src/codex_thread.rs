@@ -11,6 +11,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -224,12 +225,9 @@ impl CodexThread {
         app_server_client_version: Option<String>,
         mcp_elicitations_auto_deny: bool,
     ) -> ConstraintResult<()> {
+        let _ = mcp_elicitations_auto_deny;
         self.codex
-            .set_app_server_client_info(
-                app_server_client_name,
-                app_server_client_version,
-                mcp_elicitations_auto_deny,
-            )
+            .set_app_server_client_info(app_server_client_name, app_server_client_version)
             .await
     }
 
@@ -253,6 +251,7 @@ impl CodexThread {
             collaboration_mode,
             personality,
         } = overrides;
+        let _ = active_permission_profile;
         let collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
             collaboration_mode
         } else {
@@ -269,11 +268,12 @@ impl CodexThread {
             approvals_reviewer,
             sandbox_policy,
             permission_profile,
-            active_permission_profile,
             windows_sandbox_level,
             collaboration_mode: Some(collaboration_mode),
             reasoning_summary: summary,
-            service_tier,
+            service_tier: service_tier.map(|service_tier| {
+                service_tier.and_then(|service_tier| ServiceTier::from_request_value(&service_tier))
+            }),
             personality,
             ..Default::default()
         };
@@ -401,9 +401,10 @@ impl CodexThread {
     pub async fn guardian_trunk_rollout_path(&self) -> Option<PathBuf> {
         self.codex
             .session
-            .guardian_review_session
-            .trunk_rollout_path()
+            .current_rollout_path()
             .await
+            .ok()
+            .flatten()
     }
 
     pub async fn load_history(
@@ -539,15 +540,9 @@ impl CodexThread {
 
 fn pending_message_input_item(message: &ResponseItem) -> CodexResult<ResponseInputItem> {
     match message {
-        ResponseItem::Message {
-            role,
-            content,
-            phase,
-            ..
-        } => Ok(ResponseInputItem::Message {
+        ResponseItem::Message { role, content, .. } => Ok(ResponseInputItem::Message {
             role: role.clone(),
             content: content.clone(),
-            phase: phase.clone(),
         }),
         _ => Err(CodexErr::InvalidRequest(
             "append_message only supports ResponseItem::Message".to_string(),

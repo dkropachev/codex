@@ -48,6 +48,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -222,6 +223,27 @@ pub struct StartThreadWithToolsOptions {
     pub environments: Vec<TurnEnvironmentSelection>,
 }
 
+pub struct StartThreadOptions {
+    pub config: Config,
+    pub initial_history: InitialHistory,
+    pub session_source: Option<SessionSource>,
+    pub thread_source: Option<ThreadSource>,
+    pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+    pub persist_extended_history: bool,
+    pub metrics_service_name: Option<String>,
+    pub parent_trace: Option<W3cTraceContext>,
+    pub environments: Vec<TurnEnvironmentSelection>,
+}
+
+pub(crate) struct ResumeThreadWithHistoryOptions {
+    pub(crate) config: Config,
+    pub(crate) initial_history: InitialHistory,
+    pub(crate) agent_control: AgentControl,
+    pub(crate) session_source: SessionSource,
+    pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+    pub(crate) inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+}
+
 /// Shared, `Arc`-owned state for [`ThreadManager`]. This `Arc` is required to have a single
 /// `Arc` reference that can be downgraded to by `AgentControl` while preventing every single
 /// function to require an `Arc<&Self>`.
@@ -263,6 +285,13 @@ fn configured_thread_store(config: &Config) -> Arc<dyn ThreadStore> {
         #[cfg(debug_assertions)]
         ThreadStoreConfig::InMemory { id } => InMemoryThreadStore::for_id(id),
     }
+}
+
+pub fn thread_store_from_config(
+    config: &Config,
+    _state_db: Option<codex_rollout::state_db::StateDbHandle>,
+) -> Arc<dyn ThreadStore> {
+    configured_thread_store(config)
 }
 
 impl ThreadManager {
@@ -571,6 +600,42 @@ impl ThreadManager {
             options.metrics_service_name,
             options.parent_trace,
             options.environments,
+            /*user_shell_override*/ None,
+        ))
+        .await
+    }
+
+    pub async fn start_thread_with_options(
+        &self,
+        options: StartThreadOptions,
+    ) -> CodexResult<NewThread> {
+        let StartThreadOptions {
+            config,
+            initial_history,
+            session_source,
+            thread_source,
+            dynamic_tools,
+            persist_extended_history,
+            metrics_service_name,
+            parent_trace,
+            environments,
+        } = options;
+        let _ = thread_source;
+        let thread_store = configured_thread_store(&config);
+        Box::pin(self.state.spawn_thread_with_source(
+            config,
+            thread_store,
+            initial_history,
+            Arc::clone(&self.state.auth_manager),
+            self.agent_control(),
+            session_source.unwrap_or_else(|| self.state.session_source.clone()),
+            dynamic_tools,
+            persist_extended_history,
+            metrics_service_name,
+            /*inherited_shell_snapshot*/ None,
+            /*inherited_exec_policy*/ None,
+            parent_trace,
+            environments,
             /*user_shell_override*/ None,
         ))
         .await
@@ -957,6 +1022,40 @@ impl ThreadManagerState {
         .await
     }
 
+    pub(crate) async fn resume_thread_with_history_with_source(
+        &self,
+        options: ResumeThreadWithHistoryOptions,
+    ) -> CodexResult<NewThread> {
+        let ResumeThreadWithHistoryOptions {
+            config,
+            initial_history,
+            agent_control,
+            session_source,
+            inherited_shell_snapshot,
+            inherited_exec_policy,
+        } = options;
+        let thread_store = configured_thread_store(&config);
+        let environments =
+            default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd);
+        Box::pin(self.spawn_thread_with_source(
+            config,
+            thread_store,
+            initial_history,
+            Arc::clone(&self.auth_manager),
+            agent_control,
+            session_source,
+            Vec::new(),
+            /*persist_extended_history*/ false,
+            /*metrics_service_name*/ None,
+            inherited_shell_snapshot,
+            inherited_exec_policy,
+            /*parent_trace*/ None,
+            environments,
+            /*user_shell_override*/ None,
+        ))
+        .await
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn fork_thread_with_source(
         &self,
@@ -1065,6 +1164,7 @@ impl ThreadManagerState {
         let parent_rollout_thread_trace = self
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
+        let thread_session_source = session_source.clone();
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
@@ -1093,7 +1193,7 @@ impl ThreadManagerState {
         })
         .await?;
         let new_thread = self
-            .finalize_thread_spawn(codex, thread_id, watch_registration)
+            .finalize_thread_spawn(codex, thread_id, thread_session_source, watch_registration)
             .await?;
         if is_resumed_thread
             && let Err(err) = new_thread.thread.apply_goal_resume_runtime_effects().await
@@ -1107,6 +1207,7 @@ impl ThreadManagerState {
         &self,
         codex: Codex,
         thread_id: ThreadId,
+        session_source: SessionSource,
         watch_registration: crate::file_watcher::WatchRegistration,
     ) -> CodexResult<NewThread> {
         let event = codex.next_event().await?;
@@ -1122,7 +1223,9 @@ impl ThreadManagerState {
 
         let thread = Arc::new(CodexThread::new(
             codex,
+            session_configured.clone(),
             session_configured.rollout_path.clone(),
+            session_source,
             watch_registration,
         ));
         let mut threads = self.threads.write().await;

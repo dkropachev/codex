@@ -22,9 +22,8 @@ use crate::provider::ModelProvider;
 use crate::provider::ProviderAccountResult;
 use crate::provider::ProviderAccountState;
 use auth::resolve_provider_auth;
-use auth::resolve_region;
 pub(crate) use catalog::static_model_catalog;
-use mantle::base_url;
+use mantle::runtime_base_url;
 
 /// Runtime provider for Amazon Bedrock's OpenAI-compatible Mantle endpoint.
 #[derive(Clone, Debug)]
@@ -76,9 +75,8 @@ impl ModelProvider for AmazonBedrockModelProvider {
 
     async fn api_provider_for_auth(&self, auth: Option<&CodexAuth>) -> Result<Provider> {
         let _ = auth;
-        let region = resolve_region(&self.aws).await?;
         let mut api_provider_info = self.info.clone();
-        api_provider_info.base_url = Some(base_url(&region)?);
+        api_provider_info.base_url = Some(runtime_base_url(&self.aws).await?);
         api_provider_info.to_api_provider(/*auth_mode*/ None)
     }
 

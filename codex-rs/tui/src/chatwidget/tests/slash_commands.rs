@@ -38,16 +38,14 @@ fn recall_latest_after_clearing(chat: &mut ChatWidget) -> String {
     chat.bottom_pane.composer_text()
 }
 
-fn next_add_to_history_event(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> String {
+fn next_add_to_history_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> String {
     loop {
-        match rx.try_recv() {
-            Ok(AppEvent::AppendMessageHistoryEntry { text, .. }) => return text,
+        match op_rx.try_recv() {
+            Ok(Op::AddToHistory { text }) => return text,
             Ok(_) => continue,
-            Err(TryRecvError::Empty) => {
-                panic!("expected AppendMessageHistoryEntry event but queue was empty")
-            }
+            Err(TryRecvError::Empty) => panic!("expected AddToHistory op but queue was empty"),
             Err(TryRecvError::Disconnected) => {
-                panic!("expected AppendMessageHistoryEntry event but channel closed")
+                panic!("expected AddToHistory op but channel closed")
             }
         }
     }
@@ -118,6 +116,15 @@ async fn queued_slash_review_with_args_dispatches_after_active_turn() {
     complete_turn_with_message(&mut chat, "turn-1", Some("done"));
 
     match op_rx.try_recv() {
+        Ok(Op::AddToHistory { .. }) => match op_rx.try_recv() {
+            Ok(Op::Review { target }) => assert_eq!(
+                target,
+                ReviewTarget::Custom {
+                    instructions: "check regressions".to_string(),
+                }
+            ),
+            other => panic!("expected queued /review to submit review op, got {other:?}"),
+        },
         Ok(Op::Review { target }) => assert_eq!(
             target,
             ReviewTarget::Custom {
@@ -145,7 +152,7 @@ async fn queued_slash_review_with_args_restores_for_edit() {
 
 #[tokio::test]
 async fn queued_bang_shell_dispatches_after_active_turn() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
     handle_turn_started(&mut chat, "turn-1");
 
@@ -164,7 +171,10 @@ async fn queued_bang_shell_dispatches_after_active_turn() {
         Ok(Op::RunUserShellCommand { command }) => assert_eq!(command, "echo hi"),
         other => panic!("expected queued shell command op, got {other:?}"),
     }
-    assert_eq!(next_add_to_history_event(&mut rx), "!echo hi");
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::AddToHistory { text }) if text == "!echo hi"
+    );
     assert!(chat.queued_user_messages.is_empty());
 }
 
@@ -207,7 +217,7 @@ async fn queued_empty_bang_shell_reports_help_when_dequeued_and_drains_next_inpu
 
 #[tokio::test]
 async fn queued_bang_shell_waits_for_user_shell_completion_before_next_input() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
     handle_turn_started(&mut chat, "turn-1");
 
@@ -220,7 +230,10 @@ async fn queued_bang_shell_waits_for_user_shell_completion_before_next_input() {
         Ok(Op::RunUserShellCommand { command }) => assert_eq!(command, "echo hi"),
         other => panic!("expected queued shell command op, got {other:?}"),
     }
-    assert_eq!(next_add_to_history_event(&mut rx), "!echo hi");
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::AddToHistory { text }) if text == "!echo hi"
+    );
     assert_eq!(chat.queued_user_messages.len(), 1);
 
     let begin = begin_exec_with_source(
@@ -399,10 +412,10 @@ async fn queued_inline_rename_does_not_drain_again_before_turn_started() {
         ),
         other => panic!("expected first queued message after /rename, got {other:?}"),
     }
-    assert!(events.iter().any(|event| matches!(
-        event,
-        AppEvent::AppendMessageHistoryEntry { text, .. } if text == "first after rename"
-    )));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::AddToHistory { text }) if text == "first after rename"
+    );
     assert_eq!(
         chat.queued_user_message_texts(),
         vec!["second after rename"]
@@ -932,7 +945,7 @@ fn merged_history_record_remaps_override_image_placeholders() {
 
 #[tokio::test]
 async fn interrupted_merged_message_history_encodes_mentions_once() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
     chat.on_agent_message_delta("Final answer line\n".to_string());
@@ -964,7 +977,7 @@ async fn interrupted_merged_message_history_encodes_mentions_once() {
         other => panic!("expected user turn, got {other:?}"),
     }
     let encoded = "use [$figma](app://figma) now";
-    assert_eq!(next_add_to_history_event(&mut rx), encoded);
+    assert_eq!(next_add_to_history_op(&mut op_rx), encoded);
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     next_interrupt_op(&mut op_rx);
@@ -984,7 +997,7 @@ async fn interrupted_merged_message_history_encodes_mentions_once() {
         }
         other => panic!("expected resubmitted user turn, got {other:?}"),
     }
-    assert_eq!(next_add_to_history_event(&mut rx), encoded);
+    assert_eq!(next_add_to_history_op(&mut op_rx), encoded);
 }
 
 #[tokio::test]
@@ -1040,788 +1053,6 @@ async fn usage_error_slash_command_is_available_from_local_recall() {
         "expected usage message, got: {rendered:?}"
     );
     assert_eq!(recall_latest_after_clearing(&mut chat), "/fast maybe");
-}
-
-#[tokio::test]
-async fn repo_ci_slash_command_sets_session_mode() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/repo-ci remote");
-
-    assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::SetRepoCiSessionConfig {
-            mode: Some(Some(codex_protocol::protocol::RepoCiSessionMode::Remote)),
-            issue_types: None,
-            review_rounds: None,
-            long_ci: None,
-            implement_enabled: None,
-            implement_mode: None,
-            implement_max_cycles: None,
-        })
-    );
-    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-    assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, AppEvent::InsertHistoryCell(_))),
-        "expected repo-ci status history event; events: {events:?}"
-    );
-    assert_eq!(recall_latest_after_clearing(&mut chat), "/repo-ci remote");
-}
-
-#[tokio::test]
-async fn repo_ci_slash_command_without_args_shows_usage_snapshot() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/repo-ci");
-
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected one info message");
-    let rendered = lines_to_single_string(&cells[0]);
-    assert_chatwidget_snapshot!("repo_ci_usage_info_message", rendered);
-    assert!(rendered.contains("/repo-ci setup"));
-    assert!(rendered.contains("/repo-ci learn"));
-    assert!(rendered.contains("/repo-ci retry"));
-    assert!(rendered.contains("long-ci <inherit|on|off>"));
-}
-
-#[tokio::test]
-async fn slash_codex_enters_config_mode_snapshot() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    submit_composer_text(&mut chat, "/codex");
-
-    let cells = drain_insert_history(&mut rx);
-    let codex_mode_cell = cells
-        .iter()
-        .find(|cell| lines_to_single_string(cell).contains("Codex mode enabled."))
-        .expect("expected Codex mode info history cell");
-    let mut rendered = normalize_snapshot_paths(lines_to_single_string(codex_mode_cell));
-    let workspace_prefix = std::env::temp_dir()
-        .join("codex-config-")
-        .display()
-        .to_string();
-    if let Some(start) = rendered.find(&workspace_prefix) {
-        let end = rendered[start..]
-            .find('.')
-            .map(|offset| start + offset)
-            .unwrap_or(rendered.len());
-        rendered.replace_range(start..end, "<codex-config-workspace>");
-    }
-    assert_chatwidget_snapshot!("slash_codex_guide", rendered);
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Codex);
-    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
-    assert_eq!(recall_latest_after_clearing(&mut chat), "/codex");
-}
-
-#[tokio::test]
-async fn slash_codex_off_leaves_config_mode() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    submit_composer_text(&mut chat, "/codex");
-    let _ = drain_insert_history(&mut rx);
-    submit_composer_text(&mut chat, "/codex off");
-
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
-    let cells = drain_insert_history(&mut rx);
-    let rendered = cells
-        .iter()
-        .map(|cell| lines_to_single_string(cell))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(rendered.contains("Codex mode disabled."));
-    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
-}
-
-#[tokio::test]
-async fn slash_codex_with_investigate_args_submits_codex_turn() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.thread_id = Some(ThreadId::new());
-    let command_text = "/codex explain how validation works for /implement";
-    let prompt_text = "explain how validation works for /implement";
-
-    submit_composer_text(&mut chat, command_text);
-
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            items,
-            collaboration_mode:
-                Some(CollaborationMode {
-                    mode: ModeKind::Codex,
-                    settings,
-                }),
-            ..
-        } => {
-            assert_eq!(
-                items,
-                vec![UserInput::Text {
-                    text: prompt_text.to_string(),
-                    text_elements: Vec::new(),
-                }]
-            );
-            assert!(
-                settings
-                    .developer_instructions
-                    .as_deref()
-                    .is_some_and(|instructions| instructions.contains("Codex Investigate Mode"))
-            );
-        }
-        other => panic!("expected Codex investigate UserTurn, got {other:?}"),
-    }
-    let rendered = drain_insert_history(&mut rx)
-        .iter()
-        .map(|cell| lines_to_single_string(cell))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(rendered.contains(prompt_text));
-    assert!(!rendered.contains("Codex guide"));
-    assert!(!rendered.contains("TUI slash commands"));
-    assert!(!rendered.contains("Codex Investigate Mode"));
-    assert_eq!(recall_latest_after_clearing(&mut chat), command_text);
-}
-
-#[tokio::test]
-async fn slash_codex_with_edit_args_submits_config_edit_turn() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.thread_id = Some(ThreadId::new());
-    let command_text =
-        "/codex i don't want repo-ci to run cibuildwheel or integration tests at all";
-    let prompt_text = "i don't want repo-ci to run cibuildwheel or integration tests at all";
-
-    submit_composer_text(&mut chat, command_text);
-
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            items,
-            collaboration_mode:
-                Some(CollaborationMode {
-                    mode: ModeKind::CodexConfigEdit,
-                    settings,
-                }),
-            ..
-        } => {
-            assert_eq!(
-                items,
-                vec![UserInput::Text {
-                    text: prompt_text.to_string(),
-                    text_elements: Vec::new(),
-                }]
-            );
-            assert!(
-                settings.developer_instructions.as_deref().is_some_and(
-                    |instructions| instructions.contains("Codex Config Edit Planning Mode")
-                )
-            );
-            assert!(
-                settings.developer_instructions.as_deref().is_some_and(
-                    |instructions| instructions.contains("Execution vs. mutation in Plan Mode")
-                )
-            );
-        }
-        other => panic!("expected Codex config-edit UserTurn, got {other:?}"),
-    }
-    let rendered = drain_insert_history(&mut rx)
-        .iter()
-        .map(|cell| lines_to_single_string(cell))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(rendered.contains(prompt_text));
-    assert!(!rendered.contains("Codex guide"));
-    assert!(!rendered.contains("TUI slash commands"));
-    assert!(!rendered.contains("Codex Config Edit Planning Mode"));
-    assert_eq!(
-        chat.active_collaboration_mode_kind(),
-        ModeKind::CodexConfigEdit
-    );
-}
-
-#[tokio::test]
-async fn slash_codex_with_ambiguous_args_uses_ai_classification_fallback() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.thread_id = Some(ThreadId::new());
-    let command_text = "/codex repo-ci cibuildwheel integration tests";
-    let prompt_text = "repo-ci cibuildwheel integration tests";
-
-    submit_composer_text(&mut chat, command_text);
-
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            items,
-            collaboration_mode:
-                Some(CollaborationMode {
-                    mode: ModeKind::CodexConfigEdit,
-                    settings,
-                }),
-            ..
-        } => {
-            assert_eq!(
-                items,
-                vec![UserInput::Text {
-                    text: prompt_text.to_string(),
-                    text_elements: Vec::new(),
-                }]
-            );
-            assert!(
-                settings
-                    .developer_instructions
-                    .as_deref()
-                    .is_some_and(|instructions| instructions
-                        .contains("Codex AI Classification Fallback Mode"))
-            );
-        }
-        other => panic!("expected Codex AI fallback UserTurn, got {other:?}"),
-    }
-    let rendered = drain_insert_history(&mut rx)
-        .iter()
-        .map(|cell| lines_to_single_string(cell))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(rendered.contains(prompt_text));
-    assert!(!rendered.contains("Codex AI Classification Fallback Mode"));
-    assert_eq!(
-        chat.active_collaboration_mode_kind(),
-        ModeKind::CodexConfigEdit
-    );
-}
-
-#[tokio::test]
-async fn codex_mode_turn_uses_scratch_workspace_and_sandbox() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.thread_id = Some(ThreadId::new());
-    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-    let target_cwd = chat.config.cwd.to_path_buf();
-    chat.set_collaboration_mask(crate::codex_config_context::codex_config_edit_mask(
-        &target_cwd,
-    ));
-
-    submit_composer_text(&mut chat, "configure Codex");
-
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            cwd,
-            sandbox_policy,
-            permission_profile,
-            collaboration_mode:
-                Some(CollaborationMode {
-                    mode: ModeKind::CodexConfigEdit,
-                    settings,
-                }),
-            ..
-        } => {
-            let expected_sandbox = crate::codex_config_context::codex_config_sandbox_policy();
-            assert_ne!(cwd, target_cwd);
-            assert!(cwd.starts_with(std::env::temp_dir()));
-            assert_eq!(sandbox_policy, expected_sandbox);
-            assert_eq!(
-                permission_profile,
-                Some(crate::codex_config_context::codex_config_permission_profile())
-            );
-            assert!(
-                settings
-                    .developer_instructions
-                    .as_deref()
-                    .is_some_and(|instructions| instructions.contains("Codex guide"))
-            );
-        }
-        other => panic!("expected Codex config-edit UserTurn, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn codex_mode_user_messages_switch_between_internal_submodes() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.thread_id = Some(ThreadId::new());
-    chat.set_collaboration_mask(crate::codex_config_context::codex_investigate_mask(
-        &chat.config.cwd,
-    ));
-
-    submit_composer_text(&mut chat, "update repo-ci settings");
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            collaboration_mode: Some(CollaborationMode { mode, .. }),
-            ..
-        } => assert_eq!(mode, ModeKind::CodexConfigEdit),
-        other => panic!("expected Codex config-edit turn, got {other:?}"),
-    }
-    chat.on_task_complete(Some("Plan ready.".to_string()), /*from_replay*/ false);
-
-    submit_composer_text(&mut chat, "explain the current repo-ci config");
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            collaboration_mode: Some(CollaborationMode { mode, .. }),
-            ..
-        } => assert_eq!(mode, ModeKind::Codex),
-        other => panic!("expected Codex investigate turn, got {other:?}"),
-    }
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Codex);
-}
-
-#[tokio::test]
-async fn repo_ci_setup_slash_command_runs_enable_and_learn() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/repo-ci setup");
-
-    match op_rx.try_recv() {
-        Ok(Op::RunUserShellCommand { command }) => {
-            assert!(command.contains("repo-ci enable --cwd"));
-            assert!(command.contains("repo-ci learn --cwd"));
-        }
-        other => panic!("expected RunUserShellCommand op, got {other:?}"),
-    }
-    assert_eq!(recall_latest_after_clearing(&mut chat), "/repo-ci setup");
-}
-
-#[tokio::test]
-async fn repo_ci_learn_slash_command_runs_learning() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/repo-ci learn");
-
-    match op_rx.try_recv() {
-        Ok(Op::RunUserShellCommand { command }) => {
-            assert!(command.contains("repo-ci learn --cwd"));
-            assert!(!command.contains("repo-ci enable --cwd"));
-        }
-        other => panic!("expected RunUserShellCommand op, got {other:?}"),
-    }
-    assert_eq!(recall_latest_after_clearing(&mut chat), "/repo-ci learn");
-}
-
-#[tokio::test]
-async fn repo_ci_instruction_show_slash_command_runs_show() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/repo-ci instruction show");
-
-    match op_rx.try_recv() {
-        Ok(Op::RunUserShellCommand { command }) => {
-            assert!(command.contains("repo-ci instruction show --cwd"));
-        }
-        other => panic!("expected RunUserShellCommand op, got {other:?}"),
-    }
-    assert_eq!(
-        recall_latest_after_clearing(&mut chat),
-        "/repo-ci instruction show"
-    );
-}
-
-#[tokio::test]
-async fn repo_ci_instruction_set_slash_command_runs_set() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(
-        &mut chat,
-        "/repo-ci instruction set --instruction \"Use nextest.\"",
-    );
-
-    match op_rx.try_recv() {
-        Ok(Op::RunUserShellCommand { command }) => {
-            assert!(command.contains("repo-ci instruction set --cwd --instruction"));
-            assert!(command.contains("Use nextest."));
-        }
-        other => panic!("expected RunUserShellCommand op, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn repo_ci_instruction_clear_slash_command_runs_clear() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/repo-ci instruction clear");
-
-    match op_rx.try_recv() {
-        Ok(Op::RunUserShellCommand { command }) => {
-            assert!(command.contains("repo-ci instruction clear --cwd"));
-        }
-        other => panic!("expected RunUserShellCommand op, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn repo_ci_instruction_edit_slash_command_runs_edit() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/repo-ci instruction edit");
-
-    match op_rx.try_recv() {
-        Ok(Op::RunUserShellCommand { command }) => {
-            assert!(command.contains("repo-ci instruction edit --cwd"));
-        }
-        other => panic!("expected RunUserShellCommand op, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn repo_ci_retry_slash_command_runs_workflow() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/repo-ci retry");
-
-    match op_rx.try_recv() {
-        Ok(Op::RunUserShellCommand { command }) => {
-            assert!(command.contains("repo-ci workflow --cwd"));
-            assert!(!command.contains("repo-ci enable --cwd"));
-            assert!(!command.contains("repo-ci learn --cwd"));
-        }
-        other => panic!("expected RunUserShellCommand op, got {other:?}"),
-    }
-    assert_eq!(recall_latest_after_clearing(&mut chat), "/repo-ci retry");
-}
-
-#[tokio::test]
-async fn repo_ci_issues_slash_command_sets_session_config() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/repo-ci issues correctness,security");
-
-    assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::SetRepoCiSessionConfig {
-            mode: None,
-            issue_types: Some(Some(issue_types)),
-            review_rounds: None,
-            long_ci: None,
-            implement_enabled: None,
-            implement_mode: None,
-            implement_max_cycles: None,
-        }) if issue_types == vec![
-            codex_protocol::protocol::RepoCiIssueType::Correctness,
-            codex_protocol::protocol::RepoCiIssueType::Security,
-        ]
-    );
-    assert_eq!(
-        recall_latest_after_clearing(&mut chat),
-        "/repo-ci issues correctness,security"
-    );
-}
-
-#[tokio::test]
-async fn repo_ci_partial_slash_command_preserves_unspecified_session_config() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/repo-ci remote");
-    assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::SetRepoCiSessionConfig {
-            mode: Some(Some(codex_protocol::protocol::RepoCiSessionMode::Remote)),
-            issue_types: None,
-            review_rounds: None,
-            long_ci: None,
-            implement_enabled: None,
-            implement_mode: None,
-            implement_max_cycles: None,
-        })
-    );
-
-    submit_composer_text(&mut chat, "/repo-ci issues security");
-
-    assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::SetRepoCiSessionConfig {
-            mode: None,
-            issue_types: Some(Some(issue_types)),
-            review_rounds: None,
-            long_ci: None,
-            implement_enabled: None,
-            implement_mode: None,
-            implement_max_cycles: None,
-        }) if issue_types == vec![codex_protocol::protocol::RepoCiIssueType::Security]
-    );
-    assert_eq!(
-        chat.config.repo_ci_session_mode,
-        Some(codex_protocol::protocol::RepoCiSessionMode::Remote)
-    );
-}
-
-#[tokio::test]
-async fn repo_ci_rounds_slash_command_sets_session_config() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/repo-ci rounds 3");
-
-    assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::SetRepoCiSessionConfig {
-            mode: None,
-            issue_types: None,
-            review_rounds: Some(Some(3)),
-            long_ci: None,
-            implement_enabled: None,
-            implement_mode: None,
-            implement_max_cycles: None,
-        })
-    );
-    assert_eq!(recall_latest_after_clearing(&mut chat), "/repo-ci rounds 3");
-}
-
-#[tokio::test]
-async fn repo_ci_long_ci_slash_command_sets_session_config() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/repo-ci long-ci on");
-
-    assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::SetRepoCiSessionConfig {
-            mode: None,
-            issue_types: None,
-            review_rounds: None,
-            long_ci: Some(Some(true)),
-            implement_enabled: None,
-            implement_mode: None,
-            implement_max_cycles: None,
-        })
-    );
-    assert_eq!(
-        recall_latest_after_clearing(&mut chat),
-        "/repo-ci long-ci on"
-    );
-}
-
-#[tokio::test]
-async fn repo_ci_slash_command_with_task_applies_config_for_one_turn() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.thread_id = Some(ThreadId::new());
-
-    submit_composer_text(&mut chat, "/repo-ci local fix the failing tests");
-
-    match next_submit_op(&mut op_rx) {
-        Op::UserInputWithTurnContext { items, repo_ci, .. } => {
-            assert_eq!(
-                items,
-                vec![UserInput::Text {
-                    text: "fix the failing tests".to_string(),
-                    text_elements: Vec::new(),
-                }]
-            );
-            assert_eq!(
-                repo_ci,
-                Some(codex_protocol::protocol::RepoCiTurnOverrides {
-                    mode: Some(Some(codex_protocol::protocol::RepoCiSessionMode::Local)),
-                    issue_types: None,
-                    review_rounds: None,
-                    long_ci: None,
-                    implement_enabled: None,
-                    implement_mode: None,
-                    implement_max_cycles: None,
-                })
-            );
-        }
-        other => panic!("expected repo-ci task user turn, got {other:?}"),
-    }
-    assert_eq!(
-        recall_latest_after_clearing(&mut chat),
-        "/repo-ci local fix the failing tests"
-    );
-}
-
-#[tokio::test]
-async fn repo_ci_slash_command_with_task_restores_previous_session_config() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.thread_id = Some(ThreadId::new());
-
-    submit_composer_text(&mut chat, "/repo-ci remote");
-    assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::SetRepoCiSessionConfig {
-            mode: Some(Some(codex_protocol::protocol::RepoCiSessionMode::Remote)),
-            issue_types: None,
-            review_rounds: None,
-            long_ci: None,
-            implement_enabled: None,
-            implement_mode: None,
-            implement_max_cycles: None,
-        })
-    );
-
-    submit_composer_text(&mut chat, "/repo-ci local rounds 2 fix the failing tests");
-
-    match next_submit_op(&mut op_rx) {
-        Op::UserInputWithTurnContext { items, repo_ci, .. } => {
-            assert_eq!(
-                items,
-                vec![UserInput::Text {
-                    text: "fix the failing tests".to_string(),
-                    text_elements: Vec::new(),
-                }]
-            );
-            assert_eq!(
-                repo_ci,
-                Some(codex_protocol::protocol::RepoCiTurnOverrides {
-                    mode: Some(Some(codex_protocol::protocol::RepoCiSessionMode::Local)),
-                    issue_types: None,
-                    review_rounds: Some(Some(2)),
-                    long_ci: None,
-                    implement_enabled: None,
-                    implement_mode: None,
-                    implement_max_cycles: None,
-                })
-            );
-        }
-        other => panic!("expected repo-ci task user turn, got {other:?}"),
-    }
-    let remaining_ops = std::iter::from_fn(|| op_rx.try_recv().ok()).collect::<Vec<_>>();
-    assert!(
-        remaining_ops
-            .iter()
-            .all(|op| !matches!(op, Op::SetRepoCiSessionConfig { .. })),
-        "repo-ci task should not restore by submitting session config ops: {remaining_ops:?}"
-    );
-    assert_eq!(
-        chat.config.repo_ci_session_mode,
-        Some(codex_protocol::protocol::RepoCiSessionMode::Remote)
-    );
-}
-
-#[tokio::test]
-async fn implement_slash_command_sets_session_config() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/implement enable --max-cycles=4");
-
-    assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::SetRepoCiSessionConfig {
-            mode: None,
-            issue_types: None,
-            review_rounds: None,
-            long_ci: None,
-            implement_enabled: Some(Some(true)),
-            implement_mode: Some(Some(codex_protocol::protocol::ImplementMode::Auto)),
-            implement_max_cycles: Some(Some(4)),
-        })
-    );
-    assert_eq!(
-        recall_latest_after_clearing(&mut chat),
-        "/implement enable --max-cycles=4"
-    );
-}
-
-#[tokio::test]
-async fn implement_implicit_slash_command_sets_session_config() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/implement implicit --max-cycles=2");
-
-    assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::SetRepoCiSessionConfig {
-            mode: None,
-            issue_types: None,
-            review_rounds: None,
-            long_ci: None,
-            implement_enabled: Some(Some(true)),
-            implement_mode: Some(Some(codex_protocol::protocol::ImplementMode::Implicit)),
-            implement_max_cycles: Some(Some(2)),
-        })
-    );
-    assert_eq!(
-        recall_latest_after_clearing(&mut chat),
-        "/implement implicit --max-cycles=2"
-    );
-}
-
-#[tokio::test]
-async fn implement_inherit_slash_command_sets_session_config() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/implement inherit");
-
-    assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::SetRepoCiSessionConfig {
-            mode: None,
-            issue_types: None,
-            review_rounds: None,
-            long_ci: None,
-            implement_enabled: Some(None),
-            implement_mode: Some(None),
-            implement_max_cycles: Some(None),
-        })
-    );
-    assert_eq!(
-        recall_latest_after_clearing(&mut chat),
-        "/implement inherit"
-    );
-}
-
-#[tokio::test]
-async fn implement_slash_command_with_task_applies_for_one_turn() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.thread_id = Some(ThreadId::new());
-
-    submit_composer_text(&mut chat, "/implement --max-cycles=1 fix the failing tests");
-
-    match next_submit_op(&mut op_rx) {
-        Op::UserInputWithTurnContext { items, repo_ci, .. } => {
-            assert_eq!(
-                items,
-                vec![UserInput::Text {
-                    text: "fix the failing tests".to_string(),
-                    text_elements: Vec::new(),
-                }]
-            );
-            assert_eq!(
-                repo_ci,
-                Some(codex_protocol::protocol::RepoCiTurnOverrides {
-                    mode: None,
-                    issue_types: None,
-                    review_rounds: None,
-                    long_ci: None,
-                    implement_enabled: Some(Some(true)),
-                    implement_mode: None,
-                    implement_max_cycles: Some(Some(1)),
-                })
-            );
-        }
-        other => panic!("expected implement task user turn, got {other:?}"),
-    }
-    assert_eq!(
-        recall_latest_after_clearing(&mut chat),
-        "/implement --max-cycles=1 fix the failing tests"
-    );
-}
-
-#[tokio::test]
-async fn model_router_slash_command_sets_session_config() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/model-router disable");
-
-    assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::SetModelRouterSessionConfig {
-            enabled: Some(false),
-        })
-    );
-    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-    assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, AppEvent::InsertHistoryCell(_))),
-        "expected model-router status history event; events: {events:?}"
-    );
-    assert_eq!(
-        recall_latest_after_clearing(&mut chat),
-        "/model-router disable"
-    );
-}
-
-#[tokio::test]
-async fn model_router_slash_command_without_args_shows_usage() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-
-    submit_composer_text(&mut chat, "/model-router");
-
-    let cells = drain_insert_history(&mut rx);
-    let rendered = cells
-        .iter()
-        .map(|cell| lines_to_single_string(cell))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(rendered.contains("Usage: /model-router <enable|disable|inherit>"));
 }
 
 #[tokio::test]
@@ -2364,37 +1595,6 @@ async fn slash_clear_requests_ui_clear_when_idle() {
 }
 
 #[tokio::test]
-async fn slash_clear_after_ctrl_c_keeps_stashed_draft_recallable() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let thread_id = ThreadId::new();
-    chat.thread_id = Some(thread_id);
-    chat.bottom_pane
-        .set_history_metadata(thread_id, /*log_id*/ 1, /*entry_count*/ 0);
-
-    submit_composer_text(&mut chat, "ok");
-    assert_eq!(next_add_to_history_event(&mut rx), "ok");
-
-    let stashed_draft = "explain why history recall lost this draft";
-
-    chat.bottom_pane
-        .set_composer_text(stashed_draft.to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
-    assert_eq!(chat.bottom_pane.composer_text(), "");
-    assert_eq!(next_add_to_history_event(&mut rx), stashed_draft);
-
-    chat.bottom_pane
-        .set_composer_text("/clear".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ClearUi));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(chat.bottom_pane.composer_text(), stashed_draft);
-
-    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(chat.bottom_pane.composer_text(), "ok");
-}
-
-#[tokio::test]
 async fn slash_clear_is_disabled_while_task_running() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_task_running(/*running*/ true);
@@ -2603,9 +1803,9 @@ async fn fast_slash_command_updates_and_persists_local_service_tier() {
         events.iter().any(|event| matches!(
             event,
             AppEvent::CodexOp(Op::OverrideTurnContext {
-                service_tier: Some(Some(service_tier)),
+                service_tier: Some(Some(ServiceTier::Fast)),
                 ..
-            }) if service_tier == ServiceTier::Fast.request_value()
+            })
         )),
         "expected fast-mode override app event; events: {events:?}"
     );
@@ -2634,9 +1834,9 @@ async fn fast_keybinding_toggle_uses_same_events_as_fast_slash_command() {
         events.iter().any(|event| matches!(
             event,
             AppEvent::CodexOp(Op::OverrideTurnContext {
-                service_tier: Some(Some(service_tier)),
+                service_tier: Some(Some(ServiceTier::Fast)),
                 ..
-            }) if service_tier == ServiceTier::Fast.request_value()
+            })
         )),
         "expected fast-mode override app event; events: {events:?}"
     );
@@ -2684,9 +1884,9 @@ async fn user_turn_carries_service_tier_after_fast_toggle() {
 
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            service_tier: Some(Some(service_tier)),
+            service_tier: Some(Some(ServiceTier::Fast)),
             ..
-        } if service_tier == ServiceTier::Fast.request_value() => {}
+        } => {}
         other => panic!("expected Op::UserTurn with fast service tier, got {other:?}"),
     }
 }
@@ -2709,9 +1909,9 @@ async fn queued_fast_slash_applies_before_next_queued_message() {
         events.iter().any(|event| matches!(
             event,
             AppEvent::CodexOp(Op::OverrideTurnContext {
-                service_tier: Some(Some(service_tier)),
+                service_tier: Some(Some(ServiceTier::Fast)),
                 ..
-            }) if service_tier == ServiceTier::Fast.request_value()
+            })
         )),
         "expected queued /fast to update service tier before next turn; events: {events:?}"
     );
@@ -2719,9 +1919,9 @@ async fn queued_fast_slash_applies_before_next_queued_message() {
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
             items,
-            service_tier: Some(Some(service_tier)),
+            service_tier: Some(Some(ServiceTier::Fast)),
             ..
-        } if service_tier == ServiceTier::Fast.request_value() => assert_eq!(
+        } => assert_eq!(
             items,
             vec![UserInput::Text {
                 text: "hello after fast".to_string(),

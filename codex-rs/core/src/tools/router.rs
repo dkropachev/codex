@@ -591,11 +591,8 @@ impl ToolRouter {
                 &routing_tool::response_to_content_items(response),
             )
             .unwrap_or_default();
-            token_accounting = token_accounting.saturating_add(
-                result
-                    .result
-                    .token_accounting(estimate_text_tokens(&text)),
-            );
+            token_accounting = token_accounting
+                .saturating_add(result.result.token_accounting(estimate_text_tokens(&text)));
             content.push(FunctionCallOutputContentItem::InputText {
                 text: format!("## {label}\n{text}"),
             });
@@ -605,8 +602,7 @@ impl ToolRouter {
             codex_protocol::models::function_call_output_content_items_to_text(&content)
                 .unwrap_or_default();
         let returned_output_tokens = estimate_text_tokens(&returned_text);
-        let token_accounting =
-            token_accounting.with_returned_output_tokens(returned_output_tokens);
+        let token_accounting = token_accounting.with_returned_output_tokens(returned_output_tokens);
         let output = FunctionToolOutput::from_content(content, Some(all_success));
         self.record_tool_router_usage(
             &context.session,

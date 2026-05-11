@@ -17,12 +17,6 @@ pub(crate) struct SessionNetworkProxyRuntime {
     pub(crate) socks_addr: String,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct MessageHistoryMetadata {
-    pub(crate) log_id: u64,
-    pub(crate) entry_count: usize,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ThreadSessionState {
     pub(crate) thread_id: ThreadId,
@@ -31,7 +25,7 @@ pub(crate) struct ThreadSessionState {
     pub(crate) thread_name: Option<String>,
     pub(crate) model: String,
     pub(crate) model_provider_id: String,
-    pub(crate) service_tier: Option<String>,
+    pub(crate) service_tier: Option<codex_protocol::config_types::ServiceTier>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     /// Canonical active permissions for this session. Legacy app-server
@@ -44,7 +38,8 @@ pub(crate) struct ThreadSessionState {
     pub(crate) cwd: AbsolutePathBuf,
     pub(crate) instruction_source_paths: Vec<AbsolutePathBuf>,
     pub(crate) reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
-    pub(crate) message_history: Option<MessageHistoryMetadata>,
+    pub(crate) history_log_id: u64,
+    pub(crate) history_entry_count: u64,
     pub(crate) network_proxy: Option<SessionNetworkProxyRuntime>,
     pub(crate) rollout_path: Option<PathBuf>,
 }

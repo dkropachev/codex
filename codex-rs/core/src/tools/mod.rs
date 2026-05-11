@@ -19,8 +19,6 @@ pub(crate) mod routing_tool;
 pub(crate) mod runtimes;
 pub(crate) mod sandboxing;
 pub(crate) mod spec;
-pub(crate) mod spec_plan;
-pub(crate) mod spec_plan_types;
 pub(crate) mod tool_dispatch_trace;
 pub(crate) mod tool_search_entry;
 

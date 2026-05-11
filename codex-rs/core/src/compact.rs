@@ -553,7 +553,10 @@ async fn drain_to_completed(
             &turn_context.session_telemetry,
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
-            turn_context.config.service_tier,
+            turn_context
+                .config
+                .service_tier
+                .map(|service_tier| service_tier.request_value().to_string()),
             turn_metadata_header,
             // Rollout tracing currently models remote compaction only; local compaction streams
             // are left untraced until the reducer has a first-class local compaction lifecycle.

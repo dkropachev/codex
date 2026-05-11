@@ -44,13 +44,13 @@ pub(super) async fn list_threads(
         codex_home: store.config.codex_home.clone(),
         sqlite_home: store.config.sqlite_home.clone(),
         cwd: store.config.codex_home.clone(),
-        model_provider_id: store.config.default_model_provider_id.clone(),
+        model_provider_id: store.config.model_provider_id.clone(),
         generate_memories: false,
     };
     let page = list_rollout_threads(
         state_db,
         &rollout_config,
-        store.config.default_model_provider_id.as_str(),
+        store.config.model_provider_id.as_str(),
         &params,
         cursor.as_ref(),
         sort_key,
@@ -70,7 +70,7 @@ pub(super) async fn list_threads(
             stored_thread_from_rollout_item(
                 item,
                 params.archived,
-                store.config.default_model_provider_id.as_str(),
+                store.config.model_provider_id.as_str(),
             )
         })
         .collect::<Vec<_>>();

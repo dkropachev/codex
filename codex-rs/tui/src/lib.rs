@@ -108,9 +108,6 @@ mod chatwidget;
 mod cli;
 mod clipboard_copy;
 mod clipboard_paste;
-mod codex_config_context;
-mod codex_config_history;
-mod codex_guide;
 mod collaboration_modes;
 mod color;
 pub(crate) mod custom_terminal;
@@ -812,8 +809,7 @@ pub async fn run_main(
         /*enable_codex_api_key_env*/ false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
         chatgpt_base_url,
-    )
-    .await;
+    );
 
     let model_provider_override = if cli.oss {
         let resolved = resolve_oss_provider(
@@ -852,9 +848,6 @@ pub async fn run_main(
     };
 
     let additional_dirs = cli.add_dir.clone();
-    let repo_ci_issue_types =
-        crate::cli::RepoCiIssueTypeCliArg::normalize_list(cli.repo_ci_issue_types.clone())
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
 
     let overrides = ConfigOverrides {
         model,
@@ -871,10 +864,6 @@ pub async fn run_main(
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
         show_raw_agent_reasoning: cli.oss.then_some(true),
-        repo_ci_session_mode: cli.repo_ci.map(Into::into),
-        repo_ci_issue_types,
-        repo_ci_review_rounds: cli.repo_ci_review_rounds,
-        repo_ci_long_ci: cli.repo_ci_long_ci.then_some(true),
         additional_writable_roots: additional_dirs,
         ..Default::default()
     };
@@ -891,38 +880,40 @@ pub async fn run_main(
         AppServerTarget::Remote { .. } => state_db::get_state_db(&config).await,
     };
 
-    let effective_toml = config.config_layer_stack.effective_config();
-    match effective_toml.try_into() {
-        Ok(config_toml) => {
-            match crate::legacy_core::personality_migration::maybe_migrate_personality(
-                &config.codex_home,
-                &config_toml,
-                state_db.clone(),
-            )
-            .await
-            {
-                Ok(
-                    crate::legacy_core::personality_migration::PersonalityMigrationStatus::Applied,
-                ) => {
-                    config = load_config_or_exit(
-                        cli_kv_overrides.clone(),
-                        overrides.clone(),
-                        cloud_requirements.clone(),
-                    )
-                    .await;
-                }
-                Ok(
-                    crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedMarker
-                    | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedExplicitPersonality
-                    | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedNoSessions,
-                ) => {}
-                Err(err) => {
-                    tracing::warn!(error = %err, "failed to run personality migration");
+    if let Some(state_db) = state_db.clone() {
+        let effective_toml = config.config_layer_stack.effective_config();
+        match effective_toml.try_into() {
+            Ok(config_toml) => {
+                match crate::legacy_core::personality_migration::maybe_migrate_personality(
+                    &config.codex_home,
+                    &config_toml,
+                    Some(state_db),
+                )
+                .await
+                {
+                    Ok(
+                        crate::legacy_core::personality_migration::PersonalityMigrationStatus::Applied,
+                    ) => {
+                        config = load_config_or_exit(
+                            cli_kv_overrides.clone(),
+                            overrides.clone(),
+                            cloud_requirements.clone(),
+                        )
+                        .await;
+                    }
+                    Ok(
+                        crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedMarker
+                        | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedExplicitPersonality
+                        | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedNoSessions,
+                    ) => {}
+                    Err(err) => {
+                        tracing::warn!(error = %err, "failed to run personality migration");
+                    }
                 }
             }
-        }
-        Err(err) => {
-            tracing::warn!(error = %err, "failed to deserialize config for personality migration");
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to deserialize config for personality migration");
+            }
         }
     }
 
@@ -959,10 +950,7 @@ pub async fn run_main(
             auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
             forced_login_method: config.forced_login_method,
             forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
-            chatgpt_base_url: Some(config.chatgpt_base_url.clone()),
-        })
-        .await
-        {
+        }) {
             eprintln!("{err}");
             std::process::exit(1);
         }
@@ -1236,8 +1224,7 @@ async fn run_ratatui_app(
                 /*enable_codex_api_key_env*/ false,
                 initial_config.cli_auth_credentials_store_mode,
                 initial_config.chatgpt_base_url.clone(),
-            )
-            .await;
+            );
         }
 
         // If the user made an explicit trust decision, or we showed the login flow, reload config
@@ -1645,8 +1632,7 @@ async fn get_login_status(
     let account = app_server.read_account().await?;
     Ok(match account.account {
         Some(AppServerAccount::ApiKey {}) => LoginStatus::AuthMode(AppServerAuthMode::ApiKey),
-        Some(AppServerAccount::Chatgpt { .. }) => LoginStatus::AuthMode(AppServerAuthMode::Chatgpt),
-        Some(AppServerAccount::ChatgptPool { .. }) => {
+        Some(AppServerAccount::Chatgpt { .. } | AppServerAccount::ChatgptPool { .. }) => {
             LoginStatus::AuthMode(AppServerAuthMode::Chatgpt)
         }
         Some(AppServerAccount::AmazonBedrock {}) => LoginStatus::NotAuthenticated,

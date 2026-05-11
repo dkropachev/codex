@@ -23,7 +23,8 @@ pub(crate) fn redirect_for_ci_command(turn: &TurnContext, command: &str) -> Opti
 }
 
 fn repo_ci_available(turn: &TurnContext) -> bool {
-    turn.tools_config.has_environment && turn.config.features.enabled(Feature::RepoCi)
+    turn.tools_config.environment_mode.has_environment()
+        && turn.config.features.enabled(Feature::RepoCi)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

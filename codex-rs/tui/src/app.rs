@@ -42,11 +42,13 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::UpdateAvailableHistoryCell;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::RuntimeKeymap;
+use crate::legacy_core::append_message_history_entry;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::edit::ConfigEdit;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
+use crate::legacy_core::lookup_message_history_entry;
 #[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::model_catalog::ModelCatalog;
@@ -526,8 +528,8 @@ fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<App
 
 async fn resolve_runtime_model_provider_base_url(provider: &ModelProviderInfo) -> Option<String> {
     let provider = create_model_provider(provider.clone(), /*auth_manager*/ None);
-    match provider.runtime_base_url().await {
-        Ok(base_url) => base_url,
+    match provider.api_provider().await {
+        Ok(provider) => Some(provider.base_url),
         Err(err) => {
             tracing::warn!(%err, "failed to resolve runtime model provider base URL for status");
             None

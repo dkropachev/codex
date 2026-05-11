@@ -78,7 +78,6 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
-use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::ActivePermissionProfile;
@@ -361,8 +360,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         /*enable_codex_api_key_env*/ false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
         chatgpt_base_url,
-    )
-    .await;
+    );
     let run_cli_overrides = cli_kv_overrides.clone();
     let run_loader_overrides = loader_overrides.clone();
     let run_cloud_requirements = cloud_requirements.clone();
@@ -407,7 +405,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         approvals_reviewer: None,
         sandbox_mode,
         permission_profile: None,
-        default_permissions: None,
         cwd: resolved_cwd,
         model_provider: model_provider.clone(),
         service_tier: None,
@@ -459,10 +456,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
         forced_login_method: config.forced_login_method,
         forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
-        chatgpt_base_url: Some(config.chatgpt_base_url.clone()),
-    })
-    .await
-    {
+    }) {
         eprintln!("{err}");
         std::process::exit(1);
     }
@@ -514,7 +508,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         arg0_paths.codex_self_exe.clone(),
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
-    let state_db = codex_core::init_state_db(&config).await;
+    let state_db = codex_core::get_state_db(&config).await;
     let in_process_start_args = InProcessClientStartArgs {
         arg0_paths,
         config: std::sync::Arc::new(config.clone()),
@@ -703,7 +697,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let session_configured =
                 session_configured_from_thread_resume_response(&response, &config)
                     .map_err(anyhow::Error::msg)?;
-            (session_configured.thread_id, session_configured)
+            (session_configured.session_id, session_configured)
         } else {
             let response: ThreadStartResponse = send_request_with_response(
                 &client,
@@ -718,7 +712,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let session_configured =
                 session_configured_from_thread_start_response(&response, &config)
                     .map_err(anyhow::Error::msg)?;
-            (session_configured.thread_id, session_configured)
+            (session_configured.session_id, session_configured)
         }
     } else {
         let response: ThreadStartResponse = send_request_with_response(
@@ -733,7 +727,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         .map_err(anyhow::Error::msg)?;
         let session_configured = session_configured_from_thread_start_response(&response, &config)
             .map_err(anyhow::Error::msg)?;
-        (session_configured.thread_id, session_configured)
+        (session_configured.session_id, session_configured)
     };
 
     let primary_thread_id_for_span = primary_thread_id.to_string();
@@ -1127,7 +1121,7 @@ fn review_target_to_api(target: ReviewTarget) -> ApiReviewTarget {
     reason = "session mapping keeps explicit fields"
 )]
 fn session_configured_from_thread_response(
-    session_id: &str,
+    _session_id: &str,
     thread_id: &str,
     thread_name: Option<String>,
     rollout_path: Option<PathBuf>,
@@ -1137,30 +1131,34 @@ fn session_configured_from_thread_response(
     approval_policy: AskForApproval,
     approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     permission_profile: PermissionProfile,
-    active_permission_profile: Option<codex_protocol::models::ActivePermissionProfile>,
+    _active_permission_profile: Option<codex_protocol::models::ActivePermissionProfile>,
     cwd: AbsolutePathBuf,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 ) -> Result<SessionConfiguredEvent, String> {
-    let session_id = SessionId::from_string(session_id)
-        .map_err(|err| format!("session id `{session_id}` is invalid: {err}"))?;
     let thread_id = ThreadId::from_string(thread_id)
         .map_err(|err| format!("thread id `{thread_id}` is invalid: {err}"))?;
+    let service_tier = service_tier
+        .as_deref()
+        .and_then(codex_protocol::config_types::ServiceTier::from_request_value);
+    let sandbox_policy = permission_profile
+        .to_legacy_sandbox_policy(cwd.as_path())
+        .map_err(|err| format!("permission profile is invalid: {err}"))?;
 
     Ok(SessionConfiguredEvent {
-        session_id,
-        thread_id,
+        session_id: thread_id,
         forked_from_id: None,
-        thread_source: None,
         thread_name,
         model,
         model_provider_id,
         service_tier,
         approval_policy,
         approvals_reviewer,
-        permission_profile,
-        active_permission_profile,
+        sandbox_policy,
+        permission_profile: Some(permission_profile),
         cwd,
         reasoning_effort,
+        history_log_id: 0,
+        history_entry_count: 0,
         initial_messages: None,
         network_proxy: None,
         rollout_path,

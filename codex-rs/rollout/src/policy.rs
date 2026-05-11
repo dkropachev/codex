@@ -22,6 +22,10 @@ pub fn is_persisted_response_item(item: &RolloutItem, mode: EventPersistenceMode
     }
 }
 
+pub fn is_persisted_rollout_item(item: &RolloutItem, mode: EventPersistenceMode) -> bool {
+    is_persisted_response_item(item, mode)
+}
+
 /// Whether a `ResponseItem` should be persisted in rollout files.
 #[inline]
 pub fn should_persist_response_item(item: &ResponseItem) -> bool {
@@ -38,6 +42,7 @@ pub fn should_persist_response_item(item: &ResponseItem) -> bool {
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::GhostSnapshot { .. }
+        | ResponseItem::ContextCompaction { .. }
         | ResponseItem::Compaction { .. } => true,
         ResponseItem::Other => false,
     }
@@ -59,6 +64,7 @@ pub fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
         ResponseItem::Reasoning { .. }
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::GhostSnapshot { .. }
+        | ResponseItem::ContextCompaction { .. }
         | ResponseItem::Compaction { .. }
         | ResponseItem::Other => false,
     }

@@ -67,27 +67,26 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
+mod analytics_utils;
 mod app_server_tracing;
 mod bespoke_event_handling;
-mod codex_message_processor;
 mod command_exec;
 mod config;
-mod config_api;
 mod config_manager;
 mod config_manager_service;
-mod device_key_api;
+mod connection_rpc_gate;
 mod dynamic_tools;
 mod error_code;
-mod external_agent_config_api;
 mod filters;
-mod fs_api;
 mod fs_watch;
 mod fuzzy_file_search;
 pub mod in_process;
+mod mcp_refresh;
 mod message_processor;
 mod models;
 mod outgoing_message;
-mod repo_ci_learning_instruction;
+mod request_processors;
+mod request_serialization;
 mod server_request_error;
 mod thread_state;
 mod thread_status;
@@ -415,12 +414,15 @@ pub async fn run_main_with_transport_options(
     auth: AppServerWebsocketAuthSettings,
     runtime_options: AppServerRuntimeOptions,
 ) -> IoResult<()> {
-    let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::from_env(
-        ExecServerRuntimePaths::from_optional_paths(
-            arg0_paths.codex_self_exe.clone(),
-            arg0_paths.codex_linux_sandbox_exe.clone(),
-        )?,
-    )));
+    let environment_manager = Arc::new(
+        EnvironmentManager::new(EnvironmentManagerArgs::new(
+            ExecServerRuntimePaths::from_optional_paths(
+                arg0_paths.codex_self_exe.clone(),
+                arg0_paths.codex_linux_sandbox_exe.clone(),
+            )?,
+        ))
+        .await,
+    );
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);
@@ -455,6 +457,7 @@ pub async fn run_main_with_transport_options(
                     if let Err(err) = codex_core::personality_migration::maybe_migrate_personality(
                         &config.codex_home,
                         &config_toml,
+                        /*state_db*/ None,
                     )
                     .await
                     {
@@ -633,6 +636,7 @@ pub async fn run_main_with_transport_options(
 
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
+    let installation_id = codex_core::resolve_installation_id(&config.codex_home).await?;
 
     let remote_control_enabled = config.features.enabled(Feature::RemoteControl);
     if transport_accept_handles.is_empty() && !remote_control_enabled {
@@ -710,21 +714,30 @@ pub async fn run_main_with_transport_options(
     });
 
     let processor_handle = tokio::spawn({
-        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+        let analytics_events_client = crate::analytics_utils::analytics_events_client_from_config(
+            auth_manager.clone(),
+            &config,
+        );
+        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
+            outgoing_tx,
+            analytics_events_client.clone(),
+        ));
         let outbound_control_tx = outbound_control_tx;
-        let auth_manager =
-            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
+        let auth_manager = auth_manager.clone();
         let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
             outgoing: outgoing_message_sender,
+            analytics_events_client,
             arg0_paths,
             config: Arc::new(config),
             config_manager,
             environment_manager,
             feedback: feedback.clone(),
             log_db,
+            state_db,
             config_warnings,
             session_source,
             auth_manager,
+            installation_id,
             rpc_transport: analytics_rpc_transport(&transport),
             remote_control_handle: Some(remote_control_handle),
             plugin_startup_tasks: runtime_options.plugin_startup_tasks,
@@ -810,9 +823,9 @@ pub async fn run_main_with_transport_options(
                                 );
                             }
                             TransportEvent::ConnectionClosed { connection_id } => {
-                                if connections.remove(&connection_id).is_none() {
+                                let Some(connection_state) = connections.remove(&connection_id) else {
                                     continue;
-                                }
+                                };
                                 if outbound_control_tx
                                     .send(OutboundControlEvent::Closed { connection_id })
                                     .await
@@ -820,7 +833,9 @@ pub async fn run_main_with_transport_options(
                                 {
                                     break;
                                 }
-                                processor.connection_closed(connection_id).await;
+                                processor
+                                    .connection_closed(connection_id, &connection_state.session)
+                                    .await;
                                 if shutdown_when_no_connections && connections.is_empty() {
                                     break;
                                 }

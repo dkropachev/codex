@@ -70,6 +70,7 @@ use codex_login::auth::ExternalAuth;
 use codex_login::auth::ExternalAuthRefreshContext;
 use codex_login::auth::ExternalAuthRefreshReason;
 use codex_login::auth::ExternalAuthTokens;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
@@ -297,11 +298,9 @@ impl MessageProcessor {
             config.as_ref(),
             auth_manager.clone(),
             session_source,
+            CollaborationModesConfig::default(),
             environment_manager,
             Some(analytics_events_client.clone()),
-            Arc::clone(&thread_store),
-            state_db.clone(),
-            installation_id,
         ));
         thread_manager
             .plugins_manager()
@@ -1013,6 +1012,13 @@ impl MessageProcessor {
             ClientRequest::ThreadMemoryModeSet { params, .. } => {
                 self.thread_processor.thread_memory_mode_set(params).await
             }
+            ClientRequest::ThreadRepoCiSessionConfigSet { .. }
+            | ClientRequest::ThreadCodexConfigIntentSubmit { .. }
+            | ClientRequest::RepoCiLearningInstructionRead { .. }
+            | ClientRequest::RepoCiLearningInstructionWrite { .. }
+            | ClientRequest::ThreadModelRouterSessionConfigSet { .. } => Err(invalid_request(
+                "this app-server build does not support repo-ci thread configuration requests",
+            )),
             ClientRequest::MemoryReset { .. } => self.thread_processor.memory_reset().await,
             ClientRequest::ThreadUnarchive { params, .. } => {
                 self.thread_processor

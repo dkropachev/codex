@@ -352,7 +352,8 @@ impl ToolHandler for UnifiedExecHandler {
                             wait_until_exit,
                             wait_timeout_ms,
                             max_output_tokens: Some(max_output_tokens),
-                            workdir,
+                            cwd,
+                            environment: Arc::clone(environment),
                             network: context.turn.network.clone(),
                             tty,
                             sandbox_permissions: effective_additional_permissions

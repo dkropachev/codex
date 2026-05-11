@@ -31,6 +31,7 @@ use codex_config::types::McpServerEnvVar;
 use codex_exec_server::ExecBackend;
 use codex_exec_server::ExecEnvPolicy;
 use codex_exec_server::ExecParams;
+use codex_exec_server::ExecProcess;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 #[cfg(unix)]
 use codex_utils_pty::process_group::kill_process_group;
@@ -110,6 +111,17 @@ pub struct StdioServerTransport {
     _process_group_guard: Option<ProcessGroupGuard>,
 }
 
+#[derive(Clone)]
+pub struct StdioServerProcessHandle {
+    inner: StdioServerProcessHandleInner,
+}
+
+#[derive(Clone)]
+enum StdioServerProcessHandleInner {
+    Local { process_group_id: Option<u32> },
+    Executor { process: Arc<dyn ExecProcess> },
+}
+
 enum StdioServerTransportInner {
     Local(TokioChildProcess),
     Executor(ExecutorProcessTransport),
@@ -165,6 +177,41 @@ impl StdioServerCommand {
             env,
             env_vars,
             cwd,
+        }
+    }
+}
+
+impl StdioServerTransport {
+    pub fn process_handle(&self) -> StdioServerProcessHandle {
+        let inner = match &self.inner {
+            StdioServerTransportInner::Local(transport) => StdioServerProcessHandleInner::Local {
+                process_group_id: transport.id(),
+            },
+            StdioServerTransportInner::Executor(transport) => {
+                StdioServerProcessHandleInner::Executor {
+                    process: transport.process_handle(),
+                }
+            }
+        };
+        StdioServerProcessHandle { inner }
+    }
+}
+
+impl StdioServerProcessHandle {
+    pub async fn terminate(&self) -> io::Result<()> {
+        match &self.inner {
+            StdioServerProcessHandleInner::Local { process_group_id } => {
+                #[cfg(unix)]
+                {
+                    if let Some(process_group_id) = process_group_id {
+                        terminate_process_group_with_escalation(*process_group_id);
+                    }
+                }
+                Ok(())
+            }
+            StdioServerProcessHandleInner::Executor { process } => {
+                process.terminate().await.map_err(io::Error::other)
+            }
         }
     }
 }
@@ -330,26 +377,30 @@ impl ProcessGroupGuard {
 
     #[cfg(unix)]
     fn maybe_terminate_process_group(&self) {
-        let process_group_id = self.process_group_id;
-        let should_escalate = match terminate_process_group(process_group_id) {
-            Ok(exists) => exists,
-            Err(error) => {
-                warn!("Failed to terminate MCP process group {process_group_id}: {error}");
-                false
-            }
-        };
-        if should_escalate {
-            spawn(move || {
-                sleep(PROCESS_GROUP_TERM_GRACE_PERIOD);
-                if let Err(error) = kill_process_group(process_group_id) {
-                    warn!("Failed to kill MCP process group {process_group_id}: {error}");
-                }
-            });
-        }
+        terminate_process_group_with_escalation(self.process_group_id);
     }
 
     #[cfg(not(unix))]
     fn maybe_terminate_process_group(&self) {}
+}
+
+#[cfg(unix)]
+fn terminate_process_group_with_escalation(process_group_id: u32) {
+    let should_escalate = match terminate_process_group(process_group_id) {
+        Ok(exists) => exists,
+        Err(error) => {
+            warn!("Failed to terminate MCP process group {process_group_id}: {error}");
+            false
+        }
+    };
+    if should_escalate {
+        spawn(move || {
+            sleep(PROCESS_GROUP_TERM_GRACE_PERIOD);
+            if let Err(error) = kill_process_group(process_group_id) {
+                warn!("Failed to kill MCP process group {process_group_id}: {error}");
+            }
+        });
+    }
 }
 
 impl Drop for ProcessGroupGuard {

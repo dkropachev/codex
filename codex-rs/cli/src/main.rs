@@ -69,6 +69,7 @@ use crate::repo_ci_learn::normalize_repo_ci_learning_instruction_with_ai;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::LoaderOverrides;
 use codex_core::build_models_manager;
+use codex_core::clear_memory_roots_contents;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
@@ -77,7 +78,6 @@ use codex_features::FEATURES;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
 use codex_login::AuthManager;
-use codex_memories_write::clear_memory_roots_contents;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::RefreshStrategy;
@@ -933,10 +933,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 
     let mut lines = Vec::new();
     if !token_usage.is_zero() {
-        lines.push(format!(
-            "{}",
-            codex_protocol::protocol::FinalOutput::from(token_usage)
-        ));
+        lines.push(token_usage.to_string());
     }
 
     if let Some(resume_cmd) =
@@ -3102,16 +3099,12 @@ async fn run_debug_prompt_input_command(
         ));
     }
 
-    let approval_policy = if shared.full_auto {
-        Some(AskForApproval::OnRequest)
-    } else if shared.dangerously_bypass_approvals_and_sandbox {
+    let approval_policy = if shared.dangerously_bypass_approvals_and_sandbox {
         Some(AskForApproval::Never)
     } else {
         interactive.approval_policy.map(Into::into)
     };
-    let sandbox_mode = if shared.full_auto {
-        Some(codex_protocol::config_types::SandboxMode::WorkspaceWrite)
-    } else if shared.dangerously_bypass_approvals_and_sandbox {
+    let sandbox_mode = if shared.dangerously_bypass_approvals_and_sandbox {
         Some(codex_protocol::config_types::SandboxMode::DangerFullAccess)
     } else {
         shared.sandbox_mode.map(Into::into)
@@ -3146,7 +3139,7 @@ async fn run_debug_prompt_input_command(
         });
     }
 
-    let prompt_input = codex_core::build_prompt_input(config, input).await?;
+    let prompt_input = codex_core::build_prompt_input(config, input, None).await?;
     println!("{}", serde_json::to_string_pretty(&prompt_input)?);
 
     Ok(())
@@ -4622,7 +4615,6 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         shared,
         approval_policy,
         web_search,
-        repo_ci,
         prompt,
         config_overrides,
         ..
@@ -4635,9 +4627,6 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     }
     if web_search {
         interactive.web_search = true;
-    }
-    if repo_ci.is_some() {
-        interactive.repo_ci = repo_ci;
     }
     if let Some(prompt) = prompt {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.

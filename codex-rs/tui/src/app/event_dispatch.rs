@@ -326,17 +326,6 @@ impl App {
             AppEvent::CodexOp(op) => {
                 self.submit_active_thread_op(app_server, op).await?;
             }
-            AppEvent::AppendMessageHistoryEntry { thread_id, text } => {
-                self.append_message_history_entry(thread_id, text);
-            }
-            AppEvent::LookupMessageHistoryEntry {
-                thread_id,
-                offset,
-                log_id,
-            } => {
-                self.lookup_message_history_entry(thread_id, offset, log_id)
-                    .await?;
-            }
             AppEvent::ApproveRecentAutoReviewDenial { thread_id, id } => {
                 self.chat_widget
                     .approve_recent_auto_review_denial(thread_id, id);
@@ -733,9 +722,6 @@ impl App {
             }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
-            }
-            AppEvent::ApplyCodexConfigPlan => {
-                self.chat_widget.apply_codex_config_plan();
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
@@ -1277,8 +1263,7 @@ impl App {
             AppEvent::PersistServiceTierSelection { service_tier } => {
                 self.refresh_status_line();
                 let profile = self.active_profile.as_deref();
-                self.config.service_tier =
-                    service_tier.map(|service_tier| service_tier.request_value().to_string());
+                self.config.service_tier = service_tier;
                 let mut edits = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
                     .set_service_tier(service_tier);

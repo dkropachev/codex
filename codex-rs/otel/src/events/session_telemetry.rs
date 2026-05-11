@@ -1116,6 +1116,7 @@ impl SessionTelemetry {
             ResponseItem::WebSearchCall { .. } => "web_search_call".into(),
             ResponseItem::ImageGenerationCall { .. } => "image_generation_call".into(),
             ResponseItem::GhostSnapshot { .. } => "ghost_snapshot".into(),
+            ResponseItem::ContextCompaction { .. } => "context_compaction".into(),
             ResponseItem::Compaction { .. } => "compaction".into(),
             ResponseItem::Other => "other".into(),
         }

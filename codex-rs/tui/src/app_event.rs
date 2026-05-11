@@ -28,6 +28,7 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
+use codex_protocol::message_history::HistoryEntry;
 use codex_protocol::openai_models::ModelPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
@@ -67,7 +68,7 @@ pub(crate) enum ThreadGoalSetMode {
 pub(crate) struct HistoryLookupResponse {
     pub(crate) offset: usize,
     pub(crate) log_id: u64,
-    pub(crate) entry: Option<String>,
+    pub(crate) entry: Option<HistoryEntry>,
 }
 
 impl RealtimeAudioDeviceKind {
@@ -149,19 +150,6 @@ pub(crate) enum AppEvent {
         event: HistoryLookupResponse,
     },
 
-    /// Persist a submitted prompt in the cross-session message history.
-    AppendMessageHistoryEntry {
-        thread_id: ThreadId,
-        text: String,
-    },
-
-    /// Fetch a persistent cross-session message history entry by offset.
-    LookupMessageHistoryEntry {
-        thread_id: ThreadId,
-        offset: usize,
-        log_id: u64,
-    },
-
     /// Start a new session.
     NewSession,
 
@@ -211,13 +199,6 @@ pub(crate) enum AppEvent {
     CodexOp(AppCommand),
 
     /// Approve one retry of a recent auto-review denial selected in the TUI.
-    ApproveRecentAutoReviewDenial {
-        thread_id: ThreadId,
-        id: String,
-    },
-
-    /// Approve one retry of a recent auto-review denial selected in the TUI.
-    #[allow(dead_code)]
     ApproveRecentAutoReviewDenial {
         thread_id: ThreadId,
         id: String,
@@ -559,9 +540,6 @@ pub(crate) enum AppEvent {
 
     /// Update the active collaboration mask in the running app and widget.
     UpdateCollaborationMode(CollaborationModeMask),
-
-    /// Apply the latest approved Codex config-edit plan.
-    ApplyCodexConfigPlan,
 
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),

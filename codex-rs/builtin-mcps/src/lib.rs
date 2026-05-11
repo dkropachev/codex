@@ -4,6 +4,7 @@
 //! declared here so product-owned MCPs do not need to live in `codex-core`.
 
 use codex_config::McpServerConfig;
+use codex_config::McpServerProcessReuseScope;
 use codex_config::McpServerTransportConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
@@ -68,6 +69,7 @@ fn builtin_stdio_server_config(
             env_vars: Vec::new(),
             cwd: None,
         },
+        process_reuse_scope: McpServerProcessReuseScope::Cwd,
         experimental_environment: None,
         enabled: true,
         required: false,

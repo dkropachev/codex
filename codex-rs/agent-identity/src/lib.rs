@@ -323,6 +323,7 @@ pub fn build_abom(session_source: SessionSource) -> AgentBillOfMaterials {
             | SessionSource::Mcp
             | SessionSource::Custom(_)
             | SessionSource::SubAgent(_)
+            | SessionSource::Internal(_)
             | SessionSource::Unknown => "codex-cli".to_string(),
         },
         running_location: format!("{}-{}", session_source, std::env::consts::OS),

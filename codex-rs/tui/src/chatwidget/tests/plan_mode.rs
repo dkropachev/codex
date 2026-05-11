@@ -158,125 +158,6 @@ async fn plan_implementation_popup_no_selected_snapshot() {
 }
 
 #[tokio::test]
-async fn codex_config_apply_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-    let mask = crate::codex_config_context::codex_config_edit_mask(&chat.config.cwd);
-    chat.set_collaboration_mask(mask);
-
-    chat.on_task_started();
-    chat.on_plan_item_completed("- Update config\n- Reload Codex\n".to_string());
-    chat.on_task_complete(Some("Plan ready.".to_string()), /*from_replay*/ false);
-
-    let popup = render_bottom_popup(&chat, /*width*/ 80);
-    assert_chatwidget_snapshot!("codex_config_apply_popup", popup);
-    assert!(popup.contains(codex_config_apply::CODEX_CONFIG_APPLY_TITLE));
-}
-
-#[tokio::test]
-async fn codex_config_completion_popup_snapshot() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-    chat.set_collaboration_mask(crate::codex_config_context::codex_investigate_mask(
-        &chat.config.cwd,
-    ));
-
-    let message = format!(
-        "Investigation complete.\n{}",
-        crate::codex_config_context::CODEX_CONFIG_DONE_MARKER
-    );
-    chat.on_task_started();
-    chat.on_agent_message_item_completed(AgentMessageItem {
-        id: "agent-1".to_string(),
-        content: vec![AgentMessageContent::Text {
-            text: message.clone(),
-        }],
-        phase: Some(MessagePhase::FinalAnswer),
-        memory_citation: None,
-    });
-    chat.on_task_complete(Some(message), /*from_replay*/ false);
-
-    let rendered = drain_insert_history(&mut rx)
-        .iter()
-        .map(|cell| lines_to_single_string(cell))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(rendered.contains("Investigation complete."));
-    assert!(!rendered.contains(crate::codex_config_context::CODEX_CONFIG_DONE_MARKER));
-
-    let popup = render_bottom_popup(&chat, /*width*/ 80);
-    assert_chatwidget_snapshot!("codex_config_completion_popup", popup);
-    assert!(popup.contains(codex_config_completion::CODEX_CONFIG_COMPLETION_TITLE));
-}
-
-#[tokio::test]
-async fn codex_ai_fallback_investigation_marker_opens_completion_popup() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-    chat.set_collaboration_mask(crate::codex_config_context::codex_ai_resolve_mask(
-        &chat.config.cwd,
-    ));
-
-    let message = format!(
-        "Investigation complete.\n{}",
-        crate::codex_config_context::CODEX_CONFIG_DONE_MARKER
-    );
-    chat.on_task_started();
-    chat.on_agent_message_item_completed(AgentMessageItem {
-        id: "agent-1".to_string(),
-        content: vec![AgentMessageContent::Text {
-            text: message.clone(),
-        }],
-        phase: Some(MessagePhase::FinalAnswer),
-        memory_citation: None,
-    });
-    chat.on_task_complete(Some(message), /*from_replay*/ false);
-
-    let rendered = drain_insert_history(&mut rx)
-        .iter()
-        .map(|cell| lines_to_single_string(cell))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(rendered.contains("Investigation complete."));
-    assert!(!rendered.contains(crate::codex_config_context::CODEX_CONFIG_DONE_MARKER));
-
-    let popup = render_bottom_popup(&chat, /*width*/ 80);
-    assert!(popup.contains(codex_config_completion::CODEX_CONFIG_COMPLETION_TITLE));
-}
-
-#[tokio::test]
-async fn codex_config_done_marker_is_stripped_from_stream_consolidation() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-    chat.set_collaboration_mask(crate::codex_config_context::codex_investigate_mask(
-        &chat.config.cwd,
-    ));
-
-    let message = format!(
-        "Investigation complete.\n{}\n",
-        crate::codex_config_context::CODEX_CONFIG_DONE_MARKER
-    );
-    chat.on_task_started();
-    chat.on_agent_message_delta(message.clone());
-    chat.on_agent_message_item_completed(AgentMessageItem {
-        id: "agent-1".to_string(),
-        content: vec![AgentMessageContent::Text { text: message }],
-        phase: Some(MessagePhase::FinalAnswer),
-        memory_citation: None,
-    });
-
-    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-    let source = events
-        .iter()
-        .find_map(|event| match event {
-            AppEvent::ConsolidateAgentMessage { source, .. } => Some(source.as_str()),
-            _ => None,
-        })
-        .expect("expected stream consolidation event");
-    assert_eq!(source, "Investigation complete.");
-}
-
-#[tokio::test]
 async fn plan_implementation_popup_yes_emits_submit_message_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.open_plan_implementation_prompt();
@@ -296,130 +177,6 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
         plan_implementation::PLAN_IMPLEMENTATION_CODING_MESSAGE
     );
     assert_eq!(collaboration_mode.mode, Some(ModeKind::Default));
-}
-
-#[tokio::test]
-async fn codex_config_apply_popup_emits_apply_event() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.set_collaboration_mask(crate::codex_config_context::codex_config_edit_mask(
-        &chat.config.cwd,
-    ));
-    chat.on_plan_item_completed("- Update config\n".to_string());
-    let _ = drain_insert_history(&mut rx);
-    chat.open_codex_config_apply_prompt();
-
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-
-    let event = rx.try_recv().expect("expected AppEvent");
-    assert!(matches!(event, AppEvent::ApplyCodexConfigPlan));
-}
-
-#[tokio::test]
-async fn codex_config_apply_creates_bundle_and_submits_apply_turn() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.thread_id = Some(ThreadId::new());
-    std::fs::create_dir_all(chat.config.codex_home.as_path()).expect("create codex home");
-    std::fs::write(
-        chat.config.codex_home.join("config.toml"),
-        "model = \"old\"\n",
-    )
-    .expect("write config");
-    chat.set_collaboration_mask(crate::codex_config_context::codex_config_edit_mask(
-        &chat.config.cwd,
-    ));
-    chat.record_codex_config_user_message("update the model");
-    chat.on_plan_item_completed("- Set model to new\n".to_string());
-
-    chat.apply_codex_config_plan();
-
-    let Op::UserTurn {
-        items,
-        collaboration_mode,
-        sandbox_policy,
-        permission_profile,
-        ..
-    } = next_submit_op(&mut op_rx)
-    else {
-        panic!("expected apply UserTurn");
-    };
-    let user_text = match items.as_slice() {
-        [UserInput::Text { text, .. }] => text,
-        other => panic!("expected text input, got {other:?}"),
-    };
-    let bundle_path = chat
-        .pending_codex_config_apply_bundle
-        .as_ref()
-        .expect("pending bundle")
-        .path
-        .clone();
-    assert!(user_text.contains(&bundle_path.display().to_string()));
-    assert_eq!(collaboration_mode.expect("mode").mode, ModeKind::Codex);
-    assert_eq!(
-        sandbox_policy,
-        crate::codex_config_context::codex_config_apply_sandbox_policy(&chat.config.codex_home)
-    );
-    assert_eq!(
-        permission_profile,
-        Some(
-            crate::codex_config_context::codex_config_apply_permission_profile(
-                &chat.config.codex_home
-            )
-        )
-    );
-    assert!(bundle_path.join("before/config.toml").exists());
-    assert!(bundle_path.join("approved-plan.md").exists());
-    assert!(bundle_path.join("conversation.md").exists());
-    assert!(bundle_path.join("rollback.md").exists());
-}
-
-#[tokio::test]
-async fn codex_config_apply_finalizes_after_and_diff() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.thread_id = Some(ThreadId::new());
-    std::fs::create_dir_all(chat.config.codex_home.as_path()).expect("create codex home");
-    std::fs::write(
-        chat.config.codex_home.join("config.toml"),
-        "model = \"old\"\n",
-    )
-    .expect("write config");
-    chat.set_collaboration_mask(crate::codex_config_context::codex_config_edit_mask(
-        &chat.config.cwd,
-    ));
-    chat.on_plan_item_completed("- Set model to new\n".to_string());
-    chat.apply_codex_config_plan();
-    let _ = next_submit_op(&mut op_rx);
-    let bundle_path = chat
-        .pending_codex_config_apply_bundle
-        .as_ref()
-        .expect("pending bundle")
-        .path
-        .clone();
-
-    std::fs::write(
-        chat.config.codex_home.join("config.toml"),
-        "model = \"new\"\n",
-    )
-    .expect("write updated config");
-    chat.on_task_complete(
-        Some("Applied config.".to_string()),
-        /*from_replay*/ false,
-    );
-
-    assert!(bundle_path.join("after/config.toml").exists());
-    let diff = std::fs::read_to_string(bundle_path.join("config.diff")).expect("read diff");
-    assert!(diff.contains("model = \"old\""));
-    assert!(diff.contains("model = \"new\""));
-    let conversation =
-        std::fs::read_to_string(bundle_path.join("conversation.md")).expect("read conversation");
-    assert!(conversation.contains("Applied config."));
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Codex);
-    assert!(
-        chat.active_collaboration_mask
-            .as_ref()
-            .and_then(|mask| mask.developer_instructions.as_ref())
-            .and_then(Option::as_deref)
-            .is_some_and(|instructions| instructions.contains("Codex Investigate Mode"))
-    );
 }
 
 #[tokio::test]
@@ -1462,7 +1219,8 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        message_history: None,
+        history_log_id: 0,
+        history_entry_count: 0,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -1705,7 +1463,8 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        message_history: None,
+        history_log_id: 0,
+        history_entry_count: 0,
         network_proxy: None,
         rollout_path: None,
     };

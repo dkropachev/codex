@@ -187,7 +187,8 @@ fn response_item_records_turn_ttft(item: &ResponseItem) -> bool {
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. }
-        | ResponseItem::ContextCompaction { .. } => true,
+        | ResponseItem::ContextCompaction { .. }
+        | ResponseItem::GhostSnapshot { .. } => true,
         ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::ToolSearchOutput { .. }

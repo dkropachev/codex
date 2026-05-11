@@ -629,7 +629,7 @@ async fn prepare_realtime_start(
     let session_config = build_realtime_session_config(
         sess,
         params.prompt,
-        params.realtime_session_id,
+        params.session_id,
         params.output_modality,
         params.voice,
     )
@@ -798,7 +798,7 @@ async fn handle_start_inner(
     sess.send_event_raw(Event {
         id: sub_id.to_string(),
         msg: EventMsg::RealtimeConversationStarted(RealtimeConversationStartedEvent {
-            realtime_session_id: requested_realtime_session_id,
+            session_id: requested_realtime_session_id,
             version,
         }),
     })

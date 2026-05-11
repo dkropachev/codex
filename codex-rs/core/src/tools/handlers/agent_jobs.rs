@@ -211,7 +211,12 @@ async fn run_agent_job_loop(
                             "agent_job:{job_id}"
                         )))),
                         SpawnAgentOptions {
-                            environments: Some(turn.environments.to_selections()),
+                            environments: Some(
+                                turn.environments
+                                    .iter()
+                                    .map(crate::session::turn_context::TurnEnvironment::selection)
+                                    .collect(),
+                            ),
                             ..Default::default()
                         },
                     )

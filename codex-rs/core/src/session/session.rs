@@ -112,16 +112,22 @@ impl SessionConfiguration {
         ThreadConfigSnapshot {
             model: self.collaboration_mode.model().to_string(),
             model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
-            service_tier: self.service_tier,
+            service_tier: self
+                .service_tier
+                .map(|service_tier| service_tier.request_value().to_string()),
             approval_policy: self.approval_policy.value(),
             approvals_reviewer: self.approvals_reviewer,
-            sandbox_policy: self.sandbox_policy.get().clone(),
             permission_profile: self.permission_profile(),
+            active_permission_profile: None,
             cwd: self.cwd.clone(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
             session_source: self.session_source.clone(),
+            thread_source: self
+                .session_source
+                .thread_source_name()
+                .and_then(|source| source.parse::<ThreadSource>().ok()),
         }
     }
 
@@ -376,10 +382,19 @@ impl Session {
                                 thread_id: conversation_id,
                                 forked_from_id,
                                 source: session_source,
+                                thread_source: session_configuration
+                                    .session_source
+                                    .thread_source_name()
+                                    .and_then(|source| source.parse::<ThreadSource>().ok()),
                                 base_instructions: BaseInstructions {
                                     text: session_configuration.base_instructions.clone(),
                                 },
                                 dynamic_tools: session_configuration.dynamic_tools.clone(),
+                                metadata: ThreadPersistenceMetadata {
+                                    cwd: Some(session_configuration.cwd.to_path_buf()),
+                                    model_provider: config.model_provider_id.clone(),
+                                    memory_mode: ThreadMemoryMode::Enabled,
+                                },
                                 event_persistence_mode,
                             },
                         )
@@ -393,6 +408,11 @@ impl Session {
                                 rollout_path: resumed_history.rollout_path.clone(),
                                 history: Some(resumed_history.history.clone()),
                                 include_archived: true,
+                                metadata: ThreadPersistenceMetadata {
+                                    cwd: Some(session_configuration.cwd.to_path_buf()),
+                                    model_provider: config.model_provider_id.clone(),
+                                    memory_mode: ThreadMemoryMode::Enabled,
+                                },
                                 event_persistence_mode,
                             },
                         )
@@ -671,6 +691,7 @@ impl Session {
                         session_configuration.cwd.clone(),
                         &mut default_shell,
                         session_telemetry.clone(),
+                        state_db_ctx.clone(),
                     )
                 }
             } else {
@@ -754,6 +775,8 @@ impl Session {
                 legacy_notify_argv: config.notify.clone(),
                 feature_enabled: config.features.enabled(Feature::CodexHooks),
                 config_layer_stack: Some(config.config_layer_stack.clone()),
+                plugin_hook_sources: Vec::new(),
+                plugin_hook_load_warnings: Vec::new(),
                 shell_program: Some(hook_shell_program),
                 shell_args: hook_shell_argv,
             });
@@ -819,6 +842,7 @@ impl Session {
                 thread_store: Arc::clone(&thread_store),
                 model_client: ModelClient::new(
                     Some(Arc::clone(&auth_manager)),
+                    codex_protocol::SessionId::from(conversation_id),
                     conversation_id,
                     installation_id,
                     session_configuration.provider.clone(),
@@ -988,12 +1012,6 @@ impl Session {
                 let mut state = sess.state.lock().await;
                 state.set_pending_session_start_source(Some(session_start_source));
             }
-
-            memories::start_memories_startup_task(
-                &sess,
-                Arc::clone(&config),
-                &session_configuration.session_source,
-            );
 
             Ok(sess)
         }

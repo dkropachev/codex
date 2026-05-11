@@ -40,6 +40,7 @@ impl From<CoreSessionSource> for SessionSource {
             CoreSessionSource::Mcp => SessionSource::AppServer,
             CoreSessionSource::Custom(source) => SessionSource::Custom(source),
             CoreSessionSource::SubAgent(sub) => SessionSource::SubAgent(sub),
+            CoreSessionSource::Internal(_) => SessionSource::Unknown,
             CoreSessionSource::Unknown => SessionSource::Unknown,
         }
     }

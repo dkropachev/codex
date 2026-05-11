@@ -165,10 +165,7 @@ pub(crate) async fn resolve_router_request(
 
     macro_rules! resolve {
         ($resolution:expr) => {
-            return Ok(with_request_shape(
-                $resolution,
-                request_shape_json.clone(),
-            ));
+            return Ok(with_request_shape($resolution, request_shape_json.clone()));
         };
     }
 

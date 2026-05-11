@@ -1,7 +1,0 @@
----
-source: tui/src/chatwidget/tests/slash_commands.rs
-assertion_line: 1211
-expression: rendered
----
-• Usage: /repo-ci setup | /repo-ci learn | /repo-ci retry | /repo-ci instruction <show|set --instruction TEXT|clear|edit> | /repo-ci <options> [task]
-Options: <inherit|off|local|remote|local-and-remote> [issues <inherit|none|comma-list>] [rounds <inherit|N>] [long-ci <inherit|on|off>] Use /repo-ci <options> to configure this session, or append task text to run repo CI for that task only.

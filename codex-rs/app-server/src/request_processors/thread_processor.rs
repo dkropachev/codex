@@ -39,11 +39,11 @@ fn collect_resume_override_mismatches(
         ));
     }
     if let Some(requested_service_tier) = request.service_tier.as_ref()
-        && requested_service_tier != &config_snapshot.service_tier
+        && requested_service_tier.as_ref() != config_snapshot.service_tier.as_ref()
     {
         mismatch_details.push(format!(
-            "service_tier requested={requested_service_tier:?} active={:?}",
-            config_snapshot.service_tier
+            "service_tier requested={:?} active={:?}",
+            request.service_tier, config_snapshot.service_tier
         ));
     }
     if let Some(requested_cwd) = request.cwd.as_deref() {
@@ -1196,7 +1196,8 @@ impl ThreadRequestProcessor {
         let mut overrides = ConfigOverrides {
             model,
             model_provider,
-            service_tier,
+            service_tier: service_tier
+                .map(|tier| tier.and_then(|tier| ServiceTier::from_request_value(&tier))),
             cwd: cwd.map(PathBuf::from),
             approval_policy: approval_policy
                 .map(codex_app_server_protocol::AskForApproval::to_core),
@@ -2480,7 +2481,9 @@ impl ThreadRequestProcessor {
                     thread,
                     model: session_configured.model,
                     model_provider: session_configured.model_provider_id,
-                    service_tier: session_configured.service_tier,
+                    service_tier: session_configured
+                        .service_tier
+                        .map(|tier| tier.request_value().to_string()),
                     cwd: session_configured.cwd,
                     instruction_sources,
                     approval_policy: session_configured.approval_policy.into(),
@@ -2686,6 +2689,7 @@ impl ThreadRequestProcessor {
                     emit_thread_goal_update,
                     thread_goal_state_db,
                     include_turns: !params.exclude_turns,
+                    redact_resume_payloads: false,
                 }),
             );
             if listener_command_tx.send(command).is_err() {
@@ -3034,7 +3038,6 @@ impl ThreadRequestProcessor {
                     history: history_items.clone(),
                     rollout_path: source_thread.rollout_path.clone(),
                 }),
-                thread_source.map(Into::into),
                 /*persist_extended_history*/ false,
                 self.request_trace_context(&request_id).await,
             )
@@ -3127,7 +3130,9 @@ impl ThreadRequestProcessor {
             thread: thread.clone(),
             model: session_configured.model,
             model_provider: session_configured.model_provider_id,
-            service_tier: session_configured.service_tier,
+            service_tier: session_configured
+                .service_tier
+                .map(|tier| tier.request_value().to_string()),
             cwd: session_configured.cwd,
             instruction_sources,
             approval_policy: session_configured.approval_policy.into(),
@@ -3855,13 +3860,6 @@ fn requested_permissions_trust_project(overrides: &ConfigOverrides, cwd: &Path) 
             codex_protocol::config_types::SandboxMode::WorkspaceWrite
                 | codex_protocol::config_types::SandboxMode::DangerFullAccess
         )
-    ) {
-        return true;
-    }
-
-    if matches!(
-        overrides.default_permissions.as_deref(),
-        Some(":workspace" | ":danger-no-sandbox")
     ) {
         return true;
     }

@@ -177,7 +177,12 @@ pub(super) fn apply_permission_profile_selection_to_config_overrides(
     let Some(PermissionProfileSelectionParams::Profile { id, modifications }) = permissions else {
         return;
     };
-    overrides.default_permissions = Some(id);
+    overrides.permission_profile = match id.as_str() {
+        ":read-only" => Some(codex_protocol::models::PermissionProfile::read_only()),
+        ":workspace" => Some(codex_protocol::models::PermissionProfile::workspace_write()),
+        ":danger-no-sandbox" => Some(codex_protocol::models::PermissionProfile::Disabled),
+        _ => None,
+    };
     overrides
         .additional_writable_roots
         .extend(modifications.unwrap_or_default().into_iter().map(

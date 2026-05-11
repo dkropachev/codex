@@ -374,8 +374,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
     let runtime_handle = tokio::spawn(async move {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(channel_capacity);
         let auth_manager =
-            AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env)
-                .await;
+            AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env);
         let analytics_events_client =
             analytics_events_client_from_config(Arc::clone(&auth_manager), args.config.as_ref());
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(

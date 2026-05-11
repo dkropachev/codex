@@ -185,13 +185,15 @@ impl TurnRequestProcessor {
     fn normalize_turn_start_collaboration_mode(
         &self,
         mut collaboration_mode: CollaborationMode,
+        collaboration_modes_config: CollaborationModesConfig,
     ) -> CollaborationMode {
         if collaboration_mode.settings.developer_instructions.is_none()
-            && let Some(instructions) = builtin_collaboration_mode_presets()
-                .into_iter()
-                .find(|preset| preset.mode == Some(collaboration_mode.mode))
-                .and_then(|preset| preset.developer_instructions.flatten())
-                .filter(|instructions| !instructions.is_empty())
+            && let Some(instructions) =
+                builtin_collaboration_mode_presets(collaboration_modes_config)
+                    .into_iter()
+                    .find(|preset| preset.mode == Some(collaboration_mode.mode))
+                    .and_then(|preset| preset.developer_instructions.flatten())
+                    .filter(|instructions| !instructions.is_empty())
         {
             collaboration_mode.settings.developer_instructions = Some(instructions);
         }
@@ -340,9 +342,12 @@ impl TurnRequestProcessor {
             self.track_error_response(&request_id, error, /*error_type*/ None);
         })?;
 
-        let collaboration_mode = params
-            .collaboration_mode
-            .map(|mode| self.normalize_turn_start_collaboration_mode(mode));
+        let collaboration_modes_config = CollaborationModesConfig {
+            default_mode_request_user_input: thread.enabled(Feature::DefaultModeRequestUserInput),
+        };
+        let collaboration_mode = params.collaboration_mode.map(|mode| {
+            self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)
+        });
         let environment_selections = self.parse_environment_selections(params.environments)?;
 
         // Map v2 input items to core input items.
@@ -409,10 +414,7 @@ impl TurnRequestProcessor {
                         "invalid turn context override: {warning}"
                     )));
                 }
-                (
-                    Some(config.permissions.permission_profile()),
-                    config.permissions.active_permission_profile(),
-                )
+                (Some(config.permissions.permission_profile()), None)
             } else {
                 (None, None)
             };
@@ -420,6 +422,10 @@ impl TurnRequestProcessor {
         let effort = params.effort.map(Some);
         let summary = params.summary;
         let service_tier = params.service_tier;
+        let service_tier_for_op = service_tier.as_ref().map(|tier| {
+            tier.as_ref()
+                .and_then(|tier| ServiceTier::from_request_value(tier))
+        });
         let personality = params.personality;
 
         // If any overrides are provided, validate them synchronously so the
@@ -458,14 +464,14 @@ impl TurnRequestProcessor {
                 approvals_reviewer,
                 sandbox_policy,
                 permission_profile,
-                active_permission_profile,
                 windows_sandbox_level: None,
                 model,
                 effort,
                 summary,
-                service_tier,
+                service_tier: service_tier_for_op,
                 collaboration_mode,
                 personality,
+                repo_ci: None,
             }
         } else {
             Op::UserInput {
@@ -711,7 +717,7 @@ impl TurnRequestProcessor {
             Op::RealtimeConversationStart(ConversationStartParams {
                 output_modality: params.output_modality,
                 prompt: params.prompt,
-                realtime_session_id: params.realtime_session_id,
+                session_id: params.realtime_session_id,
                 transport: params.transport.map(|transport| match transport {
                     ThreadRealtimeStartTransport::Websocket => {
                         ConversationStartTransport::Websocket
@@ -904,7 +910,6 @@ impl TurnRequestProcessor {
                     history: parent_history.items,
                     rollout_path: parent_thread.rollout_path(),
                 }),
-                /*thread_source*/ None,
                 /*persist_extended_history*/ false,
                 self.request_trace_context(request_id).await,
             )

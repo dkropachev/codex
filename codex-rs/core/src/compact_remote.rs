@@ -197,7 +197,10 @@ async fn run_remote_compact_task_inner_impl(
             CompactConversationRequestSettings {
                 effort: turn_context.reasoning_effort,
                 summary: turn_context.reasoning_summary,
-                service_tier: turn_context.config.service_tier.clone(),
+                service_tier: turn_context
+                    .config
+                    .service_tier
+                    .map(|service_tier| service_tier.request_value().to_string()),
             },
             &turn_context.session_telemetry,
             &compaction_trace,
@@ -295,7 +298,9 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
         }
         ResponseItem::Message { role, .. } if role == "assistant" => true,
         ResponseItem::Message { .. } => false,
-        ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => true,
+        ResponseItem::Compaction { .. }
+        | ResponseItem::ContextCompaction { .. }
+        | ResponseItem::GhostSnapshot { .. } => true,
         ResponseItem::Reasoning { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }

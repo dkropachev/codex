@@ -38,10 +38,7 @@ impl EnvironmentContextEnvironment {
             .map(|environment| Self {
                 id: environment.environment_id.clone(),
                 cwd: environment.cwd.clone(),
-                shell: environment
-                    .shell
-                    .clone()
-                    .unwrap_or_else(|| shell.name().to_string()),
+                shell: shell.name().to_string(),
             })
             .collect()
     }
@@ -180,7 +177,7 @@ impl EnvironmentContext {
     pub(crate) fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
         Self::new(
             EnvironmentContextEnvironment::from_turn_environments(
-                &turn_context.environments.turn_environments,
+                &turn_context.environments,
                 shell,
             ),
             turn_context.current_date.clone(),

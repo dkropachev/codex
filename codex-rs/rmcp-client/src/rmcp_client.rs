@@ -321,11 +321,17 @@ impl RmcpClient {
         let transport = Self::create_pending_transport(&transport_recipe)
             .await
             .map_err(io::Error::other)?;
+        let stdio_process = match &transport {
+            PendingTransport::Stdio { transport } => Some(transport.process_handle()),
+            PendingTransport::StreamableHttp { .. }
+            | PendingTransport::StreamableHttpWithOAuth { .. } => None,
+        };
 
         Ok(Self {
             state: Mutex::new(ClientState::Connecting {
                 transport: Some(transport),
             }),
+            stdio_process,
             transport_recipe,
             initialize_context: Mutex::new(None),
             session_recovery_lock: Semaphore::new(/*permits*/ 1),

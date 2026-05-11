@@ -172,10 +172,11 @@ pub(crate) async fn run_turn(
     sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
 
+    let plugins_input = turn_context.config.plugins_config_input();
     let loaded_plugins = sess
         .services
         .plugins_manager
-        .plugins_for_config(&turn_context.config)
+        .plugins_for_config(&plugins_input)
         .await;
     // Structured plugin:// mentions are resolved from the current session's
     // enabled plugins, then converted into turn-scoped guidance below.
@@ -1237,10 +1238,11 @@ pub(crate) async fn built_tools(
         .or_cancel(cancellation_token)
         .await?;
     drop(mcp_connection_manager);
+    let plugins_input = turn_context.config.plugins_config_input();
     let loaded_plugins = sess
         .services
         .plugins_manager
-        .plugins_for_config(&turn_context.config)
+        .plugins_for_config(&plugins_input)
         .await;
 
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
@@ -1996,7 +1998,10 @@ async fn try_run_sampling_request(
             &turn_context.session_telemetry,
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
-            turn_context.config.service_tier,
+            turn_context
+                .config
+                .service_tier
+                .map(|service_tier| service_tier.request_value().to_string()),
             turn_metadata_header,
             &inference_trace,
         )
@@ -2140,6 +2145,7 @@ async fn try_run_sampling_request(
                     | ResponseItem::ImageGenerationCall { .. }
                     | ResponseItem::GhostSnapshot { .. }
                     | ResponseItem::Compaction { .. }
+                    | ResponseItem::ContextCompaction { .. }
                     | ResponseItem::Other => false,
                 };
 

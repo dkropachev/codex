@@ -964,7 +964,7 @@ pub(crate) async fn load_remote_control_auth(
                     "remote control requires ChatGPT authentication",
                 ));
             }
-            auth_manager.reload().await;
+            auth_manager.reload();
             reloaded = true;
             continue;
         };
@@ -972,7 +972,7 @@ pub(crate) async fn load_remote_control_auth(
             break auth;
         }
         if auth.get_account_id().is_none() && !reloaded {
-            auth_manager.reload().await;
+            auth_manager.reload();
             reloaded = true;
             continue;
         }

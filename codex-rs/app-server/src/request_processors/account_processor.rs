@@ -277,7 +277,7 @@ impl AccountRequestProcessor {
             self.config.cli_auth_credentials_store_mode,
         ) {
             Ok(()) => {
-                self.auth_manager.reload().await;
+                self.auth_manager.reload();
                 Ok(())
             }
             Err(err) => Err(internal_error(format!("failed to save api key: {err}"))),
@@ -583,7 +583,7 @@ impl AccountRequestProcessor {
             chatgpt_plan_type.as_deref(),
         )
         .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
-        self.auth_manager.reload().await;
+        self.auth_manager.reload();
         self.config_manager.replace_cloud_requirements_loader(
             self.auth_manager.clone(),
             self.config.chatgpt_base_url.clone(),
@@ -641,7 +641,7 @@ impl AccountRequestProcessor {
 
         if success {
             let auth_manager = thread_manager.auth_manager();
-            auth_manager.reload().await;
+            auth_manager.reload();
             config_manager
                 .replace_cloud_requirements_loader(auth_manager.clone(), chatgpt_base_url);
             config_manager

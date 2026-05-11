@@ -385,6 +385,7 @@ fn build_arc_monitor_message_item(
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. }
         | ResponseItem::ContextCompaction { .. }
+        | ResponseItem::GhostSnapshot { .. }
         | ResponseItem::Other => None,
     }
 }

@@ -350,7 +350,8 @@ impl ModelClient {
     ) -> Self {
         let client = Self::new(
             auth_manager,
-            self.state.conversation_id,
+            self.state.session_id,
+            self.state.thread_id,
             self.state.installation_id.clone(),
             provider_info,
             self.state.session_source.clone(),

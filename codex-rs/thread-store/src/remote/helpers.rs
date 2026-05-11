@@ -26,10 +26,10 @@ use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadEventPersistenceMode;
 use crate::ThreadMetadataPatch;
-use crate::ThreadPersistenceMetadata;
 use crate::ThreadSortKey;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
+use crate::types::ThreadPersistenceMetadata;
 
 pub(super) fn remote_status_to_error(status: tonic::Status) -> ThreadStoreError {
     match status.code() {
@@ -301,7 +301,9 @@ pub(super) fn stored_thread_from_proto(
             .thread_source
             .map(|thread_source| thread_source.parse::<ThreadSource>())
             .transpose()
-            .map_err(|error| ThreadStoreError::Internal { message: error })?,
+            .map_err(|error| ThreadStoreError::Internal {
+                message: error.to_string(),
+            })?,
         agent_nickname: thread.agent_nickname,
         agent_role: thread.agent_role,
         agent_path: thread.agent_path,

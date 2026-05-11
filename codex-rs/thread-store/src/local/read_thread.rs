@@ -4,6 +4,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::find_archived_thread_path_by_id_str;
 use codex_rollout::find_thread_name_by_id;
@@ -123,16 +124,22 @@ async fn resolve_rollout_path(
     thread_id: codex_protocol::ThreadId,
     include_archived: bool,
 ) -> ThreadStoreResult<Option<std::path::PathBuf>> {
+    let state_db = store.state_db().await;
     if include_archived {
-        match find_thread_path_by_id_str(store.config.codex_home.as_path(), &thread_id.to_string())
-            .await
-            .map_err(|err| ThreadStoreError::InvalidRequest {
-                message: format!("failed to locate thread id {thread_id}: {err}"),
-            })? {
+        match find_thread_path_by_id_str(
+            store.config.codex_home.as_path(),
+            &thread_id.to_string(),
+            state_db.as_deref(),
+        )
+        .await
+        .map_err(|err| ThreadStoreError::InvalidRequest {
+            message: format!("failed to locate thread id {thread_id}: {err}"),
+        })? {
             Some(path) => Ok(Some(path)),
             None => find_archived_thread_path_by_id_str(
                 store.config.codex_home.as_path(),
                 &thread_id.to_string(),
+                state_db.as_deref(),
             )
             .await
             .map_err(|err| ThreadStoreError::InvalidRequest {
@@ -140,11 +147,15 @@ async fn resolve_rollout_path(
             }),
         }
     } else {
-        find_thread_path_by_id_str(store.config.codex_home.as_path(), &thread_id.to_string())
-            .await
-            .map_err(|err| ThreadStoreError::InvalidRequest {
-                message: format!("failed to locate thread id {thread_id}: {err}"),
-            })
+        find_thread_path_by_id_str(
+            store.config.codex_home.as_path(),
+            &thread_id.to_string(),
+            state_db.as_deref(),
+        )
+        .await
+        .map_err(|err| ThreadStoreError::InvalidRequest {
+            message: format!("failed to locate thread id {thread_id}: {err}"),
+        })
     }
 }
 
@@ -236,6 +247,7 @@ async fn stored_thread_from_sqlite_metadata(
         cwd: metadata.cwd,
         cli_version: metadata.cli_version,
         source: parse_session_source(&metadata.source),
+        thread_source: metadata.thread_source,
         agent_nickname: metadata.agent_nickname,
         agent_role: metadata.agent_role,
         agent_path: metadata.agent_path,
@@ -287,6 +299,10 @@ fn stored_thread_from_meta_line(
         .and_then(|meta| meta.modified().ok())
         .map(DateTime::<Utc>::from)
         .unwrap_or(created_at);
+    let source = meta_line.meta.source;
+    let thread_source = source
+        .thread_source_name()
+        .and_then(|source| source.parse::<ThreadSource>().ok());
     StoredThread {
         thread_id: meta_line.meta.id,
         rollout_path: Some(path),
@@ -305,7 +321,8 @@ fn stored_thread_from_meta_line(
         archived_at: archived.then_some(updated_at),
         cwd: meta_line.meta.cwd,
         cli_version: meta_line.meta.cli_version,
-        source: meta_line.meta.source,
+        source,
+        thread_source,
         agent_nickname: meta_line.meta.agent_nickname,
         agent_role: meta_line.meta.agent_role,
         agent_path: meta_line.meta.agent_path,

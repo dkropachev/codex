@@ -58,6 +58,7 @@ use serde::Serialize;
 use serde_json::Value;
 use serde_with::serde_as;
 use strum_macros::Display;
+use strum_macros::EnumIter;
 use tracing::error;
 use ts_rs::TS;
 
@@ -1719,7 +1720,7 @@ pub enum EventMsg {
     CollabResumeEnd(CollabResumeEndEvent),
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, EnumIter)]
 #[serde(rename_all = "snake_case")]
 pub enum HookEventName {
     PreToolUse,
@@ -2663,6 +2664,8 @@ pub struct DynamicToolCallResponseEvent {
     pub call_id: String,
     /// Turn ID that this dynamic tool call belongs to.
     pub turn_id: String,
+    #[serde(default)]
+    pub completed_at_ms: i64,
     /// Dynamic tool namespace, when one was provided.
     #[serde(default)]
     pub namespace: Option<String>,
@@ -2862,6 +2865,7 @@ pub enum SessionSource {
     Mcp,
     Custom(String),
     SubAgent(SubAgentSource),
+    Internal(InternalSessionSource),
     #[serde(other)]
     Unknown,
 }
@@ -2904,6 +2908,13 @@ impl FromStr for ThreadSource {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum InternalSessionSource {
+    MemoryConsolidation,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -2933,6 +2944,7 @@ impl fmt::Display for SessionSource {
             SessionSource::Mcp => f.write_str("mcp"),
             SessionSource::Custom(source) => f.write_str(source),
             SessionSource::SubAgent(sub_source) => write!(f, "subagent_{sub_source}"),
+            SessionSource::Internal(source) => write!(f, "internal_{source}"),
             SessionSource::Unknown => f.write_str("unknown"),
         }
     }
@@ -2961,6 +2973,9 @@ impl SessionSource {
         match self {
             SessionSource::Cli | SessionSource::VSCode | SessionSource::Exec => Some("user"),
             SessionSource::SubAgent(_) => Some("subagent"),
+            SessionSource::Internal(InternalSessionSource::MemoryConsolidation) => {
+                Some("memory_consolidation")
+            }
             SessionSource::Mcp | SessionSource::Custom(_) | SessionSource::Unknown => None,
         }
     }
@@ -2971,6 +2986,9 @@ impl SessionSource {
                 agent_nickname.clone()
             }
             SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
+                Some("Morpheus".to_string())
+            }
+            SessionSource::Internal(InternalSessionSource::MemoryConsolidation) => {
                 Some("Morpheus".to_string())
             }
             _ => None,
@@ -2985,6 +3003,9 @@ impl SessionSource {
             SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
                 Some("memory builder".to_string())
             }
+            SessionSource::Internal(InternalSessionSource::MemoryConsolidation) => {
+                Some("memory builder".to_string())
+            }
             _ => None,
         }
     }
@@ -2997,8 +3018,18 @@ impl SessionSource {
             SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
                 Some(AgentPath::morpheus())
             }
+            SessionSource::Internal(InternalSessionSource::MemoryConsolidation) => {
+                Some(AgentPath::morpheus())
+            }
             _ => None,
         }
+    }
+
+    pub fn is_non_root_agent(&self) -> bool {
+        matches!(
+            self,
+            SessionSource::SubAgent(_) | SessionSource::Internal(_)
+        )
     }
 
     pub fn restriction_product(&self) -> Option<Product> {
@@ -3008,6 +3039,7 @@ impl SessionSource {
             | SessionSource::VSCode
             | SessionSource::Exec
             | SessionSource::Mcp
+            | SessionSource::Internal(_)
             | SessionSource::Unknown => Some(Product::Codex),
             SessionSource::SubAgent(_) => None,
         }
@@ -3018,6 +3050,14 @@ impl SessionSource {
             || self
                 .restriction_product()
                 .is_some_and(|product| product.matches_product_restriction(products))
+    }
+}
+
+impl fmt::Display for InternalSessionSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InternalSessionSource::MemoryConsolidation => f.write_str("memory_consolidation"),
+        }
     }
 }
 
@@ -3385,6 +3425,8 @@ pub enum ExecCommandStatus {
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
     pub call_id: String,
+    #[serde(default)]
+    pub started_at_ms: i64,
     /// Identifier for the underlying PTY process (when available).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -3409,6 +3451,8 @@ pub struct ExecCommandBeginEvent {
 pub struct ExecCommandEndEvent {
     /// Identifier for the ExecCommandBegin that finished.
     pub call_id: String,
+    #[serde(default)]
+    pub completed_at_ms: i64,
     /// Identifier for the underlying PTY process (when available).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -4036,6 +4080,8 @@ pub enum TurnAbortReason {
 pub struct CollabAgentSpawnBeginEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    #[serde(default)]
+    pub started_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the
@@ -4075,6 +4121,8 @@ pub struct CollabAgentStatusEntry {
 pub struct CollabAgentSpawnEndEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    #[serde(default)]
+    pub completed_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Thread ID of the newly spawned agent, if it was created.
@@ -4100,6 +4148,8 @@ pub struct CollabAgentSpawnEndEvent {
 pub struct CollabAgentInteractionBeginEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    #[serde(default)]
+    pub started_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receiver.
@@ -4113,6 +4163,8 @@ pub struct CollabAgentInteractionBeginEvent {
 pub struct CollabAgentInteractionEndEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    #[serde(default)]
+    pub completed_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receiver.
@@ -4132,6 +4184,8 @@ pub struct CollabAgentInteractionEndEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct CollabWaitingBeginEvent {
+    #[serde(default)]
+    pub started_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receivers.
@@ -4145,6 +4199,8 @@ pub struct CollabWaitingBeginEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct CollabWaitingEndEvent {
+    #[serde(default)]
+    pub completed_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// ID of the waiting call.
@@ -4160,6 +4216,8 @@ pub struct CollabWaitingEndEvent {
 pub struct CollabCloseBeginEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    #[serde(default)]
+    pub started_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receiver.
@@ -4170,6 +4228,8 @@ pub struct CollabCloseBeginEvent {
 pub struct CollabCloseEndEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    #[serde(default)]
+    pub completed_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receiver.
@@ -4189,6 +4249,8 @@ pub struct CollabCloseEndEvent {
 pub struct CollabResumeBeginEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    #[serde(default)]
+    pub started_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receiver.
@@ -4205,6 +4267,8 @@ pub struct CollabResumeBeginEvent {
 pub struct CollabResumeEndEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    #[serde(default)]
+    pub completed_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receiver.

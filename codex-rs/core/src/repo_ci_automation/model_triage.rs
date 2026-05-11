@@ -172,7 +172,9 @@ async fn run_model_triage_attempt(
             &turn_context.session_telemetry,
             effort,
             turn_context.reasoning_summary,
-            policy_config.service_tier,
+            policy_config
+                .service_tier
+                .map(|service_tier| service_tier.request_value().to_string()),
             turn_metadata_header.as_deref(),
             &InferenceTraceContext::disabled(),
         )

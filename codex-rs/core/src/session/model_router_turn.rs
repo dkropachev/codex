@@ -145,12 +145,13 @@ impl Session {
             .models_manager
             .get_model_info(model.as_str(), &per_turn_config.to_models_manager_config())
             .await;
+        let plugins_input = per_turn_config.plugins_config_input();
         let plugin_outcome = self
             .services
             .plugins_manager
-            .plugins_for_config(&per_turn_config)
+            .plugins_for_config(&plugins_input)
             .await;
-        let effective_skill_roots = plugin_outcome.effective_skill_roots();
+        let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
         let fs = previous
             .environment

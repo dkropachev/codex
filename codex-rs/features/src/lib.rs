@@ -79,6 +79,8 @@ pub enum Feature {
     ShellTool,
     /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
     CodexHooks,
+    /// Enable general analytics events.
+    GeneralAnalytics,
 
     // Experimental
     /// Removed compatibility flag for the deleted JavaScript REPL feature.
@@ -842,6 +844,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CodexHooks,
         key: "hooks",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::GeneralAnalytics,
+        key: "general_analytics",
         stage: Stage::Stable,
         default_enabled: true,
     },

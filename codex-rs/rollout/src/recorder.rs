@@ -674,7 +674,7 @@ impl RolloutRecorder {
                     conversation_id,
                     forked_from_id,
                     source,
-                    thread_source,
+                    thread_source: _,
                     base_instructions,
                     dynamic_tools,
                     event_persistence_mode,
@@ -703,7 +703,6 @@ impl RolloutRecorder {
                         agent_role: source.get_agent_role(),
                         agent_path: source.get_agent_path().map(Into::into),
                         source,
-                        thread_source,
                         model_provider: Some(config.model_provider_id().to_string()),
                         base_instructions: Some(base_instructions),
                         dynamic_tools: if dynamic_tools.is_empty() {

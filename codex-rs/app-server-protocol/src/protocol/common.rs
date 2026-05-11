@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::path::PathBuf;
 
 use crate::JSONRPCNotification;
 use crate::JSONRPCRequest;
@@ -73,6 +74,19 @@ macro_rules! experimental_type_entry {
     };
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClientRequestSerializationScope {
+    Global(&'static str),
+    GlobalSharedRead(&'static str),
+    Thread { thread_id: String },
+    ThreadPath { path: PathBuf },
+    CommandExecProcess { process_id: String },
+    Process { process_handle: String },
+    FuzzyFileSearchSession { session_id: String },
+    FsWatch { watch_id: String },
+    McpOauth { server_name: String },
+}
+
 /// Generates an `enum ClientRequest` where each variant is a request that the
 /// client can send to the server. Each variant has associated `params` and
 /// `response` types. Also generates a `export_client_responses()` function to
@@ -85,6 +99,7 @@ macro_rules! client_request_definitions {
             $variant:ident $(=> $wire:literal)? {
                 params: $(#[$params_meta:meta])* $params:ty,
                 $(inspect_params: $inspect_params:tt,)?
+                $(manual_payload_conversion: $manual_payload_conversion:ident,)?
                 response: $response:ty,
             }
         ),* $(,)?
@@ -123,6 +138,10 @@ macro_rules! client_request_definitions {
                     })
                     .unwrap_or_else(|| "<unknown>".to_string())
             }
+
+            pub fn serialization_scope(&self) -> Option<ClientRequestSerializationScope> {
+                None
+            }
         }
 
         /// Typed response from the server to the client.
@@ -159,6 +178,50 @@ macro_rules! client_request_definitions {
                     .unwrap_or_else(|| "<unknown>".to_string())
             }
         }
+
+        /// Typed response payload before a JSON-RPC request id is attached.
+        #[derive(Serialize, Deserialize, Debug, Clone)]
+        #[serde(tag = "method", content = "response", rename_all = "camelCase")]
+        pub enum ClientResponsePayload {
+            $(
+                $(#[doc = $variant_doc])*
+                $(#[serde(rename = $wire)])?
+                $variant($response),
+            )*
+        }
+
+        impl ClientResponsePayload {
+            pub fn into_client_response(self, request_id: RequestId) -> Option<ClientResponse> {
+                Some(match self {
+                    $(
+                        Self::$variant(response) => ClientResponse::$variant {
+                            request_id,
+                            response,
+                        },
+                    )*
+                })
+            }
+
+            pub fn into_jsonrpc_parts_and_payload(
+                self,
+                request_id: RequestId,
+            ) -> serde_json::Result<(RequestId, serde_json::Value, Option<Self>)> {
+                let result = match &self {
+                    $(
+                        Self::$variant(response) => serde_json::to_value(response)?,
+                    )*
+                };
+                Ok((request_id, result, Some(self)))
+            }
+        }
+
+        $(
+            client_response_payload_from_impl!(
+                $variant,
+                $response
+                $(, $manual_payload_conversion)?
+            );
+        )*
 
         impl crate::experimental_api::ExperimentalApi for ClientRequest {
             fn experimental_reason(&self) -> Option<&'static str> {
@@ -230,6 +293,17 @@ macro_rules! client_request_definitions {
             Ok(schemas)
         }
     };
+}
+
+macro_rules! client_response_payload_from_impl {
+    ($variant:ident, $response:ty) => {
+        impl From<$response> for ClientResponsePayload {
+            fn from(response: $response) -> Self {
+                Self::$variant(response)
+            }
+        }
+    };
+    ($variant:ident, $response:ty, manual) => {};
 }
 
 client_request_definitions! {
@@ -685,6 +759,7 @@ client_request_definitions! {
     },
     ConfigBatchWrite => "config/batchWrite" {
         params: v2::ConfigBatchWriteParams,
+        manual_payload_conversion: manual,
         response: v2::ConfigWriteResponse,
     },
 
@@ -767,6 +842,23 @@ macro_rules! server_request_definitions {
             pub fn id(&self) -> &RequestId {
                 match self {
                     $(Self::$variant { request_id, .. } => request_id,)*
+                }
+            }
+
+            pub fn response_from_result(
+                &self,
+                result: crate::Result,
+            ) -> serde_json::Result<ServerResponse> {
+                match self {
+                    $(
+                        Self::$variant { request_id, .. } => {
+                            let response = serde_json::from_value::<$response>(result)?;
+                            Ok(ServerResponse::$variant {
+                                request_id: request_id.clone(),
+                                response,
+                            })
+                        }
+                    )*
                 }
             }
         }

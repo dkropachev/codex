@@ -152,6 +152,16 @@ pub enum ExecExpiration {
     Timeout(Duration),
     DefaultTimeout,
     Cancellation(CancellationToken),
+    TimeoutOrCancellation {
+        timeout: Duration,
+        cancellation: CancellationToken,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecExpirationOutcome {
+    TimedOut,
+    Cancelled,
 }
 
 impl From<Option<u64>> for ExecExpiration {
@@ -178,6 +188,41 @@ impl ExecExpiration {
             ExecExpiration::Cancellation(cancel) => {
                 cancel.cancelled().await;
             }
+            ExecExpiration::TimeoutOrCancellation {
+                timeout,
+                cancellation,
+            } => {
+                tokio::select! {
+                    _ = tokio::time::sleep(timeout) => {}
+                    _ = cancellation.cancelled() => {}
+                }
+            }
+        }
+    }
+
+    pub async fn wait_with_outcome(self) -> ExecExpirationOutcome {
+        match self {
+            ExecExpiration::Timeout(duration) => {
+                tokio::time::sleep(duration).await;
+                ExecExpirationOutcome::TimedOut
+            }
+            ExecExpiration::DefaultTimeout => {
+                tokio::time::sleep(Duration::from_millis(DEFAULT_EXEC_COMMAND_TIMEOUT_MS)).await;
+                ExecExpirationOutcome::TimedOut
+            }
+            ExecExpiration::Cancellation(cancel) => {
+                cancel.cancelled().await;
+                ExecExpirationOutcome::Cancelled
+            }
+            ExecExpiration::TimeoutOrCancellation {
+                timeout,
+                cancellation,
+            } => {
+                tokio::select! {
+                    _ = tokio::time::sleep(timeout) => ExecExpirationOutcome::TimedOut,
+                    _ = cancellation.cancelled() => ExecExpirationOutcome::Cancelled,
+                }
+            }
         }
     }
 
@@ -187,6 +232,29 @@ impl ExecExpiration {
             ExecExpiration::Timeout(duration) => Some(duration.as_millis() as u64),
             ExecExpiration::DefaultTimeout => Some(DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
             ExecExpiration::Cancellation(_) => None,
+            ExecExpiration::TimeoutOrCancellation { timeout, .. } => {
+                Some(timeout.as_millis() as u64)
+            }
+        }
+    }
+
+    pub(crate) fn with_cancellation(self, cancellation: CancellationToken) -> Self {
+        match self {
+            ExecExpiration::Timeout(timeout) => ExecExpiration::TimeoutOrCancellation {
+                timeout,
+                cancellation,
+            },
+            ExecExpiration::DefaultTimeout => ExecExpiration::TimeoutOrCancellation {
+                timeout: Duration::from_millis(DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
+                cancellation,
+            },
+            ExecExpiration::Cancellation(_) => ExecExpiration::Cancellation(cancellation),
+            ExecExpiration::TimeoutOrCancellation { timeout, .. } => {
+                ExecExpiration::TimeoutOrCancellation {
+                    timeout,
+                    cancellation,
+                }
+            }
         }
     }
 }

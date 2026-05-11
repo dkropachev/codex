@@ -15,7 +15,6 @@ use crate::config_loader::ResidencyRequirement;
 use crate::config_loader::Sourced;
 use crate::config_loader::load_config_layers_state;
 use crate::config_loader::project_trust_key;
-use crate::memories::memory_root;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
@@ -47,11 +46,15 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
+use codex_config::types::SessionPickerViewMode;
 use codex_config::types::ToolSuggestConfig;
+use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
+use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
+use codex_core_plugins::PluginsConfigInput;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
@@ -66,6 +69,7 @@ use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
 use codex_mcp::McpConfig;
 use codex_mcp::McpRuntimeEnvironment;
+use codex_memories_read::memory_root;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
@@ -85,6 +89,7 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelsResponse;
@@ -201,6 +206,9 @@ pub struct Permissions {
     pub approval_policy: Constrained<AskForApproval>,
     /// Effective permission profile used for sandbox-aware tool execution.
     pub permission_profile: Constrained<PermissionProfile>,
+    /// Named or implicit built-in profile selected by config, rather than an
+    /// ad-hoc override.
+    pub active_permission_profile: Option<ActivePermissionProfile>,
     /// Effective sandbox policy used for shell/unified exec.
     pub sandbox_policy: Constrained<SandboxPolicy>,
     /// Effective filesystem sandbox policy, including entries that cannot yet
@@ -234,6 +242,11 @@ impl Permissions {
     /// readable-root additions have been applied.
     pub fn permission_profile(&self) -> PermissionProfile {
         self.permission_profile.get().clone()
+    }
+
+    /// Named profile selected by config, if the current profile has one.
+    pub fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
+        self.active_permission_profile.clone()
     }
 
     pub fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
@@ -281,6 +294,7 @@ impl Permissions {
                 requirement_source: codex_config::RequirementSource::Unknown,
             })?;
         self.permission_profile.set(permission_profile.clone())?;
+        self.active_permission_profile = None;
         self.sandbox_policy.set(sandbox_policy)?;
         let (file_system_sandbox_policy, network_sandbox_policy) =
             permission_profile.to_runtime_permissions();
@@ -296,6 +310,16 @@ impl Permissions {
         self.set_permission_profile_for_cwd(permission_profile, Path::new("/"))
     }
 
+    pub fn set_permission_profile_with_active_profile(
+        &mut self,
+        permission_profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
+    ) -> ConstraintResult<()> {
+        self.set_permission_profile_for_cwd(permission_profile, Path::new("/"))?;
+        self.active_permission_profile = active_permission_profile;
+        Ok(())
+    }
+
     pub fn set_legacy_sandbox_policy(
         &mut self,
         sandbox_policy: SandboxPolicy,
@@ -307,6 +331,7 @@ impl Permissions {
             NetworkSandboxPolicy::from(&sandbox_policy),
         );
         self.permission_profile.set(permission_profile)?;
+        self.active_permission_profile = None;
         self.sandbox_policy.set(sandbox_policy.clone())?;
         self.file_system_sandbox_policy =
             FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, cwd);
@@ -474,6 +499,12 @@ pub struct Config {
     /// Persisted startup availability NUX state for model tooltips.
     pub model_availability_nux: ModelAvailabilityNuxConfig,
 
+    /// Start the composer in Vim mode (`Normal`) by default.
+    pub tui_vim_mode_default: bool,
+
+    /// Start the TUI in raw scrollback mode for copy-friendly transcript output.
+    pub tui_raw_output_mode: bool,
+
     /// Maximum rendered terminal rows to replay during terminal resize reflow.
     pub terminal_resize_reflow: TerminalResizeReflowConfig,
 
@@ -490,6 +521,9 @@ pub struct Config {
     /// When unset, the TUI defaults to: `model-with-reasoning` and `current-dir`.
     pub tui_status_line: Option<Vec<String>>,
 
+    /// Whether to color status line items with colors from the active syntax theme.
+    pub tui_status_line_use_colors: bool,
+
     /// Ordered list of terminal title item identifiers for the TUI.
     ///
     /// When unset, the TUI defaults to: `project` and `spinner`.
@@ -497,6 +531,12 @@ pub struct Config {
 
     /// Syntax highlighting theme override (kebab-case name).
     pub tui_theme: Option<String>,
+
+    /// Preferred layout for resume/fork session picker results.
+    pub tui_session_picker_view: SessionPickerViewMode,
+
+    /// Keybinding overrides for the TUI.
+    pub tui_keymap: TuiKeymap,
 
     /// The absolute directory that should be treated as the current working
     /// directory for the session. All relative paths inside the business-logic
@@ -964,6 +1004,16 @@ impl ConfigBuilder {
 }
 
 impl Config {
+    pub fn plugins_config_input(&self) -> PluginsConfigInput {
+        PluginsConfigInput {
+            config_layer_stack: self.config_layer_stack.clone(),
+            plugins_enabled: self.features.enabled(Feature::Plugins),
+            remote_plugin_enabled: self.features.enabled(Feature::RemotePlugin),
+            plugin_hooks_enabled: self.features.enabled(Feature::PluginHooks),
+            chatgpt_base_url: self.chatgpt_base_url.clone(),
+        }
+    }
+
     pub fn to_models_manager_config(&self) -> ModelsManagerConfig {
         ModelsManagerConfig {
             model_context_window: self.model_context_window,
@@ -980,7 +1030,9 @@ impl Config {
         &self,
         plugins_manager: &crate::plugins::PluginsManager,
     ) -> McpConfig {
-        let loaded_plugins = plugins_manager.plugins_for_config(self).await;
+        let loaded_plugins = plugins_manager
+            .plugins_for_config(&self.plugins_config_input())
+            .await;
         let mut configured_mcp_servers = self.mcp_servers.get().clone();
         for (name, plugin_server) in loaded_plugins.effective_mcp_servers() {
             configured_mcp_servers.entry(name).or_insert(plugin_server);
@@ -1463,9 +1515,8 @@ pub struct AgentRoleConfig {
 }
 
 fn resolve_tool_suggest_config(config_toml: &ConfigToml) -> ToolSuggestConfig {
-    let discoverables = config_toml
-        .tool_suggest
-        .as_ref()
+    let tool_suggest = config_toml.tool_suggest.as_ref();
+    let discoverables = tool_suggest
         .into_iter()
         .flat_map(|tool_suggest| tool_suggest.discoverables.iter())
         .filter_map(|discoverable| {
@@ -1480,8 +1531,26 @@ fn resolve_tool_suggest_config(config_toml: &ConfigToml) -> ToolSuggestConfig {
             }
         })
         .collect();
+    let disabled_tools = tool_suggest
+        .into_iter()
+        .flat_map(|tool_suggest| tool_suggest.disabled_tools.iter())
+        .filter_map(|disabled_tool| {
+            let trimmed = disabled_tool.id.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(ToolSuggestDisabledTool {
+                    kind: disabled_tool.kind,
+                    id: trimmed.to_string(),
+                })
+            }
+        })
+        .collect();
 
-    ToolSuggestConfig { discoverables }
+    ToolSuggestConfig {
+        discoverables,
+        disabled_tools,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2555,6 +2624,7 @@ impl Config {
             permissions: Permissions {
                 approval_policy: constrained_approval_policy.value,
                 permission_profile: constrained_permission_profile.value,
+                active_permission_profile: None,
                 sandbox_policy: Constrained::allow_any(effective_sandbox_policy),
                 file_system_sandbox_policy: effective_file_system_sandbox_policy,
                 network_sandbox_policy: effective_network_sandbox_policy,
@@ -2725,6 +2795,16 @@ impl Config {
                 .as_ref()
                 .map(|t| t.model_availability_nux.clone())
                 .unwrap_or_default(),
+            tui_vim_mode_default: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.vim_mode_default)
+                .unwrap_or(false),
+            tui_raw_output_mode: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.raw_output_mode)
+                .unwrap_or(false),
             terminal_resize_reflow: cfg
                 .tui
                 .as_ref()
@@ -2743,8 +2823,24 @@ impl Config {
                 .map(|t| t.alternate_screen)
                 .unwrap_or_default(),
             tui_status_line: cfg.tui.as_ref().and_then(|t| t.status_line.clone()),
+            tui_status_line_use_colors: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.status_line_use_colors)
+                .unwrap_or(true),
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
+            tui_session_picker_view: config_profile
+                .tui
+                .as_ref()
+                .and_then(|t| t.session_picker_view)
+                .or_else(|| cfg.tui.as_ref().and_then(|t| t.session_picker_view))
+                .unwrap_or_default(),
+            tui_keymap: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.keymap.clone())
+                .unwrap_or_default(),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
