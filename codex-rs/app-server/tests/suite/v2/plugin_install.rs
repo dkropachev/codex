@@ -509,8 +509,7 @@ async fn plugin_install_rejects_when_workspace_codex_plugins_disabled() -> Resul
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(r#"{"beta_settings":{"plugins":false}}"#),
+            ResponseTemplate::new(200).set_body_string(r#"{"beta_settings":{"plugins":false}}"#),
         )
         .mount(&server)
         .await;

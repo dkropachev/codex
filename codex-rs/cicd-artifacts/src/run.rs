@@ -682,8 +682,11 @@ mod tests {
             .as_object_mut()
             .expect("artifact object")
             .remove("resource_usage");
-        fs::write(&path, serde_json::to_vec_pretty(&value).expect("artifact bytes"))
-            .expect("write artifact");
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&value).expect("artifact bytes"),
+        )
+        .expect("write artifact");
         store::index_artifact_file(
             codex_home,
             state_dir,

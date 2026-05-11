@@ -638,9 +638,7 @@ mod tests {
 
         assert_eq!(
             LedgerRow {
-                selected_tools_json: row
-                    .try_get("selected_tools_json")
-                    .expect("selected tools"),
+                selected_tools_json: row.try_get("selected_tools_json").expect("selected tools"),
                 model_slug: row.try_get("model_slug").expect("model slug"),
                 model_provider: row.try_get("model_provider").expect("model provider"),
                 toolset_hash: row.try_get("toolset_hash").expect("toolset hash"),

@@ -754,13 +754,11 @@ mod tests {
         );
 
         let observed_request_count = Arc::clone(&request_count);
-        let ((), request_count_while_first_response_delayed) = tokio::join!(
-            pool.refresh_usage(/*pool_id*/ None),
-            async move {
+        let ((), request_count_while_first_response_delayed) =
+            tokio::join!(pool.refresh_usage(/*pool_id*/ None), async move {
                 tokio::time::sleep(Duration::from_millis(/*millis*/ 1_000)).await;
                 observed_request_count.load(Ordering::SeqCst)
-            }
-        );
+            });
         assert_eq!(
             request_count_while_first_response_delayed, 2,
             "usage refresh should start all member requests before the first response returns"
