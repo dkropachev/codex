@@ -253,7 +253,7 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
             model: None,
             effort: None,
             summary: None,
-            service_tier: Some(Some(ServiceTier::Fast.request_value().to_string())),
+            service_tier: Some(Some(ServiceTier::Fast)),
             collaboration_mode: None,
             personality: None,
         })
@@ -269,7 +269,7 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
     let context = crate::runtime::MemoryStartupContext::new(
         Arc::clone(&test.thread_manager),
         test.thread_manager.auth_manager(),
-        test.session_configured.thread_id,
+        test.session_configured.session_id,
         Arc::clone(&test.codex),
         &test.config,
         config_snapshot.session_source.clone(),
@@ -324,7 +324,7 @@ async fn trigger_memories_startup(test: &TestCodex) {
     start_memories_startup_task(
         Arc::clone(&test.thread_manager),
         test.thread_manager.auth_manager(),
-        test.session_configured.thread_id,
+        test.session_configured.session_id,
         Arc::clone(&test.codex),
         Arc::new(config),
         &config_snapshot.session_source,

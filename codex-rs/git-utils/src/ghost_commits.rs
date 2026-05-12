@@ -911,7 +911,6 @@ fn default_commit_identity() -> Vec<(OsString, OsString)> {
 mod tests {
     use super::*;
     use crate::operations::run_git_for_stdout;
-    use assert_matches::assert_matches;
     use pretty_assertions::assert_eq;
     use std::fs::File;
     use std::process::Command;
@@ -1487,7 +1486,7 @@ mod tests {
         let options = CreateGhostCommitOptions::new(repo)
             .force_include(vec![PathBuf::from("../outside.txt")]);
         let err = create_ghost_commit(&options).unwrap_err();
-        assert_matches!(err, GitToolingError::PathEscapesRepository { .. });
+        assert!(matches!(err, GitToolingError::PathEscapesRepository { .. }));
     }
 
     #[test]
@@ -1495,7 +1494,7 @@ mod tests {
     fn restore_requires_git_repository() {
         let temp = tempfile::tempdir().expect("tempdir");
         let err = restore_to_commit(temp.path(), "deadbeef").unwrap_err();
-        assert_matches!(err, GitToolingError::NotAGitRepository { .. });
+        assert!(matches!(err, GitToolingError::NotAGitRepository { .. }));
     }
 
     #[test]

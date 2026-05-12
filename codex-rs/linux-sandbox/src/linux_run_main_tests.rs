@@ -339,6 +339,7 @@ fn resolve_sandbox_policies_derives_split_policies_from_legacy_policy() {
         Some(sandbox_policy.clone()),
         /*file_system_sandbox_policy*/ None,
         /*network_sandbox_policy*/ None,
+        /*permission_profile*/ None,
     )
     .expect("legacy policy should resolve");
 
@@ -364,6 +365,7 @@ fn resolve_sandbox_policies_derives_legacy_policy_from_split_policies() {
         /*sandbox_policy*/ None,
         Some(file_system_sandbox_policy.clone()),
         Some(network_sandbox_policy),
+        /*permission_profile*/ None,
     )
     .expect("split policies should resolve");
 
@@ -382,6 +384,7 @@ fn resolve_sandbox_policies_rejects_partial_split_policies() {
         Some(SandboxPolicy::new_read_only_policy()),
         Some(FileSystemSandboxPolicy::default()),
         /*network_sandbox_policy*/ None,
+        /*permission_profile*/ None,
     )
     .expect_err("partial split policies should fail");
 
@@ -395,6 +398,7 @@ fn resolve_sandbox_policies_rejects_mismatched_legacy_and_split_inputs() {
         Some(SandboxPolicy::new_read_only_policy()),
         Some(FileSystemSandboxPolicy::unrestricted()),
         Some(NetworkSandboxPolicy::Enabled),
+        /*permission_profile*/ None,
     )
     .expect_err("mismatched legacy and split policies should fail");
 
@@ -432,6 +436,7 @@ fn resolve_sandbox_policies_accepts_split_policies_requiring_direct_runtime_enfo
         Some(sandbox_policy.clone()),
         Some(file_system_sandbox_policy.clone()),
         Some(NetworkSandboxPolicy::Restricted),
+        /*permission_profile*/ None,
     )
     .expect("split-only policy should preserve provided legacy fallback");
 
@@ -466,6 +471,7 @@ fn resolve_sandbox_policies_accepts_semantically_equivalent_workspace_write_inpu
         Some(sandbox_policy.clone()),
         Some(file_system_sandbox_policy.clone()),
         Some(NetworkSandboxPolicy::Restricted),
+        /*permission_profile*/ None,
     )
     .expect("semantically equivalent legacy workspace-write policy should resolve");
 

@@ -256,6 +256,7 @@ fn turn_items_for_thread_returns_matching_turn_items() {
         cwd: test_path_buf("/tmp/project").abs(),
         cli_version: "0.0.0-test".to_string(),
         source: codex_app_server_protocol::SessionSource::Exec,
+        thread_source: None,
         agent_nickname: None,
         agent_role: None,
         git_info: None,
@@ -365,11 +366,11 @@ async fn thread_start_params_include_review_policy_when_review_policy_is_manual_
         params.approvals_reviewer,
         Some(codex_app_server_protocol::ApprovalsReviewer::User)
     );
-    assert_eq!(params.sandbox, None);
     assert_eq!(
-        params.permission_profile,
-        Some(config.permissions.permission_profile().into())
+        params.sandbox,
+        Some(codex_app_server_protocol::SandboxMode::ReadOnly)
     );
+    assert_eq!(params.permissions, None);
 }
 
 #[tokio::test]
@@ -443,10 +444,6 @@ async fn session_configured_from_thread_response_uses_review_policy_from_respons
 
     assert_eq!(
         event.session_id.to_string(),
-        "67e55044-10b1-426f-9247-bb680e5fe0c7"
-    );
-    assert_eq!(
-        event.thread_id.to_string(),
         "67e55044-10b1-426f-9247-bb680e5fe0c8"
     );
     assert_eq!(event.approvals_reviewer, ApprovalsReviewer::AutoReview);
@@ -468,7 +465,7 @@ async fn session_configured_from_thread_response_uses_permission_profile_from_re
     let event = session_configured_from_thread_start_response(&response, &config)
         .expect("build bootstrap session configured event");
 
-    assert_eq!(event.permission_profile, PermissionProfile::Disabled);
+    assert_eq!(event.permission_profile, Some(PermissionProfile::Disabled));
 }
 
 fn sample_thread_start_response() -> ThreadStartResponse {

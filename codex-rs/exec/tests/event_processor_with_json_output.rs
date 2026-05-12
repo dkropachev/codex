@@ -27,11 +27,11 @@ use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::WebSearchAction as ApiWebSearchAction;
-use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
@@ -108,20 +108,20 @@ fn session_configured_produces_thread_started_event() {
     let thread_id = ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")
         .expect("thread id should parse");
     let session_configured = SessionConfiguredEvent {
-        session_id: SessionId::from(thread_id),
-        thread_id,
+        session_id: thread_id,
         forked_from_id: None,
-        thread_source: None,
         thread_name: None,
         model: "codex-mini-latest".to_string(),
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
-        permission_profile: PermissionProfile::read_only(),
-        active_permission_profile: None,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: Some(PermissionProfile::read_only()),
         cwd: test_path_buf("/tmp/project").abs(),
         reasoning_effort: None,
+        history_log_id: 0,
+        history_entry_count: 0,
         initial_messages: None,
         network_proxy: None,
         rollout_path: None,

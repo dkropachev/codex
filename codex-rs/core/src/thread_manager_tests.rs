@@ -61,16 +61,6 @@ fn developer_interrupted_marker() -> ResponseItem {
         .expect("developer interrupted marker should be enabled")
 }
 
-fn contextual_user_interrupted_marker() -> ResponseItem {
-    interrupted_turn_history_marker(InterruptedTurnHistoryMarker::ContextualUser)
-        .expect("contextual-user interrupted marker should be enabled")
-}
-
-fn developer_interrupted_marker() -> ResponseItem {
-    interrupted_turn_history_marker(InterruptedTurnHistoryMarker::Developer)
-        .expect("developer interrupted marker should be enabled")
-}
-
 #[test]
 fn truncates_before_requested_user_message() {
     let items = [

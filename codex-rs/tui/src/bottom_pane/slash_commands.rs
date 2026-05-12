@@ -141,12 +141,11 @@ mod tests {
         let mut flags = all_enabled_flags();
         flags.workflows_enabled = false;
 
-        let commands = builtins_for_input(flags)
-            .into_iter()
-            .map(|(_, command)| command)
-            .collect::<Vec<_>>();
-
-        assert!(!commands.contains(&SlashCommand::Workflow));
+        assert!(
+            !builtins_for_input(flags)
+                .into_iter()
+                .any(|(_, command)| command == SlashCommand::Workflow)
+        );
         assert!(!has_builtin_prefix("workflow", flags));
     }
 

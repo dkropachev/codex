@@ -2689,7 +2689,6 @@ impl ThreadRequestProcessor {
                     emit_thread_goal_update,
                     thread_goal_state_db,
                     include_turns: !params.exclude_turns,
-                    redact_resume_payloads: false,
                 }),
             );
             if listener_command_tx.send(command).is_err() {
@@ -2947,7 +2946,7 @@ impl ThreadRequestProcessor {
             base_instructions,
             developer_instructions,
             ephemeral,
-            thread_source,
+            thread_source: _,
             exclude_turns,
             persist_extended_history,
         } = params;

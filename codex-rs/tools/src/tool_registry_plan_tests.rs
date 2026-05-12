@@ -1876,7 +1876,7 @@ fn request_plugin_install_description_lists_discoverable_tools() {
 
     let request_plugin_install = find_tool(&tools, REQUEST_PLUGIN_INSTALL_TOOL_NAME);
     let ToolSpec::Function(ResponsesApiTool {
-        connector_description: description,
+        description,
         parameters,
         ..
     }) = &request_plugin_install.spec
@@ -2402,7 +2402,7 @@ fn deferred_mcp_tool<'a>(
         name: ToolName::namespaced(tool_namespace, tool_name),
         server_name,
         connector_name,
-        description,
+        connector_description: description,
     }
 }
 

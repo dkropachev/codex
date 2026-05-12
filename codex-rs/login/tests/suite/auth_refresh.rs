@@ -985,8 +985,7 @@ impl RefreshTokenTestContext {
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
-        )
-        .await;
+        );
 
         Ok(Self {
             codex_home,
@@ -1007,7 +1006,7 @@ impl RefreshTokenTestContext {
             auth_dot_json,
             AuthCredentialsStoreMode::File,
         )?;
-        self.auth_manager.reload().await;
+        self.auth_manager.reload();
         Ok(())
     }
 }

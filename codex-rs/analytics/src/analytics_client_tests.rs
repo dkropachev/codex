@@ -72,6 +72,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionSource as AppServerSessionSource;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
 use codex_app_server_protocol::Turn;
@@ -722,7 +723,7 @@ fn compaction_event_serializes_expected_shape() {
             },
             sample_app_server_client_metadata(),
             sample_runtime_metadata(),
-            Some("user"),
+            Some(ThreadSource::User),
             /*subagent_source*/ None,
             /*parent_thread_id*/ None,
         ),
@@ -821,7 +822,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             },
             model: "gpt-5".to_string(),
             ephemeral: true,
-            thread_source: Some("user"),
+            thread_source: Some(ThreadSource::User),
             initialization_mode: ThreadInitializationMode::New,
             subagent_source: None,
             parent_thread_id: None,
@@ -1754,7 +1755,7 @@ fn turn_event_serializes_expected_shape() {
             runtime: sample_runtime_metadata(),
             submission_type: None,
             ephemeral: false,
-            thread_source: Some("user".to_string()),
+            thread_source: Some(ThreadSource::User),
             initialization_mode: ThreadInitializationMode::New,
             subagent_source: None,
             parent_thread_id: None,

@@ -28,6 +28,7 @@ use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -199,6 +200,18 @@ pub enum ShellModelOutput {
     ShellCommand,
     LocalShell,
     // UnifiedExec has its own set of tests
+}
+
+/// Returns the permission fields required by `Op::UserTurn` for tests that
+/// construct the op directly.
+pub fn turn_permission_fields(
+    permission_profile: PermissionProfile,
+    cwd: &Path,
+) -> (SandboxPolicy, Option<PermissionProfile>) {
+    let sandbox_policy = permission_profile
+        .to_legacy_sandbox_policy(cwd)
+        .unwrap_or_else(|_| SandboxPolicy::new_read_only_policy());
+    (sandbox_policy, Some(permission_profile))
 }
 
 pub struct TestCodexBuilder {

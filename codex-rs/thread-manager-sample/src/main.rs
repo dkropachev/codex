@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::io::Write;
@@ -9,57 +7,29 @@ use anyhow::Context;
 use anyhow::bail;
 use clap::Parser;
 use codex_core_api::AbsolutePathBuf;
-use codex_core_api::AltScreenMode;
-use codex_core_api::ApprovalsReviewer;
 use codex_core_api::Arg0DispatchPaths;
 use codex_core_api::AskForApproval;
-use codex_core_api::AuthCredentialsStoreMode;
 use codex_core_api::AuthManager;
 use codex_core_api::CodexThread;
+use codex_core_api::CollaborationModesConfig;
 use codex_core_api::Config;
-use codex_core_api::ConfigLayerStack;
-use codex_core_api::Constrained;
+use codex_core_api::ConfigBuilder;
+use codex_core_api::ConfigOverrides;
 use codex_core_api::EnvironmentManager;
 use codex_core_api::EnvironmentManagerArgs;
 use codex_core_api::EventMsg;
 use codex_core_api::ExecServerRuntimePaths;
 use codex_core_api::Features;
-use codex_core_api::GhostSnapshotConfig;
-use codex_core_api::History;
-use codex_core_api::MemoriesConfig;
-use codex_core_api::ModelAvailabilityNuxConfig;
-use codex_core_api::MultiAgentV2Config;
 use codex_core_api::NewThread;
-use codex_core_api::Notice;
-use codex_core_api::OAuthCredentialsStoreMode;
-use codex_core_api::OPENAI_PROVIDER_ID;
 use codex_core_api::Op;
-use codex_core_api::OtelConfig;
 use codex_core_api::PermissionProfile;
-use codex_core_api::Permissions;
-use codex_core_api::ProjectConfig;
-use codex_core_api::RealtimeAudioConfig;
-use codex_core_api::RealtimeConfig;
-use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
-use codex_core_api::ShellEnvironmentPolicy;
-use codex_core_api::TerminalResizeReflowConfig;
 use codex_core_api::ThreadManager;
-use codex_core_api::ThreadStoreConfig;
-use codex_core_api::ToolSuggestConfig;
-use codex_core_api::TuiKeymap;
-use codex_core_api::TuiNotificationSettings;
-use codex_core_api::UriBasedFileOpener;
 use codex_core_api::UserInput;
-use codex_core_api::WebSearchMode;
 use codex_core_api::arg0_dispatch_or_else;
-use codex_core_api::built_in_model_providers;
 use codex_core_api::find_codex_home;
-use codex_core_api::init_state_db;
 use codex_core_api::item_event_to_server_notification;
-use codex_core_api::resolve_installation_id;
 use codex_core_api::set_default_originator;
-use codex_core_api::thread_store_from_config;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -104,8 +74,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         args.prompt.join(" ")
     };
 
-    let config = new_config(args.model, arg0_paths)?;
-    let state_db = init_state_db(&config).await;
+    let config = new_config(args.model, arg0_paths).await?;
 
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
@@ -113,19 +82,15 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         config.codex_self_exe.clone(),
         config.codex_linux_sandbox_exe.clone(),
     )?;
-    let thread_store = thread_store_from_config(&config, state_db.clone());
     let environment_manager =
         Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await);
-    let installation_id = resolve_installation_id(&config.codex_home).await?;
     let thread_manager = ThreadManager::new(
         &config,
         auth_manager,
         SessionSource::Exec,
+        CollaborationModesConfig::default(),
         environment_manager,
         /*analytics_events_client*/ None,
-        Arc::clone(&thread_store),
-        state_db,
-        installation_id,
     );
 
     let NewThread {
@@ -146,139 +111,35 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<Config> {
+async fn new_config(
+    model: Option<String>,
+    arg0_paths: Arg0DispatchPaths,
+) -> anyhow::Result<Config> {
     let codex_home = find_codex_home().context("find Codex home")?;
     let cwd = AbsolutePathBuf::current_dir().context("resolve current directory")?;
-    let model_provider_id = OPENAI_PROVIDER_ID.to_string();
-    let model_providers = built_in_model_providers(/*openai_base_url*/ None);
-    let model_provider = model_providers
-        .get(&model_provider_id)
-        .context("OpenAI model provider should be available")?
-        .clone();
-
-    let mut config = Config {
-        config_layer_stack: ConfigLayerStack::default(),
-        startup_warnings: Vec::new(),
-        model,
-        service_tier: None,
-        review_model: None,
-        model_context_window: None,
-        model_auto_compact_token_limit: None,
-        model_provider_id,
-        model_provider,
-        personality: None,
-        permissions: Permissions {
-            approval_policy: Constrained::allow_any(AskForApproval::Never),
-            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
-            active_permission_profile: None,
-            network: None,
-            allow_login_shell: true,
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
-            windows_sandbox_mode: None,
-            windows_sandbox_private_desktop: true,
-        },
-        approvals_reviewer: ApprovalsReviewer::User,
-        enforce_residency: Constrained::allow_any(/*initial_value*/ None),
-        hide_agent_reasoning: false,
-        show_raw_agent_reasoning: false,
-        user_instructions: None,
-        base_instructions: None,
-        developer_instructions: None,
-        guardian_policy_config: None,
-        include_permissions_instructions: false,
-        include_apps_instructions: false,
-        include_skill_instructions: false,
-        include_environment_context: false,
-        compact_prompt: None,
-        commit_attribution: None,
-        notify: None,
-        tui_notifications: TuiNotificationSettings::default(),
-        animations: true,
-        show_tooltips: true,
-        model_availability_nux: ModelAvailabilityNuxConfig::default(),
-        tui_alternate_screen: AltScreenMode::Auto,
-        tui_status_line: None,
-        tui_status_line_use_colors: true,
-        tui_terminal_title: None,
-        tui_theme: None,
-        tui_raw_output_mode: false,
-        terminal_resize_reflow: TerminalResizeReflowConfig::default(),
-        tui_keymap: TuiKeymap::default(),
-        tui_session_picker_view: SessionPickerViewMode::Dense,
-        tui_vim_mode_default: false,
-        cwd,
-        cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        mcp_servers: Constrained::allow_any(HashMap::new()),
-        mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode::File,
-        mcp_oauth_callback_port: None,
-        mcp_oauth_callback_url: None,
-        model_providers,
-        project_doc_max_bytes: 32 * 1024,
-        project_doc_fallback_filenames: Vec::new(),
-        tool_output_token_limit: None,
-        agent_max_threads: Some(6),
-        agent_job_max_runtime_seconds: None,
-        agent_interrupt_message_enabled: false,
-        agent_max_depth: 1,
-        agent_roles: BTreeMap::new(),
-        memories: MemoriesConfig::default(),
-        sqlite_home: codex_home.to_path_buf(),
-        log_dir: codex_home.join("log").to_path_buf(),
-        config_lock_export_dir: None,
-        config_lock_allow_codex_version_mismatch: false,
-        config_lock_save_fields_resolved_from_model_catalog: true,
-        config_lock_toml: None,
-        codex_home,
-        history: History::default(),
-        ephemeral: true,
-        file_opener: UriBasedFileOpener::VsCode,
-        codex_self_exe: arg0_paths.codex_self_exe,
-        codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe,
-        main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe,
-        zsh_path: None,
-        model_reasoning_effort: None,
-        plan_mode_reasoning_effort: None,
-        model_reasoning_summary: None,
-        model_supports_reasoning_summaries: None,
-        model_catalog: None,
-        model_verbosity: None,
-        chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
-        apps_mcp_path_override: None,
-        realtime_audio: RealtimeAudioConfig::default(),
-        experimental_realtime_ws_base_url: None,
-        experimental_realtime_ws_model: None,
-        realtime: RealtimeConfig::default(),
-        experimental_realtime_ws_backend_prompt: None,
-        experimental_realtime_ws_startup_context: None,
-        experimental_realtime_start_instructions: None,
-        experimental_thread_config_endpoint: None,
-        experimental_thread_store: ThreadStoreConfig::Local,
-        forced_chatgpt_workspace_id: None,
-        forced_login_method: None,
-        include_apply_patch_tool: false,
-        web_search_mode: Constrained::allow_any(WebSearchMode::Disabled),
-        web_search_config: None,
-        use_experimental_unified_exec_tool: false,
-        background_terminal_max_timeout: 300_000,
-        ghost_snapshot: GhostSnapshotConfig::default(),
-        multi_agent_v2: MultiAgentV2Config::default(),
-        features: Default::default(),
-        suppress_unstable_features_warning: false,
-        active_profile: None,
-        active_project: ProjectConfig { trust_level: None },
-        windows_wsl_setup_acknowledged: false,
-        notices: Notice::default(),
-        check_for_update_on_startup: false,
-        disable_paste_burst: false,
-        analytics_enabled: Some(false),
-        feedback_enabled: false,
-        tool_suggest: ToolSuggestConfig::default(),
-        otel: OtelConfig::default(),
-    };
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .fallback_cwd(Some(cwd.to_path_buf()))
+        .harness_overrides(ConfigOverrides {
+            model,
+            approval_policy: Some(AskForApproval::Never),
+            permission_profile: Some(PermissionProfile::read_only()),
+            codex_self_exe: arg0_paths.codex_self_exe,
+            codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe,
+            main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe,
+            ephemeral: Some(true),
+            ..Default::default()
+        })
+        .build()
+        .await
+        .context("load Codex config")?;
     config
         .features
         .set(Features::with_defaults())
         .context("configure default features")?;
+    config.analytics_enabled = Some(false);
+    config.feedback_enabled = false;
+    config.check_for_update_on_startup = false;
     Ok(config)
 }
 
