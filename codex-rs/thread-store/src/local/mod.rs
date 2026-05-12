@@ -251,6 +251,7 @@ mod tests {
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::ThreadMemoryMode;
     use codex_protocol::protocol::UserMessageEvent;
     use tempfile::TempDir;
 
@@ -387,6 +388,7 @@ mod tests {
                 rollout_path: None,
                 history: None,
                 include_archived: true,
+                metadata: test_thread_metadata(),
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -443,6 +445,7 @@ mod tests {
                 rollout_path: Some(rollout_path),
                 history: None,
                 include_archived: true,
+                metadata: test_thread_metadata(),
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -490,6 +493,7 @@ mod tests {
                 rollout_path: Some(rollout_path),
                 history: None,
                 include_archived: true,
+                metadata: test_thread_metadata(),
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -572,9 +576,19 @@ mod tests {
             thread_id,
             forked_from_id: None,
             source: SessionSource::Exec,
+            thread_source: None,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            metadata: test_thread_metadata(),
             event_persistence_mode: ThreadEventPersistenceMode::Limited,
+        }
+    }
+
+    fn test_thread_metadata() -> crate::ThreadPersistenceMetadata {
+        crate::ThreadPersistenceMetadata {
+            cwd: None,
+            model_provider: "test-provider".to_string(),
+            memory_mode: ThreadMemoryMode::Enabled,
         }
     }
 

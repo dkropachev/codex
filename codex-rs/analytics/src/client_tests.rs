@@ -4,6 +4,7 @@ use crate::facts::AnalyticsFact;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
 use codex_app_server_protocol::RequestId;
@@ -208,7 +209,10 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
         (RequestId::Integer(4), sample_turn_start_response()),
         (RequestId::Integer(5), sample_turn_steer_response()),
     ] {
-        client.track_response(/*connection_id*/ 7, request_id, response);
+        let response = response
+            .into_client_response(request_id)
+            .expect("response should attach request id");
+        client.track_response(/*connection_id*/ 7, response);
         assert!(matches!(
             receiver.try_recv(),
             Ok(AnalyticsFact::ClientResponse { .. })
@@ -217,8 +221,10 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
 
     client.track_response(
         /*connection_id*/ 7,
-        RequestId::Integer(6),
-        ClientResponsePayload::ThreadArchive(ThreadArchiveResponse {}),
+        ClientResponse::ThreadArchive {
+            request_id: RequestId::Integer(6),
+            response: ThreadArchiveResponse {},
+        },
     );
     assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
 }

@@ -4,7 +4,6 @@ use codex_network_proxy::has_proxy_url_env_vars;
 use codex_network_proxy::proxy_url_env_value;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::permissions::PROTECTED_METADATA_PATH_NAMES;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::WritableRoot;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -22,6 +21,7 @@ const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl
 const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");
 const MACOS_RESTRICTED_READ_ONLY_PLATFORM_DEFAULTS: &str =
     include_str!("restricted_read_only_platform_defaults.sbpl");
+const PROTECTED_METADATA_PATH_NAMES: &[&str] = &[".git", ".agents", ".codex"];
 
 /// When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
 /// to defend against an attacker trying to inject a malicious version on the
@@ -409,7 +409,7 @@ fn protected_metadata_names_for_writable_root(
     writable_root: &WritableRoot,
     cwd: &Path,
 ) -> Vec<String> {
-    let mut names = writable_root.protected_metadata_names.clone();
+    let mut names = Vec::new();
     for name in PROTECTED_METADATA_PATH_NAMES {
         if names.iter().any(|existing| existing == name) {
             continue;

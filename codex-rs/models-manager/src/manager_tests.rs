@@ -187,11 +187,20 @@ fn openai_manager_for_tests_with_auth(
     endpoint_client: Arc<dyn ModelsEndpointClient>,
     auth_manager: Option<Arc<AuthManager>>,
 ) -> OpenAiModelsManager {
-    OpenAiModelsManager::new(codex_home, endpoint_client, auth_manager)
+    OpenAiModelsManager::new(
+        codex_home,
+        endpoint_client,
+        auth_manager,
+        CollaborationModesConfig::default(),
+    )
 }
 
 fn static_manager_for_tests(model_catalog: ModelsResponse) -> StaticModelsManager {
-    StaticModelsManager::new(/*auth_manager*/ None, model_catalog)
+    StaticModelsManager::new(
+        /*auth_manager*/ None,
+        model_catalog,
+        CollaborationModesConfig::default(),
+    )
 }
 
 async fn chatgpt_auth_tokens_for_tests(codex_home: &Path) -> CodexAuth {
@@ -219,14 +228,9 @@ c2ln",
     )
     .expect("auth.json should be written");
 
-    CodexAuth::from_auth_storage(
-        codex_home,
-        AuthCredentialsStoreMode::File,
-        /*chatgpt_base_url*/ None,
-    )
-    .await
-    .expect("auth should load")
-    .expect("auth should be present")
+    CodexAuth::from_auth_storage(codex_home, AuthCredentialsStoreMode::File)
+        .expect("auth should load")
+        .expect("auth should be present")
 }
 
 #[tokio::test]
@@ -741,6 +745,7 @@ async fn static_manager_reads_latest_auth_mode() {
         ModelsResponse {
             models: vec![chatgpt_only_model, api_model],
         },
+        CollaborationModesConfig::default(),
     );
 
     let chatgpt_models = manager.list_models(RefreshStrategy::Online).await;

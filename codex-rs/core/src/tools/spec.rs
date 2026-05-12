@@ -89,6 +89,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ReadMcpResourceHandler;
     use crate::tools::handlers::RepoCiHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
+    use crate::tools::handlers::RequestPluginInstallHandler;
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
@@ -157,6 +158,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let view_image_handler = Arc::new(ViewImageHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler::from(config.shell_command_backend));
     let request_permissions_handler = Arc::new(RequestPermissionsHandler);
+    let request_plugin_install_handler = Arc::new(RequestPluginInstallHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
         available_modes: config.request_user_input_available_modes.clone(),
     });
@@ -278,6 +280,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::RequestPermissions => {
                 builder.register_handler(handler.name, request_permissions_handler.clone());
+            }
+            ToolHandlerKind::RequestPluginInstall => {
+                builder.register_handler(handler.name, request_plugin_install_handler.clone());
             }
             ToolHandlerKind::RequestUserInput => {
                 builder.register_handler(handler.name, request_user_input_handler.clone());

@@ -25,6 +25,7 @@ pub enum ToolHandlerKind {
     McpResource,
     Plan,
     RequestPermissions,
+    RequestPluginInstall,
     RequestUserInput,
     RepoCi,
     ResumeAgentV1,

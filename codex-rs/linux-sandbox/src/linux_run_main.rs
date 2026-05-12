@@ -15,6 +15,7 @@ use crate::launcher::exec_bwrap;
 use crate::launcher::preferred_bwrap_supports_argv0;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
@@ -53,6 +54,9 @@ pub struct LandlockCommand {
 
     #[arg(long = "network-sandbox-policy", hide = true)]
     pub network_sandbox_policy: Option<NetworkSandboxPolicy>,
+
+    #[arg(long = "permission-profile", hide = true)]
+    pub permission_profile: Option<PermissionProfile>,
 
     /// Opt-in: use the legacy Landlock Linux sandbox fallback.
     ///
@@ -105,6 +109,7 @@ pub fn run_main() -> ! {
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
+        permission_profile,
         use_legacy_landlock,
         apply_seccomp_then_exec,
         allow_network_for_proxy,
@@ -126,6 +131,7 @@ pub fn run_main() -> ! {
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
+        permission_profile,
     )
     .unwrap_or_else(|err| panic!("{err}"));
     ensure_legacy_landlock_mode_supports_policy(
@@ -237,6 +243,7 @@ enum ResolveSandboxPoliciesError {
         provided: SandboxPolicy,
         derived: SandboxPolicy,
     },
+    PermissionProfileCannotBeCombined,
     MissingConfiguration,
 }
 
@@ -267,6 +274,10 @@ impl fmt::Display for ResolveSandboxPoliciesError {
                     "legacy sandbox policy must match split sandbox policies: provided={provided:?}, derived={derived:?}"
                 )
             }
+            Self::PermissionProfileCannotBeCombined => write!(
+                f,
+                "permission profile cannot be combined with explicit sandbox policies"
+            ),
             Self::MissingConfiguration => write!(f, "missing sandbox policy configuration"),
         }
     }
@@ -277,7 +288,29 @@ fn resolve_sandbox_policies(
     sandbox_policy: Option<SandboxPolicy>,
     file_system_sandbox_policy: Option<FileSystemSandboxPolicy>,
     network_sandbox_policy: Option<NetworkSandboxPolicy>,
+    permission_profile: Option<PermissionProfile>,
 ) -> Result<EffectiveSandboxPolicies, ResolveSandboxPoliciesError> {
+    if let Some(permission_profile) = permission_profile {
+        if sandbox_policy.is_some()
+            || file_system_sandbox_policy.is_some()
+            || network_sandbox_policy.is_some()
+        {
+            return Err(ResolveSandboxPoliciesError::PermissionProfileCannotBeCombined);
+        }
+        let (file_system_sandbox_policy, network_sandbox_policy) =
+            permission_profile.to_runtime_permissions();
+        let sandbox_policy = permission_profile
+            .to_legacy_sandbox_policy(sandbox_policy_cwd)
+            .map_err(|err| {
+                ResolveSandboxPoliciesError::FailedToDeriveLegacyPolicy(err.to_string())
+            })?;
+        return Ok(EffectiveSandboxPolicies {
+            sandbox_policy,
+            file_system_sandbox_policy,
+            network_sandbox_policy,
+        });
+    }
+
     // Accept either a fully legacy policy, a fully split policy pair, or all
     // three views together. Reject partial split-policy input so the helper
     // never runs with mismatched filesystem/network state.

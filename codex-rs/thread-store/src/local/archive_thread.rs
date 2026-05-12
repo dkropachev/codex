@@ -81,7 +81,7 @@ mod tests {
     #[tokio::test]
     async fn archive_thread_moves_rollout_to_archived_collection() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let store = LocalThreadStore::new(test_config(home.path()));
         let uuid = Uuid::from_u128(201);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let active_path =
@@ -133,11 +133,11 @@ mod tests {
             write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
         let runtime = codex_state::StateRuntime::init(
             home.path().to_path_buf(),
-            config.default_model_provider_id.clone(),
+            config.model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
-        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let store = LocalThreadStore::new(config.clone());
         runtime
             .mark_backfill_complete(/*last_watermark*/ None)
             .await
@@ -148,10 +148,10 @@ mod tests {
             Utc::now(),
             SessionSource::Cli,
         );
-        builder.model_provider = Some(config.default_model_provider_id.clone());
+        builder.model_provider = Some(config.model_provider_id.clone());
         builder.cwd = home.path().to_path_buf();
         builder.cli_version = Some("test_version".to_string());
-        let metadata = builder.build(config.default_model_provider_id.as_str());
+        let metadata = builder.build(config.model_provider_id.as_str());
         runtime
             .upsert_thread(&metadata)
             .await

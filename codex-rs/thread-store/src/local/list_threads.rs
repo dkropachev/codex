@@ -110,7 +110,7 @@ pub(super) async fn list_threads(
 async fn list_rollout_threads(
     state_db: Option<codex_rollout::StateDbHandle>,
     config: &RolloutConfig,
-    default_model_provider_id: &str,
+    model_provider_id: &str,
     params: &ListThreadsParams,
     cursor: Option<&codex_rollout::Cursor>,
     sort_key: codex_rollout::ThreadSortKey,
@@ -127,7 +127,7 @@ async fn list_rollout_threads(
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
             params.cwd_filters.as_deref(),
-            default_model_provider_id,
+            model_provider_id,
             params.search_term.as_deref(),
         )
         .await
@@ -142,7 +142,7 @@ async fn list_rollout_threads(
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
             params.cwd_filters.as_deref(),
-            default_model_provider_id,
+            model_provider_id,
             params.search_term.as_deref(),
         )
         .await
@@ -157,7 +157,7 @@ async fn list_rollout_threads(
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
             params.cwd_filters.as_deref(),
-            default_model_provider_id,
+            model_provider_id,
             params.search_term.as_deref(),
         )
         .await
@@ -172,7 +172,7 @@ async fn list_rollout_threads(
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
             params.cwd_filters.as_deref(),
-            default_model_provider_id,
+            model_provider_id,
             params.search_term.as_deref(),
         )
         .await
@@ -203,7 +203,7 @@ mod tests {
     #[tokio::test]
     async fn list_threads_uses_default_provider_when_rollout_omits_provider() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let store = LocalThreadStore::new(test_config(home.path()));
         write_session_file_with(
             home.path(),
             home.path().join("sessions/2025/01/03"),
@@ -245,11 +245,11 @@ mod tests {
 
         let runtime = codex_state::StateRuntime::init(
             home.path().to_path_buf(),
-            config.default_model_provider_id.clone(),
+            config.model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
-        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let store = LocalThreadStore::new(config.clone());
         runtime
             .mark_backfill_complete(/*last_watermark*/ None)
             .await
@@ -261,10 +261,10 @@ mod tests {
             created_at,
             SessionSource::Cli,
         );
-        builder.model_provider = Some(config.default_model_provider_id.clone());
+        builder.model_provider = Some(config.model_provider_id.clone());
         builder.cwd = home.path().to_path_buf();
         builder.cli_version = Some("test_version".to_string());
-        let mut metadata = builder.build(config.default_model_provider_id.as_str());
+        let mut metadata = builder.build(config.model_provider_id.as_str());
         metadata.title = "needle title".to_string();
         metadata.first_user_message = Some("plain preview".to_string());
         runtime
@@ -303,7 +303,7 @@ mod tests {
     #[tokio::test]
     async fn list_threads_selects_active_or_archived_collection() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let store = LocalThreadStore::new(test_config(home.path()));
         let active_uuid = Uuid::from_u128(105);
         let archived_uuid = Uuid::from_u128(106);
         write_session_file(home.path(), "2025-01-03T12-00-00", active_uuid)
@@ -372,7 +372,7 @@ mod tests {
     async fn list_threads_returns_local_rollout_summary() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
-        let store = LocalThreadStore::new(config, /*state_db*/ None);
+        let store = LocalThreadStore::new(config);
         let uuid = Uuid::from_u128(101);
         let path =
             write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
@@ -411,7 +411,7 @@ mod tests {
     #[tokio::test]
     async fn list_threads_rejects_invalid_cursor() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let store = LocalThreadStore::new(test_config(home.path()));
 
         let err = store
             .list_threads(ListThreadsParams {

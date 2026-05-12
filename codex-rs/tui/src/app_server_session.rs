@@ -1583,7 +1583,7 @@ mod tests {
         let config = ConfigBuilder::default()
             .codex_home(temp_dir.path().to_path_buf())
             .harness_overrides(ConfigOverrides {
-                default_permissions: Some(":workspace".to_string()),
+                permission_profile: Some(PermissionProfile::workspace_write()),
                 ..ConfigOverrides::default()
             })
             .build()

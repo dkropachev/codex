@@ -140,6 +140,7 @@ pub use tool_discovery::ToolSuggestEntry;
 pub use tool_discovery::collect_request_plugin_install_entries;
 pub use tool_discovery::collect_tool_search_source_infos;
 pub use tool_discovery::collect_tool_suggest_entries;
+pub use tool_discovery::create_request_plugin_install_tool;
 pub use tool_discovery::create_tool_search_tool;
 pub use tool_discovery::create_tool_suggest_tool;
 pub use tool_discovery::filter_request_plugin_install_discoverable_tools_for_client;

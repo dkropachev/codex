@@ -29,7 +29,17 @@ use crate::local_file_system::current_sandbox_cwd;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 
-const FS_HELPER_ENV_ALLOWLIST: &[&str] = &["PATH", "TMPDIR", "TMP", "TEMP"];
+const FS_HELPER_ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "CARGO_BIN_EXE_bwrap",
+    "RUNFILES_DIR",
+    "TEST_SRCDIR",
+    "RUNFILES_MANIFEST_FILE",
+    "TEST_WORKSPACE",
+];
 
 #[derive(Clone, Debug)]
 pub(crate) struct FileSystemSandboxRunner {
@@ -396,6 +406,11 @@ mod tests {
                 ("TMPDIR", "/tmp/codex"),
                 ("TMP", "/tmp"),
                 ("TEMP", "/tmp"),
+                ("CARGO_BIN_EXE_bwrap", "/runfiles/bwrap"),
+                ("RUNFILES_DIR", "/runfiles"),
+                ("TEST_SRCDIR", "/test/runfiles"),
+                ("RUNFILES_MANIFEST_FILE", "/test/MANIFEST"),
+                ("TEST_WORKSPACE", "codex"),
                 ("HOME", "/home/user"),
                 ("OPENAI_API_KEY", "secret"),
                 ("HTTPS_PROXY", "http://proxy.example"),
@@ -410,6 +425,17 @@ mod tests {
                 ("TMPDIR".to_string(), "/tmp/codex".to_string()),
                 ("TMP".to_string(), "/tmp".to_string()),
                 ("TEMP".to_string(), "/tmp".to_string()),
+                (
+                    "CARGO_BIN_EXE_bwrap".to_string(),
+                    "/runfiles/bwrap".to_string()
+                ),
+                ("RUNFILES_DIR".to_string(), "/runfiles".to_string()),
+                ("TEST_SRCDIR".to_string(), "/test/runfiles".to_string()),
+                (
+                    "RUNFILES_MANIFEST_FILE".to_string(),
+                    "/test/MANIFEST".to_string()
+                ),
+                ("TEST_WORKSPACE".to_string(), "codex".to_string()),
             ])
         );
     }

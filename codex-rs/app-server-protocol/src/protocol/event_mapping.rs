@@ -502,6 +502,7 @@ mod tests {
             receiver_thread_id: ThreadId::new(),
             receiver_agent_nickname: None,
             receiver_agent_role: None,
+            started_at_ms: UNKNOWN_ITEM_STARTED_AT_MS,
         };
 
         let notification = item_event_to_server_notification(
@@ -539,6 +540,7 @@ mod tests {
             receiver_agent_nickname: None,
             receiver_agent_role: None,
             status: codex_protocol::protocol::AgentStatus::NotFound,
+            completed_at_ms: UNKNOWN_ITEM_COMPLETED_AT_MS,
         };
 
         let receiver_id = event.receiver_thread_id.to_string();

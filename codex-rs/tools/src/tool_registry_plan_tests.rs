@@ -7,6 +7,7 @@ use crate::FreeformTool;
 use crate::JsonSchema;
 use crate::JsonSchemaPrimitiveType;
 use crate::JsonSchemaType;
+use crate::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
 use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
 use crate::ResponsesApiWebSearchFilters;
@@ -19,7 +20,6 @@ use crate::ToolRegistryPlanDeferredTool;
 use crate::ToolRegistryPlanMcpTool;
 use crate::ToolsConfigParams;
 use crate::WaitAgentTimeoutOptions;
-use crate::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
 use crate::create_exec_command_tool;
 use crate::mcp_call_tool_result_output_schema;
 use crate::request_user_input_available_modes;
@@ -1876,7 +1876,7 @@ fn request_plugin_install_description_lists_discoverable_tools() {
 
     let request_plugin_install = find_tool(&tools, REQUEST_PLUGIN_INSTALL_TOOL_NAME);
     let ToolSpec::Function(ResponsesApiTool {
-        description,
+        connector_description: description,
         parameters,
         ..
     }) = &request_plugin_install.spec

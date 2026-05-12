@@ -376,7 +376,7 @@ mod tests {
     #[tokio::test]
     async fn update_thread_metadata_sets_name_on_active_rollout_and_indexes_name() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let store = LocalThreadStore::new(test_config(home.path()));
         let uuid = Uuid::from_u128(301);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         write_session_file(home.path(), "2025-01-03T14-00-00", uuid).expect("session file");
@@ -410,11 +410,11 @@ mod tests {
             write_session_file(home.path(), "2025-01-03T14-30-00", uuid).expect("session file");
         let runtime = codex_state::StateRuntime::init(
             home.path().to_path_buf(),
-            config.default_model_provider_id.clone(),
+            config.model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
-        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let store = LocalThreadStore::new(config.clone());
 
         let thread = store
             .update_thread_metadata(UpdateThreadMetadataParams {
@@ -450,11 +450,11 @@ mod tests {
             write_session_file(home.path(), "2025-01-03T18-30-00", uuid).expect("session file");
         let runtime = codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
-            config.default_model_provider_id.clone(),
+            config.model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
-        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let store = LocalThreadStore::new(config.clone());
 
         store
             .update_thread_metadata(UpdateThreadMetadataParams {
@@ -495,7 +495,7 @@ mod tests {
         codex_rollout::state_db::reconcile_rollout(
             Some(runtime.as_ref()),
             path.as_path(),
-            config.default_model_provider_id.as_str(),
+            config.model_provider_id.as_str(),
             /*builder*/ None,
             &[],
             /*archived_only*/ None,
@@ -513,7 +513,7 @@ mod tests {
     async fn update_thread_metadata_uses_live_rollout_path_for_external_resume() {
         let home = TempDir::new().expect("temp dir");
         let external_home = TempDir::new().expect("external temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let store = LocalThreadStore::new(test_config(home.path()));
         let uuid = Uuid::from_u128(307);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let path = write_session_file(external_home.path(), "2025-01-03T14-45-00", uuid)
@@ -556,11 +556,11 @@ mod tests {
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
-            config.default_model_provider_id.clone(),
+            config.model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
-        let store = LocalThreadStore::new(config, Some(runtime));
+        let store = LocalThreadStore::new(config);
         let uuid = Uuid::from_u128(309);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         write_session_file(home.path(), "2025-01-03T17-00-00", uuid).expect("session file");
@@ -599,11 +599,11 @@ mod tests {
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
-            config.default_model_provider_id.clone(),
+            config.model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
-        let store = LocalThreadStore::new(config, Some(runtime));
+        let store = LocalThreadStore::new(config);
         let uuid = Uuid::from_u128(310);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         write_session_file(home.path(), "2025-01-03T17-30-00", uuid).expect("session file");
@@ -657,11 +657,11 @@ mod tests {
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
-            config.default_model_provider_id.clone(),
+            config.model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
-        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let store = LocalThreadStore::new(config.clone());
         let uuid = Uuid::from_u128(311);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let path =
@@ -707,7 +707,7 @@ mod tests {
         codex_rollout::state_db::reconcile_rollout(
             Some(runtime.as_ref()),
             path.as_path(),
-            config.default_model_provider_id.as_str(),
+            config.model_provider_id.as_str(),
             /*builder*/ None,
             &[],
             /*archived_only*/ None,
@@ -741,7 +741,7 @@ mod tests {
         codex_rollout::state_db::reconcile_rollout(
             Some(runtime.as_ref()),
             path.as_path(),
-            config.default_model_provider_id.as_str(),
+            config.model_provider_id.as_str(),
             /*builder*/ None,
             &[],
             /*archived_only*/ None,
@@ -801,7 +801,7 @@ mod tests {
         codex_rollout::state_db::reconcile_rollout(
             Some(runtime.as_ref()),
             path.as_path(),
-            config.default_model_provider_id.as_str(),
+            config.model_provider_id.as_str(),
             /*builder*/ None,
             &[],
             /*archived_only*/ None,
@@ -825,7 +825,7 @@ mod tests {
     #[tokio::test]
     async fn update_thread_metadata_rejects_mismatched_session_meta_id() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let store = LocalThreadStore::new(test_config(home.path()));
         let filename_uuid = Uuid::from_u128(303);
         let metadata_uuid = Uuid::from_u128(304);
         let thread_id = ThreadId::from_string(&filename_uuid.to_string()).expect("valid thread id");
@@ -857,7 +857,7 @@ mod tests {
     #[tokio::test]
     async fn update_thread_metadata_rejects_multi_field_patch_without_partial_write() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let store = LocalThreadStore::new(test_config(home.path()));
         let uuid = Uuid::from_u128(305);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let path =
@@ -898,11 +898,11 @@ mod tests {
             .expect("archived session file");
         let runtime = codex_state::StateRuntime::init(
             home.path().to_path_buf(),
-            config.default_model_provider_id.clone(),
+            config.model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
-        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let store = LocalThreadStore::new(config.clone());
         runtime
             .mark_backfill_complete(/*last_watermark*/ None)
             .await
@@ -910,7 +910,7 @@ mod tests {
         codex_rollout::state_db::reconcile_rollout(
             Some(runtime.as_ref()),
             archived_path.as_path(),
-            config.default_model_provider_id.as_str(),
+            config.model_provider_id.as_str(),
             /*builder*/ None,
             &[],
             /*archived_only*/ Some(true),
@@ -961,11 +961,11 @@ mod tests {
             .expect("archived session file");
         let runtime = codex_state::StateRuntime::init(
             home.path().to_path_buf(),
-            config.default_model_provider_id.clone(),
+            config.model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
-        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let store = LocalThreadStore::new(config.clone());
         runtime
             .mark_backfill_complete(/*last_watermark*/ None)
             .await
@@ -973,7 +973,7 @@ mod tests {
         codex_rollout::state_db::reconcile_rollout(
             Some(runtime.as_ref()),
             archived_path.as_path(),
-            config.default_model_provider_id.as_str(),
+            config.model_provider_id.as_str(),
             /*builder*/ None,
             &[],
             /*archived_only*/ Some(true),

@@ -114,14 +114,14 @@ mod tests {
         let region = "eu-central-1";
         let mut api_provider_info =
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
-        api_provider_info.base_url = Some(base_url(region).expect("supported region"));
+        api_provider_info.base_url = Some(mantle::base_url(region).expect("supported region"));
         let api_provider = api_provider_info
             .to_api_provider(/*auth_mode*/ None)
             .expect("api provider should build");
 
         assert_eq!(
             api_provider.base_url,
-            "https://bedrock-mantle.eu-central-1.api.aws/v1"
+            "https://bedrock-mantle.eu-central-1.api.aws/openai/v1"
         );
     }
 }

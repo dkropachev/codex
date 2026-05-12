@@ -1,5 +1,6 @@
 use crate::CommandToolOptions;
 use crate::REPO_CI_NAMESPACE;
+use crate::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
 use crate::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::ResponsesApiNamespace;
 use crate::ResponsesApiNamespaceTool;
@@ -20,6 +21,7 @@ use crate::ViewImageToolOptions;
 use crate::WebSearchToolOptions;
 use crate::coalesce_loadable_tool_specs;
 use crate::collect_code_mode_exec_prompt_tool_definitions;
+use crate::collect_request_plugin_install_entries;
 use crate::collect_tool_search_source_infos;
 use crate::collect_tool_suggest_entries;
 use crate::create_apply_patch_freeform_tool;
@@ -41,6 +43,7 @@ use crate::create_read_mcp_resource_tool;
 use crate::create_repo_ci_namespace_tool;
 use crate::create_report_agent_job_result_tool;
 use crate::create_request_permissions_tool;
+use crate::create_request_plugin_install_tool;
 use crate::create_request_user_input_tool;
 use crate::create_resume_agent_tool;
 use crate::create_send_input_tool_v1;
@@ -312,6 +315,17 @@ pub fn build_tool_registry_plan(
         && let Some(discoverable_tools) =
             params.discoverable_tools.filter(|tools| !tools.is_empty())
     {
+        plan.push_spec(
+            create_request_plugin_install_tool(&collect_request_plugin_install_entries(
+                discoverable_tools,
+            )),
+            /*supports_parallel_tool_calls*/ true,
+            /*code_mode_enabled*/ false,
+        );
+        plan.register_handler(
+            REQUEST_PLUGIN_INSTALL_TOOL_NAME,
+            ToolHandlerKind::RequestPluginInstall,
+        );
         plan.push_spec(
             create_tool_suggest_tool(&collect_tool_suggest_entries(discoverable_tools)),
             /*supports_parallel_tool_calls*/ true,

@@ -1402,8 +1402,7 @@ mod tests {
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
-        )
-        .await;
+        );
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut enrollment = Some(RemoteControlEnrollment {
             account_id: "account_id".to_string(),
@@ -1496,8 +1495,7 @@ mod tests {
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
-        )
-        .await;
+        );
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut enrollment = None;
         let (status_publisher, status_rx) = remote_control_status_channel();
@@ -1591,8 +1589,7 @@ mod tests {
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
-        )
-        .await;
+        );
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut enrollment = Some(RemoteControlEnrollment {
             account_id: "account_id".to_string(),

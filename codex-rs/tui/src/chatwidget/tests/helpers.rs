@@ -1440,6 +1440,7 @@ pub(super) fn plugins_test_summary(
         },
         installed,
         enabled,
+        share_context: None,
         install_policy,
         auth_policy: PluginAuthPolicy::OnInstall,
         availability: PluginAvailability::Available,
@@ -1674,6 +1675,8 @@ fn hook_event_label(event_name: codex_app_server_protocol::HookEventName) -> &'s
         codex_app_server_protocol::HookEventName::PostToolUse => "PostToolUse",
         codex_app_server_protocol::HookEventName::SessionStart => "SessionStart",
         codex_app_server_protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        codex_app_server_protocol::HookEventName::PreCompact => "PreCompact",
+        codex_app_server_protocol::HookEventName::PostCompact => "PostCompact",
         codex_app_server_protocol::HookEventName::Stop => "Stop",
     }
 }

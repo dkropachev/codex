@@ -1061,8 +1061,7 @@ mod tests {
                 /*enable_codex_api_key_env*/ false,
                 AuthCredentialsStoreMode::File,
                 "https://chatgpt.com/backend-api/".to_string(),
-            )
-            .await,
+            ),
             feedback: codex_feedback::CodexFeedback::new(),
             log_db: None,
             state_db: None,

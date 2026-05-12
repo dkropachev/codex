@@ -1838,6 +1838,7 @@ mod tests {
                 duration: Duration::from_millis(12),
                 formatted_output: String::new(),
                 status: CoreExecCommandStatus::Completed,
+                completed_at_ms: 0,
             }),
             EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id: "mcp-1".into(),
@@ -2005,6 +2006,7 @@ mod tests {
                 success: true,
                 error: None,
                 duration: Duration::from_millis(42),
+                completed_at_ms: 0,
             }),
         ];
 
@@ -2063,6 +2065,7 @@ mod tests {
                 duration: Duration::ZERO,
                 formatted_output: String::new(),
                 status: CoreExecCommandStatus::Declined,
+                completed_at_ms: 0,
             }),
             EventMsg::PatchApplyEnd(PatchApplyEndEvent {
                 call_id: "patch-declined".into(),
@@ -2312,6 +2315,7 @@ mod tests {
                 duration: Duration::from_millis(5),
                 formatted_output: "done\n".into(),
                 status: CoreExecCommandStatus::Completed,
+                completed_at_ms: 0,
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-b".into(),
@@ -2403,6 +2407,7 @@ mod tests {
                 duration: Duration::from_millis(5),
                 formatted_output: "done\n".into(),
                 status: CoreExecCommandStatus::Completed,
+                completed_at_ms: 0,
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-b".into(),
@@ -2745,6 +2750,7 @@ mod tests {
                 receiver_agent_nickname: None,
                 receiver_agent_role: None,
                 status: AgentStatus::Completed(None),
+                completed_at_ms: 0,
             }),
         ];
 
@@ -2802,6 +2808,7 @@ mod tests {
                 model: "gpt-5.4-mini".into(),
                 reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,
                 status: AgentStatus::Running,
+                completed_at_ms: 0,
             }),
         ];
 
@@ -2858,6 +2865,7 @@ mod tests {
                     sender_thread_id: sender,
                     receiver_thread_id: receiver,
                     prompt: "new task".into(),
+                    started_at_ms: 0,
                 },
             ),
             EventMsg::CollabAgentInteractionEnd(
@@ -2869,6 +2877,7 @@ mod tests {
                     receiver_agent_role: None,
                     prompt: "new task".into(),
                     status: AgentStatus::Interrupted,
+                    completed_at_ms: 0,
                 },
             ),
         ];

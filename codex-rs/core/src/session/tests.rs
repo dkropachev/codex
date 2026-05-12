@@ -108,6 +108,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadGoalStatus;
+use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
@@ -2662,8 +2663,14 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
             thread_id: session.conversation_id,
             forked_from_id: None,
             source: SessionSource::Exec,
+            thread_source: None,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            metadata: codex_thread_store::ThreadPersistenceMetadata {
+                cwd: Some(session.cwd.clone().into_path_buf()),
+                model_provider: session.config.model_provider_id.clone(),
+                memory_mode: ThreadMemoryMode::Enabled,
+            },
             event_persistence_mode: ThreadEventPersistenceMode::Limited,
         },
     )

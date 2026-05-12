@@ -289,6 +289,24 @@ pub struct ActivePermissionProfile {
     pub modifications: Vec<ActivePermissionProfileModification>,
 }
 
+impl ActivePermissionProfile {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            extends: None,
+            modifications: Vec::new(),
+        }
+    }
+
+    pub fn with_modifications(
+        mut self,
+        modifications: Vec<ActivePermissionProfileModification>,
+    ) -> Self {
+        self.modifications = modifications;
+        self
+    }
+}
+
 #[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
@@ -722,6 +740,14 @@ impl<'de> Deserialize<'de> for PermissionProfile {
             PermissionProfileDe::Tagged(tagged) => tagged.into(),
             PermissionProfileDe::Legacy(legacy) => legacy.into(),
         })
+    }
+}
+
+impl std::str::FromStr for PermissionProfile {
+    type Err = serde_json::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
     }
 }
 
