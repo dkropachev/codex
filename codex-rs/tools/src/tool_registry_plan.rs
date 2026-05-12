@@ -9,6 +9,7 @@ use crate::SpawnAgentToolOptions;
 use crate::TOOL_SEARCH_DEFAULT_LIMIT;
 use crate::TOOL_SEARCH_TOOL_NAME;
 use crate::TOOL_SUGGEST_TOOL_NAME;
+use crate::ToolEnvironmentMode;
 use crate::ToolHandlerKind;
 use crate::ToolName;
 use crate::ToolRegistryPlan;
@@ -164,6 +165,10 @@ pub fn build_tool_registry_plan(
                     create_exec_command_tool(CommandToolOptions {
                         allow_login_shell: config.allow_login_shell,
                         exec_permission_approvals_enabled,
+                        include_environment_id: matches!(
+                            config.environment_mode,
+                            ToolEnvironmentMode::Multiple
+                        ),
                     }),
                     /*supports_parallel_tool_calls*/ true,
                     config.code_mode_enabled,
@@ -182,6 +187,7 @@ pub fn build_tool_registry_plan(
                     create_shell_command_tool(CommandToolOptions {
                         allow_login_shell: config.allow_login_shell,
                         exec_permission_approvals_enabled,
+                        include_environment_id: false,
                     }),
                     /*supports_parallel_tool_calls*/ true,
                     config.code_mode_enabled,
@@ -268,17 +274,15 @@ pub fn build_tool_registry_plan(
         plan.register_handler("request_permissions", ToolHandlerKind::RequestPermissions);
     }
 
+    let deferred_mcp_tools = params.deferred_mcp_tools.filter(|_| config.namespace_tools);
     let deferred_dynamic_tools = params
         .dynamic_tools
         .iter()
-        .filter(|tool| tool.defer_loading)
+        .filter(|tool| tool.defer_loading && (config.namespace_tools || tool.namespace.is_none()))
         .collect::<Vec<_>>();
 
-    if config.search_tool
-        && (params.deferred_mcp_tools.is_some() || !deferred_dynamic_tools.is_empty())
-    {
-        let mut search_source_infos = params
-            .deferred_mcp_tools
+    if config.search_tool && (deferred_mcp_tools.is_some() || !deferred_dynamic_tools.is_empty()) {
+        let mut search_source_infos = deferred_mcp_tools
             .map(|deferred_mcp_tools| {
                 collect_tool_search_source_infos(deferred_mcp_tools.iter().map(|tool| {
                     ToolSearchSource {
@@ -304,7 +308,7 @@ pub fn build_tool_registry_plan(
         );
         plan.register_handler(TOOL_SEARCH_TOOL_NAME, ToolHandlerKind::ToolSearch);
 
-        if let Some(deferred_mcp_tools) = params.deferred_mcp_tools {
+        if let Some(deferred_mcp_tools) = deferred_mcp_tools {
             for tool in deferred_mcp_tools {
                 plan.register_handler(tool.name.clone(), ToolHandlerKind::Mcp);
             }
@@ -584,7 +588,7 @@ pub fn build_tool_registry_plan(
                 }
             }
 
-            if !tools.is_empty() {
+            if config.namespace_tools && !tools.is_empty() {
                 plan.push_spec(
                     ToolSpec::Namespace(ResponsesApiNamespace {
                         name: namespace,
@@ -600,6 +604,9 @@ pub fn build_tool_registry_plan(
 
     let mut dynamic_tool_specs = Vec::new();
     for tool in params.dynamic_tools {
+        if !config.namespace_tools && tool.namespace.is_some() {
+            continue;
+        }
         match dynamic_tool_to_loadable_tool_spec(tool) {
             Ok(loadable_tool) => {
                 let handler_name = ToolName::new(tool.namespace.clone(), tool.name.clone());

@@ -3,7 +3,14 @@ use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
 fn windows_shell_guidance_description() -> String {
-    format!("\n\n{}", windows_shell_guidance())
+    format!(
+        "\n\n{REPO_CI_SHELL_GUIDANCE}\n\n{}",
+        windows_shell_guidance()
+    )
+}
+
+fn repo_ci_shell_guidance_description() -> String {
+    format!("\n\n{REPO_CI_SHELL_GUIDANCE}")
 }
 
 #[test]
@@ -30,6 +37,7 @@ Examples of valid command strings:
 - The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
 - Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
             .to_string()
+            + &repo_ci_shell_guidance_description()
     };
 
     let properties = BTreeMap::from([
@@ -96,6 +104,7 @@ fn exec_command_tool_matches_expected_spec() {
     let tool = create_exec_command_tool(CommandToolOptions {
         allow_login_shell: true,
         exec_permission_approvals_enabled: false,
+        include_environment_id: false,
     });
 
     let description = if cfg!(windows) {
@@ -106,6 +115,7 @@ fn exec_command_tool_matches_expected_spec() {
     } else {
         "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
             .to_string()
+            + &repo_ci_shell_guidance_description()
     };
 
     let mut properties = BTreeMap::from([
@@ -256,26 +266,24 @@ fn shell_tool_with_request_permission_includes_additional_permissions() {
     ));
 
     let description = if cfg!(windows) {
-        format!(
-            r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
+        r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
 
 Examples of valid command strings:
 
 - ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
 - recursive find by name: ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.py"]
 - recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
-- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object {{ $_.ProcessName -like '*python*' }}"]
+- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
 - setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
-- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]
-
-{}"#,
-            windows_shell_guidance()
-        )
+- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
+            .to_string()
+            + &windows_shell_guidance_description()
     } else {
         r#"Runs a shell command and returns its output.
 - The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
 - Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
             .to_string()
+            + &repo_ci_shell_guidance_description()
     };
 
     assert_eq!(
@@ -332,6 +340,7 @@ fn shell_command_tool_matches_expected_spec() {
     let tool = create_shell_command_tool(CommandToolOptions {
         allow_login_shell: true,
         exec_permission_approvals_enabled: false,
+        include_environment_id: false,
     });
 
     let description = if cfg!(windows) {
@@ -351,6 +360,7 @@ Examples of valid command strings:
         r#"Runs a shell command and returns its output.
 - Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#
             .to_string()
+            + &repo_ci_shell_guidance_description()
     };
 
     let mut properties = BTreeMap::from([

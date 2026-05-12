@@ -11,6 +11,7 @@ const REPO_CI_SHELL_GUIDANCE: &str = "When repo-ci tools are available, do not u
 pub struct CommandToolOptions {
     pub allow_login_shell: bool,
     pub exec_permission_approvals_enabled: bool,
+    pub include_environment_id: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +63,15 @@ pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
             "login".to_string(),
             JsonSchema::boolean(Some(
                 "Whether to run the shell with -l/-i semantics. Defaults to true.".to_string(),
+            )),
+        );
+    }
+    if options.include_environment_id {
+        properties.insert(
+            "environment_id".to_string(),
+            JsonSchema::string(Some(
+                "Optional environment id from the <environment_context> block. If omitted, uses the primary environment."
+                    .to_string(),
             )),
         );
     }

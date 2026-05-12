@@ -112,10 +112,10 @@ impl ToolHandler for ListDirHandler {
 
         let selected_environment_id = environment_path
             .as_ref()
-            .map(|environment_path| environment_path.environment_id.as_str())
-            .or(environment_id.as_deref());
+            .map(|environment_path| environment_path.environment_id.clone())
+            .or(environment_id);
         let Some(turn_environment) =
-            resolve_tool_environment(turn.as_ref(), selected_environment_id)?
+            resolve_tool_environment(turn.as_ref(), selected_environment_id.as_deref())?
         else {
             return Err(FunctionCallError::RespondToModel(
                 "list_dir is unavailable in this session".to_string(),
@@ -151,7 +151,7 @@ impl ToolHandler for ListDirHandler {
         )
         .await?;
         let mut output = Vec::with_capacity(entries.len() + 1);
-        if let Some(environment_id) = selected_environment_id {
+        if let Some(environment_id) = selected_environment_id.as_deref() {
             output.push(format!(
                 "Environment path: {}",
                 format_oai_env_uri(environment_id, &path)

@@ -586,7 +586,7 @@ mod tests {
 
     fn test_thread_metadata() -> crate::ThreadPersistenceMetadata {
         crate::ThreadPersistenceMetadata {
-            cwd: None,
+            cwd: Some(std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))),
             model_provider: "test-provider".to_string(),
             memory_mode: ThreadMemoryMode::Enabled,
         }

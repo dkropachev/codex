@@ -432,14 +432,14 @@ fn find_model_by_namespaced_suffix(model: &str, candidates: &[ModelInfo]) -> Opt
     // Retry metadata lookup for a single namespaced slug like `namespace/model-name`.
     //
     // This only strips one leading namespace segment and only when the namespace is ASCII
-    // alphanumeric/underscore (`\w+`) to avoid broadly matching arbitrary aliases.
+    // alphanumeric/underscore/hyphen to avoid broadly matching arbitrary aliases.
     let (namespace, suffix) = model.split_once('/')?;
     if suffix.contains('/') {
         return None;
     }
     if !namespace
         .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
         return None;
     }

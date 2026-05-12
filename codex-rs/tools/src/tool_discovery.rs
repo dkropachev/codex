@@ -275,7 +275,11 @@ pub fn collect_tool_search_source_infos<'a>(
 
             Some(ToolSearchSourceInfo {
                 name: name.to_string(),
-                description: None,
+                description: tool
+                    .connector_description
+                    .map(str::trim)
+                    .filter(|description| !description.is_empty())
+                    .map(str::to_string),
             })
         })
         .collect()

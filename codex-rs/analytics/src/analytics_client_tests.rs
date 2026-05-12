@@ -1616,8 +1616,10 @@ async fn reducer_ingests_skill_invoked_fact() {
             "event_params": {
                 "product_client_id": originator().value,
                 "skill_scope": "user",
+                "plugin_id": null,
                 "repo_url": null,
                 "thread_id": "thread-1",
+                "turn_id": "turn-1",
                 "invoke_type": "explicit",
                 "model_slug": "gpt-5"
             }

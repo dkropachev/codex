@@ -704,7 +704,7 @@ impl RolloutRecorder {
                         agent_path: source.get_agent_path().map(Into::into),
                         thread_source: source
                             .thread_source_name()
-                            .map(|value| value.parse().expect("known thread source")),
+                            .and_then(|value| value.parse().ok()),
                         source,
                         model_provider: Some(config.model_provider_id().to_string()),
                         base_instructions: Some(base_instructions),
