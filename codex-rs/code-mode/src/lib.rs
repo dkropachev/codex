@@ -1,6 +1,14 @@
 mod description;
 mod response;
+#[cfg(feature = "v8-runtime")]
 mod runtime;
+#[cfg(not(feature = "v8-runtime"))]
+#[path = "runtime_stub.rs"]
+mod runtime;
+#[cfg(feature = "v8-runtime")]
+mod service;
+#[cfg(not(feature = "v8-runtime"))]
+#[path = "service_stub.rs"]
 mod service;
 
 pub use description::CODE_MODE_PRAGMA_PREFIX;

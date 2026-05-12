@@ -9,7 +9,6 @@ workspace = true
 
 [dependencies]
 codex-app-server-protocol = { workspace = true }
-codex-code-mode = { workspace = true }
 codex-features = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
@@ -23,6 +22,12 @@ rmcp = { workspace = true, default-features = false, features = [
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+
+[target.'cfg(target_env = "musl")'.dependencies]
+codex-code-mode = { path = "../code-mode", default-features = false }
+
+[target.'cfg(not(target_env = "musl"))'.dependencies]
+codex-code-mode = { path = "../code-mode" }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
