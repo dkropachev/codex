@@ -200,15 +200,17 @@ impl StdioServerTransport {
 impl StdioServerProcessHandle {
     pub async fn terminate(&self) -> io::Result<()> {
         match &self.inner {
+            #[cfg(unix)]
             StdioServerProcessHandleInner::Local { process_group_id } => {
-                #[cfg(unix)]
-                {
-                    if let Some(process_group_id) = process_group_id {
-                        terminate_process_group_with_escalation(*process_group_id);
-                    }
+                if let Some(process_group_id) = process_group_id {
+                    terminate_process_group_with_escalation(*process_group_id);
                 }
                 Ok(())
             }
+            #[cfg(not(unix))]
+            StdioServerProcessHandleInner::Local {
+                process_group_id: _,
+            } => Ok(()),
             StdioServerProcessHandleInner::Executor { process } => {
                 process.terminate().await.map_err(io::Error::other)
             }

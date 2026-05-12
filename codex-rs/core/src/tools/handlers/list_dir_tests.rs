@@ -15,7 +15,6 @@ use codex_protocol::permissions::ReadDenyMatcher;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::ffi::OsString;
 use std::io;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -538,6 +537,7 @@ async fn lists_directory_entries() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn recurses_into_non_utf8_local_directory_names() {
+    use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
 
     let temp = tempdir().expect("create tempdir");
