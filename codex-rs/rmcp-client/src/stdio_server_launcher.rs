@@ -118,8 +118,15 @@ pub struct StdioServerProcessHandle {
 
 #[derive(Clone)]
 enum StdioServerProcessHandleInner {
-    Local { process_group_id: Option<u32> },
-    Executor { process: Arc<dyn ExecProcess> },
+    #[cfg(unix)]
+    Local {
+        process_group_id: Option<u32>,
+    },
+    #[cfg(not(unix))]
+    Local,
+    Executor {
+        process: Arc<dyn ExecProcess>,
+    },
 }
 
 enum StdioServerTransportInner {
@@ -184,9 +191,12 @@ impl StdioServerCommand {
 impl StdioServerTransport {
     pub fn process_handle(&self) -> StdioServerProcessHandle {
         let inner = match &self.inner {
+            #[cfg(unix)]
             StdioServerTransportInner::Local(transport) => StdioServerProcessHandleInner::Local {
                 process_group_id: transport.id(),
             },
+            #[cfg(not(unix))]
+            StdioServerTransportInner::Local(_) => StdioServerProcessHandleInner::Local,
             StdioServerTransportInner::Executor(transport) => {
                 StdioServerProcessHandleInner::Executor {
                     process: transport.process_handle(),
@@ -208,9 +218,7 @@ impl StdioServerProcessHandle {
                 Ok(())
             }
             #[cfg(not(unix))]
-            StdioServerProcessHandleInner::Local {
-                process_group_id: _,
-            } => Ok(()),
+            StdioServerProcessHandleInner::Local => Ok(()),
             StdioServerProcessHandleInner::Executor { process } => {
                 process.terminate().await.map_err(io::Error::other)
             }
