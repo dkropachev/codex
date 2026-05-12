@@ -344,6 +344,7 @@ impl TurnRequestProcessor {
 
         let collaboration_modes_config = CollaborationModesConfig {
             default_mode_request_user_input: thread.enabled(Feature::DefaultModeRequestUserInput),
+            workflows_enabled: thread.enabled(Feature::Workflows),
         };
         let collaboration_mode = params.collaboration_mode.map(|mode| {
             self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)

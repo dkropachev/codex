@@ -139,4 +139,12 @@ fn request_user_input_tool_description_mentions_available_modes() {
         request_user_input_tool_description(&[ModeKind::Default, ModeKind::Plan, ModeKind::Codex]),
         "Request user input for one to three short questions and wait for the response. This tool is only available in Default, Plan, or Codex modes.".to_string()
     );
+    assert_eq!(
+        request_user_input_tool_description(&[
+            ModeKind::Plan,
+            ModeKind::Codex,
+            ModeKind::Workflow,
+        ]),
+        "Request user input for one to three short questions and wait for the response. This tool is only available in Plan, Codex, or Workflow modes.".to_string()
+    );
 }

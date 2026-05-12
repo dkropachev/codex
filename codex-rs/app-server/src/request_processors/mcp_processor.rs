@@ -252,7 +252,7 @@ impl McpRequestProcessor {
         outgoing.send_result(request_id, result).await;
     }
 
-    async fn list_mcp_server_status_response(
+    pub(crate) async fn list_mcp_server_status_response(
         request_id: String,
         params: ListMcpServerStatusParams,
         config: Config,

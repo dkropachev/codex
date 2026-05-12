@@ -94,6 +94,12 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
                     .enable(Feature::DefaultModeRequestUserInput)
                     .expect("test config should allow feature update");
             }
+            if mode == ModeKind::Workflow {
+                config
+                    .features
+                    .enable(Feature::Workflows)
+                    .expect("test config should allow feature update");
+            }
         })
         .build(&server)
         .await?;
@@ -318,6 +324,11 @@ async fn request_user_input_rejected_in_default_mode_by_default() -> anyhow::Res
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_user_input_round_trip_in_default_mode_with_feature() -> anyhow::Result<()> {
     request_user_input_round_trip_for_mode(ModeKind::Default).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_round_trip_in_workflow_mode() -> anyhow::Result<()> {
+    request_user_input_round_trip_for_mode(ModeKind::Workflow).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

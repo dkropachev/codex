@@ -128,6 +128,15 @@ impl CatalogRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn api_catalog_read(
+        &self,
+        params: ApiCatalogReadParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.api_catalog_read_response(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn skills_config_write(
         &self,
         params: SkillsConfigWriteParams,
@@ -196,6 +205,106 @@ impl CatalogRequestProcessor {
             .load_latest_config(fallback_cwd)
             .await
             .map_err(|err| internal_error(format!("failed to reload config: {err}")))
+    }
+
+    async fn api_catalog_read_response(
+        &self,
+        params: ApiCatalogReadParams,
+    ) -> Result<ApiCatalogReadResponse, JSONRPCErrorError> {
+        let include = params.include;
+        let app_server_methods =
+            if api_catalog_includes(&include, ApiCatalogSection::AppServerMethods) {
+                api_catalog_methods()
+            } else {
+                Vec::new()
+            };
+        let mcp_servers = if api_catalog_includes(&include, ApiCatalogSection::McpServers) {
+            self.api_catalog_mcp_servers(params.mcp_detail).await?
+        } else {
+            Vec::new()
+        };
+        let built_in_tools = if api_catalog_includes(&include, ApiCatalogSection::BuiltInTools) {
+            codex_app_server_protocol::built_in_api_catalog_tools()
+        } else {
+            Vec::new()
+        };
+        let workflow_runtime = if api_catalog_includes(&include, ApiCatalogSection::WorkflowRuntime)
+        {
+            codex_app_server_protocol::workflow_runtime_api_catalog()
+        } else {
+            codex_app_server_protocol::ApiCatalogWorkflowRuntime {
+                package: String::new(),
+                import_specifier: String::new(),
+                symbols: Vec::new(),
+            }
+        };
+        let workflows = if api_catalog_includes(&include, ApiCatalogSection::Workflows) {
+            self.api_catalog_workflows()?
+        } else {
+            Vec::new()
+        };
+
+        Ok(ApiCatalogReadResponse {
+            schema_version: 1,
+            generated_at: Utc::now().timestamp(),
+            app_server_methods,
+            mcp_servers,
+            built_in_tools,
+            workflow_runtime,
+            workflows,
+        })
+    }
+
+    fn api_catalog_workflows(
+        &self,
+    ) -> Result<Vec<codex_app_server_protocol::WorkflowSummary>, JSONRPCErrorError> {
+        codex_workflows::discover_workflows(
+            self.config.codex_home.as_path(),
+            self.config.cwd.as_path(),
+            &self.config.workflows,
+        )
+        .map(|workflows| {
+            workflows
+                .into_iter()
+                .map(api_catalog_workflow_to_info)
+                .collect()
+        })
+        .map_err(|err| internal_error(format!("failed to discover workflows: {err}")))
+    }
+
+    async fn api_catalog_mcp_servers(
+        &self,
+        detail: Option<McpServerStatusDetail>,
+    ) -> Result<Vec<McpServerStatus>, JSONRPCErrorError> {
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        let mcp_config = config
+            .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
+            .await;
+        let auth = self.auth_manager.auth().await;
+        let environment_manager = self.thread_manager.environment_manager();
+        let runtime_environment = match environment_manager.default_environment() {
+            Some(environment) => McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf()),
+            None => McpRuntimeEnvironment::new(
+                environment_manager.local_environment(),
+                config.cwd.to_path_buf(),
+            ),
+        };
+
+        let response = McpRequestProcessor::list_mcp_server_status_response(
+            "apiCatalog/read".to_string(),
+            ListMcpServerStatusParams {
+                cursor: None,
+                limit: None,
+                detail,
+            },
+            config,
+            mcp_config,
+            auth,
+            runtime_environment,
+        )
+        .await?;
+
+        Ok(response.data)
     }
 
     async fn workspace_codex_plugins_enabled(
@@ -617,5 +726,67 @@ impl CatalogRequestProcessor {
                 }
             })
             .map_err(|err| internal_error(format!("failed to update skill settings: {err}")))
+    }
+}
+
+fn api_catalog_includes(
+    include: &Option<Vec<ApiCatalogSection>>,
+    section: ApiCatalogSection,
+) -> bool {
+    match include {
+        Some(sections) => sections.contains(&section),
+        None => true,
+    }
+}
+
+fn api_catalog_methods() -> Vec<ApiCatalogMethod> {
+    codex_app_server_protocol::client_method_infos()
+        .into_iter()
+        .map(|method| ApiCatalogMethod {
+            method: method.method,
+            params_type: method.params_type.to_string(),
+            response_type: method.response_type.to_string(),
+            experimental: method.experimental,
+            description: method.description,
+        })
+        .collect()
+}
+
+fn api_catalog_workflow_to_info(
+    workflow: codex_workflows::WorkflowSummary,
+) -> codex_app_server_protocol::WorkflowSummary {
+    codex_app_server_protocol::WorkflowSummary {
+        id: workflow.id,
+        title: workflow.title,
+        user_description: workflow.user_description,
+        search_terms: workflow.search_terms,
+        root_label: workflow.root_label,
+        root_kind: match workflow.root_kind {
+            codex_workflows::WorkflowRootKind::Global => {
+                codex_app_server_protocol::WorkflowRootKind::Global
+            }
+            codex_workflows::WorkflowRootKind::Project => {
+                codex_app_server_protocol::WorkflowRootKind::Project
+            }
+            codex_workflows::WorkflowRootKind::SearchPath => {
+                codex_app_server_protocol::WorkflowRootKind::SearchPath
+            }
+        },
+        root_path: workflow.root_path,
+        path: workflow.path,
+        workflow_yaml_path: workflow.workflow_yaml_path,
+        mention_target: workflow.mention_target,
+        validation: codex_app_server_protocol::WorkflowValidationInfo {
+            status: match workflow.validation.status {
+                codex_workflows::WorkflowValidationStatus::Valid => {
+                    codex_app_server_protocol::WorkflowValidationStatus::Valid
+                }
+                codex_workflows::WorkflowValidationStatus::Invalid => {
+                    codex_app_server_protocol::WorkflowValidationStatus::Invalid
+                }
+            },
+            messages: workflow.validation.messages,
+        },
+        repair_mode: workflow.repair_mode,
     }
 }

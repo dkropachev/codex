@@ -3,7 +3,7 @@
 //! It is responsible for:
 //!
 //! - Editing the input buffer (a [`TextArea`]), including placeholder "elements" for attachments.
-//! - Routing keys to the active popup (slash commands, file search, skill/apps mentions).
+//! - Routing keys to the active popup (slash commands, file search, skill/app/workflow mentions).
 //! - Promoting typed slash commands into atomic elements when the command name is completed.
 //! - Handling submit vs newline on Enter.
 //! - Turning raw key streams into explicit paste operations on platforms where terminals
@@ -211,6 +211,7 @@ use codex_protocol::models::local_image_label_text;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::TextElement;
+use codex_workflows::WorkflowSummary;
 
 mod history_search;
 
@@ -387,6 +388,7 @@ pub(crate) struct ChatComposer {
     context_window_used_tokens: Option<i64>,
     skills: Option<Vec<SkillMetadata>>,
     plugins: Option<Vec<PluginCapabilitySummary>>,
+    workflows: Option<Vec<WorkflowSummary>>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
     dismissed_mention_popup_token: Option<String>,
     mention_bindings: HashMap<u64, ComposerMentionBinding>,
@@ -570,6 +572,7 @@ impl ChatComposer {
             context_window_used_tokens: None,
             skills: None,
             plugins: None,
+            workflows: None,
             connectors_snapshot: None,
             dismissed_mention_popup_token: None,
             mention_bindings: HashMap::new(),
@@ -653,6 +656,11 @@ impl ChatComposer {
         self.sync_popups();
     }
 
+    pub fn set_workflow_mentions(&mut self, workflows: Option<Vec<WorkflowSummary>>) {
+        self.workflows = workflows;
+        self.sync_popups();
+    }
+
     pub fn set_plugins_command_enabled(&mut self, enabled: bool) {
         self.plugins_command_enabled = enabled;
     }
@@ -705,6 +713,7 @@ impl ChatComposer {
 
     pub fn set_workflows_enabled(&mut self, enabled: bool) {
         self.workflows_enabled = enabled;
+        self.sync_popups();
     }
 
     /// Replace composer, editor, and footer-hint key bindings from one runtime snapshot.
@@ -2256,6 +2265,10 @@ impl ChatComposer {
         self.plugins.as_ref()
     }
 
+    pub fn workflows(&self) -> Option<&Vec<WorkflowSummary>> {
+        self.workflows.as_ref()
+    }
+
     fn mentions_enabled(&self) -> bool {
         let skills_ready = self
             .skills
@@ -2270,7 +2283,12 @@ impl ChatComposer {
                 .connectors_snapshot
                 .as_ref()
                 .is_some_and(|snapshot| !snapshot.connectors.is_empty());
-        skills_ready || plugins_ready || connectors_ready
+        let workflows_ready = self.workflows_enabled
+            && self
+                .workflows
+                .as_ref()
+                .is_some_and(|workflows| !workflows.is_empty());
+        skills_ready || plugins_ready || connectors_ready || workflows_ready
     }
 
     /// Extract a token prefixed with `prefix` under the cursor, if any.
@@ -4014,6 +4032,43 @@ impl ChatComposer {
             }
         }
 
+        if self.workflows_enabled
+            && let Some(workflows) = self.workflows.as_ref()
+        {
+            for workflow in workflows {
+                let title = workflow
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| workflow.id.clone());
+                let summary = workflow
+                    .user_description
+                    .clone()
+                    .or_else(|| workflow.title.clone())
+                    .unwrap_or_else(|| "Workflow".to_string());
+                let status = match workflow.validation.status {
+                    codex_workflows::WorkflowValidationStatus::Valid => "valid",
+                    codex_workflows::WorkflowValidationStatus::Invalid => "invalid",
+                };
+                let mut search_terms = vec![workflow.id.clone(), title];
+                if let Some(description) = workflow.user_description.clone() {
+                    search_terms.push(description);
+                }
+                search_terms.extend(workflow.search_terms.clone());
+                mentions.push(MentionItem {
+                    display_name: workflow.id.clone(),
+                    description: Some(format!(
+                        "{summary} · {} · {status} · repair {}",
+                        workflow.root_label, workflow.repair_mode
+                    )),
+                    insert_text: format!("${}", workflow.id),
+                    search_terms,
+                    path: Some(workflow.mention_target.clone()),
+                    category_tag: Some("[Workflow]".to_string()),
+                    sort_rank: 1,
+                });
+            }
+        }
+
         mentions
     }
 
@@ -4159,7 +4214,7 @@ fn skill_description(skill: &SkillMetadata) -> Option<String> {
 }
 
 fn is_mention_name_char(byte: u8) -> bool {
-    matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-')
+    matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-' | b'/')
 }
 
 fn find_next_mention_token_range(text: &str, token: &str, from: usize) -> Option<Range<usize>> {
@@ -6336,6 +6391,35 @@ mod tests {
     }
 
     #[test]
+    fn set_workflow_mentions_refreshes_open_mention_popup() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_workflows_enabled(/*enabled*/ true);
+        composer.set_text_content("$".to_string(), Vec::new(), Vec::new());
+        assert!(matches!(composer.active_popup, ActivePopup::None));
+
+        let workflow = test_workflow_summary("reports/jira-summary", "Jira Summary");
+        let expected_target = workflow.mention_target.clone();
+        composer.set_workflow_mentions(Some(vec![workflow]));
+
+        let ActivePopup::Skill(popup) = &composer.active_popup else {
+            panic!("expected mention popup to open after workflow update");
+        };
+        let mention = popup
+            .selected_mention()
+            .expect("expected workflow mention to be selected");
+        assert_eq!(mention.insert_text, "$reports/jira-summary".to_string());
+        assert_eq!(mention.path, Some(expected_target));
+    }
+
+    #[test]
     fn mention_items_show_plugin_owned_skill_and_app_duplicates() {
         let skill_path = test_path_buf("/tmp/repo/google-calendar/SKILL.md").abs();
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -6460,16 +6544,16 @@ mod tests {
                     plugin_id: None,
                 }]));
                 composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
-                config_name: "google-calendar@debug".to_string(),
-                display_name: "Google Calendar".to_string(),
-                description: Some(
-                    "Connect Google Calendar for scheduling, availability, and event management."
-                        .to_string(),
-                ),
-                has_skills: false,
-                mcp_server_names: vec!["google-calendar".to_string()],
-                app_connector_ids: Vec::new(),
-            }]));
+                    config_name: "google-calendar@debug".to_string(),
+                    display_name: "Google Calendar".to_string(),
+                    description: Some(
+                        "Connect Google Calendar for scheduling, availability, and event management."
+                            .to_string(),
+                    ),
+                    has_skills: false,
+                    mcp_server_names: vec!["google-calendar".to_string()],
+                    app_connector_ids: Vec::new(),
+                }]));
                 composer.set_connector_mentions(Some(ConnectorsSnapshot {
                     connectors: vec![AppInfo {
                         id: "google_calendar".to_string(),
@@ -6487,8 +6571,37 @@ mod tests {
                         plugin_display_names: Vec::new(),
                     }],
                 }));
+                composer.set_workflows_enabled(/*enabled*/ true);
+                composer.set_workflow_mentions(Some(vec![test_workflow_summary(
+                    "reports/google-calendar",
+                    "Google Calendar Report",
+                )]));
             },
         );
+    }
+
+    fn test_workflow_summary(id: &str, title: &str) -> codex_workflows::WorkflowSummary {
+        let root = PathBuf::from("/tmp/workflows");
+        let path = id
+            .split('/')
+            .fold(root.clone(), |path, component| path.join(component));
+        codex_workflows::WorkflowSummary {
+            id: id.to_string(),
+            title: Some(title.to_string()),
+            user_description: Some("Prepare a focused workflow report".to_string()),
+            search_terms: vec!["report".to_string()],
+            root_label: "global".to_string(),
+            root_kind: codex_workflows::WorkflowRootKind::Global,
+            root_path: root.clone(),
+            workflow_yaml_path: path.join("workflow.yaml"),
+            mention_target: codex_workflows::mention_target(&root, id).unwrap(),
+            path,
+            validation: codex_workflows::WorkflowValidation {
+                status: codex_workflows::WorkflowValidationStatus::Valid,
+                messages: Vec::new(),
+            },
+            repair_mode: "threshold:3".to_string(),
+        }
     }
 
     #[test]

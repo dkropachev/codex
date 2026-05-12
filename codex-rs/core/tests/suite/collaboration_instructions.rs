@@ -608,6 +608,63 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn workflow_mode_includes_collaboration_instructions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let test = test_codex().build(&server).await?;
+    let workflow_text = "workflow mode instructions";
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            sandbox_policy: None,
+            permission_profile: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: Some(collab_mode_with_mode_and_instructions(
+                ModeKind::Workflow,
+                Some(workflow_text),
+            )),
+            personality: None,
+        })
+        .await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let input = req.single_request().input();
+    let dev_texts = developer_texts(&input);
+    assert_eq!(
+        count_messages_containing(&dev_texts, &collab_xml(workflow_text)),
+        1
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

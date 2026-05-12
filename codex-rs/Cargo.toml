@@ -78,6 +78,7 @@ members = [
     "otel",
     "tui",
     "tools",
+    "workflows",
     "v8-poc",
     "utils/absolute-path",
     "utils/cargo-bin",
@@ -214,6 +215,7 @@ codex-thread-store = { path = "thread-store" }
 codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }
 codex-uds = { path = "uds" }
+codex-workflows = { path = "workflows" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-approval-presets = { path = "utils/approval-presets" }
 codex-utils-cache = { path = "utils/cache" }

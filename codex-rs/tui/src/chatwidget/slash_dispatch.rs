@@ -83,6 +83,16 @@ impl ChatWidget {
         }
     }
 
+    fn collaboration_mode_switch_allowed(&mut self) -> bool {
+        if self.bottom_pane.is_task_running() {
+            self.add_error_message(
+                "Cannot switch collaboration mode while a turn is running.".to_string(),
+            );
+            return false;
+        }
+        true
+    }
+
     fn request_side_conversation(
         &mut self,
         parent_thread_id: ThreadId,
@@ -240,7 +250,27 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
             SlashCommand::Workflow => {
-                self.add_error_message("Usage: /workflow <command>".to_string());
+                if !self.config.features.enabled(Feature::Workflows) {
+                    self.add_info_message(
+                        "Workflows are disabled.".to_string(),
+                        Some("Enable [features].workflows to use /workflow.".to_string()),
+                    );
+                    return;
+                }
+                if !self.collaboration_mode_switch_allowed() {
+                    return;
+                }
+                if let Some(mask) = collaboration_modes::workflow_mask(
+                    self.model_catalog.as_ref(),
+                    self.collaboration_modes_config(),
+                ) {
+                    self.set_collaboration_mask(mask);
+                } else {
+                    self.add_info_message(
+                        "Workflow mode unavailable right now.".to_string(),
+                        /*hint*/ None,
+                    );
+                }
             }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
@@ -767,8 +797,26 @@ impl ChatWidget {
                 self.request_side_conversation(parent_thread_id, Some(user_message));
             }
             SlashCommand::Workflow if !trimmed.is_empty() => {
-                self.app_event_tx
-                    .send(AppEvent::RunWorkflow { command: args });
+                if trimmed == "done" {
+                    if !self.collaboration_mode_switch_allowed() {
+                        return;
+                    }
+                    if let Some(mask) = collaboration_modes::default_mask_with_config(
+                        self.model_catalog.as_ref(),
+                        self.collaboration_modes_config(),
+                    ) {
+                        self.set_collaboration_mask(mask);
+                    } else {
+                        self.add_info_message(
+                            "Default mode unavailable right now.".to_string(),
+                            /*hint*/ None,
+                        );
+                    }
+                } else {
+                    self.app_event_tx.send(AppEvent::RunWorkflow {
+                        command: format!("codex workflow {args}"),
+                    });
+                }
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 self.submit_op(AppCommand::review(ReviewTarget::Custom {

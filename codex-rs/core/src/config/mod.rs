@@ -54,6 +54,7 @@ use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
+use codex_config::types::WorkflowsConfigToml;
 use codex_core_plugins::PluginsConfigInput;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
@@ -747,6 +748,9 @@ pub struct Config {
 
     /// Repository CI learning and validation settings.
     pub repo_ci: Option<RepoCiToml>,
+
+    /// JavaScript workflow discovery and authoring settings.
+    pub workflows: WorkflowsConfigToml,
 
     /// Review/fix implementation loop settings.
     pub implement: Option<ImplementToml>,
@@ -2756,6 +2760,7 @@ impl Config {
             background_terminal_max_timeout,
             ghost_snapshot,
             repo_ci: cfg.repo_ci,
+            workflows: cfg.workflows.unwrap_or_default(),
             implement: cfg.implement,
             repo_ci_session_mode,
             repo_ci_issue_types,

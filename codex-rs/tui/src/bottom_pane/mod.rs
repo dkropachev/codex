@@ -310,6 +310,14 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_workflow_mentions(
+        &mut self,
+        workflows: Option<Vec<codex_workflows::WorkflowSummary>>,
+    ) {
+        self.composer.set_workflow_mentions(workflows);
+        self.request_redraw();
+    }
+
     pub fn set_plugins_command_enabled(&mut self, enabled: bool) {
         self.composer.set_plugins_command_enabled(enabled);
         self.request_redraw();
@@ -453,6 +461,10 @@ impl BottomPane {
 
     pub fn plugins(&self) -> Option<&Vec<PluginCapabilitySummary>> {
         self.composer.plugins()
+    }
+
+    pub fn workflows(&self) -> Option<&Vec<codex_workflows::WorkflowSummary>> {
+        self.composer.workflows()
     }
 
     #[cfg(test)]

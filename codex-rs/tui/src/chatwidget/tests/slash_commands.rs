@@ -30,16 +30,35 @@ async fn workflow_slash_with_args_emits_run_workflow_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
 
-    chat.dispatch_command_with_args(
-        SlashCommand::Workflow,
-        "node workflow.js".to_string(),
-        Vec::new(),
-    );
+    chat.dispatch_command_with_args(SlashCommand::Workflow, "list".to_string(), Vec::new());
 
     match rx.try_recv() {
-        Ok(AppEvent::RunWorkflow { command }) => assert_eq!(command, "node workflow.js"),
+        Ok(AppEvent::RunWorkflow { command }) => assert_eq!(command, "codex workflow list"),
         other => panic!("expected RunWorkflow event, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn bare_workflow_slash_enters_workflow_mode() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+
+    chat.dispatch_command(SlashCommand::Workflow);
+
+    assert_eq!(chat.current_collaboration_mode().mode, ModeKind::Workflow);
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn workflow_done_slash_exits_to_default_mode() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+
+    chat.dispatch_command(SlashCommand::Workflow);
+    chat.dispatch_command_with_args(SlashCommand::Workflow, "done".to_string(), Vec::new());
+
+    assert_eq!(chat.current_collaboration_mode().mode, ModeKind::Default);
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 fn queue_composer_text_with_tab(chat: &mut ChatWidget, text: &str) {

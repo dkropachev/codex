@@ -111,6 +111,7 @@
       "enum": [
         "plan",
         "codex",
+        "workflow",
         "codex_config_edit",
         "default"
       ],

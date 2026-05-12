@@ -1896,6 +1896,7 @@ dependencies = [
  "codex-utils-cli",
  "codex-utils-json-to-toml",
  "codex-utils-pty",
+ "codex-workflows",
  "core_test_support",
  "flate2",
  "futures",
@@ -2240,6 +2241,7 @@ dependencies = [
  "codex-utils-cli",
  "codex-utils-path",
  "codex-windows-sandbox",
+ "codex-workflows",
  "libc",
  "owo-colors",
  "predicates",
@@ -2520,6 +2522,7 @@ dependencies = [
  "codex-utils-string",
  "codex-utils-template",
  "codex-windows-sandbox",
+ "codex-workflows",
  "core_test_support",
  "csv",
  "ctor 0.6.3",
@@ -3779,6 +3782,7 @@ dependencies = [
  "codex-utils-sleep-inhibitor",
  "codex-utils-string",
  "codex-windows-sandbox",
+ "codex-workflows",
  "color-eyre",
  "cpal",
  "crossterm",
@@ -4085,6 +4089,25 @@ dependencies = [
  "windows 0.58.0",
  "windows-sys 0.52.0",
  "winres",
+]
+
+[[package]]
+name = "codex-workflows"
+version = "0.129.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "codex-config",
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "shlex",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml_edit 0.24.0+spec-1.1.0",
 ]
 
 [[package]]

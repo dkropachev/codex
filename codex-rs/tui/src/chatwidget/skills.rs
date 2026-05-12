@@ -329,6 +329,45 @@ pub(crate) fn find_app_mentions(
         .collect()
 }
 
+pub(crate) fn find_workflow_mentions(
+    mentions: &ToolMentions,
+    workflows: &[codex_workflows::WorkflowSummary],
+) -> Vec<codex_workflows::WorkflowSummary> {
+    let mut selected_targets = HashSet::new();
+    let mut matches = Vec::new();
+
+    for path in mentions.linked_paths.values() {
+        if !path.starts_with("workflow://") {
+            continue;
+        }
+        if let Some(workflow) = workflows
+            .iter()
+            .find(|workflow| workflow.mention_target == *path)
+            && selected_targets.insert(workflow.mention_target.clone())
+        {
+            matches.push(workflow.clone());
+        }
+    }
+
+    let mut id_counts = HashMap::new();
+    for workflow in workflows {
+        *id_counts.entry(workflow.id.as_str()).or_insert(0usize) += 1;
+    }
+
+    for workflow in workflows {
+        if id_counts.get(workflow.id.as_str()) != Some(&1) {
+            continue;
+        }
+        if mentions.names.contains(&workflow.id)
+            && selected_targets.insert(workflow.mention_target.clone())
+        {
+            matches.push(workflow.clone());
+        }
+    }
+
+    matches
+}
+
 pub(crate) struct ToolMentions {
     names: HashSet<String>,
     linked_paths: HashMap<String, String>,
@@ -473,11 +512,14 @@ fn is_common_env_var(name: &str) -> bool {
 }
 
 fn is_mention_name_char(byte: u8) -> bool {
-    matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-')
+    matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-' | b'/')
 }
 
 fn is_skill_path(path: &str) -> bool {
-    !path.starts_with("app://") && !path.starts_with("mcp://") && !path.starts_with("plugin://")
+    !path.starts_with("app://")
+        && !path.starts_with("mcp://")
+        && !path.starts_with("plugin://")
+        && !path.starts_with("workflow://")
 }
 
 fn normalize_skill_path(path: &str) -> &str {

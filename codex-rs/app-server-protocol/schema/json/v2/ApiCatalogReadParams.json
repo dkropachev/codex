@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ApiCatalogSection": {
+      "enum": [
+        "appServerMethods",
+        "mcpServers",
+        "builtInTools",
+        "workflowRuntime",
+        "workflows"
+      ],
+      "type": "string"
+    },
+    "McpServerStatusDetail": {
+      "enum": [
+        "full",
+        "toolsAndAuthOnly"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "include": {
+      "description": "Optional subset of catalog sections to return. Omitted returns every section.",
+      "items": {
+        "$ref": "#/definitions/ApiCatalogSection"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "mcpDetail": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/McpServerStatusDetail"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Controls MCP inventory detail. Defaults to `Full` when omitted."
+    }
+  },
+  "title": "ApiCatalogReadParams",
+  "type": "object"
+}

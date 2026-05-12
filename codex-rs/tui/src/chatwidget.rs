@@ -137,6 +137,7 @@ use codex_git_utils::current_branch_name;
 use codex_git_utils::get_git_repo_root;
 use codex_git_utils::local_git_branches;
 use codex_git_utils::recent_commits;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_plugin::PluginCapabilitySummary;
@@ -337,6 +338,7 @@ mod slash_dispatch;
 use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
+use self::skills::find_workflow_mentions;
 mod plugins;
 use self::plugins::PluginsCacheState;
 mod plan_implementation;
@@ -5789,6 +5791,45 @@ impl ChatWidget {
             }
         }
 
+        let mut selected_workflow_targets: HashSet<String> = HashSet::new();
+        if let Some(workflows) = self.workflows_for_mentions() {
+            for binding in &mention_bindings {
+                if !binding.path.starts_with("workflow://")
+                    || !selected_workflow_targets.insert(binding.path.clone())
+                {
+                    continue;
+                }
+                if let Some(workflow) = workflows
+                    .iter()
+                    .find(|workflow| workflow.mention_target == binding.path)
+                {
+                    items.push(UserInput::Mention {
+                        name: workflow
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| workflow.id.clone()),
+                        path: workflow.mention_target.clone(),
+                    });
+                }
+            }
+
+            let workflow_mentions = find_workflow_mentions(&mentions, workflows);
+            for workflow in workflow_mentions {
+                if bound_names.contains(workflow.id.as_str())
+                    || !selected_workflow_targets.insert(workflow.mention_target.clone())
+                {
+                    continue;
+                }
+                items.push(UserInput::Mention {
+                    name: workflow
+                        .title
+                        .clone()
+                        .unwrap_or_else(|| workflow.id.clone()),
+                    path: workflow.mention_target.clone(),
+                });
+            }
+        }
+
         let mut selected_app_ids: HashSet<String> = HashSet::new();
         if let Some(apps) = self.connectors_for_mentions() {
             for binding in &mention_bindings {
@@ -7830,7 +7871,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_collaboration_modes_popup(&mut self) {
-        let presets = collaboration_modes::presets_for_tui(self.model_catalog.as_ref());
+        let presets = collaboration_modes::presets_for_tui_with_config(
+            self.model_catalog.as_ref(),
+            self.collaboration_modes_config(),
+        );
         if presets.is_empty() {
             self.add_info_message(
                 "No collaboration modes are available right now.".to_string(),
@@ -7844,8 +7888,11 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.mode)
             .or_else(|| {
-                collaboration_modes::default_mask(self.model_catalog.as_ref())
-                    .and_then(|mask| mask.mode)
+                collaboration_modes::default_mask_with_config(
+                    self.model_catalog.as_ref(),
+                    self.collaboration_modes_config(),
+                )
+                .and_then(|mask| mask.mode)
             });
         let items: Vec<SelectionItem> = presets
             .into_iter()
@@ -9463,8 +9510,19 @@ impl ChatWidget {
     }
 
     fn sync_workflows_enabled(&mut self) {
-        self.bottom_pane
-            .set_workflows_enabled(self.config.features.enabled(Feature::Workflows));
+        let enabled = self.config.features.enabled(Feature::Workflows);
+        self.bottom_pane.set_workflows_enabled(enabled);
+        if enabled {
+            let workflows = codex_workflows::discover_workflows(
+                self.config.codex_home.as_path(),
+                self.config.cwd.as_path(),
+                &self.config.workflows,
+            )
+            .ok();
+            self.bottom_pane.set_workflow_mentions(workflows);
+        } else {
+            self.bottom_pane.set_workflow_mentions(None);
+        }
     }
 
     fn current_model_supports_personality(&self) -> bool {
@@ -9544,6 +9602,16 @@ impl ChatWidget {
 
     fn collaboration_modes_enabled(&self) -> bool {
         true
+    }
+
+    fn collaboration_modes_config(&self) -> CollaborationModesConfig {
+        CollaborationModesConfig {
+            default_mode_request_user_input: self
+                .config
+                .features
+                .enabled(Feature::DefaultModeRequestUserInput),
+            workflows_enabled: self.config.features.enabled(Feature::Workflows),
+        }
     }
 
     /// Returns the dismissal scope that applies to the currently visible draft.
@@ -9675,6 +9743,7 @@ impl ChatWidget {
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
+            ModeKind::Workflow => Some(CollaborationModeIndicator::Workflow),
             ModeKind::Default
             | ModeKind::Codex
             | ModeKind::CodexConfigEdit
@@ -9752,15 +9821,16 @@ impl ChatWidget {
         }
     }
 
-    /// Cycle to the next collaboration mode variant (Plan -> Default -> Plan).
+    /// Cycle to the next visible collaboration mode preset.
     fn cycle_collaboration_mode(&mut self) {
         if !self.collaboration_modes_enabled() {
             return;
         }
 
-        if let Some(next_mask) = collaboration_modes::next_mask(
+        if let Some(next_mask) = collaboration_modes::next_mask_with_config(
             self.model_catalog.as_ref(),
             self.active_collaboration_mask.as_ref(),
+            self.collaboration_modes_config(),
         ) {
             self.set_collaboration_mask(next_mask);
         }
@@ -9842,6 +9912,14 @@ impl ChatWidget {
         }
 
         self.bottom_pane.plugins().map(Vec::as_slice)
+    }
+
+    fn workflows_for_mentions(&self) -> Option<&[codex_workflows::WorkflowSummary]> {
+        if !self.config.features.enabled(Feature::Workflows) {
+            return None;
+        }
+
+        self.bottom_pane.workflows().map(Vec::as_slice)
     }
 
     /// Build a placeholder header cell while the session is configuring.

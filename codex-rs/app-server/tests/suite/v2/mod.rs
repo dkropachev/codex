@@ -1,5 +1,6 @@
 mod account;
 mod analytics;
+mod api_catalog;
 mod app_list;
 mod client_metadata;
 mod collaboration_mode_list;
@@ -69,3 +70,4 @@ mod turn_start;
 mod turn_start_zsh_fork;
 mod turn_steer;
 mod windows_sandbox_setup;
+mod workflow;

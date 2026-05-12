@@ -1,0 +1,120 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "WorkflowRootKind": {
+      "enum": [
+        "global",
+        "project",
+        "searchPath"
+      ],
+      "type": "string"
+    },
+    "WorkflowSummary": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "mentionTarget": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "repairMode": {
+          "type": "string"
+        },
+        "rootKind": {
+          "$ref": "#/definitions/WorkflowRootKind"
+        },
+        "rootLabel": {
+          "type": "string"
+        },
+        "rootPath": {
+          "type": "string"
+        },
+        "searchTerms": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "userDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "validation": {
+          "$ref": "#/definitions/WorkflowValidationInfo"
+        },
+        "workflowYamlPath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "mentionTarget",
+        "path",
+        "repairMode",
+        "rootKind",
+        "rootLabel",
+        "rootPath",
+        "searchTerms",
+        "validation",
+        "workflowYamlPath"
+      ],
+      "type": "object"
+    },
+    "WorkflowValidationInfo": {
+      "properties": {
+        "messages": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/definitions/WorkflowValidationStatus"
+        }
+      },
+      "required": [
+        "messages",
+        "status"
+      ],
+      "type": "object"
+    },
+    "WorkflowValidationStatus": {
+      "enum": [
+        "valid",
+        "invalid"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "readme": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "workflow": {
+      "$ref": "#/definitions/WorkflowSummary"
+    },
+    "workflowYaml": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "workflow",
+    "workflowYaml"
+  ],
+  "title": "WorkflowReadResponse",
+  "type": "object"
+}

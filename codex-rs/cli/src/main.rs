@@ -48,6 +48,7 @@ use std::sync::Arc;
 use supports_color::Stream;
 
 mod account_usage;
+mod api_catalog_cmd;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod app_cmd;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -56,15 +57,20 @@ mod marketplace_cmd;
 mod mcp_cmd;
 mod repo_ci_exec;
 mod repo_ci_learn;
+mod workflow_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
+use crate::api_catalog_cmd::ApiCatalogCli;
+use crate::api_catalog_cmd::run_api_catalog_command;
 use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
 use crate::repo_ci_exec::repo_ci_exec_timeout;
 use crate::repo_ci_exec::run_repo_ci_exec_json;
 use crate::repo_ci_learn::learn_repo_ci_with_ai;
 use crate::repo_ci_learn::normalize_repo_ci_learning_instruction_with_ai;
+use crate::workflow_cmd::WorkflowCli;
+use crate::workflow_cmd::run_workflow_command;
 
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::LoaderOverrides;
@@ -145,6 +151,12 @@ enum Subcommand {
 
     /// Manage Codex plugins.
     Plugin(PluginCli),
+
+    /// Print a machine-readable catalog of Codex APIs, MCP tools, and workflow helpers.
+    Api(ApiCatalogCli),
+
+    /// Manage Codex workflows.
+    Workflow(WorkflowCli),
 
     /// Tune tool-router guidance.
     #[clap(name = "tool-router")]
@@ -1472,6 +1484,34 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     marketplace_cli.run().await?;
                 }
             }
+        }
+        Some(Subcommand::Api(api_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "api",
+            )?;
+            run_api_catalog_command(
+                api_cli,
+                root_config_overrides,
+                interactive.config_profile.clone(),
+                arg0_paths.clone(),
+            )
+            .await?;
+        }
+        Some(Subcommand::Workflow(workflow_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "workflow",
+            )?;
+            run_workflow_command(
+                workflow_cli,
+                root_config_overrides,
+                interactive.config_profile.clone(),
+                arg0_paths.clone(),
+            )
+            .await?;
         }
         Some(Subcommand::ToolRouter(tool_router_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -6117,6 +6157,20 @@ mod tests {
             "--allow-unauthenticated-non-loopback-ws",
         ]);
         assert!(parse_result.is_err());
+    }
+
+    #[test]
+    fn api_catalog_parses_mcp_detail() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "api", "--mcp-detail", "tools-and-auth-only"])
+                .expect("parse should succeed");
+        let Some(Subcommand::Api(api)) = cli.subcommand else {
+            panic!("expected api subcommand");
+        };
+        assert_eq!(
+            api.mcp_detail,
+            api_catalog_cmd::ApiCatalogMcpDetail::ToolsAndAuthOnly
+        );
     }
 
     #[test]

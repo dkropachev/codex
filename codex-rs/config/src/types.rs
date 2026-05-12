@@ -24,6 +24,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
+use std::path::PathBuf;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -451,6 +452,48 @@ pub struct AppsConfigToml {
     /// Per-app settings keyed by app ID (for example `[apps.google_drive]`).
     #[serde(default, flatten)]
     pub apps: HashMap<String, AppConfig>,
+}
+
+/// JavaScript workflow discovery and authoring settings loaded from `config.toml`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
+pub struct WorkflowsConfigToml {
+    /// Additional roots searched after the default global and project workflow roots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_paths: Option<Vec<PathBuf>>,
+
+    /// Root used when scaffolding a workflow without an explicit destination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_location: Option<WorkflowDefaultLocation>,
+
+    /// Repair policy. The built-in default is `threshold:3`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair_mode: Option<String>,
+
+    /// Maximum automatic repair cycles before returning control to the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_repair_cycles: Option<u32>,
+
+    /// Dependency update behavior for workflow authoring commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependency_update_policy: Option<String>,
+
+    /// Git commit behavior for accepted workflow edits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit_policy: Option<String>,
+
+    /// Validation profile used by validate/fix commands unless overridden by workflow.yaml.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_profile: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowDefaultLocation {
+    #[default]
+    Global,
+    Project,
 }
 
 // ===== OTEL configuration =====

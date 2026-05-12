@@ -126,6 +126,21 @@ const mcpResult = await ctx.mcp.callTool(agent, {
 const commandResult = await ctx.tools.exec(["git", "status", "--short"]);
 ```
 
+Workflows can ask Codex for the same machine-readable API catalog exposed by `codex api` and app-server
+`apiCatalog/read`. This is useful when handing available MCP/tool/workflow APIs and discovered workflow metadata to an IDE or another coding agent.
+
+```typescript
+const catalog = await ctx.api.read({ mcpDetail: "toolsAndAuthOnly" });
+```
+
+The context also exposes the workflow registry and command API used by `codex workflow` and `/workflow`.
+
+```typescript
+const { workflows } = await ctx.workflows.registry.list();
+const result = await ctx.workflows.run("reports/jira-summary", { project: "COD" });
+await ctx.workflows.command.execute(["validate", workflows[0].id]);
+```
+
 For lower-level control, use `CodexWorkflow.start()`, `CodexWorkflow.connect()`, `CodexWorkflow.spawnServer()`, or
 `CodexWorkflow.fromTui()` directly.
 
@@ -141,11 +156,12 @@ workflows = true
 Then launch the workflow from the TUI:
 
 ```bash
-/workflow node ./workflow.js
+/workflow list
+/workflow run reports/jira-summary --input '{"project":"COD"}'
 ```
 
-The TUI starts a loopback app-server automatically and passes its URL to the workflow process. In that mode reusable
-workflows can use the same `runWorkflow()` entrypoint:
+The TUI starts a loopback app-server automatically and runs the same shared workflow command engine as `codex workflow`.
+In that mode reusable workflows can use the same `runWorkflow()` entrypoint:
 
 ```typescript
 await runWorkflow(workflow);

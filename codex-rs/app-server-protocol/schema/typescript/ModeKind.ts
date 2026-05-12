@@ -5,4 +5,4 @@
 /**
  * Initial collaboration mode to use when the TUI starts.
  */
-export type ModeKind = "plan" | "codex" | "codex_config_edit" | "default";
+export type ModeKind = "plan" | "codex" | "workflow" | "codex_config_edit" | "default";

@@ -161,6 +161,138 @@ export type WorkflowProgressEvent = {
   data?: unknown;
 };
 
+export type ApiCatalogSection =
+  | "appServerMethods"
+  | "mcpServers"
+  | "builtInTools"
+  | "workflowRuntime"
+  | "workflows";
+
+export type ApiCatalogReadParams = {
+  include?: ApiCatalogSection[] | null;
+  mcpDetail?: "full" | "toolsAndAuthOnly" | null;
+};
+
+export type ApiCatalogMethod = {
+  method: string;
+  paramsType: string;
+  responseType: string;
+  experimental: boolean;
+  description: string | null;
+};
+
+export type ApiCatalogTool = {
+  name: string;
+  source: "appServerRpc" | "workflowRuntime";
+  invocation: string;
+  description: string;
+  inputSchema: unknown;
+  outputSchema: unknown | null;
+};
+
+export type ApiCatalogSymbol = {
+  name: string;
+  kind: "function" | "class" | "method" | "type";
+  signature: string;
+  description: string;
+};
+
+export type ApiCatalogWorkflowRuntime = {
+  package: string;
+  importSpecifier: string;
+  symbols: ApiCatalogSymbol[];
+};
+
+export type ApiCatalogReadResponse = {
+  schemaVersion: number;
+  generatedAt: number;
+  appServerMethods: ApiCatalogMethod[];
+  mcpServers: unknown[];
+  builtInTools: ApiCatalogTool[];
+  workflowRuntime: ApiCatalogWorkflowRuntime;
+  workflows: WorkflowSummary[];
+};
+
+export type WorkflowRootKind = "global" | "project" | "searchPath";
+
+export type WorkflowValidationStatus = "valid" | "invalid";
+
+export type WorkflowValidationInfo = {
+  status: WorkflowValidationStatus;
+  messages: string[];
+};
+
+export type WorkflowRootInfo = {
+  kind: WorkflowRootKind;
+  label: string;
+  path: string;
+};
+
+export type WorkflowSummary = {
+  id: string;
+  title: string | null;
+  userDescription: string | null;
+  searchTerms: string[];
+  rootLabel: string;
+  rootKind: WorkflowRootKind;
+  rootPath: string;
+  path: string;
+  workflowYamlPath: string;
+  mentionTarget: string;
+  validation: WorkflowValidationInfo;
+  repairMode: string;
+};
+
+export type WorkflowImpactInfo = {
+  id: string;
+  path: string;
+  dependencies: string[];
+  devDependencies: string[];
+  gitStatus: string[];
+};
+
+export type WorkflowConfigValues = {
+  search_paths: string[];
+  default_location: string;
+  repair_mode: string;
+  max_repair_cycles: number;
+  dependency_update_policy: string;
+  commit_policy: string;
+  validation_profile: string;
+};
+
+export type WorkflowListResponse = {
+  roots: WorkflowRootInfo[];
+  workflows: WorkflowSummary[];
+};
+
+export type WorkflowReadResponse = {
+  workflow: WorkflowSummary;
+  workflowYaml: string;
+  readme: string | null;
+};
+
+export type WorkflowImpactResponse = {
+  impact: WorkflowImpactInfo;
+};
+
+export type WorkflowCommandResponse = {
+  message: string;
+  data: unknown;
+};
+
+export type WorkflowConfigReadResponse = {
+  config: WorkflowConfigValues;
+};
+
+export type WorkflowConfigWriteResponse = WorkflowConfigReadResponse;
+
+export type WorkflowAuthoringContextPrepareResponse = {
+  roots: WorkflowRootInfo[];
+  workflows: WorkflowSummary[];
+  config: WorkflowConfigValues;
+};
+
 export type WorkflowRunOptions<Input = unknown> = WorkflowOptions & {
   input?: Input;
   context?: WorkflowContext;
@@ -176,6 +308,8 @@ export type DefinedWorkflow<Input = unknown, Output = unknown> = {
 
 export type WorkflowContext = {
   readonly workflow: CodexWorkflow;
+  readonly api: WorkflowApiCatalog;
+  readonly workflows: WorkflowApis;
   readonly mcp: WorkflowMcp;
   readonly tools: WorkflowTools;
   createAgent(options?: AgentStartOptions): Promise<AgentHandle>;
@@ -302,6 +436,8 @@ export async function runWorkflow<Input = undefined, Output = unknown>(
 }
 
 export class CodexWorkflow {
+  readonly api: WorkflowApiCatalog;
+  readonly workflows: WorkflowApis;
   readonly mcp: WorkflowMcp;
   readonly tools: WorkflowTools;
 
@@ -313,6 +449,8 @@ export class CodexWorkflow {
   private constructor(client: AppServerClient, approvals: ResolvedWorkflowApprovals) {
     this.client = client;
     this.approvals = approvals;
+    this.api = new WorkflowApiCatalog(client);
+    this.workflows = new WorkflowApis(client);
     this.mcp = new WorkflowMcp(client);
     this.tools = new WorkflowTools(client);
     this.client.onServerRequest((request) => this.handleServerRequest(request));
@@ -616,6 +754,88 @@ export class WorkflowMcp {
   }
 }
 
+export class WorkflowApiCatalog {
+  constructor(private client: AppServerClient) {}
+
+  read(params: ApiCatalogReadParams = {}): Promise<ApiCatalogReadResponse> {
+    return this.client.request("apiCatalog/read", params);
+  }
+}
+
+export class WorkflowApis {
+  readonly registry: WorkflowRegistryApi;
+  readonly config: WorkflowConfigApi;
+  readonly command: WorkflowCommandApi;
+
+  constructor(private client: AppServerClient) {
+    this.registry = new WorkflowRegistryApi(client);
+    this.config = new WorkflowConfigApi(client);
+    this.command = new WorkflowCommandApi(client);
+  }
+
+  run(id: string, input?: unknown): Promise<WorkflowCommandResponse> {
+    return this.client.request("workflow/run", { id, input });
+  }
+}
+
+export class WorkflowRegistryApi {
+  constructor(private client: AppServerClient) {}
+
+  list(): Promise<WorkflowListResponse> {
+    return this.client.request("workflow/list", {});
+  }
+
+  read(id: string, target?: string | null): Promise<WorkflowReadResponse> {
+    return this.client.request("workflow/read", { id, target });
+  }
+
+  impact(id: string): Promise<WorkflowImpactResponse> {
+    return this.client.request("workflow/impact", { id });
+  }
+
+  develop(description: string): Promise<WorkflowCommandResponse> {
+    return this.client.request("workflow/develop", { description });
+  }
+
+  edit(id: string, instruction: string): Promise<WorkflowCommandResponse> {
+    return this.client.request("workflow/edit", { id, instruction });
+  }
+
+  validate(id: string): Promise<WorkflowCommandResponse> {
+    return this.client.request("workflow/validate", { id });
+  }
+
+  repair(id: string): Promise<WorkflowCommandResponse> {
+    return this.client.request("workflow/repair", { id });
+  }
+
+  authoringContextPrepare(
+    params: { id?: string | null; description?: string | null } = {},
+  ): Promise<WorkflowAuthoringContextPrepareResponse> {
+    return this.client.request("workflow/authoringContext/prepare", params);
+  }
+}
+
+export class WorkflowConfigApi {
+  constructor(private client: AppServerClient) {}
+
+  read(): Promise<WorkflowConfigReadResponse> {
+    return this.client.request("workflow/config/read", {});
+  }
+
+  write(key: string, value?: unknown): Promise<WorkflowConfigWriteResponse> {
+    return this.client.request("workflow/config/write", { key, value });
+  }
+}
+
+export class WorkflowCommandApi {
+  constructor(private client: AppServerClient) {}
+
+  execute(args: string[]): Promise<WorkflowCommandResponse> {
+    return this.client.request("workflow/command/execute", { args });
+  }
+}
+
 export class WorkflowTools {
   constructor(private client: AppServerClient) {}
 
@@ -625,6 +845,8 @@ export class WorkflowTools {
 }
 
 class DefaultWorkflowContext implements WorkflowContext {
+  readonly api: WorkflowApiCatalog;
+  readonly workflows: WorkflowApis;
   readonly mcp: WorkflowMcp;
   readonly tools: WorkflowTools;
 
@@ -635,6 +857,8 @@ class DefaultWorkflowContext implements WorkflowContext {
       onResult?: (result: unknown) => void;
     } = {},
   ) {
+    this.api = workflow.api;
+    this.workflows = workflow.workflows;
     this.mcp = workflow.mcp;
     this.tools = workflow.tools;
   }

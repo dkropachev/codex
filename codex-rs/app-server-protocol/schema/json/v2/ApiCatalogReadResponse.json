@@ -1,0 +1,431 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ApiCatalogMethod": {
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "experimental": {
+          "type": "boolean"
+        },
+        "method": {
+          "type": "string"
+        },
+        "paramsType": {
+          "type": "string"
+        },
+        "responseType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "experimental",
+        "method",
+        "paramsType",
+        "responseType"
+      ],
+      "type": "object"
+    },
+    "ApiCatalogSymbol": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/ApiCatalogSymbolKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "signature": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "description",
+        "kind",
+        "name",
+        "signature"
+      ],
+      "type": "object"
+    },
+    "ApiCatalogSymbolKind": {
+      "enum": [
+        "function",
+        "class",
+        "method",
+        "type"
+      ],
+      "type": "string"
+    },
+    "ApiCatalogTool": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "inputSchema": true,
+        "invocation": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "outputSchema": true,
+        "source": {
+          "$ref": "#/definitions/ApiCatalogToolSource"
+        }
+      },
+      "required": [
+        "description",
+        "inputSchema",
+        "invocation",
+        "name",
+        "source"
+      ],
+      "type": "object"
+    },
+    "ApiCatalogToolSource": {
+      "enum": [
+        "appServerRpc",
+        "workflowRuntime"
+      ],
+      "type": "string"
+    },
+    "ApiCatalogWorkflowRuntime": {
+      "properties": {
+        "importSpecifier": {
+          "type": "string"
+        },
+        "package": {
+          "type": "string"
+        },
+        "symbols": {
+          "items": {
+            "$ref": "#/definitions/ApiCatalogSymbol"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "importSpecifier",
+        "package",
+        "symbols"
+      ],
+      "type": "object"
+    },
+    "McpAuthStatus": {
+      "enum": [
+        "unsupported",
+        "notLoggedIn",
+        "bearerToken",
+        "oAuth"
+      ],
+      "type": "string"
+    },
+    "McpServerStatus": {
+      "properties": {
+        "authStatus": {
+          "$ref": "#/definitions/McpAuthStatus"
+        },
+        "name": {
+          "type": "string"
+        },
+        "resourceTemplates": {
+          "items": {
+            "$ref": "#/definitions/ResourceTemplate"
+          },
+          "type": "array"
+        },
+        "resources": {
+          "items": {
+            "$ref": "#/definitions/Resource"
+          },
+          "type": "array"
+        },
+        "tools": {
+          "additionalProperties": {
+            "$ref": "#/definitions/Tool"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "authStatus",
+        "name",
+        "resourceTemplates",
+        "resources",
+        "tools"
+      ],
+      "type": "object"
+    },
+    "Resource": {
+      "description": "A known resource that the server is capable of reading.",
+      "properties": {
+        "_meta": true,
+        "annotations": true,
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "items": true,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "uri"
+      ],
+      "type": "object"
+    },
+    "ResourceTemplate": {
+      "description": "A template description for resources available on the server.",
+      "properties": {
+        "annotations": true,
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uriTemplate": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "uriTemplate"
+      ],
+      "type": "object"
+    },
+    "Tool": {
+      "description": "Definition for a tool the client can call.",
+      "properties": {
+        "_meta": true,
+        "annotations": true,
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "items": true,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "inputSchema": true,
+        "name": {
+          "type": "string"
+        },
+        "outputSchema": true,
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "inputSchema",
+        "name"
+      ],
+      "type": "object"
+    },
+    "WorkflowRootKind": {
+      "enum": [
+        "global",
+        "project",
+        "searchPath"
+      ],
+      "type": "string"
+    },
+    "WorkflowSummary": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "mentionTarget": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "repairMode": {
+          "type": "string"
+        },
+        "rootKind": {
+          "$ref": "#/definitions/WorkflowRootKind"
+        },
+        "rootLabel": {
+          "type": "string"
+        },
+        "rootPath": {
+          "type": "string"
+        },
+        "searchTerms": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "userDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "validation": {
+          "$ref": "#/definitions/WorkflowValidationInfo"
+        },
+        "workflowYamlPath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "mentionTarget",
+        "path",
+        "repairMode",
+        "rootKind",
+        "rootLabel",
+        "rootPath",
+        "searchTerms",
+        "validation",
+        "workflowYamlPath"
+      ],
+      "type": "object"
+    },
+    "WorkflowValidationInfo": {
+      "properties": {
+        "messages": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/definitions/WorkflowValidationStatus"
+        }
+      },
+      "required": [
+        "messages",
+        "status"
+      ],
+      "type": "object"
+    },
+    "WorkflowValidationStatus": {
+      "enum": [
+        "valid",
+        "invalid"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "appServerMethods": {
+      "items": {
+        "$ref": "#/definitions/ApiCatalogMethod"
+      },
+      "type": "array"
+    },
+    "builtInTools": {
+      "items": {
+        "$ref": "#/definitions/ApiCatalogTool"
+      },
+      "type": "array"
+    },
+    "generatedAt": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "mcpServers": {
+      "items": {
+        "$ref": "#/definitions/McpServerStatus"
+      },
+      "type": "array"
+    },
+    "schemaVersion": {
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "workflowRuntime": {
+      "$ref": "#/definitions/ApiCatalogWorkflowRuntime"
+    },
+    "workflows": {
+      "items": {
+        "$ref": "#/definitions/WorkflowSummary"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "appServerMethods",
+    "builtInTools",
+    "generatedAt",
+    "mcpServers",
+    "schemaVersion",
+    "workflowRuntime",
+    "workflows"
+  ],
+  "title": "ApiCatalogReadResponse",
+  "type": "object"
+}

@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "WorkflowConfigValues": {
+      "properties": {
+        "commit_policy": {
+          "type": "string"
+        },
+        "default_location": {
+          "type": "string"
+        },
+        "dependency_update_policy": {
+          "type": "string"
+        },
+        "max_repair_cycles": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "repair_mode": {
+          "type": "string"
+        },
+        "search_paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "validation_profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "commit_policy",
+        "default_location",
+        "dependency_update_policy",
+        "max_repair_cycles",
+        "repair_mode",
+        "search_paths",
+        "validation_profile"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "config": {
+      "$ref": "#/definitions/WorkflowConfigValues"
+    }
+  },
+  "required": [
+    "config"
+  ],
+  "title": "WorkflowConfigReadResponse",
+  "type": "object"
+}

@@ -1121,6 +1121,29 @@ impl CodexMessageProcessor {
                 self.apps_list(to_connection_request_id(request_id), params)
                     .await;
             }
+            ClientRequest::ApiCatalogRead { request_id, .. } => {
+                warn!(
+                    request_id = %request_id,
+                    "ApiCatalogRead request reached CodexMessageProcessor unexpectedly"
+                );
+            }
+            ClientRequest::WorkflowList { request_id, .. }
+            | ClientRequest::WorkflowRead { request_id, .. }
+            | ClientRequest::WorkflowImpact { request_id, .. }
+            | ClientRequest::WorkflowDevelop { request_id, .. }
+            | ClientRequest::WorkflowEdit { request_id, .. }
+            | ClientRequest::WorkflowRun { request_id, .. }
+            | ClientRequest::WorkflowValidate { request_id, .. }
+            | ClientRequest::WorkflowRepair { request_id, .. }
+            | ClientRequest::WorkflowConfigRead { request_id, .. }
+            | ClientRequest::WorkflowConfigWrite { request_id, .. }
+            | ClientRequest::WorkflowCommandExecute { request_id, .. }
+            | ClientRequest::WorkflowAuthoringContextPrepare { request_id, .. } => {
+                warn!(
+                    request_id = %request_id,
+                    "workflow request reached CodexMessageProcessor unexpectedly"
+                );
+            }
             ClientRequest::SkillsConfigWrite { request_id, params } => {
                 self.skills_config_write(to_connection_request_id(request_id), params)
                     .await;
@@ -7482,6 +7505,7 @@ impl CodexMessageProcessor {
 
         let collaboration_modes_config = CollaborationModesConfig {
             default_mode_request_user_input: thread.enabled(Feature::DefaultModeRequestUserInput),
+            workflows_enabled: thread.enabled(Feature::Workflows),
         };
         let collaboration_mode = params.collaboration_mode.map(|mode| {
             self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)

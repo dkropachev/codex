@@ -382,6 +382,212 @@
       },
       "type": "object"
     },
+    "ApiCatalogMethod": {
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "experimental": {
+          "type": "boolean"
+        },
+        "method": {
+          "type": "string"
+        },
+        "paramsType": {
+          "type": "string"
+        },
+        "responseType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "experimental",
+        "method",
+        "paramsType",
+        "responseType"
+      ],
+      "type": "object"
+    },
+    "ApiCatalogReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "include": {
+          "description": "Optional subset of catalog sections to return. Omitted returns every section.",
+          "items": {
+            "$ref": "#/definitions/ApiCatalogSection"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "mcpDetail": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpServerStatusDetail"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Controls MCP inventory detail. Defaults to `Full` when omitted."
+        }
+      },
+      "title": "ApiCatalogReadParams",
+      "type": "object"
+    },
+    "ApiCatalogReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "appServerMethods": {
+          "items": {
+            "$ref": "#/definitions/ApiCatalogMethod"
+          },
+          "type": "array"
+        },
+        "builtInTools": {
+          "items": {
+            "$ref": "#/definitions/ApiCatalogTool"
+          },
+          "type": "array"
+        },
+        "generatedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "mcpServers": {
+          "items": {
+            "$ref": "#/definitions/McpServerStatus"
+          },
+          "type": "array"
+        },
+        "schemaVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "workflowRuntime": {
+          "$ref": "#/definitions/ApiCatalogWorkflowRuntime"
+        },
+        "workflows": {
+          "items": {
+            "$ref": "#/definitions/WorkflowSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "appServerMethods",
+        "builtInTools",
+        "generatedAt",
+        "mcpServers",
+        "schemaVersion",
+        "workflowRuntime",
+        "workflows"
+      ],
+      "title": "ApiCatalogReadResponse",
+      "type": "object"
+    },
+    "ApiCatalogSection": {
+      "enum": [
+        "appServerMethods",
+        "mcpServers",
+        "builtInTools",
+        "workflowRuntime",
+        "workflows"
+      ],
+      "type": "string"
+    },
+    "ApiCatalogSymbol": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/ApiCatalogSymbolKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "signature": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "description",
+        "kind",
+        "name",
+        "signature"
+      ],
+      "type": "object"
+    },
+    "ApiCatalogSymbolKind": {
+      "enum": [
+        "function",
+        "class",
+        "method",
+        "type"
+      ],
+      "type": "string"
+    },
+    "ApiCatalogTool": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "inputSchema": true,
+        "invocation": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "outputSchema": true,
+        "source": {
+          "$ref": "#/definitions/ApiCatalogToolSource"
+        }
+      },
+      "required": [
+        "description",
+        "inputSchema",
+        "invocation",
+        "name",
+        "source"
+      ],
+      "type": "object"
+    },
+    "ApiCatalogToolSource": {
+      "enum": [
+        "appServerRpc",
+        "workflowRuntime"
+      ],
+      "type": "string"
+    },
+    "ApiCatalogWorkflowRuntime": {
+      "properties": {
+        "importSpecifier": {
+          "type": "string"
+        },
+        "package": {
+          "type": "string"
+        },
+        "symbols": {
+          "items": {
+            "$ref": "#/definitions/ApiCatalogSymbol"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "importSpecifier",
+        "package",
+        "symbols"
+      ],
+      "type": "object"
+    },
     "AppBranding": {
       "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
       "properties": {
@@ -1875,6 +2081,318 @@
             "params"
           ],
           "title": "Hooks/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "apiCatalog/read"
+              ],
+              "title": "ApiCatalog/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ApiCatalogReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ApiCatalog/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/list"
+              ],
+              "title": "Workflow/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/read"
+              ],
+              "title": "Workflow/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/impact"
+              ],
+              "title": "Workflow/impactRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowImpactParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/impactRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/develop"
+              ],
+              "title": "Workflow/developRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowDevelopParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/developRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/edit"
+              ],
+              "title": "Workflow/editRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowEditParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/editRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/run"
+              ],
+              "title": "Workflow/runRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowRunParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/runRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/validate"
+              ],
+              "title": "Workflow/validateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowValidateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/validateRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/repair"
+              ],
+              "title": "Workflow/repairRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowRepairParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/repairRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/config/read"
+              ],
+              "title": "Workflow/config/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowConfigReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/config/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/config/write"
+              ],
+              "title": "Workflow/config/writeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowConfigWriteParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/config/writeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/command/execute"
+              ],
+              "title": "Workflow/command/executeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowCommandExecuteParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/command/executeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/authoringContext/prepare"
+              ],
+              "title": "Workflow/authoringContext/prepareRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowAuthoringContextPrepareParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/authoringContext/prepareRequest",
           "type": "object"
         },
         {
@@ -8317,6 +8835,7 @@
       "enum": [
         "plan",
         "codex",
+        "workflow",
         "codex_config_edit",
         "default"
       ],
@@ -11540,6 +12059,28 @@
             "type"
           ],
           "title": "GhostSnapshotResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "encrypted_content": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "context_compaction"
+              ],
+              "title": "ContextCompactionResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ContextCompactionResponseItem",
           "type": "object"
         },
         {
@@ -17623,6 +18164,559 @@
       ],
       "title": "WindowsWorldWritableWarningNotification",
       "type": "object"
+    },
+    "WorkflowAuthoringContextPrepareParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "WorkflowAuthoringContextPrepareParams",
+      "type": "object"
+    },
+    "WorkflowAuthoringContextPrepareResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "config": {
+          "$ref": "#/definitions/WorkflowConfigValues"
+        },
+        "roots": {
+          "items": {
+            "$ref": "#/definitions/WorkflowRootInfo"
+          },
+          "type": "array"
+        },
+        "workflows": {
+          "items": {
+            "$ref": "#/definitions/WorkflowSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "config",
+        "roots",
+        "workflows"
+      ],
+      "title": "WorkflowAuthoringContextPrepareResponse",
+      "type": "object"
+    },
+    "WorkflowCommandExecuteParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "args"
+      ],
+      "title": "WorkflowCommandExecuteParams",
+      "type": "object"
+    },
+    "WorkflowCommandExecuteResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "data": true,
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "message"
+      ],
+      "title": "WorkflowCommandExecuteResponse",
+      "type": "object"
+    },
+    "WorkflowConfigReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "WorkflowConfigReadParams",
+      "type": "object"
+    },
+    "WorkflowConfigReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "config": {
+          "$ref": "#/definitions/WorkflowConfigValues"
+        }
+      },
+      "required": [
+        "config"
+      ],
+      "title": "WorkflowConfigReadResponse",
+      "type": "object"
+    },
+    "WorkflowConfigValues": {
+      "properties": {
+        "commit_policy": {
+          "type": "string"
+        },
+        "default_location": {
+          "type": "string"
+        },
+        "dependency_update_policy": {
+          "type": "string"
+        },
+        "max_repair_cycles": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "repair_mode": {
+          "type": "string"
+        },
+        "search_paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "validation_profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "commit_policy",
+        "default_location",
+        "dependency_update_policy",
+        "max_repair_cycles",
+        "repair_mode",
+        "search_paths",
+        "validation_profile"
+      ],
+      "type": "object"
+    },
+    "WorkflowConfigWriteParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": true
+      },
+      "required": [
+        "key"
+      ],
+      "title": "WorkflowConfigWriteParams",
+      "type": "object"
+    },
+    "WorkflowConfigWriteResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "config": {
+          "$ref": "#/definitions/WorkflowConfigValues"
+        }
+      },
+      "required": [
+        "config"
+      ],
+      "title": "WorkflowConfigWriteResponse",
+      "type": "object"
+    },
+    "WorkflowDevelopParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "description"
+      ],
+      "title": "WorkflowDevelopParams",
+      "type": "object"
+    },
+    "WorkflowDevelopResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "data": true,
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "message"
+      ],
+      "title": "WorkflowDevelopResponse",
+      "type": "object"
+    },
+    "WorkflowEditParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "instruction": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "instruction"
+      ],
+      "title": "WorkflowEditParams",
+      "type": "object"
+    },
+    "WorkflowEditResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "data": true,
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "message"
+      ],
+      "title": "WorkflowEditResponse",
+      "type": "object"
+    },
+    "WorkflowImpactInfo": {
+      "properties": {
+        "dependencies": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "devDependencies": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "gitStatus": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "dependencies",
+        "devDependencies",
+        "gitStatus",
+        "id",
+        "path"
+      ],
+      "type": "object"
+    },
+    "WorkflowImpactParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "WorkflowImpactParams",
+      "type": "object"
+    },
+    "WorkflowImpactResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "impact": {
+          "$ref": "#/definitions/WorkflowImpactInfo"
+        }
+      },
+      "required": [
+        "impact"
+      ],
+      "title": "WorkflowImpactResponse",
+      "type": "object"
+    },
+    "WorkflowListParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "WorkflowListParams",
+      "type": "object"
+    },
+    "WorkflowListResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "roots": {
+          "items": {
+            "$ref": "#/definitions/WorkflowRootInfo"
+          },
+          "type": "array"
+        },
+        "workflows": {
+          "items": {
+            "$ref": "#/definitions/WorkflowSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "roots",
+        "workflows"
+      ],
+      "title": "WorkflowListResponse",
+      "type": "object"
+    },
+    "WorkflowReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "WorkflowReadParams",
+      "type": "object"
+    },
+    "WorkflowReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "readme": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workflow": {
+          "$ref": "#/definitions/WorkflowSummary"
+        },
+        "workflowYaml": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workflow",
+        "workflowYaml"
+      ],
+      "title": "WorkflowReadResponse",
+      "type": "object"
+    },
+    "WorkflowRepairParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "WorkflowRepairParams",
+      "type": "object"
+    },
+    "WorkflowRepairResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "data": true,
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "message"
+      ],
+      "title": "WorkflowRepairResponse",
+      "type": "object"
+    },
+    "WorkflowRootInfo": {
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/WorkflowRootKind"
+        },
+        "label": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "label",
+        "path"
+      ],
+      "type": "object"
+    },
+    "WorkflowRootKind": {
+      "enum": [
+        "global",
+        "project",
+        "searchPath"
+      ],
+      "type": "string"
+    },
+    "WorkflowRunParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "input": true
+      },
+      "required": [
+        "id"
+      ],
+      "title": "WorkflowRunParams",
+      "type": "object"
+    },
+    "WorkflowRunResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "data": true,
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "message"
+      ],
+      "title": "WorkflowRunResponse",
+      "type": "object"
+    },
+    "WorkflowSummary": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "mentionTarget": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "repairMode": {
+          "type": "string"
+        },
+        "rootKind": {
+          "$ref": "#/definitions/WorkflowRootKind"
+        },
+        "rootLabel": {
+          "type": "string"
+        },
+        "rootPath": {
+          "type": "string"
+        },
+        "searchTerms": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "userDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "validation": {
+          "$ref": "#/definitions/WorkflowValidationInfo"
+        },
+        "workflowYamlPath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "mentionTarget",
+        "path",
+        "repairMode",
+        "rootKind",
+        "rootLabel",
+        "rootPath",
+        "searchTerms",
+        "validation",
+        "workflowYamlPath"
+      ],
+      "type": "object"
+    },
+    "WorkflowValidateParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "WorkflowValidateParams",
+      "type": "object"
+    },
+    "WorkflowValidateResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "data": true,
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "message"
+      ],
+      "title": "WorkflowValidateResponse",
+      "type": "object"
+    },
+    "WorkflowValidationInfo": {
+      "properties": {
+        "messages": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/definitions/WorkflowValidationStatus"
+        }
+      },
+      "required": [
+        "messages",
+        "status"
+      ],
+      "type": "object"
+    },
+    "WorkflowValidationStatus": {
+      "enum": [
+        "valid",
+        "invalid"
+      ],
+      "type": "string"
     },
     "WriteStatus": {
       "enum": [

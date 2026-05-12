@@ -506,6 +506,7 @@ pub enum AltScreenMode {
 pub enum ModeKind {
     Plan,
     Codex,
+    Workflow,
     #[serde(rename = "codex_config_edit")]
     CodexConfigEdit,
     #[default]
@@ -528,14 +529,19 @@ pub enum ModeKind {
     Execute,
 }
 
-pub const TUI_VISIBLE_COLLABORATION_MODES: [ModeKind; 3] =
-    [ModeKind::Default, ModeKind::Plan, ModeKind::Codex];
+pub const TUI_VISIBLE_COLLABORATION_MODES: [ModeKind; 4] = [
+    ModeKind::Default,
+    ModeKind::Plan,
+    ModeKind::Codex,
+    ModeKind::Workflow,
+];
 
 impl ModeKind {
     pub const fn display_name(self) -> &'static str {
         match self {
             Self::Plan => "Plan",
             Self::Codex => "Codex",
+            Self::Workflow => "Workflow",
             Self::CodexConfigEdit => "Codex",
             Self::Default => "Default",
             Self::PairProgramming => "Pair Programming",
@@ -544,15 +550,21 @@ impl ModeKind {
     }
 
     pub const fn is_tui_visible(self) -> bool {
-        matches!(self, Self::Plan | Self::Codex | Self::Default)
+        matches!(
+            self,
+            Self::Plan | Self::Codex | Self::Default | Self::Workflow
+        )
     }
 
     pub const fn visible_mode(self) -> Self {
         match self {
             Self::CodexConfigEdit => Self::Codex,
-            Self::Plan | Self::Codex | Self::Default | Self::PairProgramming | Self::Execute => {
-                self
-            }
+            Self::Plan
+            | Self::Codex
+            | Self::Workflow
+            | Self::Default
+            | Self::PairProgramming
+            | Self::Execute => self,
         }
     }
 
@@ -561,7 +573,10 @@ impl ModeKind {
     }
 
     pub const fn allows_request_user_input(self) -> bool {
-        matches!(self, Self::Plan | Self::Codex | Self::CodexConfigEdit)
+        matches!(
+            self,
+            Self::Plan | Self::Codex | Self::Workflow | Self::CodexConfigEdit
+        )
     }
 }
 
@@ -724,7 +739,12 @@ mod tests {
 
     #[test]
     fn tui_visible_collaboration_modes_match_mode_kind_visibility() {
-        let expected = [ModeKind::Default, ModeKind::Plan, ModeKind::Codex];
+        let expected = [
+            ModeKind::Default,
+            ModeKind::Plan,
+            ModeKind::Codex,
+            ModeKind::Workflow,
+        ];
         assert_eq!(expected, TUI_VISIBLE_COLLABORATION_MODES);
 
         for mode in TUI_VISIBLE_COLLABORATION_MODES {

@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "WorkflowImpactInfo": {
+      "properties": {
+        "dependencies": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "devDependencies": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "gitStatus": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "dependencies",
+        "devDependencies",
+        "gitStatus",
+        "id",
+        "path"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "impact": {
+      "$ref": "#/definitions/WorkflowImpactInfo"
+    }
+  },
+  "required": [
+    "impact"
+  ],
+  "title": "WorkflowImpactResponse",
+  "type": "object"
+}

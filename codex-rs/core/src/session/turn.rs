@@ -276,6 +276,11 @@ pub(crate) async fn run_turn(
 
     let plugin_items =
         build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
+    let (workflow_items, workflow_warnings) = build_workflow_injections(&input, &config);
+    for message in workflow_warnings {
+        sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
+            .await;
+    }
     let mentioned_plugin_metadata = mentioned_plugins
         .iter()
         .filter_map(crate::plugins::PluginCapabilitySummary::telemetry_metadata)
@@ -356,6 +361,10 @@ pub(crate) async fn run_turn(
     }
     if !plugin_items.is_empty() {
         sess.record_conversation_items(&turn_context, &plugin_items)
+            .await;
+    }
+    if !workflow_items.is_empty() {
+        sess.record_conversation_items(&turn_context, &workflow_items)
             .await;
     }
 
@@ -882,6 +891,36 @@ pub(super) fn collect_explicit_app_ids_from_skill_items(
     }
 
     connector_ids
+}
+
+fn build_workflow_injections(
+    input: &[UserInput],
+    config: &crate::config::Config,
+) -> (Vec<ResponseItem>, Vec<String>) {
+    if !config.features.enabled(Feature::Workflows) {
+        return (Vec::new(), Vec::new());
+    }
+
+    let mut seen_targets = HashSet::new();
+    let mut items = Vec::new();
+    let mut warnings = Vec::new();
+    for item in input {
+        let UserInput::Mention { path, .. } = item else {
+            continue;
+        };
+        if !path.starts_with("workflow://") || !seen_targets.insert(path.clone()) {
+            continue;
+        }
+
+        match codex_workflows::read_workflow_context_from_mention_target(path) {
+            Ok(context) => items.push(ContextualUserFragment::into(
+                crate::context::WorkflowInstructions::new(context),
+            )),
+            Err(err) => warnings.push(format!("failed to load workflow mention: {err}")),
+        }
+    }
+
+    (items, warnings)
 }
 
 pub(super) fn filter_connectors_for_input(

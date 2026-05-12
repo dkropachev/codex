@@ -73,6 +73,8 @@ codex app-server generate-ts --out DIR
 codex app-server generate-json-schema --out DIR
 ```
 
+For runtime discovery, use `apiCatalog/read` over app-server or `codex api` from the CLI. The catalog is JSON intended for IDEs, coding agents, and workflow code; it includes app-server methods, configured MCP servers and tool schemas, built-in workflow helpers, the JavaScript workflow runtime surface, and discovered workflow metadata.
+
 ## Core Primitives
 
 The API exposes three top level primitives representing an interaction between a user and Codex:
@@ -206,7 +208,7 @@ Example with notification opt-out:
 - `modelProvider/capabilities/read` — read provider-level capabilities for the currently configured model provider.
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `experimentalFeature/enablement/set` — patch the in-memory process-wide runtime feature enablement for the currently supported feature keys (`apps`, `memories`, `plugins`, `remote_control`, `tool_search`, `tool_suggest`, `tool_call_mcp_elicitation`). For each feature, precedence is: cloud requirements > --enable <feature_name> > config.toml > experimentalFeature/enablement/set (new) > code default.
-- `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). Built-in presets do not select a model; the Plan preset selects medium reasoning effort. This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
+- `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). Built-in presets do not select a model; the Plan preset selects medium reasoning effort, and the Workflow preset is returned only when `[features].workflows = true`. This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
 - `hooks/list` — list discovered hooks for one or more `cwd` values.
 - `marketplace/add` — add a remote plugin marketplace from an HTTP(S) Git URL, SSH Git URL, or GitHub `owner/repo` shorthand, then persist it into the user marketplace config. Returns the installed root path plus whether the marketplace was already present.
@@ -226,6 +228,11 @@ Example with notification opt-out:
 - `plugin/uninstall` — uninstall a local plugin by `pluginId` in `<plugin>@<marketplace>` form by removing its cached files and clearing its user-level config entry, or uninstall a remote ChatGPT plugin by backend `pluginId` by forwarding the uninstall to the ChatGPT plugin backend and removing any downloaded remote-plugin cache (**under development; do not call from production clients yet**).
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
 - `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental).
+- `apiCatalog/read` — return a machine-readable catalog of app-server methods, configured MCP servers/tools, built-in workflow helpers, JavaScript workflow SDK symbols, and discovered workflows. Optional `include` selects sections and `mcpDetail: "toolsAndAuthOnly"` skips MCP resource inventory.
+- `workflow/list`, `workflow/read`, `workflow/impact` — discover git-backed TypeScript workflows from `$CODEX_HOME/workflows`, `.codex/workflows`, and `[workflows].search_paths`; read `workflow.yaml`/`README.md`; and report dependency plus git impact.
+- `workflow/develop`, `workflow/edit`, `workflow/run`, `workflow/validate`, `workflow/repair` — scaffold, update, execute, validate, or repair a workflow using the same command engine as `codex workflow` and `/workflow`.
+- `workflow/config/read`, `workflow/config/write` — inspect or edit `[workflows]` config values.
+- `workflow/command/execute`, `workflow/authoringContext/prepare` — execute the shared workflow command parser or prepare registry/config context for workflow authoring clients.
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools and auth status, plus resources/resource templates for `full` detail; supports cursor+limit pagination. If `detail` is omitted, the server defaults to `full`.
 - `mcpServer/resource/read` — read a resource from a configured MCP server by optional `threadId`, `server`, and `uri`, returning text/blob resource `contents`. If `threadId` is omitted, the server reads from the latest MCP config directly.

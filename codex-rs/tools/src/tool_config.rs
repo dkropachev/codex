@@ -37,6 +37,9 @@ pub fn request_user_input_available_modes(features: &Features) -> Vec<ModeKind> 
     TUI_VISIBLE_COLLABORATION_MODES
         .into_iter()
         .filter(|mode| {
+            if *mode == ModeKind::Workflow && !features.enabled(Feature::Workflows) {
+                return false;
+            }
             mode.allows_request_user_input()
                 || (features.enabled(Feature::DefaultModeRequestUserInput)
                     && *mode == ModeKind::Default)

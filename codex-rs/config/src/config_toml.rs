@@ -27,6 +27,7 @@ use crate::types::ToolSuggestConfig;
 use crate::types::Tui;
 use crate::types::UriBasedFileOpener;
 use crate::types::WindowsToml;
+use crate::types::WorkflowsConfigToml;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_features::FeaturesToml;
@@ -407,6 +408,10 @@ pub struct ConfigToml {
     /// Settings for app-specific controls.
     #[serde(default)]
     pub apps: Option<AppsConfigToml>,
+
+    /// JavaScript workflow discovery and authoring settings.
+    #[serde(default)]
+    pub workflows: Option<WorkflowsConfigToml>,
 
     /// OTEL configuration.
     pub otel: Option<OtelConfigToml>,

@@ -77,6 +77,7 @@ impl ModelRouterSource {
                 let suffix = match mode {
                     ModeKind::Plan => "plan",
                     ModeKind::Codex | ModeKind::CodexConfigEdit => "codex",
+                    ModeKind::Workflow => "workflow",
                     ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => "default",
                 };
                 format!("chat.{suffix}")
@@ -1543,6 +1544,10 @@ mod tests {
         assert_eq!(
             ModelRouterSource::Chat(ModeKind::CodexConfigEdit).task_key(),
             "chat.codex"
+        );
+        assert_eq!(
+            ModelRouterSource::Chat(ModeKind::Workflow).task_key(),
+            "chat.workflow"
         );
     }
 

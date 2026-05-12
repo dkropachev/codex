@@ -15,6 +15,15 @@ use serde::Serialize;
 use strum_macros::Display;
 use ts_rs::TS;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientMethodInfo {
+    pub method: String,
+    pub params_type: &'static str,
+    pub response_type: &'static str,
+    pub experimental: bool,
+    pub description: Option<String>,
+}
+
 /// Authentication mode for OpenAI-backed providers.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
@@ -72,6 +81,42 @@ macro_rules! experimental_type_entry {
     ($ty:ty) => {
         ""
     };
+}
+
+macro_rules! client_method_wire_name {
+    ($variant:ident => $wire:literal) => {
+        $wire.to_string()
+    };
+    ($variant:ident) => {
+        lower_camel_case_variant_name(stringify!($variant))
+    };
+}
+
+fn client_method_description(lines: &[&str]) -> Option<String> {
+    let mut description = String::new();
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if !description.is_empty() {
+            description.push('\n');
+        }
+        description.push_str(line);
+    }
+
+    (!description.is_empty()).then_some(description)
+}
+
+fn lower_camel_case_variant_name(variant: &str) -> String {
+    let mut chars = variant.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+
+    let mut method = first.to_lowercase().collect::<String>();
+    method.extend(chars);
+    method
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -292,6 +337,20 @@ macro_rules! client_request_definitions {
             )*
             Ok(schemas)
         }
+
+        pub fn client_method_infos() -> Vec<ClientMethodInfo> {
+            vec![
+                $(
+                    ClientMethodInfo {
+                        method: client_method_wire_name!($variant $(=> $wire)?),
+                        params_type: stringify!($params),
+                        response_type: stringify!($response),
+                        experimental: !experimental_method_entry!($(#[experimental($reason)])? $(=> $wire)?).is_empty(),
+                        description: client_method_description(&[$($variant_doc),*]),
+                    },
+                )*
+            ]
+        }
     };
 }
 
@@ -501,6 +560,58 @@ client_request_definitions! {
     HooksList => "hooks/list" {
         params: v2::HooksListParams,
         response: v2::HooksListResponse,
+    },
+    ApiCatalogRead => "apiCatalog/read" {
+        params: v2::ApiCatalogReadParams,
+        response: v2::ApiCatalogReadResponse,
+    },
+    WorkflowList => "workflow/list" {
+        params: v2::WorkflowListParams,
+        response: v2::WorkflowListResponse,
+    },
+    WorkflowRead => "workflow/read" {
+        params: v2::WorkflowReadParams,
+        response: v2::WorkflowReadResponse,
+    },
+    WorkflowImpact => "workflow/impact" {
+        params: v2::WorkflowImpactParams,
+        response: v2::WorkflowImpactResponse,
+    },
+    WorkflowDevelop => "workflow/develop" {
+        params: v2::WorkflowDevelopParams,
+        response: v2::WorkflowDevelopResponse,
+    },
+    WorkflowEdit => "workflow/edit" {
+        params: v2::WorkflowEditParams,
+        response: v2::WorkflowEditResponse,
+    },
+    WorkflowRun => "workflow/run" {
+        params: v2::WorkflowRunParams,
+        response: v2::WorkflowRunResponse,
+    },
+    WorkflowValidate => "workflow/validate" {
+        params: v2::WorkflowValidateParams,
+        response: v2::WorkflowValidateResponse,
+    },
+    WorkflowRepair => "workflow/repair" {
+        params: v2::WorkflowRepairParams,
+        response: v2::WorkflowRepairResponse,
+    },
+    WorkflowConfigRead => "workflow/config/read" {
+        params: v2::WorkflowConfigReadParams,
+        response: v2::WorkflowConfigReadResponse,
+    },
+    WorkflowConfigWrite => "workflow/config/write" {
+        params: v2::WorkflowConfigWriteParams,
+        response: v2::WorkflowConfigWriteResponse,
+    },
+    WorkflowCommandExecute => "workflow/command/execute" {
+        params: v2::WorkflowCommandExecuteParams,
+        response: v2::WorkflowCommandExecuteResponse,
+    },
+    WorkflowAuthoringContextPrepare => "workflow/authoringContext/prepare" {
+        params: v2::WorkflowAuthoringContextPrepareParams,
+        response: v2::WorkflowAuthoringContextPrepareResponse,
     },
     AppsList => "app/list" {
         params: v2::AppsListParams,
@@ -2477,5 +2588,26 @@ mod tests {
             reason,
             Some("item/commandExecution/requestApproval.additionalPermissions")
         );
+    }
+
+    #[test]
+    fn api_catalog_read_request_and_method_info_use_wire_name() {
+        let request = ClientRequest::ApiCatalogRead {
+            request_id: RequestId::Integer(1),
+            params: v2::ApiCatalogReadParams {
+                include: Some(vec![v2::ApiCatalogSection::McpServers]),
+                mcp_detail: Some(v2::McpServerStatusDetail::ToolsAndAuthOnly),
+            },
+        };
+
+        assert_eq!(request.method(), "apiCatalog/read");
+
+        let method = client_method_infos()
+            .into_iter()
+            .find(|method| method.method == "apiCatalog/read")
+            .expect("apiCatalog/read method info should be generated");
+        assert_eq!(method.params_type, "v2::ApiCatalogReadParams");
+        assert_eq!(method.response_type, "v2::ApiCatalogReadResponse");
+        assert!(!method.experimental);
     }
 }

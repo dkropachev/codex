@@ -34,6 +34,9 @@ class FakeAppServerProcess extends EventEmitter {
   turnStartParams: JsonMessage | null = null;
   toolResponse: JsonMessage | null = null;
   approvalResponse: JsonMessage | null = null;
+  apiCatalogReadParams: JsonMessage | null = null;
+  workflowRunParams: JsonMessage | null = null;
+  workflowCommandExecuteParams: JsonMessage | null = null;
   sendApprovalRequestOnThreadStart = false;
 
   private buffer = "";
@@ -171,6 +174,44 @@ class FakeAppServerProcess extends EventEmitter {
     }
     if (message.method === "command/exec") {
       this.write({ id: message.id, result: { exitCode: 0, stdout: "done", stderr: "" } });
+      return;
+    }
+    if (message.method === "apiCatalog/read") {
+      this.apiCatalogReadParams = message.params as JsonMessage;
+      this.write({
+        id: message.id,
+        result: {
+          schemaVersion: 1,
+          generatedAt: 123,
+          appServerMethods: [
+            {
+              method: "thread/start",
+              paramsType: "v2::ThreadStartParams",
+              responseType: "v2::ThreadStartResponse",
+              experimental: false,
+              description: null,
+            },
+          ],
+          mcpServers: [],
+          builtInTools: [],
+          workflowRuntime: {
+            package: "@openai/codex-sdk",
+            importSpecifier: "@openai/codex-sdk/workflow",
+            symbols: [],
+          },
+          workflows: [],
+        },
+      });
+      return;
+    }
+    if (message.method === "workflow/run") {
+      this.workflowRunParams = message.params as JsonMessage;
+      this.write({ id: message.id, result: { message: "ran", data: { ok: true } } });
+      return;
+    }
+    if (message.method === "workflow/command/execute") {
+      this.workflowCommandExecuteParams = message.params as JsonMessage;
+      this.write({ id: message.id, result: { message: "listed", data: { ok: true } } });
       return;
     }
     if (message.method === "thread/unsubscribe") {
@@ -496,6 +537,37 @@ describe("CodexWorkflow", () => {
       id: "approval-request-1",
       result: { decision: "accept" },
     });
+
+    await workflow.close();
+  });
+
+  it("reads the Codex API catalog", async () => {
+    const fake = new FakeAppServerProcess();
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+
+    const workflow = await CodexWorkflow.start({ codexPathOverride: "codex" });
+    const catalog = await workflow.api.read({ mcpDetail: "toolsAndAuthOnly" });
+
+    expect(fake.apiCatalogReadParams).toEqual({ mcpDetail: "toolsAndAuthOnly" });
+    expect(catalog.schemaVersion).toBe(1);
+    expect(catalog.appServerMethods.map((method) => method.method)).toEqual(["thread/start"]);
+    expect(catalog.workflows).toEqual([]);
+
+    await workflow.close();
+  });
+
+  it("wraps workflow registry commands", async () => {
+    const fake = new FakeAppServerProcess();
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+
+    const workflow = await CodexWorkflow.start({ codexPathOverride: "codex" });
+    const result = await workflow.workflows.run("reports/jira", { project: "COD" });
+    const commandResult = await workflow.workflows.command.execute(["list"]);
+
+    expect(fake.workflowRunParams).toEqual({ id: "reports/jira", input: { project: "COD" } });
+    expect(result.message).toBe("ran");
+    expect(fake.workflowCommandExecuteParams).toEqual({ args: ["list"] });
+    expect(commandResult.message).toBe("listed");
 
     await workflow.close();
   });

@@ -1,5 +1,6 @@
 use codex_collaboration_mode_templates::DEFAULT as COLLABORATION_MODE_DEFAULT;
 use codex_collaboration_mode_templates::PLAN as COLLABORATION_MODE_PLAN;
+use codex_collaboration_mode_templates::WORKFLOW as COLLABORATION_MODE_WORKFLOW;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
@@ -24,12 +25,19 @@ static COLLABORATION_MODE_DEFAULT_TEMPLATE: LazyLock<Template> = LazyLock::new(|
 pub struct CollaborationModesConfig {
     /// Enables `request_user_input` availability in Default mode.
     pub default_mode_request_user_input: bool,
+    /// Enables the Workflow collaboration mode preset.
+    pub workflows_enabled: bool,
 }
 
 pub fn builtin_collaboration_mode_presets(
     collaboration_modes_config: CollaborationModesConfig,
 ) -> Vec<CollaborationModeMask> {
-    vec![plan_preset(), default_preset(collaboration_modes_config)]
+    let mut presets = vec![plan_preset()];
+    if collaboration_modes_config.workflows_enabled {
+        presets.push(workflow_preset());
+    }
+    presets.push(default_preset(collaboration_modes_config));
+    presets
 }
 
 fn plan_preset() -> CollaborationModeMask {
@@ -39,6 +47,16 @@ fn plan_preset() -> CollaborationModeMask {
         model: None,
         reasoning_effort: Some(Some(ReasoningEffort::Medium)),
         developer_instructions: Some(Some(COLLABORATION_MODE_PLAN.to_string())),
+    }
+}
+
+fn workflow_preset() -> CollaborationModeMask {
+    CollaborationModeMask {
+        name: ModeKind::Workflow.display_name().to_string(),
+        mode: Some(ModeKind::Workflow),
+        model: None,
+        reasoning_effort: Some(Some(ReasoningEffort::Medium)),
+        developer_instructions: Some(Some(COLLABORATION_MODE_WORKFLOW.to_string())),
     }
 }
 
@@ -53,7 +71,8 @@ fn default_preset(collaboration_modes_config: CollaborationModesConfig) -> Colla
 }
 
 fn default_mode_instructions(collaboration_modes_config: CollaborationModesConfig) -> String {
-    let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
+    let visible_modes = visible_modes_for_config(collaboration_modes_config);
+    let known_mode_names = format_mode_names(&visible_modes);
     let request_user_input_availability = request_user_input_availability_message(
         ModeKind::Default,
         collaboration_modes_config.default_mode_request_user_input,
@@ -74,6 +93,13 @@ fn default_mode_instructions(collaboration_modes_config: CollaborationModesConfi
             ),
         ])
         .unwrap_or_else(|err| panic!("collaboration mode default template must render: {err}"))
+}
+
+fn visible_modes_for_config(collaboration_modes_config: CollaborationModesConfig) -> Vec<ModeKind> {
+    TUI_VISIBLE_COLLABORATION_MODES
+        .into_iter()
+        .filter(|mode| *mode != ModeKind::Workflow || collaboration_modes_config.workflows_enabled)
+        .collect()
 }
 
 fn format_mode_names(modes: &[ModeKind]) -> String {

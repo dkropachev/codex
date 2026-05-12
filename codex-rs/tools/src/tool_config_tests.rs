@@ -184,6 +184,22 @@ fn subagents_keep_request_user_input_config_and_agent_jobs_workers_opt_in_by_lab
 }
 
 #[test]
+fn request_user_input_modes_include_workflow_only_when_workflows_are_enabled() {
+    let features = Features::with_defaults();
+    assert_eq!(
+        request_user_input_available_modes(&features),
+        vec![ModeKind::Plan, ModeKind::Codex]
+    );
+
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Workflows);
+    assert_eq!(
+        request_user_input_available_modes(&features),
+        vec![ModeKind::Plan, ModeKind::Codex, ModeKind::Workflow]
+    );
+}
+
+#[test]
 fn image_generation_requires_feature_and_supported_model() {
     let supported_model_info = model_info();
     let mut unsupported_model_info = supported_model_info.clone();

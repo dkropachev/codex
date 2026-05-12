@@ -1400,7 +1400,7 @@ impl Session {
 fn should_ignore_goal_for_mode(mode: ModeKind) -> bool {
     matches!(
         mode,
-        ModeKind::Plan | ModeKind::Codex | ModeKind::CodexConfigEdit
+        ModeKind::Plan | ModeKind::Codex | ModeKind::Workflow | ModeKind::CodexConfigEdit
     )
 }
 
@@ -1538,6 +1538,7 @@ mod tests {
     fn goal_continuation_is_ignored_in_non_default_modes() {
         assert!(should_ignore_goal_for_mode(ModeKind::Plan));
         assert!(should_ignore_goal_for_mode(ModeKind::Codex));
+        assert!(should_ignore_goal_for_mode(ModeKind::Workflow));
         assert!(should_ignore_goal_for_mode(ModeKind::CodexConfigEdit));
         assert!(!should_ignore_goal_for_mode(ModeKind::Default));
         assert!(!should_ignore_goal_for_mode(ModeKind::PairProgramming));

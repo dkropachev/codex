@@ -32,6 +32,7 @@ use crate::request_processors::ThreadGoalRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
 use crate::request_processors::TurnRequestProcessor;
 use crate::request_processors::WindowsSandboxRequestProcessor;
+use crate::request_processors::WorkflowRequestProcessor;
 use crate::request_serialization::QueuedInitializedRequest;
 use crate::request_serialization::RequestSerializationQueueKey;
 use crate::request_serialization::RequestSerializationQueues;
@@ -64,6 +65,7 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::thread_store_from_config;
 use codex_exec_server::EnvironmentManager;
+use codex_features::Feature;
 use codex_feedback::CodexFeedback;
 use codex_login::AuthManager;
 use codex_login::auth::ExternalAuth;
@@ -174,6 +176,7 @@ pub(crate) struct MessageProcessor {
     thread_goal_processor: ThreadGoalRequestProcessor,
     thread_processor: ThreadRequestProcessor,
     turn_processor: TurnRequestProcessor,
+    workflow_processor: WorkflowRequestProcessor,
     windows_sandbox_processor: WindowsSandboxRequestProcessor,
     request_serialization_queues: RequestSerializationQueues,
 }
@@ -298,7 +301,12 @@ impl MessageProcessor {
             config.as_ref(),
             auth_manager.clone(),
             session_source,
-            CollaborationModesConfig::default(),
+            CollaborationModesConfig {
+                default_mode_request_user_input: config
+                    .features
+                    .enabled(Feature::DefaultModeRequestUserInput),
+                workflows_enabled: config.features.enabled(Feature::Workflows),
+            },
             environment_manager,
             Some(analytics_events_client.clone()),
         ));
@@ -411,6 +419,8 @@ impl MessageProcessor {
             thread_watch_manager,
             thread_list_state_permit,
         );
+        let workflow_processor =
+            WorkflowRequestProcessor::new(Arc::clone(&config), config_manager.clone());
         if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {
             // Keep plugin startup warmups aligned at app-server startup.
             let on_effective_plugins_changed =
@@ -475,6 +485,7 @@ impl MessageProcessor {
             thread_goal_processor,
             thread_processor,
             turn_processor,
+            workflow_processor,
             windows_sandbox_processor,
             request_serialization_queues: RequestSerializationQueues::default(),
         }
@@ -1070,6 +1081,45 @@ impl MessageProcessor {
             }
             ClientRequest::HooksList { params, .. } => {
                 self.catalog_processor.hooks_list(params).await
+            }
+            ClientRequest::ApiCatalogRead { params, .. } => {
+                self.catalog_processor.api_catalog_read(params).await
+            }
+            ClientRequest::WorkflowList { params, .. } => {
+                self.workflow_processor.list(params).await
+            }
+            ClientRequest::WorkflowRead { params, .. } => {
+                self.workflow_processor.read(params).await
+            }
+            ClientRequest::WorkflowImpact { params, .. } => {
+                self.workflow_processor.impact(params).await
+            }
+            ClientRequest::WorkflowDevelop { params, .. } => {
+                self.workflow_processor.develop(params).await
+            }
+            ClientRequest::WorkflowEdit { params, .. } => {
+                self.workflow_processor.edit(params).await
+            }
+            ClientRequest::WorkflowRun { params, .. } => self.workflow_processor.run(params).await,
+            ClientRequest::WorkflowValidate { params, .. } => {
+                self.workflow_processor.validate(params).await
+            }
+            ClientRequest::WorkflowRepair { params, .. } => {
+                self.workflow_processor.repair(params).await
+            }
+            ClientRequest::WorkflowConfigRead { params, .. } => {
+                self.workflow_processor.config_read(params).await
+            }
+            ClientRequest::WorkflowConfigWrite { params, .. } => {
+                self.workflow_processor.config_write(params).await
+            }
+            ClientRequest::WorkflowCommandExecute { params, .. } => {
+                self.workflow_processor.command_execute(params).await
+            }
+            ClientRequest::WorkflowAuthoringContextPrepare { params, .. } => {
+                self.workflow_processor
+                    .authoring_context_prepare(params)
+                    .await
             }
             ClientRequest::MarketplaceAdd { params, .. } => {
                 self.marketplace_processor.marketplace_add(params).await

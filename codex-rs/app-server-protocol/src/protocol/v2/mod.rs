@@ -1,6 +1,7 @@
 mod shared;
 
 mod account;
+mod api_catalog;
 mod apps;
 mod collaboration_mode;
 mod command_exec;
@@ -24,8 +25,10 @@ mod thread;
 mod thread_data;
 mod turn;
 mod windows_sandbox;
+mod workflow;
 
 pub use account::*;
+pub use api_catalog::*;
 pub use apps::*;
 pub use collaboration_mode::*;
 pub use command_exec::*;
@@ -50,6 +53,7 @@ pub use thread::*;
 pub use thread_data::*;
 pub use turn::*;
 pub use windows_sandbox::*;
+pub use workflow::*;
 
 #[cfg(test)]
 mod tests;
