@@ -32,7 +32,10 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
         .filter(|(_, cmd)| {
             flags.collaboration_modes_enabled
-                || !matches!(*cmd, SlashCommand::Collab | SlashCommand::Plan)
+                || !matches!(
+                    *cmd,
+                    SlashCommand::Collab | SlashCommand::Plan | SlashCommand::Codex
+                )
         })
         .filter(|(_, cmd)| flags.connectors_enabled || *cmd != SlashCommand::Apps)
         .filter(|(_, cmd)| flags.plugins_command_enabled || *cmd != SlashCommand::Plugins)
@@ -103,6 +106,14 @@ mod tests {
         assert_eq!(
             find_builtin_command("clear", all_enabled_flags()),
             Some(SlashCommand::Clear)
+        );
+    }
+
+    #[test]
+    fn codex_command_resolves_for_dispatch() {
+        assert_eq!(
+            find_builtin_command("codex", all_enabled_flags()),
+            Some(SlashCommand::Codex)
         );
     }
 
@@ -201,6 +212,7 @@ mod tests {
                 SlashCommand::Diff,
                 SlashCommand::Mention,
                 SlashCommand::Status,
+                SlashCommand::Codex,
             ]
         );
     }

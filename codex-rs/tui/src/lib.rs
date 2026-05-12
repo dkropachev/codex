@@ -119,6 +119,7 @@ mod chatwidget;
 mod cli;
 mod clipboard_copy;
 mod clipboard_paste;
+mod codex_config_context;
 mod collaboration_modes;
 mod color;
 pub(crate) mod custom_terminal;

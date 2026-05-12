@@ -83,6 +83,42 @@ impl ChatWidget {
         }
     }
 
+    fn apply_codex_slash_command(&mut self) -> bool {
+        if self.bottom_pane.is_task_running() {
+            self.add_error_message(
+                "Cannot enter Codex mode while a task is in progress.".to_string(),
+            );
+            return false;
+        }
+        let mask = crate::codex_config_context::codex_investigate_mask(&self.config.cwd);
+        let workspace =
+            crate::codex_config_context::codex_config_workspace_for_cwd(&self.config.cwd);
+        self.set_collaboration_mask(mask);
+        self.add_info_message(
+            "Codex mode enabled.".to_string(),
+            Some(format!(
+                "Target workspace is read-only; scratch workspace is {}. Use /codex off to leave.",
+                workspace.display()
+            )),
+        );
+        true
+    }
+
+    fn disable_codex_slash_command(&mut self) -> bool {
+        let Some(default_mask) =
+            collaboration_modes::default_mode_mask(self.model_catalog.as_ref())
+        else {
+            self.add_info_message(
+                "Default mode unavailable right now.".to_string(),
+                /*hint*/ None,
+            );
+            return false;
+        };
+        self.set_collaboration_mask(default_mask);
+        self.add_info_message("Codex mode disabled.".to_string(), /*hint*/ None);
+        true
+    }
+
     fn collaboration_mode_switch_allowed(&mut self) -> bool {
         if self.bottom_pane.is_task_running() {
             self.add_error_message(
@@ -408,6 +444,9 @@ impl ChatWidget {
                     );
                 }
             }
+            SlashCommand::Codex => {
+                self.apply_codex_slash_command();
+            }
             SlashCommand::Ide => {
                 self.handle_ide_command();
             }
@@ -691,6 +730,58 @@ impl ChatWidget {
                     self.queue_user_message(user_message);
                 }
             }
+            SlashCommand::Codex if !trimmed.is_empty() => {
+                let lowered = trimmed.to_ascii_lowercase();
+                if matches!(lowered.as_str(), "disable" | "off" | "cancel") {
+                    self.disable_codex_slash_command();
+                } else if self.bottom_pane.is_task_running() {
+                    self.add_error_message(
+                        "'/codex <request>' is disabled while a task is in progress.".to_string(),
+                    );
+                } else {
+                    match crate::codex_config_context::classify_codex_request(trimmed) {
+                        crate::codex_config_context::CodexRequestMode::Investigate => {
+                            self.set_collaboration_mask(
+                                crate::codex_config_context::codex_investigate_mask(
+                                    &self.config.cwd,
+                                ),
+                            );
+                        }
+                        crate::codex_config_context::CodexRequestMode::ConfigEdit => {
+                            self.latest_proposed_plan_markdown = None;
+                            self.set_collaboration_mask(
+                                crate::codex_config_context::codex_config_edit_mask(
+                                    &self.config.cwd,
+                                ),
+                            );
+                        }
+                        crate::codex_config_context::CodexRequestMode::AiResolve => {
+                            self.latest_proposed_plan_markdown = None;
+                            self.set_collaboration_mask(
+                                crate::codex_config_context::codex_ai_resolve_mask(
+                                    &self.config.cwd,
+                                ),
+                            );
+                        }
+                    }
+                    let user_message = self.prepared_inline_user_message(
+                        args,
+                        text_elements,
+                        local_images,
+                        remote_image_urls,
+                        mention_bindings,
+                        source,
+                    );
+                    if self.is_session_configured() {
+                        self.reasoning_buffer.clear();
+                        self.full_reasoning_buffer.clear();
+                        self.set_status_header(String::from("Working"));
+                        self.submit_user_message(user_message);
+                    } else {
+                        self.queue_user_message(user_message);
+                    }
+                }
+            }
             SlashCommand::Goal if !trimmed.is_empty() => {
                 if !self.config.features.enabled(Feature::Goals) {
                     return;
@@ -954,6 +1045,7 @@ impl ChatWidget {
             SlashCommand::Fast
             | SlashCommand::Ide
             | SlashCommand::Status
+            | SlashCommand::Codex
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop

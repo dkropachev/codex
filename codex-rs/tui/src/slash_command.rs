@@ -46,6 +46,7 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Codex,
     DebugConfig,
     Title,
     Statusline,
@@ -96,6 +97,7 @@ impl SlashCommand {
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Codex => "investigate or plan Codex configuration changes",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
@@ -157,6 +159,7 @@ impl SlashCommand {
                 | SlashCommand::Ide
                 | SlashCommand::Keymap
                 | SlashCommand::Mcp
+                | SlashCommand::Codex
                 | SlashCommand::Raw
                 | SlashCommand::Side
                 | SlashCommand::Workflow
@@ -174,6 +177,7 @@ impl SlashCommand {
                 | SlashCommand::Diff
                 | SlashCommand::Mention
                 | SlashCommand::Status
+                | SlashCommand::Codex
                 | SlashCommand::Ide
         )
     }
@@ -222,6 +226,7 @@ impl SlashCommand {
             | SlashCommand::AutoReview
             | SlashCommand::Feedback
             | SlashCommand::Ide
+            | SlashCommand::Codex
             | SlashCommand::Quit
             | SlashCommand::Exit
             | SlashCommand::Side => true,
@@ -280,6 +285,15 @@ mod tests {
         assert!(SlashCommand::Raw.available_during_task());
         assert!(SlashCommand::Raw.available_in_side_conversation());
         assert!(SlashCommand::Raw.supports_inline_args());
+    }
+
+    #[test]
+    fn codex_command_is_registered_for_tui() {
+        assert_eq!(SlashCommand::from_str("codex"), Ok(SlashCommand::Codex));
+        assert_eq!(SlashCommand::Codex.command(), "codex");
+        assert!(SlashCommand::Codex.supports_inline_args());
+        assert!(SlashCommand::Codex.available_in_side_conversation());
+        assert!(SlashCommand::Codex.available_during_task());
     }
 
     #[test]

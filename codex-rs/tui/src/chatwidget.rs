@@ -5865,6 +5865,32 @@ impl ChatWidget {
             }
         }
 
+        if matches!(
+            self.active_mode_kind(),
+            ModeKind::Codex | ModeKind::CodexConfigEdit
+        ) && !text.trim().is_empty()
+        {
+            match crate::codex_config_context::classify_codex_request(&text) {
+                crate::codex_config_context::CodexRequestMode::Investigate => {
+                    self.set_collaboration_mask(
+                        crate::codex_config_context::codex_investigate_mask(&self.config.cwd),
+                    );
+                }
+                crate::codex_config_context::CodexRequestMode::ConfigEdit => {
+                    self.latest_proposed_plan_markdown = None;
+                    self.set_collaboration_mask(
+                        crate::codex_config_context::codex_config_edit_mask(&self.config.cwd),
+                    );
+                }
+                crate::codex_config_context::CodexRequestMode::AiResolve => {
+                    self.latest_proposed_plan_markdown = None;
+                    self.set_collaboration_mask(
+                        crate::codex_config_context::codex_ai_resolve_mask(&self.config.cwd),
+                    );
+                }
+            }
+        }
+
         let effective_mode = self.effective_collaboration_mode();
         if effective_mode.model().trim().is_empty() {
             self.add_error_message(
@@ -5913,10 +5939,23 @@ impl ChatWidget {
             None if self.config.notices.fast_default_opt_out == Some(true) => Some(None),
             None => None,
         };
-        let permission_profile = self.config.permissions.permission_profile();
+        let codex_config_turn = matches!(
+            effective_mode.mode,
+            ModeKind::Codex | ModeKind::CodexConfigEdit
+        );
+        let turn_cwd = if codex_config_turn {
+            crate::codex_config_context::codex_config_workspace_for_cwd(&self.config.cwd)
+        } else {
+            self.config.cwd.to_path_buf()
+        };
+        let permission_profile = if codex_config_turn {
+            crate::codex_config_context::codex_config_permission_profile()
+        } else {
+            self.config.permissions.permission_profile()
+        };
         let op = AppCommand::user_turn(
             items,
-            self.config.cwd.to_path_buf(),
+            turn_cwd,
             AskForApproval::from(self.config.permissions.approval_policy.value()),
             permission_profile,
             effective_mode.model().to_string(),

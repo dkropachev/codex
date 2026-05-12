@@ -57,7 +57,9 @@ async fn bare_workflow_slash_reports_disabled_when_feature_off() {
 
     assert_eq!(chat.current_collaboration_mode().mode, ModeKind::Default);
 
-    let event = rx.try_recv().expect("expected disabled workflow info message");
+    let event = rx
+        .try_recv()
+        .expect("expected disabled workflow info message");
     let rendered = match event {
         AppEvent::InsertHistoryCell(cell) => {
             lines_to_single_string(&cell.display_lines(/*width*/ 80))
@@ -77,6 +79,140 @@ async fn bare_workflow_slash_reports_disabled_when_feature_off() {
     assert!(
         rendered.contains("Workflows are disabled."),
         "expected disabled workflow message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn bare_codex_slash_enters_codex_mode() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Codex);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Codex);
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    let workspace =
+        crate::codex_config_context::codex_config_workspace_for_cwd(&chat.config.cwd);
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .find(|rendered| rendered.contains("Codex mode enabled."))
+        .expect("expected Codex mode info message")
+        .replace(&workspace.display().to_string(), "<codex-config-workspace>");
+    assert_chatwidget_snapshot!(
+        "codex_mode_enabled_info_message",
+        rendered,
+        @"• Codex mode enabled. Target workspace is read-only; scratch workspace is <codex-config-workspace>. Use /codex off to leave.
+"
+    );
+}
+
+#[tokio::test]
+async fn codex_slash_with_investigate_args_submits_codex_turn() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let expected_cwd =
+        crate::codex_config_context::codex_config_workspace_for_cwd(&chat.config.cwd);
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Codex,
+        "explain how repo-ci works".to_string(),
+        Vec::new(),
+    );
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Codex);
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            items,
+            cwd,
+            permission_profile,
+            collaboration_mode: Some(CollaborationMode { mode, settings }),
+            personality: None,
+            ..
+        } => {
+            assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "explain how repo-ci works".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+            assert_eq!(cwd, expected_cwd);
+            assert_eq!(
+                permission_profile,
+                crate::codex_config_context::codex_config_permission_profile()
+            );
+            assert_eq!(mode, ModeKind::Codex);
+            let instructions = settings
+                .developer_instructions
+                .expect("expected Codex instructions");
+            assert!(instructions.contains("# Codex Investigate Mode"));
+            assert!(
+                instructions
+                    .contains("TUI slash commands generated from the SlashCommand registry")
+            );
+        }
+        other => panic!("expected Codex UserTurn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn codex_slash_with_edit_args_submits_config_edit_turn() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Codex,
+        "update repo-ci defaults".to_string(),
+        Vec::new(),
+    );
+
+    assert_eq!(
+        chat.active_collaboration_mode_kind(),
+        ModeKind::CodexConfigEdit
+    );
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            items,
+            collaboration_mode: Some(CollaborationMode { mode, settings }),
+            ..
+        } => {
+            assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "update repo-ci defaults".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+            assert_eq!(mode, ModeKind::CodexConfigEdit);
+            let instructions = settings
+                .developer_instructions
+                .expect("expected Codex config-edit instructions");
+            assert!(instructions.contains("# Codex Config Edit Planning Mode"));
+            assert!(instructions.contains("<proposed_plan>"));
+        }
+        other => panic!("expected Codex config-edit UserTurn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn codex_off_slash_returns_to_default_mode() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Codex);
+    let _ = drain_insert_history(&mut rx);
+    chat.dispatch_command_with_args(SlashCommand::Codex, "off".to_string(), Vec::new());
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Codex mode disabled."),
+        "expected Codex disabled message, got {rendered:?}"
     );
 }
 
