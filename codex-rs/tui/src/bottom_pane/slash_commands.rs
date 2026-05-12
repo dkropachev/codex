@@ -52,6 +52,9 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
 /// typed command can produce a side-specific unavailable message while the popup still hides it.
 pub(crate) fn find_builtin_command(name: &str, flags: BuiltinCommandFlags) -> Option<SlashCommand> {
     let cmd = SlashCommand::from_str(name).ok()?;
+    if cmd == SlashCommand::Workflow && !flags.workflows_enabled {
+        return Some(cmd);
+    }
     builtins_for_input(BuiltinCommandFlags {
         side_conversation_active: false,
         ..flags
@@ -134,10 +137,28 @@ mod tests {
     }
 
     #[test]
-    fn workflow_command_is_hidden_when_disabled() {
+    fn workflow_command_is_hidden_from_popup_when_disabled() {
         let mut flags = all_enabled_flags();
         flags.workflows_enabled = false;
-        assert_eq!(find_builtin_command("workflow", flags), None);
+
+        let commands = builtins_for_input(flags)
+            .into_iter()
+            .map(|(_, command)| command)
+            .collect::<Vec<_>>();
+
+        assert!(!commands.contains(&SlashCommand::Workflow));
+        assert!(!has_builtin_prefix("workflow", flags));
+    }
+
+    #[test]
+    fn workflow_command_resolves_for_disabled_feature_message() {
+        let mut flags = all_enabled_flags();
+        flags.workflows_enabled = false;
+
+        assert_eq!(
+            find_builtin_command("workflow", flags),
+            Some(SlashCommand::Workflow)
+        );
     }
 
     #[test]

@@ -50,6 +50,37 @@ async fn bare_workflow_slash_enters_workflow_mode() {
 }
 
 #[tokio::test]
+async fn bare_workflow_slash_reports_disabled_when_feature_off() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Workflow);
+
+    assert_eq!(chat.current_collaboration_mode().mode, ModeKind::Default);
+
+    let event = rx.try_recv().expect("expected disabled workflow info message");
+    let rendered = match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            lines_to_single_string(&cell.display_lines(/*width*/ 80))
+        }
+        AppEvent::RunWorkflow { command } => {
+            panic!("did not expect workflow command: {command}")
+        }
+        other => panic!("expected disabled workflow info message, got {other:?}"),
+    };
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    assert_chatwidget_snapshot!(
+        "workflow_disabled_info_message",
+        rendered,
+        @"• Workflows are disabled. Enable [features].workflows to use /workflow.
+"
+    );
+    assert!(
+        rendered.contains("Workflows are disabled."),
+        "expected disabled workflow message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn workflow_done_slash_exits_to_default_mode() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
