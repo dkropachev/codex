@@ -59,6 +59,21 @@ fn seatbelt_policy_arg(args: &[String]) -> &str {
         .expect("seatbelt args should include policy text")
 }
 
+fn protected_metadata_regex_policy_parts(root: &Path) -> String {
+    let root = normalize_path_for_sandbox(root)
+        .or_else(|| AbsolutePathBuf::from_absolute_path(root).ok())
+        .expect("protected metadata root should be absolute");
+
+    super::PROTECTED_METADATA_PATH_NAMES
+        .iter()
+        .map(|name| {
+            let regex =
+                super::seatbelt_protected_metadata_name_regex(&root, name).replace('"', "\\\"");
+            format!(r#" (require-not (regex #"{regex}"))"#)
+        })
+        .collect()
+}
+
 struct TestConfigReloader;
 
 #[async_trait::async_trait]
@@ -1187,29 +1202,41 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         /*network*/ None,
     );
 
+    let slash_tmp_canonical = PathBuf::from("/tmp")
+        .canonicalize()
+        .expect("canonicalize /tmp");
+    let writable_root_0_metadata_policy =
+        protected_metadata_regex_policy_parts(&vulnerable_root_canonical);
+    let writable_root_1_metadata_policy =
+        protected_metadata_regex_policy_parts(&slash_tmp_canonical);
+
     let tmpdir_env_var = std::env::var("TMPDIR")
         .ok()
         .map(PathBuf::from)
         .and_then(|p| p.canonicalize().ok())
         .map(|p| p.to_string_lossy().to_string());
 
-    let tempdir_policy_entry = if tmpdir_env_var.is_some() {
-        r#" (require-all (subpath (param "WRITABLE_ROOT_2")) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_1"))) )"#
+    let tempdir_policy_entry = if let Some(tmpdir_env_var) = &tmpdir_env_var {
+        let tempdir_metadata_policy =
+            protected_metadata_regex_policy_parts(Path::new(tmpdir_env_var));
+        format!(
+            r#" (require-all (subpath (param "WRITABLE_ROOT_2")) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_1"))){tempdir_metadata_policy} )"#
+        )
     } else {
-        ""
+        String::new()
     };
 
     // Build the expected policy text using a raw string for readability.
     // Note that the policy includes:
     // - the base policy,
     // - read-only access to the filesystem,
-    // - write access to WRITABLE_ROOT_0 (but not its .git or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
+    // - write access to WRITABLE_ROOT_0 (but not its .git, .agents, or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
     let expected_policy = format!(
         r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
+(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))){writable_root_0_metadata_policy} ) (require-all (subpath (param "WRITABLE_ROOT_1")){writable_root_1_metadata_policy} ){tempdir_policy_entry}
 )
 
 "#,
@@ -1232,10 +1259,7 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         ),
         format!(
             "-DWRITABLE_ROOT_1={}",
-            PathBuf::from("/tmp")
-                .canonicalize()
-                .expect("canonicalize /tmp")
-                .to_string_lossy()
+            slash_tmp_canonical.to_string_lossy()
         ),
     ];
 
