@@ -432,7 +432,7 @@ async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
 
     let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
     let event = thread_initialized_event(&payload)?;
-    assert_basic_thread_initialized_event(event, &thread.id, "mock-model", "forked");
+    assert_basic_thread_initialized_event(event, &thread.id, "mock-model", "forked", "user");
     Ok(())
 }
 

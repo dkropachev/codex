@@ -187,6 +187,9 @@ mod tests {
                 .environment_id,
             "local"
         );
-        assert_eq!(resolved.primary().expect("primary environment").shell, None);
+        assert_eq!(
+            resolved.primary().expect("primary environment").cwd,
+            selected_cwd
+        );
     }
 }

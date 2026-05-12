@@ -451,6 +451,14 @@ impl GuardianReviewSessionManager {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) async fn send_trunk_event_raw_for_test(&self, event: Event) {
+        let Some(trunk) = self.state.lock().await.trunk.clone() else {
+            return;
+        };
+        let _ = trunk.codex.get_tx_event().send(event).await;
+    }
+
     async fn remove_trunk_if_current(
         &self,
         trunk: &Arc<GuardianReviewSession>,

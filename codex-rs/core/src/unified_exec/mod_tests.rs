@@ -595,8 +595,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
 
     let remote_test_env = remote_test_env().await?;
     let (_, mut turn) = make_session_and_context().await;
-    turn.environments.turn_environments[0].environment =
-        Arc::new(remote_test_env.environment().clone());
+    turn.environments[0].environment = Arc::new(remote_test_env.environment().clone());
 
     let request = test_exec_request(
         &turn,
@@ -615,7 +614,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
                 inherited_fds: vec![42],
             }),
             turn.environments
-                .primary()
+                .first()
                 .expect("turn environment")
                 .environment
                 .as_ref(),

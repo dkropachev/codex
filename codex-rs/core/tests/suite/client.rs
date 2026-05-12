@@ -1,12 +1,11 @@
 use codex_config::ConfigLayerStack;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_core::CollaborationModesConfig;
 use codex_core::ModelClient;
 use codex_core::NewThread;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ThreadManager;
-use codex_core::resolve_installation_id;
-use codex_core::thread_store_from_config;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -744,7 +743,7 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
         .expect("create new conversation");
     let codex = test.codex.clone();
     let expected_session_id = test.session_configured.session_id;
-    let expected_thread_id = test.session_configured.thread_id;
+    let expected_thread_id = test.session_configured.session_id;
 
     codex
         .submit(Op::UserInput {
@@ -1009,7 +1008,7 @@ async fn chatgpt_auth_sends_correct_request() {
         .expect("create new conversation");
     let codex = test.codex.clone();
     let expected_session_id = test.session_configured.session_id;
-    let expected_thread_id = test.session_configured.thread_id;
+    let expected_thread_id = test.session_configured.session_id;
 
     codex
         .submit(Op::UserInput {
@@ -1109,18 +1108,13 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
             Ok(None) => panic!("No CodexAuth found in codex_home"),
             Err(e) => panic!("Failed to load CodexAuth: {e}"),
         };
-    let installation_id = resolve_installation_id(&config.codex_home)
-        .await
-        .expect("resolve installation id");
     let thread_manager = ThreadManager::new(
         &config,
         auth_manager,
         SessionSource::Exec,
+        CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        thread_store_from_config(&config, /*state_db*/ None),
-        /*state_db*/ None,
-        installation_id,
     );
     let NewThread { thread: codex, .. } = thread_manager
         .start_thread(config.clone())

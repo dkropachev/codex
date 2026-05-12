@@ -115,6 +115,7 @@ fn read_only_permissions(approval_policy: AskForApproval) -> Permissions {
     Permissions {
         approval_policy: Constrained::allow_any(approval_policy),
         permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
+        active_permission_profile: None,
         sandbox_policy: Constrained::allow_any(sandbox_policy.clone()),
         file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
         network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
@@ -271,6 +272,7 @@ consolidation_model = "gpt-5.2"
             max_rollout_age_days: Some(42),
             max_rollouts_per_startup: Some(9),
             min_rollout_idle_hours: Some(24),
+            min_rate_limit_remaining_percent: None,
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5.2".to_string()),
         }),
@@ -295,6 +297,8 @@ consolidation_model = "gpt-5.2"
             max_rollout_age_days: 42,
             max_rollouts_per_startup: 9,
             min_rollout_idle_hours: 24,
+            min_rate_limit_remaining_percent:
+                codex_config::types::DEFAULT_MEMORIES_MIN_RATE_LIMIT_REMAINING_PERCENT,
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5.2".to_string()),
         }
@@ -530,10 +534,15 @@ fn config_toml_deserializes_model_availability_nux() {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
             show_tooltips: true,
+            vim_mode_default: false,
+            raw_output_mode: false,
             alternate_screen: AltScreenMode::default(),
             status_line: None,
+            status_line_use_colors: true,
             terminal_title: None,
             theme: None,
+            session_picker_view: None,
+            keymap: Default::default(),
             model_availability_nux: ModelAvailabilityNuxConfig {
                 shown_count: HashMap::from([
                     ("gpt-bar".to_string(), 4),
@@ -1567,10 +1576,15 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
             show_tooltips: true,
+            vim_mode_default: false,
+            raw_output_mode: false,
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
+            status_line_use_colors: true,
             terminal_title: None,
             theme: None,
+            session_picker_view: None,
+            keymap: Default::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow_max_rows: None,
         }
@@ -5564,6 +5578,8 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
+            tui_vim_mode_default: false,
+            tui_raw_output_mode: false,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow: TerminalResizeReflowConfig::default(),
             analytics_enabled: Some(true),
@@ -5571,8 +5587,11 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tool_suggest: ToolSuggestConfig::default(),
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_status_line_use_colors: true,
             tui_terminal_title: None,
             tui_theme: None,
+            tui_session_picker_view: Default::default(),
+            tui_keymap: Default::default(),
             otel: OtelConfig::default(),
         },
         o3_profile_config
@@ -5760,6 +5779,8 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(true),
@@ -5767,8 +5788,11 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_session_picker_view: Default::default(),
+        tui_keymap: Default::default(),
         otel: OtelConfig::default(),
     };
 
@@ -5910,6 +5934,8 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(false),
@@ -5917,8 +5943,11 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_session_picker_view: Default::default(),
+        tui_keymap: Default::default(),
         otel: OtelConfig::default(),
     };
 
@@ -6045,6 +6074,8 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(true),
@@ -6052,8 +6083,11 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_session_picker_view: Default::default(),
+        tui_keymap: Default::default(),
         otel: OtelConfig::default(),
     };
 
@@ -7644,6 +7678,7 @@ discoverables = [
                     id: "   ".to_string(),
                 },
             ],
+            disabled_tools: Vec::new(),
         })
     );
 
@@ -7668,6 +7703,7 @@ discoverables = [
                     id: "plugin_alpha@openai-curated".to_string(),
                 },
             ],
+            disabled_tools: Vec::new(),
         }
     );
     Ok(())

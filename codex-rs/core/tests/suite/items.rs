@@ -306,9 +306,8 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
     let started = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ItemStarted(ItemStartedEvent {
             item: TurnItem::WebSearch(item),
-            started_at_ms,
             ..
-        }) => Some((item.clone(), *started_at_ms)),
+        }) => Some(item.clone()),
         _ => None,
     })
     .await;
@@ -320,20 +319,17 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
     let completed = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ItemCompleted(ItemCompletedEvent {
             item: TurnItem::WebSearch(item),
-            completed_at_ms,
             ..
-        }) => Some((item.clone(), *completed_at_ms)),
+        }) => Some(item.clone()),
         _ => None,
     })
     .await;
 
     assert_eq!(begin.call_id, "web-search-1");
-    assert_eq!(started.0.id, begin.call_id);
-    assert!(started.1 > 0);
-    assert_eq!(completed.0.id, begin.call_id);
-    assert!(completed.1 > 0);
+    assert_eq!(started.id, begin.call_id);
+    assert_eq!(completed.id, begin.call_id);
     assert_eq!(
-        completed.0.action,
+        completed.action,
         WebSearchAction::Search {
             query: Some("weather seattle".to_string()),
             queries: None,
@@ -358,7 +354,7 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
     let call_id = "ig_image_saved_to_temp_dir_default";
     let expected_saved_path = image_generation_artifact_path(
         config.codex_home.as_path(),
-        &session_configured.thread_id.to_string(),
+        &session_configured.session_id.to_string(),
         call_id,
     );
     let _ = std::fs::remove_file(&expected_saved_path);
@@ -385,9 +381,8 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
     let started = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ItemStarted(ItemStartedEvent {
             item: TurnItem::ImageGeneration(item),
-            started_at_ms,
             ..
-        }) => Some((item.clone(), *started_at_ms)),
+        }) => Some(item.clone()),
         _ => None,
     })
     .await;
@@ -399,9 +394,8 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
     let completed = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ItemCompleted(ItemCompletedEvent {
             item: TurnItem::ImageGeneration(item),
-            completed_at_ms,
             ..
-        }) => Some((item.clone(), *completed_at_ms)),
+        }) => Some(item.clone()),
         _ => None,
     })
     .await;
@@ -412,10 +406,8 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
     .await;
 
     assert_eq!(begin.call_id, call_id);
-    assert_eq!(started.0.id, call_id);
-    assert!(started.1 > 0);
-    assert_eq!(completed.0.id, call_id);
-    assert!(completed.1 > 0);
+    assert_eq!(started.id, call_id);
+    assert_eq!(completed.id, call_id);
     assert_eq!(end.call_id, call_id);
     assert_eq!(end.status, "completed");
     assert_eq!(end.revised_prompt, Some("A tiny blue square".to_string()));
@@ -444,7 +436,7 @@ async fn image_generation_call_event_is_emitted_when_image_save_fails() -> anyho
     } = test_codex().build(&server).await?;
     let expected_saved_path = image_generation_artifact_path(
         config.codex_home.as_path(),
-        &session_configured.thread_id.to_string(),
+        &session_configured.session_id.to_string(),
         "ig_invalid",
     );
     let _ = std::fs::remove_file(&expected_saved_path);
@@ -547,7 +539,7 @@ async fn agent_message_content_delta_has_item_metadata() -> anyhow::Result<()> {
     })
     .await;
 
-    let thread_id = session_configured.thread_id.to_string();
+    let thread_id = session_configured.session_id.to_string();
     assert_eq!(delta_event.thread_id, thread_id);
     assert_eq!(delta_event.turn_id, started_turn_id);
     assert_eq!(delta_event.item_id, started_item.id);
@@ -614,7 +606,7 @@ async fn plan_mode_emits_plan_item_from_proposed_plan_block() -> anyhow::Result<
 
     assert_eq!(
         plan_delta.thread_id,
-        session_configured.thread_id.to_string()
+        session_configured.session_id.to_string()
     );
     assert_eq!(plan_delta.delta, "- Step 1\n- Step 2\n");
     assert_eq!(plan_completed.text, "- Step 1\n- Step 2\n");

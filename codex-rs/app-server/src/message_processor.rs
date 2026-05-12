@@ -285,7 +285,7 @@ impl MessageProcessor {
             config_warnings,
             session_source,
             auth_manager,
-            installation_id,
+            installation_id: _,
             rpc_transport,
             remote_control_handle,
             plugin_startup_tasks,

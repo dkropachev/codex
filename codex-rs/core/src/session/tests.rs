@@ -29,6 +29,7 @@ use codex_models_manager::model_info;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 use codex_models_manager::test_support::get_model_offline_for_tests;
 use codex_protocol::AgentPath;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::config_types::ServiceTier;
@@ -50,6 +51,8 @@ use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use tracing::Span;
 
+use crate::goals::ExternalGoalPreviousStatus;
+use crate::goals::ExternalGoalSet;
 use crate::goals::GoalRuntimeEvent;
 use crate::goals::SetGoalRequest;
 use crate::rollout::recorder::RolloutRecorder;
@@ -342,10 +345,12 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
 }
 
 fn test_model_client_session() -> crate::client::ModelClientSession {
+    let thread_id = ThreadId::try_from("00000000-0000-4000-8000-000000000001")
+        .expect("test thread id should be valid");
     crate::client::ModelClient::new(
         /*auth_manager*/ None,
-        ThreadId::try_from("00000000-0000-4000-8000-000000000001")
-            .expect("test thread id should be valid"),
+        SessionId::from(thread_id),
+        thread_id,
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         ModelProviderInfo::create_openai_provider(/* base_url */ /*base_url*/ None),
         codex_protocol::protocol::SessionSource::Exec,
@@ -3710,7 +3715,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         .plugins_manager
         .plugins_for_config(&plugins_input)
         .await;
-    let effective_skill_roots = plugin_outcome.effective_skill_roots();
+    let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
     let skill_fs = environment.get_filesystem();
@@ -4999,7 +5004,7 @@ where
         .plugins_manager
         .plugins_for_config(&plugins_input)
         .await;
-    let effective_skill_roots = plugin_outcome.effective_skill_roots();
+    let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
     let skill_fs = environment.get_filesystem();
@@ -5499,6 +5504,7 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
     outcome.skills = vec![
         SkillMetadata {
             name: "admin-skill".to_string(),
+            plugin_id: None,
             description: "desc".to_string(),
             short_description: None,
             interface: None,
@@ -5509,6 +5515,7 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
         },
         SkillMetadata {
             name: "repo-skill".to_string(),
+            plugin_id: None,
             description: "desc".to_string(),
             short_description: None,
             interface: None,
@@ -5544,6 +5551,7 @@ fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
     let mut outcome = SkillLoadOutcome::default();
     outcome.skills = vec![SkillMetadata {
         name: "repo-skill".to_string(),
+        plugin_id: None,
         description: "desc".to_string(),
         short_description: None,
         interface: None,
@@ -5588,6 +5596,7 @@ fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_o
     let session_telemetry = test_session_telemetry_without_metadata();
     let alpha = SkillMetadata {
         name: "alpha-skill".to_string(),
+        plugin_id: None,
         description: "abcdef".to_string(),
         short_description: None,
         interface: None,
@@ -5598,6 +5607,7 @@ fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_o
     };
     let beta = SkillMetadata {
         name: "beta-skill".to_string(),
+        plugin_id: None,
         description: "uvwxyz".to_string(),
         short_description: None,
         interface: None,
@@ -5645,6 +5655,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
     outcome.skills = vec![
         SkillMetadata {
             name: "admin-skill".to_string(),
+            plugin_id: None,
             description: "desc".to_string(),
             short_description: None,
             interface: None,
@@ -5655,6 +5666,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
         },
         SkillMetadata {
             name: "repo-skill".to_string(),
+            plugin_id: None,
             description: "desc".to_string(),
             short_description: None,
             interface: None,
@@ -7042,19 +7054,23 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
         .expect("goal should remain persisted");
     assert_eq!(70, goal.tokens_used);
 
-    state_db
+    let previous_status = goal.status;
+    let updated_goal = state_db
         .update_thread_goal(
             sess.conversation_id,
             codex_state::ThreadGoalUpdate {
                 status: Some(codex_state::ThreadGoalStatus::Complete),
                 token_budget: None,
-                expected_goal_id: Some(goal.goal_id),
+                expected_goal_id: Some(goal.goal_id.clone()),
             },
         )
         .await?
         .expect("goal status update should succeed");
     sess.goal_runtime_apply(GoalRuntimeEvent::ExternalSet {
-        status: codex_state::ThreadGoalStatus::Complete,
+        external_set: ExternalGoalSet {
+            goal: updated_goal,
+            previous_status: ExternalGoalPreviousStatus::Existing(previous_status),
+        },
     })
     .await?;
 
@@ -7086,7 +7102,7 @@ async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow:
     set_total_token_usage(&sess, post_goal_token_usage()).await;
 
     let state_db = goal_test_state_db(sess.as_ref()).await?;
-    state_db
+    let external_goal = state_db
         .replace_thread_goal(
             sess.conversation_id,
             "Keep improving the benchmark",
@@ -7095,7 +7111,10 @@ async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow:
         )
         .await?;
     sess.goal_runtime_apply(GoalRuntimeEvent::ExternalSet {
-        status: codex_state::ThreadGoalStatus::Active,
+        external_set: ExternalGoalSet {
+            goal: external_goal,
+            previous_status: ExternalGoalPreviousStatus::NewGoal,
+        },
     })
     .await?;
 

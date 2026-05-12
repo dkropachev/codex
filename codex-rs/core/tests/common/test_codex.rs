@@ -681,6 +681,19 @@ impl TestCodex {
         .await
     }
 
+    pub async fn submit_turn_with_permission_profile(
+        &self,
+        prompt: &str,
+        permission_profile: PermissionProfile,
+    ) -> Result<()> {
+        self.submit_turn_with_approval_and_permission_profile(
+            prompt,
+            AskForApproval::Never,
+            permission_profile,
+        )
+        .await
+    }
+
     pub async fn submit_turn_with_environments(
         &self,
         prompt: &str,

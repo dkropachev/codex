@@ -291,7 +291,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     .await?;
     let codex = harness.test().codex.clone();
     let session_id = harness.test().session_configured.session_id.to_string();
-    let thread_id = harness.test().session_configured.thread_id.to_string();
+    let thread_id = harness.test().session_configured.session_id.to_string();
 
     let responses_mock = responses::mount_sse_sequence(
         harness.server(),
@@ -997,7 +997,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     .await?;
     let codex = harness.test().codex.clone();
     let session_id = harness.test().session_configured.session_id.to_string();
-    let thread_id = harness.test().session_configured.thread_id.to_string();
+    let thread_id = harness.test().session_configured.session_id.to_string();
 
     mount_sse_once(
         harness.server(),

@@ -602,16 +602,10 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let harness = AgentControlHarness::new().await;
     let mut parent_config = harness.config.clone();
     let _ = parent_config.features.enable(Feature::MultiAgentV2);
-    parent_config.multi_agent_v2.root_agent_usage_hint_text =
-        Some("Parent root guidance.".to_string());
-    parent_config.multi_agent_v2.subagent_usage_hint_text =
-        Some("Parent subagent guidance.".to_string());
+    parent_config.multi_agent_v2.usage_hint_text = Some("Parent delegation guidance.".to_string());
     let mut child_config = harness.config.clone();
     let _ = child_config.features.enable(Feature::MultiAgentV2);
-    child_config.multi_agent_v2.root_agent_usage_hint_text =
-        Some("Child root guidance.".to_string());
-    child_config.multi_agent_v2.subagent_usage_hint_text =
-        Some("Child subagent guidance.".to_string());
+    child_config.multi_agent_v2.usage_hint_text = Some("Parent delegation guidance.".to_string());
     let new_thread = harness
         .manager
         .start_thread(parent_config.clone())
@@ -641,15 +635,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                     id: None,
                     role: "developer".to_string(),
                     content: vec![ContentItem::InputText {
-                        text: "Parent root guidance.".to_string(),
-                    }],
-                    phase: None,
-                },
-                ResponseItem::Message {
-                    id: None,
-                    role: "developer".to_string(),
-                    content: vec![ContentItem::InputText {
-                        text: "Parent subagent guidance.".to_string(),
+                        text: "Parent delegation guidance.".to_string(),
                     }],
                     phase: None,
                 },

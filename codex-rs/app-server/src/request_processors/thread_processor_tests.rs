@@ -447,14 +447,14 @@ mod thread_processor_behavior_tests {
 
         assert!(requested_permissions_trust_project(
             &ConfigOverrides {
-                permission_profile: Some(full_access_profile),
+                permission_profile: Some(full_access_profile.clone()),
                 ..Default::default()
             },
             cwd.as_path()
         ));
         assert!(requested_permissions_trust_project(
             &ConfigOverrides {
-                permission_profile: Some(workspace_write_profile),
+                permission_profile: Some(workspace_write_profile.clone()),
                 ..Default::default()
             },
             cwd.as_path()
@@ -468,14 +468,21 @@ mod thread_processor_behavior_tests {
         ));
         assert!(requested_permissions_trust_project(
             &ConfigOverrides {
-                default_permissions: Some(":workspace".to_string()),
+                permission_profile: Some(workspace_write_profile),
                 ..Default::default()
             },
             cwd.as_path()
         ));
         assert!(requested_permissions_trust_project(
             &ConfigOverrides {
-                default_permissions: Some(":danger-no-sandbox".to_string()),
+                permission_profile: Some(full_access_profile),
+                ..Default::default()
+            },
+            cwd.as_path()
+        ));
+        assert!(!requested_permissions_trust_project(
+            &ConfigOverrides {
+                permission_profile: Some(read_only_profile.clone()),
                 ..Default::default()
             },
             cwd.as_path()
@@ -483,13 +490,6 @@ mod thread_processor_behavior_tests {
         assert!(!requested_permissions_trust_project(
             &ConfigOverrides {
                 permission_profile: Some(read_only_profile),
-                ..Default::default()
-            },
-            cwd.as_path()
-        ));
-        assert!(!requested_permissions_trust_project(
-            &ConfigOverrides {
-                default_permissions: Some(":read-only".to_string()),
                 ..Default::default()
             },
             cwd.as_path()

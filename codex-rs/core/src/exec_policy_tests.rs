@@ -115,11 +115,7 @@ fn read_only_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
 }
 
 fn workspace_write_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
-    FileSystemSandboxPolicy::workspace_write(
-        &[],
-        /*exclude_tmpdir_env_var*/ false,
-        /*exclude_slash_tmp*/ false,
-    )
+    PermissionProfile::workspace_write().file_system_sandbox_policy()
 }
 
 fn unrestricted_file_system_sandbox_policy() -> FileSystemSandboxPolicy {

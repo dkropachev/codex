@@ -804,7 +804,7 @@ pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: St
     .await;
 }
 
-pub async fn update_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
+pub async fn update_memories(sess: &Arc<Session>, _config: &Arc<Config>, sub_id: String) {
     sess.send_event_raw(Event {
         id: sub_id.clone(),
         msg: EventMsg::Warning(WarningEvent {

@@ -1,7 +1,5 @@
 use super::*;
 use crate::config::test_config;
-use crate::init_state_db;
-use crate::installation_id::INSTALLATION_ID_FILENAME;
 use crate::rollout::RolloutRecorder;
 use crate::session::session::SessionSettingsUpdate;
 use crate::session::tests::make_session_and_context;
@@ -28,7 +26,16 @@ use std::time::Duration;
 use tempfile::tempdir;
 use wiremock::MockServer;
 
-const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
+fn test_thread_manager(config: &Config, auth_manager: Arc<AuthManager>) -> ThreadManager {
+    ThreadManager::new(
+        config,
+        auth_manager,
+        SessionSource::Exec,
+        CollaborationModesConfig::default(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*analytics_events_client*/ None,
+    )
+}
 
 fn user_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
@@ -168,7 +175,6 @@ fn fork_thread_accepts_legacy_usize_snapshot_argument() {
             usize::MAX,
             config,
             path,
-            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         );
@@ -391,16 +397,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let manager = ThreadManager::new(
-        &config,
-        auth_manager.clone(),
-        SessionSource::Exec,
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        /*analytics_events_client*/ None,
-        thread_store_from_config(&config, /*state_db*/ None),
-        /*state_db*/ None,
-        TEST_INSTALLATION_ID.to_string(),
-    );
+    let manager = test_thread_manager(&config, auth_manager.clone());
     let selected_cwd =
         AbsolutePathBuf::try_from(config.cwd.as_path().join("selected")).expect("absolute path");
     let environments = vec![TurnEnvironmentSelection {
@@ -455,22 +452,15 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .new_turn_with_sub_id("resume-turn".to_string(), SessionSettingsUpdate::default())
         .await
         .expect("build resumed turn context");
-    assert_eq!(resumed_turn.environments.turn_environments.len(), 1);
-    assert_eq!(
-        resumed_turn.environments.turn_environments[0].cwd,
-        default_cwd
-    );
-    assert_ne!(
-        resumed_turn.environments.turn_environments[0].cwd,
-        selected_cwd
-    );
+    assert_eq!(resumed_turn.environments.len(), 1);
+    assert_eq!(resumed_turn.environments[0].cwd, default_cwd);
+    assert_ne!(resumed_turn.environments[0].cwd, selected_cwd);
 
     let forked = manager
         .fork_thread(
             ForkSnapshot::Interrupted,
             config,
             rollout_path,
-            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
@@ -483,55 +473,9 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .new_turn_with_sub_id("fork-turn".to_string(), SessionSettingsUpdate::default())
         .await
         .expect("build forked turn context");
-    assert_eq!(forked_turn.environments.turn_environments.len(), 1);
-    assert_eq!(
-        forked_turn.environments.turn_environments[0].cwd,
-        default_cwd
-    );
-    assert_ne!(
-        forked_turn.environments.turn_environments[0].cwd,
-        selected_cwd
-    );
-}
-
-#[tokio::test]
-async fn explicit_installation_id_skips_codex_home_file() {
-    let temp_dir = tempdir().expect("tempdir");
-    let mut config = test_config().await;
-    config.codex_home = temp_dir.path().join("codex-home").abs();
-    config.cwd = config.codex_home.abs();
-    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
-
-    let auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let installation_id = uuid::Uuid::new_v4().to_string();
-    let state_db = init_state_db(&config).await;
-    let thread_store = thread_store_from_config(&config, state_db.clone());
-    let manager = ThreadManager::new(
-        &config,
-        auth_manager,
-        SessionSource::Exec,
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        /*analytics_events_client*/ None,
-        thread_store,
-        state_db.clone(),
-        installation_id.clone(),
-    );
-
-    let thread = manager
-        .start_thread(config.clone())
-        .await
-        .expect("start thread with explicit installation id");
-
-    assert!(!config.codex_home.join(INSTALLATION_ID_FILENAME).exists());
-    assert_eq!(thread.thread.codex.session.installation_id, installation_id);
-
-    thread
-        .thread
-        .shutdown_and_wait()
-        .await
-        .expect("shutdown thread");
-    let _ = manager.remove_thread(&thread.thread_id).await;
+    assert_eq!(forked_turn.environments.len(), 1);
+    assert_eq!(forked_turn.environments[0].cwd, default_cwd);
+    assert_ne!(forked_turn.environments[0].cwd, selected_cwd);
 }
 
 #[tokio::test]
@@ -544,16 +488,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let manager = ThreadManager::new(
-        &config,
-        auth_manager.clone(),
-        SessionSource::Exec,
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        /*analytics_events_client*/ None,
-        thread_store_from_config(&config, /*state_db*/ None),
-        /*state_db*/ None,
-        TEST_INSTALLATION_ID.to_string(),
-    );
+    let manager = test_thread_manager(&config, auth_manager.clone());
 
     let source = manager
         .start_thread(config.clone())
@@ -599,16 +534,7 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let manager = ThreadManager::new(
-        &config,
-        auth_manager.clone(),
-        SessionSource::Exec,
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        /*analytics_events_client*/ None,
-        thread_store_from_config(&config, /*state_db*/ None),
-        /*state_db*/ None,
-        TEST_INSTALLATION_ID.to_string(),
-    );
+    let manager = test_thread_manager(&config, auth_manager.clone());
 
     let source = manager
         .start_thread(config.clone())
@@ -659,18 +585,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let state_db = init_state_db(&config).await;
-    let thread_store = thread_store_from_config(&config, state_db.clone());
-    let manager = ThreadManager::new(
-        &config,
-        auth_manager.clone(),
-        SessionSource::Exec,
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        /*analytics_events_client*/ None,
-        thread_store,
-        state_db.clone(),
-        TEST_INSTALLATION_ID.to_string(),
-    );
+    let manager = test_thread_manager(&config, auth_manager.clone());
 
     let source = manager
         .start_thread_with_options(StartThreadOptions {
@@ -745,16 +660,7 @@ async fn new_uses_active_provider_for_model_refresh() {
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let manager = ThreadManager::new(
-        &config,
-        auth_manager,
-        SessionSource::Exec,
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        /*analytics_events_client*/ None,
-        thread_store_from_config(&config, /*state_db*/ None),
-        /*state_db*/ None,
-        TEST_INSTALLATION_ID.to_string(),
-    );
+    let manager = test_thread_manager(&config, auth_manager);
 
     let _ = manager.list_models(RefreshStrategy::Online).await;
     assert_eq!(models_mock.requests().len(), 1);
@@ -958,17 +864,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let state_db = init_state_db(&config).await;
-    let manager = ThreadManager::new(
-        &config,
-        auth_manager.clone(),
-        SessionSource::Exec,
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        /*analytics_events_client*/ None,
-        thread_store_from_config(&config, state_db.clone()),
-        state_db.clone(),
-        TEST_INSTALLATION_ID.to_string(),
-    );
+    let manager = test_thread_manager(&config, auth_manager.clone());
 
     let source = manager
         .resume_thread_with_history(
@@ -1000,7 +896,6 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
             ForkSnapshot::Interrupted,
             config.clone(),
             source_path,
-            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
@@ -1064,17 +959,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let state_db = init_state_db(&config).await;
-    let manager = ThreadManager::new(
-        &config,
-        auth_manager.clone(),
-        SessionSource::Exec,
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        /*analytics_events_client*/ None,
-        thread_store_from_config(&config, state_db.clone()),
-        state_db.clone(),
-        TEST_INSTALLATION_ID.to_string(),
-    );
+    let manager = test_thread_manager(&config, auth_manager.clone());
 
     let source = manager
         .resume_thread_with_history(
@@ -1117,7 +1002,6 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
             ForkSnapshot::Interrupted,
             config.clone(),
             source_path,
-            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
@@ -1159,17 +1043,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let state_db = init_state_db(&config).await;
-    let manager = ThreadManager::new(
-        &config,
-        auth_manager.clone(),
-        SessionSource::Exec,
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        /*analytics_events_client*/ None,
-        thread_store_from_config(&config, state_db.clone()),
-        state_db.clone(),
-        TEST_INSTALLATION_ID.to_string(),
-    );
+    let manager = test_thread_manager(&config, auth_manager.clone());
 
     let source = manager
         .resume_thread_with_history(
@@ -1199,7 +1073,6 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             ForkSnapshot::Interrupted,
             config.clone(),
             source_path,
-            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
@@ -1240,7 +1113,6 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             ForkSnapshot::Interrupted,
             config.clone(),
             forked_path,
-            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
@@ -1300,17 +1172,7 @@ async fn resumed_thread_keeps_paused_goal_paused() -> anyhow::Result<()> {
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let state_db = init_state_db(&config).await;
-    let manager = ThreadManager::new(
-        &config,
-        auth_manager.clone(),
-        SessionSource::Exec,
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        /*analytics_events_client*/ None,
-        thread_store_from_config(&config, state_db.clone()),
-        state_db.clone(),
-        TEST_INSTALLATION_ID.to_string(),
-    );
+    let manager = test_thread_manager(&config, auth_manager.clone());
 
     let source = manager
         .resume_thread_with_history(

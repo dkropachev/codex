@@ -43,6 +43,8 @@ use std::sync::Arc;
 
 pub struct UnifiedExecHandler;
 
+pub type ExecCommandHandler = UnifiedExecHandler;
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct ExecCommandArgs {
     cmd: String,

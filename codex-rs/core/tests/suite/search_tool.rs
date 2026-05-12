@@ -600,7 +600,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     );
     assert_eq!(
         apps_tool_call.pointer("/params/_meta/x-codex-turn-metadata/thread_id"),
-        Some(&json!(test.session_configured.thread_id.to_string()))
+        Some(&json!(test.session_configured.session_id.to_string()))
     );
     assert!(
         apps_tool_call
@@ -1107,6 +1107,7 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
                     scopes: None,
                     oauth_resource: None,
                     supports_parallel_tool_calls: false,
+                    process_reuse_scope: codex_config::types::McpServerProcessReuseScope::Cwd,
                     tools: HashMap::new(),
                 },
             );

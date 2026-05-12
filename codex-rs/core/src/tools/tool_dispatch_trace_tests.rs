@@ -58,9 +58,12 @@ async fn dispatch_lifecycle_trace_records_direct_and_code_mode_requesters() -> a
         "await tools.test_tool({})",
     );
 
-    let registry = ToolRegistry::with_handler_for_test(Arc::new(TestHandler {
-        tool_name: codex_tools::ToolName::plain("test_tool"),
-    }));
+    let registry = ToolRegistry::with_handler_for_test(
+        codex_tools::ToolName::plain("test_tool"),
+        Arc::new(TestHandler {
+            tool_name: codex_tools::ToolName::plain("test_tool"),
+        }),
+    );
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -169,9 +172,12 @@ async fn dispatch_lifecycle_trace_records_incompatible_payload_failures() -> any
     let (mut session, turn) = make_session_and_context().await;
     attach_test_trace(&mut session, &turn, temp.path())?;
 
-    let registry = ToolRegistry::with_handler_for_test(Arc::new(TestHandler {
-        tool_name: codex_tools::ToolName::plain("test_tool"),
-    }));
+    let registry = ToolRegistry::with_handler_for_test(
+        codex_tools::ToolName::plain("test_tool"),
+        Arc::new(TestHandler {
+            tool_name: codex_tools::ToolName::plain("test_tool"),
+        }),
+    );
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -203,7 +209,10 @@ async fn missing_code_mode_wait_traces_only_the_wait_tool_call() -> anyhow::Resu
     let (mut session, turn) = make_session_and_context().await;
     attach_test_trace(&mut session, &turn, temp.path())?;
 
-    let registry = ToolRegistry::with_handler_for_test(Arc::new(CodeModeWaitHandler));
+    let registry = ToolRegistry::with_handler_for_test(
+        codex_tools::ToolName::plain(WAIT_TOOL_NAME),
+        Arc::new(CodeModeWaitHandler),
+    );
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
