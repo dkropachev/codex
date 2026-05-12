@@ -66,7 +66,6 @@ pub use repo_ci::RepoCiHandler;
 pub use request_permissions::RequestPermissionsHandler;
 pub use request_plugin_install::RequestPluginInstallHandler;
 pub use request_user_input::RequestUserInputHandler;
-pub use shell::LocalShellHandler;
 pub use shell::ShellCommandHandler;
 pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;
@@ -74,7 +73,6 @@ pub use tool_search::ToolSearchHandler;
 pub use tool_suggest::ToolSuggestHandler;
 pub use unavailable_tool::UnavailableToolHandler;
 pub(crate) use unavailable_tool::unavailable_tool_message;
-pub use unified_exec::ExecCommandHandler;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;
 

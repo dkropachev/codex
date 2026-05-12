@@ -16,8 +16,8 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
-use crate::tools::handlers::LocalShellHandler;
 use crate::tools::handlers::ShellCommandHandler;
+use crate::tools::handlers::ShellHandler;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::ToolHandler;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -221,7 +221,7 @@ async fn local_shell_pre_tool_use_payload_uses_joined_command() {
         },
     };
     let (session, turn) = make_session_and_context().await;
-    let handler = LocalShellHandler;
+    let handler = ShellHandler;
 
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {

@@ -636,7 +636,6 @@ pub async fn run_main_with_transport_options(
 
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
-    let installation_id = codex_core::resolve_installation_id(&config.codex_home).await?;
 
     let remote_control_enabled = config.features.enabled(Feature::RemoteControl);
     if transport_accept_handles.is_empty() && !remote_control_enabled {
@@ -737,7 +736,6 @@ pub async fn run_main_with_transport_options(
             config_warnings,
             session_source,
             auth_manager,
-            installation_id,
             rpc_transport: analytics_rpc_transport(&transport),
             remote_control_handle: Some(remote_control_handle),
             plugin_startup_tasks: runtime_options.plugin_startup_tasks,

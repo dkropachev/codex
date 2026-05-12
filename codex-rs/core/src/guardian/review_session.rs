@@ -12,6 +12,7 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
@@ -456,7 +457,7 @@ impl GuardianReviewSessionManager {
         let Some(trunk) = self.state.lock().await.trunk.clone() else {
             return;
         };
-        let _ = trunk.codex.get_tx_event().send(event).await;
+        let _ = trunk.codex.session.get_tx_event().send(event).await;
     }
 
     async fn remove_trunk_if_current(

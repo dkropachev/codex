@@ -44,8 +44,6 @@ use codex_tools::ShellCommandBackendConfig;
 
 pub struct ShellHandler;
 
-pub type LocalShellHandler = ShellHandler;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShellCommandBackend {
     Classic,

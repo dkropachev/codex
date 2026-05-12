@@ -82,7 +82,6 @@ use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
-use codex_core::resolve_installation_id;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_login::AuthManager;
@@ -367,7 +366,6 @@ pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> 
 
 async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
     let channel_capacity = args.channel_capacity.max(1);
-    let installation_id = resolve_installation_id(&args.config.codex_home).await?;
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
     let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
 
@@ -428,7 +426,6 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
                 auth_manager,
-                installation_id,
                 rpc_transport: AppServerRpcTransport::InProcess,
                 remote_control_handle: None,
                 plugin_startup_tasks: crate::PluginStartupTasks::Start,
