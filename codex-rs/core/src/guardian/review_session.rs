@@ -12,7 +12,6 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
@@ -453,7 +452,10 @@ impl GuardianReviewSessionManager {
     }
 
     #[cfg(test)]
-    pub(crate) async fn send_trunk_event_raw_for_test(&self, event: Event) {
+    pub(crate) async fn send_trunk_event_raw_for_test(
+        &self,
+        event: codex_protocol::protocol::Event,
+    ) {
         let Some(trunk) = self.state.lock().await.trunk.clone() else {
             return;
         };
