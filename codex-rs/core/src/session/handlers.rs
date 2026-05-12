@@ -23,7 +23,6 @@ use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
 use codex_config::loader::load_config_layers_state;
 use codex_exec_server::LOCAL_FS;
-use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::review_prompts::resolve_review_request;

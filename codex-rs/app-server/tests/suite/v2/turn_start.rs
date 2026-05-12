@@ -27,9 +27,6 @@ use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangePatchUpdatedNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
-use codex_app_server_protocol::FileSystemAccessMode;
-use codex_app_server_protocol::FileSystemPath;
-use codex_app_server_protocol::FileSystemSandboxEntry;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
@@ -38,9 +35,8 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
-use codex_app_server_protocol::PermissionProfile;
-use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
-use codex_app_server_protocol::PermissionProfileNetworkPermissions;
+use codex_app_server_protocol::PermissionProfileModificationParams;
+use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
@@ -79,7 +75,6 @@ use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-use super::analytics::enable_analytics_capture;
 use super::analytics::mount_analytics_capture;
 use super::analytics::wait_for_analytics_event;
 
@@ -464,7 +459,7 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
         &server.uri(),
         &server.uri(),
     )?;
-    enable_analytics_capture(&server, codex_home.path()).await?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -787,17 +782,13 @@ async fn turn_start_rejects_invalid_permission_profile_before_starting_turn() ->
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            permission_profile: Some(PermissionProfile::Managed {
-                network: PermissionProfileNetworkPermissions { enabled: false },
-                file_system: PermissionProfileFileSystemPermissions::Restricted {
-                    entries: vec![FileSystemSandboxEntry {
-                        path: FileSystemPath::Path {
-                            path: disallowed_write_root,
-                        },
-                        access: FileSystemAccessMode::Write,
-                    }],
-                    glob_scan_max_depth: None,
-                },
+            permissions: Some(PermissionProfileSelectionParams::Profile {
+                id: ":workspace".to_string(),
+                modifications: Some(vec![
+                    PermissionProfileModificationParams::AdditionalWritableRoot {
+                        path: disallowed_write_root,
+                    },
+                ]),
             }),
             ..Default::default()
         })
@@ -1912,7 +1903,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             }),
-            permission_profile: None,
+            permissions: None,
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
@@ -1949,7 +1940,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
-            permission_profile: None,
+            permissions: None,
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),

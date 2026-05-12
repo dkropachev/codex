@@ -30,6 +30,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::env_path::format_oai_env_uri;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 async fn list_dir_slice(
     path: &Path,
@@ -80,10 +81,15 @@ fn add_secondary_environment(
     environment_id: &str,
     cwd: AbsolutePathBuf,
 ) {
-    let primary_environment = turn.primary_environment().expect("primary env");
+    let primary_environment = turn
+        .environments
+        .first()
+        .expect("primary env")
+        .environment
+        .clone();
     turn.environments.push(TurnEnvironment {
         environment_id: environment_id.to_string(),
-        environment: primary_environment.environment.clone(),
+        environment: primary_environment,
         cwd,
     });
 }
@@ -102,13 +108,7 @@ impl RecordingFileSystem {
             .expect("lock directory entries")
             .push((
                 path.clone(),
-                entries
-                    .iter()
-                    .map(|entry| ReadDirectoryEntry {
-                        file_name: OsString::from(entry.name),
-                        metadata: FileMetadata::from(entry.kind),
-                    })
-                    .collect(),
+                entries.iter().map(ReadDirectoryEntry::from).collect(),
             ));
     }
 }
@@ -128,6 +128,18 @@ impl From<TestEntryKind> for FileMetadata {
             is_symlink: kind == TestEntryKind::Symlink,
             created_at_ms: 0,
             modified_at_ms: 0,
+        }
+    }
+}
+
+impl From<&TestEntry> for ReadDirectoryEntry {
+    fn from(entry: &TestEntry) -> Self {
+        let metadata = FileMetadata::from(entry.kind);
+        Self {
+            file_name: entry.name.to_string(),
+            is_directory: metadata.is_directory,
+            is_file: metadata.is_file,
+            is_symlink: metadata.is_symlink,
         }
     }
 }

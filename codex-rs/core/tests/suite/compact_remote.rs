@@ -190,7 +190,7 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
-            realtime_session_id: None,
+            session_id: None,
             transport: None,
             voice: None,
         }))
@@ -445,7 +445,7 @@ async fn assert_remote_manual_compact_request_parity(
     let mut builder = test_codex().with_auth(auth);
     if let Some(service_tier) = configured_service_tier {
         builder = builder.with_config(move |config| {
-            config.service_tier = Some(service_tier.request_value().to_string());
+            config.service_tier = Some(service_tier);
         });
     }
     let harness = TestCodexHarness::with_builder(builder).await?;

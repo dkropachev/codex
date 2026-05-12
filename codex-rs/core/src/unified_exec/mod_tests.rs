@@ -97,7 +97,7 @@ async fn exec_command_with_tty(
                 tty,
                 Box::new(NoopSpawnLifecycle),
                 turn.environments
-                    .primary()
+                    .first()
                     .expect("turn environment")
                     .environment
                     .as_ref(),

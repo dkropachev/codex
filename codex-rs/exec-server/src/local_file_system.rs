@@ -305,13 +305,23 @@ impl ExecutorFileSystem for DirectFileSystem {
         let mut entries = Vec::new();
         let mut read_dir = tokio::fs::read_dir(path.as_path()).await?;
         while let Some(entry) = read_dir.next_entry().await? {
-            let Ok(metadata) = tokio::fs::metadata(entry.path()).await else {
+            let Ok(symlink_metadata) = tokio::fs::symlink_metadata(entry.path()).await else {
                 continue;
+            };
+            let is_symlink = symlink_metadata.file_type().is_symlink();
+            let (is_directory, is_file) = if is_symlink {
+                tokio::fs::metadata(entry.path())
+                    .await
+                    .map(|metadata| (metadata.is_dir(), metadata.is_file()))
+                    .unwrap_or((false, false))
+            } else {
+                (symlink_metadata.is_dir(), symlink_metadata.is_file())
             };
             entries.push(ReadDirectoryEntry {
                 file_name: entry.file_name().to_string_lossy().into_owned(),
-                is_directory: metadata.is_dir(),
-                is_file: metadata.is_file(),
+                is_directory,
+                is_file,
+                is_symlink,
             });
         }
         Ok(entries)

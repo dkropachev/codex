@@ -109,11 +109,10 @@ mod tests {
     use codex_config::ThreadConfigLoader;
     use codex_config::ThreadConfigSource;
     use codex_core::config::ConfigOverrides;
-    use codex_core::init_state_db;
-    use codex_core::thread_store_from_config;
     use codex_exec_server::EnvironmentManager;
     use codex_login::AuthManager;
     use codex_login::CodexAuth;
+    use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
     use codex_protocol::protocol::SessionSource;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -174,19 +173,13 @@ mod tests {
             .await?;
 
         let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
-        let state_db = init_state_db(&good_config)
-            .await
-            .expect("refresh tests require state db");
-        let thread_store = thread_store_from_config(&good_config, Some(state_db.clone()));
         let thread_manager = Arc::new(ThreadManager::new(
             &good_config,
             auth_manager,
             SessionSource::Exec,
+            CollaborationModesConfig::default(),
             Arc::new(EnvironmentManager::default_for_tests()),
             /*analytics_events_client*/ None,
-            thread_store,
-            Some(state_db.clone()),
-            "11111111-1111-4111-8111-111111111111".to_string(),
         ));
         thread_manager.start_thread(good_config).await?;
         thread_manager.start_thread(bad_config).await?;

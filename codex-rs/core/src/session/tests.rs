@@ -62,9 +62,10 @@ use crate::tasks::execute_user_shell_command;
 use crate::tools::ToolRouter;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
-use crate::tools::handlers::GoalHandler;
+use crate::tools::handlers::CreateGoalHandler;
 use crate::tools::handlers::ShellHandler;
 use crate::tools::handlers::UnifiedExecHandler;
+use crate::tools::handlers::UpdateGoalHandler;
 use crate::tools::registry::ToolHandler;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -2657,6 +2658,10 @@ async fn wait_for_thread_rollback_failed(rx: &async_channel::Receiver<Event>) ->
 }
 
 async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
+    let session_configuration = {
+        let state = session.state.lock().await;
+        state.session_configuration.clone()
+    };
     let live_thread = LiveThread::create(
         Arc::clone(&session.services.thread_store),
         CreateThreadParams {
@@ -2667,8 +2672,11 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             metadata: codex_thread_store::ThreadPersistenceMetadata {
-                cwd: Some(session.cwd.clone().into_path_buf()),
-                model_provider: session.config.model_provider_id.clone(),
+                cwd: Some(session_configuration.cwd.to_path_buf()),
+                model_provider: session_configuration
+                    .original_config_do_not_use
+                    .model_provider_id
+                    .clone(),
                 memory_mode: ThreadMemoryMode::Enabled,
             },
             event_persistence_mode: ThreadEventPersistenceMode::Limited,
@@ -3683,6 +3691,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         )),
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
+            codex_protocol::SessionId::from(conversation_id),
             conversation_id,
             /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
             session_configuration.provider.clone(),
@@ -3696,9 +3705,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     };
 
+    let plugins_input = per_turn_config.plugins_config_input();
     let plugin_outcome = services
         .plugins_manager
-        .plugins_for_config(&per_turn_config)
+        .plugins_for_config(&plugins_input)
         .await;
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_input =
@@ -4970,6 +4980,7 @@ where
         )),
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
+            codex_protocol::SessionId::from(conversation_id),
             conversation_id,
             /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
             session_configuration.provider.clone(),
@@ -4983,9 +4994,10 @@ where
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     };
 
+    let plugins_input = per_turn_config.plugins_config_input();
     let plugin_outcome = services
         .plugins_manager
-        .plugins_for_config(&per_turn_config)
+        .plugins_for_config(&plugins_input)
         .await;
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_input =
@@ -7732,7 +7744,7 @@ async fn sample_rollout(
 async fn create_goal_tool_rejects_existing_goal() {
     let (session, turn_context, _rx) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let handler = GoalHandler;
+    let handler = CreateGoalHandler;
 
     handler
         .handle(ToolInvocation {
@@ -7794,9 +7806,10 @@ async fn create_goal_tool_rejects_existing_goal() {
 async fn update_goal_tool_rejects_pausing_goal() {
     let (session, turn_context, _rx) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let handler = GoalHandler;
+    let create_handler = CreateGoalHandler;
+    let update_handler = UpdateGoalHandler;
 
-    handler
+    create_handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
@@ -7816,7 +7829,7 @@ async fn update_goal_tool_rejects_pausing_goal() {
         .await
         .expect("initial create_goal should succeed");
 
-    let response = handler
+    let response = update_handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
@@ -7854,9 +7867,10 @@ async fn update_goal_tool_rejects_pausing_goal() {
 async fn update_goal_tool_marks_goal_complete() {
     let (session, turn_context, _rx) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let handler = GoalHandler;
+    let create_handler = CreateGoalHandler;
+    let update_handler = UpdateGoalHandler;
 
-    handler
+    create_handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
@@ -7876,7 +7890,7 @@ async fn update_goal_tool_marks_goal_complete() {
         .await
         .expect("initial create_goal should succeed");
 
-    handler
+    update_handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),

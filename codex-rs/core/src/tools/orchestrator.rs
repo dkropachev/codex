@@ -12,7 +12,6 @@ use crate::guardian::new_guardian_review_id;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::network_approval_context_from_payload;
-use crate::tools::network_approval::ActiveNetworkApproval;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::begin_network_approval;

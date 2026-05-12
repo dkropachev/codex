@@ -2324,6 +2324,8 @@ async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
 
     let approval_policy = AskForApproval::Never;
     let permission_profile = restrictive_workspace_write_profile();
+    let sandbox_policy =
+        permission_profile.to_legacy_sandbox_policy(std::env::current_dir()?.as_path())?;
     let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
     let outside_path = outside_dir
         .path()
@@ -2337,7 +2339,7 @@ async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
         &server,
         runtime,
         approval_policy,
-        permission_profile,
+        permission_profile.clone(),
         move |home| {
             let _ = fs::remove_file(&outside_path_for_hook);
             let rules_dir = home.join("rules");

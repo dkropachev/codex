@@ -638,6 +638,7 @@ impl TestCodex {
             prompt,
             AskForApproval::Never,
             SandboxPolicy::DangerFullAccess,
+            /*permission_profile*/ None,
             Some(service_tier),
             /*environments*/ None,
         )
@@ -654,6 +655,26 @@ impl TestCodex {
             prompt,
             approval_policy,
             sandbox_policy,
+            /*permission_profile*/ None,
+            /*service_tier*/ None,
+            /*environments*/ None,
+        )
+        .await
+    }
+
+    pub async fn submit_turn_with_approval_and_permission_profile(
+        &self,
+        prompt: &str,
+        approval_policy: AskForApproval,
+        permission_profile: PermissionProfile,
+    ) -> Result<()> {
+        let (sandbox_policy, permission_profile) =
+            turn_permission_fields(permission_profile, self.config.cwd.as_path());
+        self.submit_turn_with_context(
+            prompt,
+            approval_policy,
+            sandbox_policy,
+            permission_profile,
             /*service_tier*/ None,
             /*environments*/ None,
         )
@@ -669,6 +690,7 @@ impl TestCodex {
             prompt,
             AskForApproval::Never,
             SandboxPolicy::DangerFullAccess,
+            /*permission_profile*/ None,
             /*service_tier*/ None,
             environments,
         )
@@ -680,6 +702,7 @@ impl TestCodex {
         prompt: &str,
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
+        permission_profile: Option<PermissionProfile>,
         service_tier: Option<Option<ServiceTier>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> Result<()> {
@@ -696,7 +719,7 @@ impl TestCodex {
                 approval_policy,
                 approvals_reviewer: None,
                 sandbox_policy,
-                permission_profile: None,
+                permission_profile,
                 model: session_model,
                 effort: None,
                 summary: None,

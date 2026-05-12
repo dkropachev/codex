@@ -43,7 +43,6 @@ use codex_features::Feature;
 use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
 use codex_login::AuthManager;
-use codex_model_provider::create_model_provider;
 use codex_plugin::PluginId;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::Op;

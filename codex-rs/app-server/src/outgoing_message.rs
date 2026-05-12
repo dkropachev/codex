@@ -482,13 +482,12 @@ impl OutgoingMessageSender {
         let serialized_response = response
             .into_jsonrpc_parts_and_payload(request_id.request_id.clone())
             .map(|(id, result, response)| {
-                if let Some(response) = response {
-                    if let Some(response) =
+                if let Some(response) = response
+                    && let Some(response) =
                         response.into_client_response(request_id_for_response.clone())
-                    {
-                        self.analytics_events_client
-                            .track_response(connection_id.0, response);
-                    }
+                {
+                    self.analytics_events_client
+                        .track_response(connection_id.0, response);
                 }
                 (id, result)
             });

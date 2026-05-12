@@ -42,7 +42,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use super::analytics::assert_basic_thread_initialized_event;
-use super::analytics::enable_analytics_capture;
+use super::analytics::mount_analytics_capture;
 use super::analytics::thread_initialized_event;
 use super::analytics::wait_for_analytics_payload;
 
@@ -403,7 +403,7 @@ async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
         &server.uri(),
         /*general_analytics_enabled*/ true,
     )?;
-    enable_analytics_capture(&server, codex_home.path()).await?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let conversation_id = create_fake_rollout(
         codex_home.path(),

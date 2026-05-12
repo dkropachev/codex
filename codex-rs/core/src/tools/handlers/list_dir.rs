@@ -1,19 +1,22 @@
 use std::collections::VecDeque;
-use std::ffi::OsStr;
-use std::fs::FileType;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::ReadDirectoryEntry;
 use codex_protocol::permissions::ReadDenyMatcher;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
-use tokio::fs;
 
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::env_path::format_oai_env_uri;
+use crate::tools::handlers::env_path::parse_oai_env_uri;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
@@ -39,6 +42,7 @@ fn default_depth() -> usize {
 #[derive(Deserialize)]
 struct ListDirArgs {
     dir_path: String,
+    environment_id: Option<String>,
     #[serde(default = "default_offset")]
     offset: usize,
     #[serde(default = "default_limit")]
@@ -70,6 +74,7 @@ impl ToolHandler for ListDirHandler {
 
         let ListDirArgs {
             dir_path,
+            environment_id,
             offset,
             limit,
             depth,
@@ -93,43 +98,105 @@ impl ToolHandler for ListDirHandler {
             ));
         }
 
-        let path = PathBuf::from(&dir_path);
-        if !path.is_absolute() {
-            return Err(FunctionCallError::RespondToModel(
-                "dir_path must be an absolute path".to_string(),
-            ));
-        }
-        let file_system_sandbox_policy = turn.file_system_sandbox_policy();
-        let read_deny_matcher = ReadDenyMatcher::new(file_system_sandbox_policy, &turn.cwd);
-        if read_deny_matcher
+        let environment_path = parse_oai_env_uri(&dir_path)?;
+        if let Some(path_environment_id) = environment_path
             .as_ref()
-            .is_some_and(|matcher| matcher.is_read_denied(&path))
+            .map(|environment_path| environment_path.environment_id.as_str())
+            && let Some(environment_id) = environment_id.as_deref()
+            && environment_id != path_environment_id
         {
             return Err(FunctionCallError::RespondToModel(format!(
-                "{DENY_READ_POLICY_MESSAGE}: `{}`",
-                path.display()
+                "environment_id `{environment_id}` does not match path environment `{path_environment_id}`"
             )));
         }
 
-        let entries =
-            list_dir_slice_with_policy(&path, offset, limit, depth, read_deny_matcher.as_ref())
-                .await?;
+        let selected_environment_id = environment_path
+            .as_ref()
+            .map(|environment_path| environment_path.environment_id.as_str())
+            .or(environment_id.as_deref());
+        let Some(turn_environment) =
+            resolve_tool_environment(turn.as_ref(), selected_environment_id)?
+        else {
+            return Err(FunctionCallError::RespondToModel(
+                "list_dir is unavailable in this session".to_string(),
+            ));
+        };
+
+        let cwd = turn_environment.cwd.clone();
+        let path = match environment_path {
+            Some(environment_path) => environment_path.path,
+            None => resolve_dir_path(&dir_path, &cwd)?,
+        };
+        let file_system_sandbox_policy = turn.file_system_sandbox_policy();
+        let read_deny_matcher = ReadDenyMatcher::new(file_system_sandbox_policy, &cwd);
+        if read_deny_matcher
+            .as_ref()
+            .is_some_and(|matcher| matcher.is_read_denied(path.as_path()))
+        {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "{DENY_READ_POLICY_MESSAGE}: `{}`",
+                path.as_path().display()
+            )));
+        }
+
+        let file_system = turn_environment.environment.get_filesystem();
+        let entries = list_dir_slice_with_policy(
+            file_system.as_ref(),
+            /*sandbox*/ None,
+            &path,
+            offset,
+            limit,
+            depth,
+            read_deny_matcher.as_ref(),
+        )
+        .await?;
         let mut output = Vec::with_capacity(entries.len() + 1);
-        output.push(format!("Absolute path: {}", path.display()));
+        if let Some(environment_id) = selected_environment_id {
+            output.push(format!(
+                "Environment path: {}",
+                format_oai_env_uri(environment_id, &path)
+            ));
+        } else {
+            output.push(format!("Absolute path: {}", path.as_path().display()));
+        }
         output.extend(entries);
         Ok(FunctionToolOutput::from_text(output.join("\n"), Some(true)))
     }
 }
 
+fn resolve_dir_path(
+    dir_path: &str,
+    cwd: &AbsolutePathBuf,
+) -> Result<AbsolutePathBuf, FunctionCallError> {
+    let path = PathBuf::from(dir_path);
+    if path.is_absolute() {
+        AbsolutePathBuf::from_absolute_path(&path)
+            .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))
+    } else {
+        Ok(cwd.join(path))
+    }
+}
+
 async fn list_dir_slice_with_policy(
-    path: &Path,
+    file_system: &dyn ExecutorFileSystem,
+    sandbox: Option<&codex_exec_server::FileSystemSandboxContext>,
+    path: &AbsolutePathBuf,
     offset: usize,
     limit: usize,
     depth: usize,
     read_deny_matcher: Option<&ReadDenyMatcher>,
 ) -> Result<Vec<String>, FunctionCallError> {
     let mut entries = Vec::new();
-    collect_entries(path, Path::new(""), depth, read_deny_matcher, &mut entries).await?;
+    collect_entries(
+        file_system,
+        sandbox,
+        path,
+        Path::new(""),
+        depth,
+        read_deny_matcher,
+        &mut entries,
+    )
+    .await?;
 
     if entries.is_empty() {
         return Ok(Vec::new());
@@ -162,47 +229,44 @@ async fn list_dir_slice_with_policy(
 }
 
 async fn collect_entries(
-    dir_path: &Path,
+    file_system: &dyn ExecutorFileSystem,
+    sandbox: Option<&codex_exec_server::FileSystemSandboxContext>,
+    dir_path: &AbsolutePathBuf,
     relative_prefix: &Path,
     depth: usize,
     read_deny_matcher: Option<&ReadDenyMatcher>,
     entries: &mut Vec<DirEntry>,
 ) -> Result<(), FunctionCallError> {
     let mut queue = VecDeque::new();
-    queue.push_back((dir_path.to_path_buf(), relative_prefix.to_path_buf(), depth));
+    queue.push_back((dir_path.clone(), relative_prefix.to_path_buf(), depth));
 
     while let Some((current_dir, prefix, remaining_depth)) = queue.pop_front() {
-        let mut read_dir = fs::read_dir(&current_dir).await.map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
-        })?;
-
+        let directory_entries = file_system
+            .read_directory(&current_dir, sandbox)
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
+            })?;
         let mut dir_entries = Vec::new();
 
-        while let Some(entry) = read_dir.next_entry().await.map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
-        })? {
-            let entry_path = entry.path();
+        for entry in directory_entries {
+            let entry_path = current_dir.join(&entry.file_name);
             if let Some(read_deny_matcher) = read_deny_matcher
-                && read_deny_matcher.is_read_denied(&entry_path)
+                && read_deny_matcher.is_read_denied(entry_path.as_path())
             {
                 continue;
             }
 
-            let file_type = entry.file_type().await.map_err(|err| {
-                FunctionCallError::RespondToModel(format!("failed to inspect entry: {err}"))
-            })?;
-
-            let file_name = entry.file_name();
             let relative_path = if prefix.as_os_str().is_empty() {
-                PathBuf::from(&file_name)
+                PathBuf::from(&entry.file_name)
             } else {
-                prefix.join(&file_name)
+                prefix.join(&entry.file_name)
             };
 
-            let display_name = format_entry_component(&file_name);
+            let display_name = format_entry_component(&entry.file_name);
             let display_depth = prefix.components().count();
             let sort_key = format_entry_name(&relative_path);
-            let kind = DirEntryKind::from(&file_type);
+            let kind = DirEntryKind::from(&entry);
             dir_entries.push((
                 entry_path,
                 relative_path,
@@ -238,12 +302,11 @@ fn format_entry_name(path: &Path) -> String {
     }
 }
 
-fn format_entry_component(name: &OsStr) -> String {
-    let normalized = name.to_string_lossy();
-    if normalized.len() > MAX_ENTRY_LENGTH {
-        take_bytes_at_char_boundary(&normalized, MAX_ENTRY_LENGTH).to_string()
+fn format_entry_component(name: &str) -> String {
+    if name.len() > MAX_ENTRY_LENGTH {
+        take_bytes_at_char_boundary(name, MAX_ENTRY_LENGTH).to_string()
     } else {
-        normalized.to_string()
+        name.to_string()
     }
 }
 
@@ -275,13 +338,13 @@ enum DirEntryKind {
     Other,
 }
 
-impl From<&FileType> for DirEntryKind {
-    fn from(file_type: &FileType) -> Self {
-        if file_type.is_symlink() {
+impl From<&ReadDirectoryEntry> for DirEntryKind {
+    fn from(entry: &ReadDirectoryEntry) -> Self {
+        if entry.is_symlink {
             DirEntryKind::Symlink
-        } else if file_type.is_dir() {
+        } else if entry.is_directory {
             DirEntryKind::Directory
-        } else if file_type.is_file() {
+        } else if entry.is_file {
             DirEntryKind::File
         } else {
             DirEntryKind::Other
