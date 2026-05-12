@@ -14,17 +14,12 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+codex-code-mode = { workspace = true }
 codex-protocol = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
-
-[target.'cfg(target_env = "musl")'.dependencies]
-codex-code-mode = { path = "../code-mode", default-features = false }
-
-[target.'cfg(not(target_env = "musl"))'.dependencies]
-codex-code-mode = { path = "../code-mode" }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

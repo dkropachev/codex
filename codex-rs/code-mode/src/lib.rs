@@ -1,13 +1,13 @@
 mod description;
 mod response;
-#[cfg(feature = "v8-runtime")]
+#[cfg(not(target_env = "musl"))]
 mod runtime;
-#[cfg(not(feature = "v8-runtime"))]
+#[cfg(target_env = "musl")]
 #[path = "runtime_stub.rs"]
 mod runtime;
-#[cfg(feature = "v8-runtime")]
+#[cfg(not(target_env = "musl"))]
 mod service;
-#[cfg(not(feature = "v8-runtime"))]
+#[cfg(target_env = "musl")]
 #[path = "service_stub.rs"]
 mod service;
 

@@ -31,6 +31,7 @@ codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-cicd-artifacts = { workspace = true }
+codex-code-mode = { workspace = true }
 codex-connectors = { workspace = true }
 codex-config = { workspace = true }
 codex-core-plugins = { workspace = true }
@@ -126,16 +127,11 @@ whoami = { workspace = true }
 
 # Build OpenSSL from source for musl builds.
 [target.x86_64-unknown-linux-musl.dependencies]
-codex-code-mode = { path = "../code-mode", default-features = false }
 openssl-sys = { workspace = true, features = ["vendored"] }
 
 # Build OpenSSL from source for musl builds.
 [target.aarch64-unknown-linux-musl.dependencies]
-codex-code-mode = { path = "../code-mode", default-features = false }
 openssl-sys = { workspace = true, features = ["vendored"] }
-
-[target.'cfg(not(target_env = "musl"))'.dependencies]
-codex-code-mode = { path = "../code-mode" }
 
 [target.'cfg(unix)'.dependencies]
 codex-shell-escalation = { workspace = true }

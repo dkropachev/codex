@@ -122,6 +122,7 @@ pub use tool_config::ToolsConfig;
 pub use tool_config::ToolsConfigParams;
 pub use tool_config::UnifiedExecShellMode;
 pub use tool_config::ZshForkConfig;
+pub use tool_config::request_user_input_available_modes;
 pub use tool_definition::ToolDefinition;
 pub use tool_discovery::DiscoverablePluginInfo;
 pub use tool_discovery::DiscoverableTool;
