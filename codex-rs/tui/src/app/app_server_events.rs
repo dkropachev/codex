@@ -29,7 +29,7 @@ impl App {
 
     pub(super) async fn handle_app_server_event(
         &mut self,
-        app_server_client: &AppServerSession,
+        app_server_client: &mut AppServerSession,
         event: AppServerEvent,
     ) {
         match event {
@@ -59,7 +59,7 @@ impl App {
 
     async fn handle_server_notification_event(
         &mut self,
-        app_server_client: &AppServerSession,
+        app_server_client: &mut AppServerSession,
         notification: ServerNotification,
     ) {
         match &notification {
@@ -111,6 +111,10 @@ impl App {
 
         match server_notification_thread_target(&notification) {
             ServerNotificationThreadTarget::Thread(thread_id) => {
+                let is_external_thread_started =
+                    matches!(&notification, ServerNotification::ThreadStarted(_))
+                        && self.primary_thread_id.is_some()
+                        && self.primary_thread_id != Some(thread_id);
                 let result = if self.primary_thread_id == Some(thread_id)
                     || self.primary_thread_id.is_none()
                 {
@@ -122,6 +126,20 @@ impl App {
 
                 if let Err(err) = result {
                     tracing::warn!("failed to enqueue app-server notification: {err}");
+                }
+                if is_external_thread_started
+                    && self
+                        .should_attach_live_thread_for_selection(thread_id)
+                        .await
+                    && let Err(err) = self
+                        .attach_live_thread_for_selection(app_server_client, thread_id)
+                        .await
+                {
+                    tracing::warn!(
+                        thread_id = %thread_id,
+                        error = %err,
+                        "failed to attach to externally started app-server thread"
+                    );
                 }
                 return;
             }

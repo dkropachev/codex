@@ -54,6 +54,12 @@ impl App {
                 )
                 .await;
             }
+            AppEvent::RunWorkflow { command } => {
+                self.run_workflow_command(command);
+            }
+            AppEvent::WorkflowProcessFinished { command, result } => {
+                self.handle_workflow_process_finished(command, result);
+            }
             AppEvent::OpenResumePicker => {
                 let picker_app_server = match crate::start_app_server_for_picker(
                     &self.config,
@@ -76,6 +82,13 @@ impl App {
                         ));
                         return Ok(AppRunControl::Continue);
                     }
+                };
+                let picker_app_server = if self.workflow_app_server_url.is_some() {
+                    picker_app_server
+                        .with_remote_cwd_override(Some(self.config.cwd.to_path_buf()))
+                        .with_embedded_thread_params()
+                } else {
+                    picker_app_server
                 };
                 match crate::resume_picker::run_resume_picker_from_existing_session_with_app_server(
                     tui,

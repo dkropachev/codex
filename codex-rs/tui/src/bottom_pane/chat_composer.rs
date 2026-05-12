@@ -403,6 +403,7 @@ pub(crate) struct ChatComposer {
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
+    workflows_enabled: bool,
     windows_degraded_sandbox_active: bool,
     side_conversation_active: bool,
     is_zellij: bool,
@@ -493,6 +494,7 @@ impl ChatComposer {
             personality_command_enabled: self.personality_command_enabled,
             realtime_conversation_enabled: self.realtime_conversation_enabled,
             audio_device_selection_enabled: self.audio_device_selection_enabled,
+            workflows_enabled: self.workflows_enabled,
             allow_elevate_sandbox: self.windows_degraded_sandbox_active,
             side_conversation_active: self.side_conversation_active,
         }
@@ -584,6 +586,7 @@ impl ChatComposer {
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
+            workflows_enabled: false,
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
             is_zellij: matches!(
@@ -698,6 +701,10 @@ impl ChatComposer {
 
     pub fn set_goal_command_enabled(&mut self, enabled: bool) {
         self.goal_command_enabled = enabled;
+    }
+
+    pub fn set_workflows_enabled(&mut self, enabled: bool) {
+        self.workflows_enabled = enabled;
     }
 
     /// Replace composer, editor, and footer-hint key bindings from one runtime snapshot.
@@ -3819,6 +3826,7 @@ impl ChatComposer {
                     let personality_command_enabled = self.personality_command_enabled;
                     let realtime_conversation_enabled = self.realtime_conversation_enabled;
                     let audio_device_selection_enabled = self.audio_device_selection_enabled;
+                    let workflows_enabled = self.workflows_enabled;
                     let mut command_popup = CommandPopup::new(CommandPopupFlags {
                         collaboration_modes_enabled,
                         connectors_enabled,
@@ -3828,6 +3836,7 @@ impl ChatComposer {
                         personality_command_enabled,
                         realtime_conversation_enabled,
                         audio_device_selection_enabled,
+                        workflows_enabled,
                         windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
                         side_conversation_active: self.side_conversation_active,
                     });

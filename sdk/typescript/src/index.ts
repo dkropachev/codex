@@ -38,3 +38,43 @@ export type {
   WebSearchMode,
 } from "./threadOptions";
 export type { TurnOptions } from "./turnOptions";
+
+export {
+  AgentHandle,
+  CodexWorkflow,
+  WorkflowMcp,
+  WorkflowTools,
+  defineTool,
+  defineWorkflow,
+  runWorkflow,
+} from "./workflow";
+export type {
+  AgentRunOptions,
+  AgentResumeOptions,
+  AgentStartOptions,
+  DefinedWorkflow,
+  DynamicToolContext,
+  DynamicToolHandler,
+  DynamicToolOutputContentItem,
+  DynamicToolResult,
+  SpawnAgentOptions,
+  WebSocketConstructor,
+  WebSocketLike,
+  WorkflowApprovalHandler,
+  WorkflowApprovalMode,
+  WorkflowApprovalRequest,
+  WorkflowApprovalResponse,
+  WorkflowApprovals,
+  WorkflowConnection,
+  WorkflowContext,
+  WorkflowInteractiveRequestBehavior,
+  WorkflowOptions,
+  WorkflowProgressEvent,
+  WorkflowRunOptions,
+  WorkflowStreamedTurn,
+  WorkflowTool,
+  WorkflowToolRegistration,
+  WorkflowToolSpec,
+  WorkflowTurnResult,
+  WorkflowUserInput,
+} from "./workflow";

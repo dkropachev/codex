@@ -2111,6 +2111,7 @@ impl ChatWidget {
         self.sync_personality_command_enabled();
         self.sync_plugins_command_enabled();
         self.sync_goal_command_enabled();
+        self.sync_workflows_enabled();
         self.refresh_plugin_mentions();
         if display == SessionConfiguredDisplay::Normal {
             let startup_tooltip_override = self.startup_tooltip_override.take();
@@ -5075,6 +5076,7 @@ impl ChatWidget {
         widget.sync_personality_command_enabled();
         widget.sync_plugins_command_enabled();
         widget.sync_goal_command_enabled();
+        widget.sync_workflows_enabled();
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_hint_binding);
@@ -9180,6 +9182,9 @@ impl ChatWidget {
                 self.update_collaboration_mode_indicator();
             }
         }
+        if feature == Feature::Workflows {
+            self.sync_workflows_enabled();
+        }
         if feature == Feature::PreventIdleSleep {
             self.turn_sleep_inhibitor = SleepInhibitor::new(enabled);
             self.turn_sleep_inhibitor
@@ -9455,6 +9460,11 @@ impl ChatWidget {
     fn sync_goal_command_enabled(&mut self) {
         self.bottom_pane
             .set_goal_command_enabled(self.config.features.enabled(Feature::Goals));
+    }
+
+    fn sync_workflows_enabled(&mut self) {
+        self.bottom_pane
+            .set_workflows_enabled(self.config.features.enabled(Feature::Workflows));
     }
 
     fn current_model_supports_personality(&self) -> bool {

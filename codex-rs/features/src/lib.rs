@@ -245,6 +245,8 @@ pub enum Feature {
     WorkspaceDependencies,
     /// Enable repository CI learning and validation.
     RepoCi,
+    /// Enable JavaScript workflows that can share the TUI app-server.
+    Workflows,
 }
 
 impl Feature {
@@ -1188,6 +1190,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RepoCi,
         key: "repo_ci",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Workflows,
+        key: "workflows",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

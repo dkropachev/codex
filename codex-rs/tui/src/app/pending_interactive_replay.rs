@@ -371,6 +371,7 @@ impl PendingInteractiveReplayState {
             ServerRequest::PermissionsRequestApproval { params, .. } => {
                 self.request_permissions_call_ids.contains(&params.item_id)
             }
+            ServerRequest::DynamicToolCall { .. } => false,
             _ => true,
         }
     }

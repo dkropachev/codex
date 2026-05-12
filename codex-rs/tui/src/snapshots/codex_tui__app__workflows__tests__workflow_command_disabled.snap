@@ -1,0 +1,5 @@
+---
+source: tui/src/app/workflows.rs
+expression: rendered
+---
+■ No workflow app-server is available. Enable `[features].workflows = true` and restart regular Codex.

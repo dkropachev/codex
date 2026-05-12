@@ -138,6 +138,17 @@ pub(crate) enum AppEvent {
         user_message: Option<UserMessage>,
     },
 
+    /// Start a JavaScript workflow process connected to the managed TUI app-server.
+    RunWorkflow {
+        command: String,
+    },
+
+    /// Result of a workflow process launched from the TUI.
+    WorkflowProcessFinished {
+        command: String,
+        result: Result<(), String>,
+    },
+
     /// Submit an op to the specified thread, regardless of current focus.
     SubmitThreadOp {
         thread_id: ThreadId,

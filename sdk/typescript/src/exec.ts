@@ -226,7 +226,7 @@ export class CodexExec {
   }
 }
 
-function serializeConfigOverrides(configOverrides: CodexConfigObject): string[] {
+export function serializeConfigOverrides(configOverrides: CodexConfigObject): string[] {
   const overrides: string[] = [];
   flattenConfigOverrides(configOverrides, "", overrides);
   return overrides;
@@ -314,7 +314,7 @@ function isPlainObject(value: unknown): value is CodexConfigObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function findCodexPath() {
+export function findCodexPath() {
   const { platform, arch } = process;
 
   let targetTriple = null;

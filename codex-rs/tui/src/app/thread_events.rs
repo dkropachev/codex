@@ -41,6 +41,7 @@ pub(super) struct ThreadEventStore {
     pub(super) input_state: Option<ThreadInputState>,
     pub(super) capacity: usize,
     pub(super) active: bool,
+    pub(super) live_attached: bool,
 }
 
 impl ThreadEventStore {
@@ -64,6 +65,7 @@ impl ThreadEventStore {
             input_state: None,
             capacity,
             active: false,
+            live_attached: false,
         }
     }
 
@@ -74,13 +76,22 @@ impl ThreadEventStore {
         turns: Vec<Turn>,
     ) -> Self {
         let mut store = Self::new(capacity);
-        store.session = Some(session);
-        store.set_turns(turns);
+        store.set_session(session, turns);
         store
     }
 
     pub(super) fn set_session(&mut self, session: ThreadSessionState, turns: Vec<Turn>) {
+        self.set_session_with_liveness(session, turns, /*live_attached*/ true);
+    }
+
+    pub(super) fn set_session_with_liveness(
+        &mut self,
+        session: ThreadSessionState,
+        turns: Vec<Turn>,
+        live_attached: bool,
+    ) {
         self.session = Some(session);
+        self.live_attached = live_attached;
         self.set_turns(turns);
     }
 

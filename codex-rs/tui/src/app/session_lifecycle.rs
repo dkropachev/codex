@@ -202,8 +202,11 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) -> Result<bool> {
-        if self.thread_event_channels.contains_key(&thread_id) {
-            return Ok(true);
+        if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+            let store = channel.store.lock().await;
+            if store.live_attached {
+                return Ok(true);
+            }
         }
 
         let (session, turns, live_attached) = match app_server
@@ -249,7 +252,7 @@ impl App {
         };
         let channel = self.ensure_thread_channel(thread_id);
         let mut store = channel.store.lock().await;
-        store.set_session(session, turns);
+        store.set_session_with_liveness(session, turns, live_attached);
         Ok(live_attached)
     }
 
@@ -303,7 +306,10 @@ impl App {
             .get(&thread_id)
             .is_some_and(|entry| entry.is_closed);
         let mut attached_replay_only = false;
-        if self.should_attach_live_thread_for_selection(thread_id) {
+        if self
+            .should_attach_live_thread_for_selection(thread_id)
+            .await
+        {
             match self
                 .attach_live_thread_for_selection(app_server, thread_id)
                 .await
@@ -376,12 +382,22 @@ impl App {
         Ok(())
     }
 
-    pub(super) fn should_attach_live_thread_for_selection(&self, thread_id: ThreadId) -> bool {
-        !self.thread_event_channels.contains_key(&thread_id)
-            && self
-                .agent_navigation
-                .get(&thread_id)
-                .is_none_or(|entry| !entry.is_closed)
+    pub(super) async fn should_attach_live_thread_for_selection(
+        &self,
+        thread_id: ThreadId,
+    ) -> bool {
+        if self
+            .agent_navigation
+            .get(&thread_id)
+            .is_some_and(|entry| entry.is_closed)
+        {
+            return false;
+        }
+        let Some(channel) = self.thread_event_channels.get(&thread_id) else {
+            return true;
+        };
+        let store = channel.store.lock().await;
+        !store.live_attached
     }
 
     pub(super) fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {

@@ -91,6 +91,9 @@ fn extract_workflow_run_hints(
     let workflow: Value = serde_yaml::from_str(&contents)
         .with_context(|| format!("failed to parse {}", workflow_path.display()))?;
 
+    let workflow_default_working_directory = workflow
+        .as_mapping()
+        .and_then(run_default_working_directory);
     let Some(jobs) = workflow.get("jobs").and_then(Value::as_mapping) else {
         return Ok(Vec::new());
     };
@@ -104,6 +107,9 @@ fn extract_workflow_run_hints(
             continue;
         };
         let origin = workflow_job_origin(workflow_relative, job_id, job);
+        let job_default_working_directory = run_default_working_directory(job)
+            .or(workflow_default_working_directory)
+            .map(str::to_string);
         let Some(steps) = mapping_get(job, "steps").and_then(Value::as_sequence) else {
             continue;
         };
@@ -114,7 +120,11 @@ fn extract_workflow_run_hints(
             let Some(run) = mapping_get(step_mapping, "run").and_then(Value::as_str) else {
                 continue;
             };
+            let step_working_directory = mapping_get(step_mapping, "working-directory")
+                .and_then(Value::as_str)
+                .or(job_default_working_directory.as_deref());
             for command in concise_run_commands(run) {
+                let command = command_with_working_directory(&command, step_working_directory);
                 if seen.insert((origin.clone(), command.clone())) {
                     hints.push(WorkflowRunHint {
                         origin: origin.clone(),
@@ -126,6 +136,28 @@ fn extract_workflow_run_hints(
     }
 
     Ok(hints)
+}
+
+fn run_default_working_directory(mapping: &Mapping) -> Option<&str> {
+    let defaults = mapping_get(mapping, "defaults")?.as_mapping()?;
+    let run = mapping_get(defaults, "run")?.as_mapping()?;
+    non_empty_working_directory(mapping_get(run, "working-directory")?.as_str()?)
+}
+
+fn command_with_working_directory(command: &str, working_directory: Option<&str>) -> String {
+    let Some(working_directory) = working_directory.and_then(non_empty_working_directory) else {
+        return command.to_string();
+    };
+    if matches!(working_directory, "." | "./") {
+        return command.to_string();
+    }
+    let quoted_working_directory = format!("'{}'", working_directory.replace('\'', "'\\''"));
+    format!("cd {quoted_working_directory} && {command}")
+}
+
+fn non_empty_working_directory(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
 }
 
 fn workflow_job_origin(workflow_relative: &Path, job_id: &str, job: &Mapping) -> String {
@@ -401,6 +433,58 @@ jobs:
         assert_eq!(
             commands,
             vec!["make build".to_string(), "make lint".to_string()]
+        );
+    }
+
+    #[test]
+    fn workflow_run_hints_preserve_working_directory() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(temp.path().join(".github/workflows")).expect("workflow dir");
+        fs::write(
+            temp.path().join(".github/workflows/rust.yml"),
+            r#"
+name: Rust
+defaults:
+  run:
+    working-directory: ignored-root-default
+jobs:
+  rust:
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - name: cargo fmt
+        run: cargo fmt -- --config imports_granularity=Item --check
+      - name: argument comment lint
+        working-directory: tools/argument-comment-lint
+        run: cargo test
+      - name: root command
+        working-directory: .
+        run: pnpm run format
+"#,
+        )
+        .expect("workflow");
+
+        let hints = collect_workflow_run_hints(temp.path()).expect("collect hints");
+
+        assert_eq!(
+            hints,
+            vec![
+                WorkflowRunHint {
+                    origin: ".github/workflows/rust.yml::rust (rust)".to_string(),
+                    command:
+                        "cd 'codex-rs' && cargo fmt -- --config imports_granularity=Item --check"
+                            .to_string(),
+                },
+                WorkflowRunHint {
+                    origin: ".github/workflows/rust.yml::rust (rust)".to_string(),
+                    command: "cd 'tools/argument-comment-lint' && cargo test".to_string(),
+                },
+                WorkflowRunHint {
+                    origin: ".github/workflows/rust.yml::rust (rust)".to_string(),
+                    command: "pnpm run format".to_string(),
+                },
+            ]
         );
     }
 }

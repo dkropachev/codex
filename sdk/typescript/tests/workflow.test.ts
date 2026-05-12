@@ -1,0 +1,634 @@
+import * as child_process from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+
+import { beforeEach, describe, expect, it } from "@jest/globals";
+
+import {
+  CodexWorkflow,
+  defineTool,
+  defineWorkflow,
+  runWorkflow,
+  type WebSocketConstructor,
+} from "../src/workflow";
+
+jest.mock("node:child_process", () => {
+  const actual = jest.requireActual<typeof import("node:child_process")>("node:child_process");
+  return { ...actual, spawn: jest.fn() };
+});
+
+type ActualChildProcess = typeof import("node:child_process");
+const spawnMock = child_process.spawn as jest.MockedFunction<ActualChildProcess["spawn"]>;
+
+type JsonMessage = Record<string, unknown>;
+
+class FakeAppServerProcess extends EventEmitter {
+  stdin = new PassThrough();
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  killed = false;
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
+  threadResumeParams: JsonMessage | null = null;
+  threadStartParams: JsonMessage | null = null;
+  turnStartParams: JsonMessage | null = null;
+  toolResponse: JsonMessage | null = null;
+  approvalResponse: JsonMessage | null = null;
+  sendApprovalRequestOnThreadStart = false;
+
+  private buffer = "";
+  private startCount = 0;
+  private threadId = "thread-1";
+  private turnId = "turn-1";
+
+  constructor() {
+    super();
+    this.stdin.on("data", (chunk: Buffer | string) => {
+      this.buffer += chunk.toString();
+      this.drainLines();
+    });
+  }
+
+  kill(): boolean {
+    this.killed = true;
+    this.exitCode = 0;
+    this.emit("exit", 0, null);
+    this.stdout.end();
+    this.stderr.end();
+    return true;
+  }
+
+  private drainLines(): void {
+    for (;;) {
+      const newline = this.buffer.indexOf("\n");
+      if (newline === -1) {
+        return;
+      }
+      const line = this.buffer.slice(0, newline);
+      this.buffer = this.buffer.slice(newline + 1);
+      if (line.trim()) {
+        this.handleMessage(JSON.parse(line) as JsonMessage);
+      }
+    }
+  }
+
+  private handleMessage(message: JsonMessage): void {
+    if (message.method === "initialize") {
+      this.write({ id: message.id, result: { userAgent: "fake", codexHome: "/tmp/codex" } });
+      return;
+    }
+    if (message.method === "initialized") {
+      return;
+    }
+    if (message.method === "thread/start") {
+      this.startCount += 1;
+      this.threadId = `thread-${this.startCount}`;
+      this.threadStartParams = message.params as JsonMessage;
+      this.write({ id: message.id, result: { thread: { id: this.threadId, turns: [] } } });
+      if (this.sendApprovalRequestOnThreadStart) {
+        setImmediate(() => {
+          this.write({
+            id: "approval-request-1",
+            method: "item/commandExecution/requestApproval",
+            params: {
+              threadId: this.threadId,
+              turnId: this.turnId,
+              itemId: "call-1",
+              approvalId: "approval-1",
+              command: "echo hi",
+            },
+          });
+        });
+      }
+      return;
+    }
+    if (message.method === "thread/resume") {
+      this.threadResumeParams = message.params as JsonMessage;
+      this.threadId = message.params
+        ? String((message.params as JsonMessage).threadId)
+        : "resumed-thread";
+      this.write({ id: message.id, result: { thread: { id: this.threadId, turns: [] } } });
+      return;
+    }
+    if (message.method === "thread/fork") {
+      this.threadId = "thread-forked";
+      this.write({ id: message.id, result: { thread: { id: this.threadId, turns: [] } } });
+      return;
+    }
+    if (message.method === "turn/start") {
+      this.turnStartParams = message.params as JsonMessage;
+      this.write({
+        id: message.id,
+        result: { turn: { id: this.turnId, status: "inProgress", items: [] } },
+      });
+      setImmediate(() => {
+        this.write({
+          id: "tool-request-1",
+          method: "item/tool/call",
+          params: {
+            threadId: this.threadId,
+            turnId: this.turnId,
+            callId: "call-1",
+            namespace: "js",
+            tool: "lookup_weather",
+            arguments: { city: "Paris" },
+          },
+        });
+      });
+      return;
+    }
+    if (message.id === "tool-request-1") {
+      this.toolResponse = message.result as JsonMessage;
+      const agentItem = { id: "item-agent", type: "agentMessage", text: "Weather: mild" };
+      this.write({
+        method: "item/completed",
+        params: {
+          threadId: this.threadId,
+          turnId: this.turnId,
+          item: { id: "item-tool", type: "dynamicToolCall", status: "completed" },
+        },
+      });
+      this.write({
+        method: "item/completed",
+        params: { threadId: this.threadId, turnId: this.turnId, item: agentItem },
+      });
+      this.write({
+        method: "turn/completed",
+        params: {
+          threadId: this.threadId,
+          turn: { id: this.turnId, status: "completed", items: [agentItem] },
+        },
+      });
+      return;
+    }
+    if (message.id === "approval-request-1") {
+      this.approvalResponse = message;
+      return;
+    }
+    if (message.method === "mcpServer/tool/call") {
+      this.write({ id: message.id, result: { content: [{ type: "text", text: "ok" }] } });
+      return;
+    }
+    if (message.method === "command/exec") {
+      this.write({ id: message.id, result: { exitCode: 0, stdout: "done", stderr: "" } });
+      return;
+    }
+    if (message.method === "thread/unsubscribe") {
+      this.write({ id: message.id, result: {} });
+    }
+  }
+
+  private write(message: JsonMessage): void {
+    this.stdout.write(`${JSON.stringify(message)}\n`);
+  }
+}
+
+class FakeWebSocket extends EventEmitter {
+  static instances: FakeWebSocket[] = [];
+
+  readyState = 0;
+  sent: JsonMessage[] = [];
+  threadStartParams: JsonMessage | null = null;
+
+  private threadId = "thread-1";
+
+  constructor(
+    readonly url: string,
+    readonly protocols?: string | string[],
+    readonly options?: unknown,
+  ) {
+    super();
+    FakeWebSocket.instances.push(this);
+    setImmediate(() => {
+      this.readyState = 1;
+      this.emit("open", { type: "open" });
+    });
+  }
+
+  send(data: string): void {
+    const message = JSON.parse(data) as JsonMessage;
+    this.sent.push(message);
+    this.handleMessage(message);
+  }
+
+  close(): void {
+    if (this.readyState === 3) {
+      return;
+    }
+    this.readyState = 3;
+    this.emit("close", { code: 1000, reason: "" });
+  }
+
+  addEventListener(event: string, listener: (event: unknown) => void): void {
+    this.on(event, listener);
+  }
+
+  removeEventListener(event: string, listener: (event: unknown) => void): void {
+    this.off(event, listener);
+  }
+
+  private handleMessage(message: JsonMessage): void {
+    if (message.method === "initialize") {
+      this.write({ id: message.id, result: { userAgent: "fake", codexHome: "/tmp/codex" } });
+      return;
+    }
+    if (message.method === "initialized") {
+      return;
+    }
+    if (message.method === "thread/start") {
+      this.threadStartParams = message.params as JsonMessage;
+      this.write({ id: message.id, result: { thread: { id: this.threadId, turns: [] } } });
+      return;
+    }
+    if (message.method === "thread/unsubscribe") {
+      this.write({ id: message.id, result: {} });
+    }
+  }
+
+  private write(message: JsonMessage): void {
+    this.emit("message", { data: JSON.stringify(message) });
+  }
+}
+
+function waitForImmediate(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+describe("CodexWorkflow", () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+    FakeWebSocket.instances = [];
+    delete process.env.CODEX_APP_SERVER_URL;
+    delete process.env.CODEX_WORKFLOW_APP_SERVER_URL;
+    delete process.env.CODEX_WORKFLOW_APPROVALS;
+    delete process.env.CODEX_WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR;
+  });
+
+  it("runs a turn with JavaScript dynamic tools over app-server", async () => {
+    const fake = new FakeAppServerProcess();
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+
+    const workflow = await CodexWorkflow.start({
+      codexPathOverride: "codex",
+      baseUrl: "https://example.test",
+      config: { model: "gpt-5" },
+    });
+    const tool = defineTool(
+      {
+        namespace: "js",
+        name: "lookup_weather",
+        description: "Looks up weather",
+        inputSchema: {
+          type: "object",
+          properties: { city: { type: "string" } },
+          required: ["city"],
+          additionalProperties: false,
+        },
+      },
+      (args) => `Weather for ${(args as { city: string }).city}: mild`,
+    );
+
+    const agent = await workflow.startAgent({
+      tools: [tool],
+      approvalPolicy: "never",
+      sandboxMode: "workspace-write",
+    });
+    const result = await agent.run("Use the weather tool");
+    const commandArgs = spawnMock.mock.calls[0]?.[1] as string[] | undefined;
+
+    expect(commandArgs).toEqual([
+      "--config",
+      'model="gpt-5"',
+      "--config",
+      'openai_base_url="https://example.test"',
+      "app-server",
+      "--listen",
+      "stdio://",
+    ]);
+    expect(fake.threadStartParams?.dynamicTools).toEqual([
+      {
+        namespace: "js",
+        name: "lookup_weather",
+        description: "Looks up weather",
+        inputSchema: tool.inputSchema,
+        deferLoading: false,
+      },
+    ]);
+    expect(fake.threadStartParams?.approvalPolicy).toBe("never");
+    expect(fake.threadStartParams?.sandbox).toBe("workspace-write");
+    expect(fake.turnStartParams?.input).toEqual([
+      { type: "text", text: "Use the weather tool", text_elements: [] },
+    ]);
+    expect(fake.toolResponse).toEqual({
+      contentItems: [{ type: "inputText", text: "Weather for Paris: mild" }],
+      success: true,
+    });
+    expect(result.finalResponse).toBe("Weather: mild");
+    expect(result.status).toBe("completed");
+    expect(workflow.listAgents().map((registeredAgent) => registeredAgent.threadId)).toEqual([
+      "thread-1",
+    ]);
+
+    await agent.close();
+    expect(workflow.listAgents()).toEqual([]);
+
+    await workflow.close();
+  });
+
+  it("tracks forked agents", async () => {
+    const fake = new FakeAppServerProcess();
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+
+    const workflow = await CodexWorkflow.start({ codexPathOverride: "codex" });
+    const agent = await workflow.startAgent();
+    const forked = await agent.fork();
+
+    expect(workflow.listAgents().map((registeredAgent) => registeredAgent.threadId)).toEqual([
+      "thread-1",
+      "thread-forked",
+    ]);
+
+    await forked.close();
+    await agent.close();
+    await workflow.close();
+  });
+
+  it("resumes persisted agents by thread id", async () => {
+    const fake = new FakeAppServerProcess();
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+
+    const workflow = await CodexWorkflow.start({ codexPathOverride: "codex" });
+    const agent = await workflow.resumeAgent("thread-existing", {
+      approvalPolicy: "never",
+      sandboxMode: "read-only",
+    });
+
+    expect(fake.threadResumeParams).toEqual({
+      threadId: "thread-existing",
+      approvalPolicy: "never",
+      sandbox: "read-only",
+    });
+    expect(agent.threadId).toBe("thread-existing");
+    expect(workflow.listAgents().map((registeredAgent) => registeredAgent.threadId)).toEqual([
+      "thread-existing",
+    ]);
+
+    await agent.close();
+    await workflow.close();
+  });
+
+  it("connects workflows to a shared app-server over websocket", async () => {
+    const workflow = await CodexWorkflow.start({
+      appServerUrl: "ws://127.0.0.1:8765",
+      webSocket: FakeWebSocket as unknown as WebSocketConstructor,
+      webSocketProtocols: "codex",
+      webSocketOptions: { headers: { authorization: "Bearer test" } },
+    });
+
+    const agent = await workflow.startAgent({ workingDirectory: "/repo" });
+    const socket = FakeWebSocket.instances[0];
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(socket?.url).toBe("ws://127.0.0.1:8765");
+    expect(socket?.protocols).toBe("codex");
+    expect(socket?.options).toEqual({ headers: { authorization: "Bearer test" } });
+    expect(socket?.threadStartParams).toEqual({ cwd: "/repo", dynamicTools: [] });
+    expect(agent.threadId).toBe("thread-1");
+
+    await agent.close();
+    await workflow.close();
+    expect(socket?.readyState).toBe(3);
+  });
+
+  it("uses CODEX_APP_SERVER_URL from the environment", async () => {
+    process.env.CODEX_APP_SERVER_URL = "ws://127.0.0.1:8765/";
+
+    const workflow = await CodexWorkflow.start({
+      webSocket: FakeWebSocket as unknown as WebSocketConstructor,
+    });
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances[0]?.url).toBe("ws://127.0.0.1:8765/");
+
+    await workflow.close();
+  });
+
+  it("requires an existing app-server when requested", async () => {
+    await expect(CodexWorkflow.connect({ codexPathOverride: "codex" })).rejects.toThrow(
+      "No Codex app-server URL is available",
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("can force a private app-server even when an environment URL is set", async () => {
+    process.env.CODEX_APP_SERVER_URL = "ws://127.0.0.1:8765/";
+    const fake = new FakeAppServerProcess();
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+
+    const workflow = await CodexWorkflow.spawnServer({ codexPathOverride: "codex" });
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toEqual([]);
+
+    await workflow.close();
+  });
+
+  it("can defer interactive requests for another app-server client", async () => {
+    const fake = new FakeAppServerProcess();
+    fake.sendApprovalRequestOnThreadStart = true;
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+
+    const workflow = await CodexWorkflow.start({
+      codexPathOverride: "codex",
+      approvals: "delegate",
+    });
+
+    await workflow.startAgent();
+    await waitForImmediate();
+    await waitForImmediate();
+
+    expect(fake.approvalResponse).toBeNull();
+
+    await workflow.close();
+  });
+
+  it("declines interactive requests by default", async () => {
+    const fake = new FakeAppServerProcess();
+    fake.sendApprovalRequestOnThreadStart = true;
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+
+    const workflow = await CodexWorkflow.start({ codexPathOverride: "codex" });
+
+    await workflow.startAgent();
+    await waitForImmediate();
+    await waitForImmediate();
+
+    expect(fake.approvalResponse).toEqual({
+      id: "approval-request-1",
+      result: { decision: "decline" },
+    });
+
+    await workflow.close();
+  });
+
+  it("can answer interactive requests with an approval handler", async () => {
+    const fake = new FakeAppServerProcess();
+    fake.sendApprovalRequestOnThreadStart = true;
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+
+    const workflow = await CodexWorkflow.start({
+      codexPathOverride: "codex",
+      approvals: {
+        mode: "handler",
+        onApproval(request) {
+          expect(request.type).toBe("commandExecution");
+          expect(request.method).toBe("item/commandExecution/requestApproval");
+          return { decision: "accept" };
+        },
+      },
+    });
+
+    await workflow.startAgent();
+    await waitForImmediate();
+    await waitForImmediate();
+
+    expect(fake.approvalResponse).toEqual({
+      id: "approval-request-1",
+      result: { decision: "accept" },
+    });
+
+    await workflow.close();
+  });
+
+  it("uses CODEX_WORKFLOW_APPROVALS from the environment", async () => {
+    process.env.CODEX_WORKFLOW_APPROVALS = "delegate";
+    const fake = new FakeAppServerProcess();
+    fake.sendApprovalRequestOnThreadStart = true;
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+
+    const workflow = await CodexWorkflow.start({ codexPathOverride: "codex" });
+
+    await workflow.startAgent();
+    await waitForImmediate();
+    await waitForImmediate();
+
+    expect(fake.approvalResponse).toBeNull();
+
+    await workflow.close();
+  });
+
+  it("keeps the legacy interactive request behavior environment fallback", async () => {
+    process.env.CODEX_WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR = "defer";
+    const fake = new FakeAppServerProcess();
+    fake.sendApprovalRequestOnThreadStart = true;
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+
+    const workflow = await CodexWorkflow.start({ codexPathOverride: "codex" });
+
+    await workflow.startAgent();
+    await waitForImmediate();
+    await waitForImmediate();
+
+    expect(fake.approvalResponse).toBeNull();
+
+    await workflow.close();
+  });
+
+  it("runs reusable workflows as standalone scripts", async () => {
+    const fake = new FakeAppServerProcess();
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+    const progress: unknown[] = [];
+    const results: unknown[] = [];
+    const workflow = defineWorkflow<{ prompt: string }, string>({
+      name: "standalone-test",
+      async run(context, input) {
+        context.progress("starting", { prompt: input.prompt });
+        const agent = await context.createAgent();
+        const turn = await agent.run(input.prompt);
+        context.result(turn.finalResponse);
+        return turn.finalResponse;
+      },
+    });
+
+    const result = await runWorkflow(workflow, {
+      codexPathOverride: "codex",
+      input: { prompt: "Use the weather tool" },
+      onProgress: (event) => progress.push(event),
+      onResult: (value) => results.push(value),
+    });
+
+    expect(result).toBe("Weather: mild");
+    expect(progress).toEqual([{ message: "starting", data: { prompt: "Use the weather tool" } }]);
+    expect(results).toEqual(["Weather: mild"]);
+    expect(fake.killed).toBe(true);
+  });
+
+  it("runs child workflows in the parent workflow context", async () => {
+    const fake = new FakeAppServerProcess();
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+    const workflow = await CodexWorkflow.start({ codexPathOverride: "codex" });
+    const progress: unknown[] = [];
+    const child = defineWorkflow<{ value: string }, string>({
+      name: "child",
+      run(context, input) {
+        context.progress("child", input);
+        return input.value;
+      },
+    });
+    const parent = defineWorkflow<undefined, string>({
+      name: "parent",
+      run(context) {
+        return context.runWorkflow(child, { value: "done" });
+      },
+    });
+
+    const result = await runWorkflow(parent, {
+      workflow,
+      input: undefined,
+      onProgress: (event) => progress.push(event),
+    });
+
+    expect(result).toBe("done");
+    expect(progress).toEqual([{ message: "child", data: { value: "done" } }]);
+    expect(fake.killed).toBe(false);
+
+    await workflow.close();
+  });
+
+  it("spawns fresh agents by default", async () => {
+    const fake = new FakeAppServerProcess();
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+
+    const workflow = await CodexWorkflow.start({ codexPathOverride: "codex" });
+    const agent = await workflow.startAgent();
+    const spawned = await agent.spawnAgent();
+
+    expect(workflow.listAgents().map((registeredAgent) => registeredAgent.threadId)).toEqual([
+      "thread-1",
+      "thread-2",
+    ]);
+
+    await spawned.close();
+    await agent.close();
+    await workflow.close();
+  });
+
+  it("exposes MCP and command wrappers", async () => {
+    const fake = new FakeAppServerProcess();
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+
+    const workflow = await CodexWorkflow.start({ codexPathOverride: "codex" });
+    const agent = await workflow.startAgent();
+
+    await expect(
+      workflow.mcp.callTool(agent, { server: "memory", tool: "read", arguments: {} }),
+    ).resolves.toEqual({ content: [{ type: "text", text: "ok" }] });
+    await expect(workflow.tools.exec(["echo", "done"])).resolves.toEqual({
+      exitCode: 0,
+      stdout: "done",
+      stderr: "",
+    });
+
+    await workflow.close();
+  });
+});

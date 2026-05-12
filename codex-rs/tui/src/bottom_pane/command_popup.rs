@@ -44,6 +44,7 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) personality_command_enabled: bool,
     pub(crate) realtime_conversation_enabled: bool,
     pub(crate) audio_device_selection_enabled: bool,
+    pub(crate) workflows_enabled: bool,
     pub(crate) windows_degraded_sandbox_active: bool,
     pub(crate) side_conversation_active: bool,
 }
@@ -59,6 +60,7 @@ impl From<CommandPopupFlags> for slash_commands::BuiltinCommandFlags {
             personality_command_enabled: value.personality_command_enabled,
             realtime_conversation_enabled: value.realtime_conversation_enabled,
             audio_device_selection_enabled: value.audio_device_selection_enabled,
+            workflows_enabled: value.workflows_enabled,
             allow_elevate_sandbox: value.windows_degraded_sandbox_active,
             side_conversation_active: value.side_conversation_active,
         }
@@ -375,6 +377,7 @@ mod tests {
             personality_command_enabled: true,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
+            workflows_enabled: false,
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
         });
@@ -397,6 +400,7 @@ mod tests {
             personality_command_enabled: true,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
+            workflows_enabled: false,
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
         });
@@ -419,6 +423,7 @@ mod tests {
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
+            workflows_enabled: false,
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
         });
@@ -448,6 +453,7 @@ mod tests {
             personality_command_enabled: true,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
+            workflows_enabled: false,
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
         });
@@ -470,6 +476,7 @@ mod tests {
             personality_command_enabled: true,
             realtime_conversation_enabled: true,
             audio_device_selection_enabled: false,
+            workflows_enabled: false,
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
         });

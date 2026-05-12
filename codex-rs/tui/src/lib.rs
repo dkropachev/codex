@@ -20,11 +20,15 @@ pub use app::AppExitInfo;
 pub use app::ExitReason;
 use app_server_session::AppServerSession;
 use codex_app_server_client::AppServerClient;
+use codex_app_server_client::AppServerRuntimeOptions;
+use codex_app_server_client::AppServerTransport;
+use codex_app_server_client::AppServerWebsocketAuthSettings;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::RemoteAppServerClient;
 use codex_app_server_client::RemoteAppServerConnectArgs;
+use codex_app_server_client::run_main_with_transport_options;
 use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
@@ -42,6 +46,7 @@ use codex_config::format_config_error_with_source;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::EnvironmentManagerArgs;
 use codex_exec_server::ExecServerRuntimePaths;
+use codex_features::Feature;
 use codex_login::AuthConfig;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
@@ -49,6 +54,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::protocol::SessionSource;
 use codex_rollout::StateDbHandle;
 use codex_rollout::state_db;
 use codex_state::log_db;
@@ -60,9 +66,11 @@ use codex_utils_oss::get_default_model_for_oss_provider;
 use color_eyre::eyre::WrapErr;
 use cwd_prompt::CwdPromptAction;
 use std::fs::OpenOptions;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 pub use token_usage::TokenUsage;
 use tracing::Level;
 use tracing::error;
@@ -75,6 +83,9 @@ use url::Url;
 use uuid::Uuid;
 
 pub(crate) use codex_app_server_client::legacy_core;
+
+const WORKFLOW_APP_SERVER_CONNECT_URL: &str = "ws://127.0.0.1:8765/";
+const WORKFLOW_APP_SERVER_PORT: u16 = 8765;
 
 mod additional_dirs;
 mod app;
@@ -295,6 +306,9 @@ async fn start_embedded_app_server(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AppServerTarget {
     Embedded,
+    ManagedWorkflow {
+        websocket_url: String,
+    },
     Remote {
         websocket_url: String,
         auth_token: Option<String>,
@@ -393,11 +407,60 @@ async fn connect_remote_app_server(
     Ok(AppServerClient::Remote(app_server))
 }
 
+async fn connect_remote_app_server_with_retries(
+    websocket_url: String,
+    auth_token: Option<String>,
+) -> color_eyre::Result<AppServerClient> {
+    let mut last_error = None;
+    for _ in 0..50 {
+        match connect_remote_app_server(websocket_url.clone(), auth_token.clone()).await {
+            Ok(app_server) => return Ok(app_server),
+            Err(err) => last_error = Some(err),
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    if let Some(err) = last_error {
+        return Err(err).wrap_err_with(|| {
+            format!("managed workflow app-server did not become ready at {websocket_url}")
+        });
+    }
+    color_eyre::eyre::bail!("managed workflow app-server did not start")
+}
+
+async fn start_managed_workflow_app_server(
+    websocket_url: String,
+    arg0_paths: Arg0DispatchPaths,
+    cli_config_overrides: codex_utils_cli::CliConfigOverrides,
+    loader_overrides: LoaderOverrides,
+) -> color_eyre::Result<AppServerClient> {
+    let bind_address = SocketAddr::from(([127, 0, 0, 1], WORKFLOW_APP_SERVER_PORT));
+    tokio::spawn(async move {
+        let result = run_main_with_transport_options(
+            arg0_paths,
+            cli_config_overrides,
+            loader_overrides,
+            /*default_analytics_enabled*/ false,
+            AppServerTransport::WebSocket { bind_address },
+            SessionSource::VSCode,
+            AppServerWebsocketAuthSettings::default(),
+            AppServerRuntimeOptions::default(),
+        )
+        .await;
+        if let Err(err) = result {
+            error!("managed workflow app-server exited: {err}");
+        }
+    });
+
+    connect_remote_app_server_with_retries(websocket_url, /*auth_token*/ None).await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn start_app_server(
     target: &AppServerTarget,
     arg0_paths: Arg0DispatchPaths,
     config: Config,
+    cli_config_overrides: codex_utils_cli::CliConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
@@ -420,6 +483,15 @@ async fn start_app_server(
         )
         .await
         .map(AppServerClient::InProcess),
+        AppServerTarget::ManagedWorkflow { websocket_url } => {
+            start_managed_workflow_app_server(
+                websocket_url.clone(),
+                arg0_paths,
+                cli_config_overrides,
+                loader_overrides,
+            )
+            .await
+        }
         AppServerTarget::Remote {
             websocket_url,
             auth_token,
@@ -437,6 +509,7 @@ pub(crate) async fn start_app_server_for_picker(
         target,
         Arg0DispatchPaths::default(),
         config.clone(),
+        codex_utils_cli::CliConfigOverrides::default(),
         Vec::new(),
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
@@ -706,14 +779,14 @@ pub async fn run_main(
     if let (Some(websocket_url), Some(_)) = (remote_url.as_deref(), remote_auth_token.as_ref()) {
         validate_remote_auth_token_transport(websocket_url).map_err(std::io::Error::other)?;
     }
-    let app_server_target = remote_url
+    let mut app_server_target = remote_url
         .clone()
         .map(|websocket_url| AppServerTarget::Remote {
             websocket_url,
             auth_token: remote_auth_token.clone(),
         })
         .unwrap_or(AppServerTarget::Embedded);
-    let remote_cwd_override = cli
+    let mut remote_cwd_override = cli
         .cwd
         .clone()
         .filter(|_| matches!(app_server_target, AppServerTarget::Remote { .. }));
@@ -875,9 +948,20 @@ pub async fn run_main(
     )
     .await;
 
+    if matches!(app_server_target, AppServerTarget::Embedded)
+        && config.features.enabled(Feature::Workflows)
+    {
+        app_server_target = AppServerTarget::ManagedWorkflow {
+            websocket_url: WORKFLOW_APP_SERVER_CONNECT_URL.to_string(),
+        };
+        remote_cwd_override = Some(config.cwd.to_path_buf());
+    }
+
     let state_db = match &app_server_target {
         AppServerTarget::Embedded => state_db::init(&config).await,
-        AppServerTarget::Remote { .. } => state_db::get_state_db(&config).await,
+        AppServerTarget::ManagedWorkflow { .. } | AppServerTarget::Remote { .. } => {
+            state_db::get_state_db(&config).await
+        }
     };
 
     if let Some(state_db) = state_db.clone() {
@@ -943,7 +1027,10 @@ pub async fn run_main(
         }
     }
 
-    if matches!(app_server_target, AppServerTarget::Embedded) {
+    if matches!(
+        app_server_target,
+        AppServerTarget::Embedded | AppServerTarget::ManagedWorkflow { .. }
+    ) {
         #[allow(clippy::print_stderr)]
         if let Err(err) = enforce_login_restrictions(&AuthConfig {
             codex_home: config.codex_home.to_path_buf(),
@@ -1067,6 +1154,7 @@ pub async fn run_main(
         remote_cwd_override,
         config,
         overrides,
+        overrides_cli,
         cli_kv_overrides,
         cloud_requirements,
         feedback,
@@ -1089,6 +1177,7 @@ async fn run_ratatui_app(
     remote_cwd_override: Option<PathBuf>,
     initial_config: Config,
     overrides: ConfigOverrides,
+    cli_config_overrides: codex_utils_cli::CliConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     mut cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
@@ -1148,6 +1237,7 @@ async fn run_ratatui_app(
             &app_server_target,
             arg0_paths.clone(),
             initial_config.clone(),
+            cli_config_overrides.clone(),
             cli_kv_overrides.clone(),
             loader_overrides.clone(),
             cloud_requirements.clone(),
@@ -1158,8 +1248,15 @@ async fn run_ratatui_app(
         )
         .await
         {
-            Ok(app_server) => AppServerSession::new(app_server)
-                .with_remote_cwd_override(remote_cwd_override.clone()),
+            Ok(app_server) => {
+                let session = AppServerSession::new(app_server)
+                    .with_remote_cwd_override(remote_cwd_override.clone());
+                if matches!(app_server_target, AppServerTarget::ManagedWorkflow { .. }) {
+                    session.with_embedded_thread_params()
+                } else {
+                    session
+                }
+            }
             Err(err) => {
                 terminal_restore_guard.restore_silently();
                 session_log::log_session_end();
@@ -1486,6 +1583,7 @@ async fn run_ratatui_app(
             &app_server_target,
             arg0_paths,
             config.clone(),
+            cli_config_overrides.clone(),
             cli_kv_overrides.clone(),
             loader_overrides,
             cloud_requirements.clone(),
@@ -1496,14 +1594,35 @@ async fn run_ratatui_app(
         )
         .await
         {
-            Ok(app_server) => AppServerSession::new(app_server)
-                .with_remote_cwd_override(remote_cwd_override.clone()),
+            Ok(app_server) => {
+                let session = AppServerSession::new(app_server)
+                    .with_remote_cwd_override(remote_cwd_override.clone());
+                if matches!(app_server_target, AppServerTarget::ManagedWorkflow { .. }) {
+                    session.with_embedded_thread_params()
+                } else {
+                    session
+                }
+            }
             Err(err) => {
                 terminal_restore_guard.restore_silently();
                 session_log::log_session_end();
                 return Err(err);
             }
         },
+    };
+
+    let (app_remote_url, app_remote_auth_token, workflow_app_server_url) = match &app_server_target
+    {
+        AppServerTarget::ManagedWorkflow { websocket_url } => (
+            Some(websocket_url.clone()),
+            None,
+            Some(websocket_url.clone()),
+        ),
+        AppServerTarget::Remote {
+            websocket_url,
+            auth_token,
+        } => (Some(websocket_url.clone()), auth_token.clone(), None),
+        AppServerTarget::Embedded => (remote_url, remote_auth_token, None),
     };
 
     let app_result = App::run(
@@ -1520,8 +1639,9 @@ async fn run_ratatui_app(
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
         should_show_trust_screen_flag, // Preserve the startup-time trust NUX signal before onboarding
         should_prompt_windows_sandbox_nux_at_startup,
-        remote_url,
-        remote_auth_token,
+        app_remote_url,
+        app_remote_auth_token,
+        workflow_app_server_url,
         state_db,
         environment_manager,
     )

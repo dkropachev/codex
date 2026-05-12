@@ -400,6 +400,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_workflows_enabled(&mut self, enabled: bool) {
+        self.composer.set_workflows_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn set_realtime_conversation_enabled(&mut self, enabled: bool) {
         self.composer.set_realtime_conversation_enabled(enabled);
         self.request_redraw();

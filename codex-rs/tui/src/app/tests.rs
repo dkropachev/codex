@@ -1514,7 +1514,7 @@ async fn should_attach_live_thread_for_selection_skips_closed_metadata_only_thre
         /*is_closed*/ true,
     );
 
-    assert!(!app.should_attach_live_thread_for_selection(thread_id));
+    assert!(!app.should_attach_live_thread_for_selection(thread_id).await);
 
     app.agent_navigation.upsert(
         thread_id,
@@ -1522,11 +1522,18 @@ async fn should_attach_live_thread_for_selection_skips_closed_metadata_only_thre
         Some("worker".to_string()),
         /*is_closed*/ false,
     );
-    assert!(app.should_attach_live_thread_for_selection(thread_id));
+    assert!(app.should_attach_live_thread_for_selection(thread_id).await);
 
     app.thread_event_channels
         .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
-    assert!(!app.should_attach_live_thread_for_selection(thread_id));
+    assert!(app.should_attach_live_thread_for_selection(thread_id).await);
+
+    let channel = app
+        .thread_event_channels
+        .get(&thread_id)
+        .expect("thread channel should exist");
+    channel.store.lock().await.live_attached = true;
+    assert!(!app.should_attach_live_thread_for_selection(thread_id).await);
 }
 
 #[tokio::test]
@@ -3465,7 +3472,7 @@ async fn side_thread_snapshot_skips_session_header_preamble() {
 async fn side_thread_ignores_global_mcp_startup_notifications() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     while app_event_rx.try_recv().is_ok() {}
-    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
         .await
         .expect("embedded app server");
     let parent_thread_id = ThreadId::new();
@@ -3477,7 +3484,7 @@ async fn side_thread_ignores_global_mcp_startup_notifications() {
     app.sync_side_thread_ui();
 
     app.handle_app_server_event(
-        &app_server,
+        &mut app_server,
         codex_app_server_client::AppServerEvent::ServerNotification(
             ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
                 name: "sentry".to_string(),
@@ -3896,6 +3903,7 @@ async fn make_test_app() -> App {
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         remote_app_server_url: None,
         remote_app_server_auth_token: None,
+        workflow_app_server_url: None,
         pending_update_action: None,
         pending_shutdown_exit_thread_id: None,
         windows_sandbox: WindowsSandboxState::default(),
@@ -3959,6 +3967,7 @@ async fn make_test_app_with_channels() -> (
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
             remote_app_server_url: None,
             remote_app_server_auth_token: None,
+            workflow_app_server_url: None,
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),

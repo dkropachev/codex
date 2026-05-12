@@ -25,6 +25,23 @@ fn submit_current_composer(chat: &mut ChatWidget) {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 }
 
+#[tokio::test]
+async fn workflow_slash_with_args_emits_run_workflow_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Workflow,
+        "node workflow.js".to_string(),
+        Vec::new(),
+    );
+
+    match rx.try_recv() {
+        Ok(AppEvent::RunWorkflow { command }) => assert_eq!(command, "node workflow.js"),
+        other => panic!("expected RunWorkflow event, got {other:?}"),
+    }
+}
+
 fn queue_composer_text_with_tab(chat: &mut ChatWidget, text: &str) {
     chat.bottom_pane
         .set_composer_text(text.to_string(), Vec::new(), Vec::new());

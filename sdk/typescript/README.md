@@ -31,6 +31,140 @@ Call `run()` repeatedly on the same `Thread` instance to continue that conversat
 const nextTurn = await thread.run("Implement the fix");
 ```
 
+## Workflows
+
+Use `defineWorkflow()` when JavaScript code should orchestrate Codex in a way that can run from the TUI, from another
+workflow, or as a standalone script. Workflow code receives a `WorkflowContext`; the launcher decides whether to reuse an
+existing app-server or start a private one.
+
+```typescript
+import { defineTool, defineWorkflow, runWorkflow } from "@openai/codex-sdk/workflow";
+
+const lookupIssue = defineTool(
+  {
+    namespace: "js",
+    name: "lookup_issue",
+    description: "Returns issue details from the host application",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string" } },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
+  async (args) => {
+    const { id } = args as { id: string };
+    return `Issue ${id}: failing checkout test`;
+  },
+);
+
+const workflow = defineWorkflow<{ issueId: string }, string>({
+  name: "fix-issue",
+  async run(ctx, input) {
+    const agent = await ctx.createAgent({ tools: [lookupIssue] });
+    const turn = await agent.run(
+      `Use lookup_issue, then propose the smallest fix for issue ${input.issueId}`,
+    );
+    return turn.finalResponse;
+  },
+});
+
+const summary = await runWorkflow(workflow, {
+  input: { issueId: "C-123" },
+  connection: "auto",
+});
+
+console.log(summary);
+```
+
+`connection: "auto"` connects to `appServerUrl`, `CODEX_APP_SERVER_URL`, or `CODEX_WORKFLOW_APP_SERVER_URL` when one is
+available. Otherwise it starts `codex app-server --listen stdio://` and shuts it down when the workflow finishes. Use
+`connection: "require-existing"` to fail instead of spawning, or `connection: "spawn"` to always start a private server.
+
+`approvals` controls who answers app-server requests that need a decision. This is separate from an agent's
+`approvalPolicy`, which controls when Codex asks. When omitted, standalone workflows decline approval requests unless a host
+sets `CODEX_WORKFLOW_APPROVALS=delegate` or you choose `approvals: "delegate"` explicitly.
+
+```typescript
+await runWorkflow(workflow, {
+  approvals: "decline", // safe default for CI/noninteractive scripts
+});
+
+await runWorkflow(workflow, {
+  approvals: "delegate", // let another client, usually the TUI, answer
+});
+```
+
+Inside a workflow, agents are backed by app-server threads. Use `fork()` or `createAgent()` when a workflow needs
+independent Codex work, then `wait()` to collect a run that was started with initial input.
+
+```typescript
+const reviewAgent = await agent.createAgent({
+  input: "Review the proposed patch for regressions",
+});
+
+const review = await reviewAgent.wait();
+console.log(review?.finalResponse);
+```
+
+Resume a persisted Codex session by thread ID when the workflow should continue an existing conversation.
+
+```typescript
+const agent = await ctx.resumeAgent(process.env.CODEX_THREAD_ID!);
+const turn = await agent.run("Continue from the previous session and summarize next steps");
+```
+
+The workflow context also exposes app-server MCP and command helpers.
+
+```typescript
+const mcpResult = await ctx.mcp.callTool(agent, {
+  server: "docs",
+  tool: "search",
+  arguments: { query: "checkout failure" },
+});
+
+const commandResult = await ctx.tools.exec(["git", "status", "--short"]);
+```
+
+For lower-level control, use `CodexWorkflow.start()`, `CodexWorkflow.connect()`, `CodexWorkflow.spawnServer()`, or
+`CodexWorkflow.fromTui()` directly.
+
+### Showing workflow agents in the TUI
+
+To see JavaScript workflow progress and results in the regular Codex TUI, enable workflows in `config.toml` and restart `codex`.
+
+```toml
+[features]
+workflows = true
+```
+
+Then launch the workflow from the TUI:
+
+```bash
+/workflow node ./workflow.js
+```
+
+The TUI starts a loopback app-server automatically and passes its URL to the workflow process. In that mode reusable
+workflows can use the same `runWorkflow()` entrypoint:
+
+```typescript
+await runWorkflow(workflow);
+```
+
+Threads started by the workflow appear in `/agent` and replay progress/results through the same transcript UI as other agents.
+The TUI also sets `CODEX_WORKFLOW_APPROVALS=delegate`, so command/file approval and MCP elicitation prompts are left for the
+TUI while JavaScript dynamic tools are still answered by the workflow process.
+
+If your Node runtime does not provide a global `WebSocket`, pass one explicitly:
+
+```typescript
+import WebSocket from "ws";
+
+const workflow = await CodexWorkflow.start({
+  webSocket: WebSocket,
+});
+```
+
 ### Streaming responses
 
 `run()` buffers events until the turn finishes. To react to intermediate progress—tool calls, streaming responses, and file change notifications—use `runStreamed()` instead, which returns an async generator of structured events.

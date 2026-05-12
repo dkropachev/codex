@@ -239,6 +239,9 @@ impl ChatWidget {
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
+            SlashCommand::Workflow => {
+                self.add_error_message("Usage: /workflow <command>".to_string());
+            }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
             }
@@ -763,6 +766,10 @@ impl ChatWidget {
                 );
                 self.request_side_conversation(parent_thread_id, Some(user_message));
             }
+            SlashCommand::Workflow if !trimmed.is_empty() => {
+                self.app_event_tx
+                    .send(AppEvent::RunWorkflow { command: args });
+            }
             SlashCommand::Review if !trimmed.is_empty() => {
                 self.submit_op(AppCommand::review(ReviewTarget::Custom {
                     instructions: args,
@@ -885,6 +892,7 @@ impl ChatWidget {
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
             realtime_conversation_enabled: self.realtime_conversation_enabled(),
             audio_device_selection_enabled: self.realtime_audio_device_selection_enabled(),
+            workflows_enabled: self.config.features.enabled(Feature::Workflows),
             allow_elevate_sandbox,
             side_conversation_active: self.active_side_conversation,
         }
@@ -908,6 +916,7 @@ impl ChatWidget {
             | SlashCommand::Plugins
             | SlashCommand::Rollout
             | SlashCommand::Copy
+            | SlashCommand::Workflow
             | SlashCommand::Raw
             | SlashCommand::Vim
             | SlashCommand::Diff
