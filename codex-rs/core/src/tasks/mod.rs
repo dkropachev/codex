@@ -53,9 +53,11 @@ use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 
 pub(crate) use codex_config::CodexConfigIntentMode;
+pub(crate) use codex_config::codex_config_edit_permission_profile;
+pub(crate) use codex_config::codex_config_edit_sandbox_policy;
 pub(crate) use codex_config::codex_config_intent_turn;
-pub(crate) use codex_config::codex_config_permission_profile;
-pub(crate) use codex_config::codex_config_sandbox_policy;
+pub(crate) use codex_config::codex_config_plan_permission_profile;
+pub(crate) use codex_config::codex_config_plan_sandbox_policy;
 pub(crate) use codex_config::codex_config_workspace_for_target;
 use codex_features::Feature;
 use codex_protocol::models::ContentItem;

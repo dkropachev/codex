@@ -31,9 +31,11 @@ use crate::tasks::CompactTask;
 use crate::tasks::UndoTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
+use crate::tasks::codex_config_edit_permission_profile;
+use crate::tasks::codex_config_edit_sandbox_policy;
 use crate::tasks::codex_config_intent_turn;
-use crate::tasks::codex_config_permission_profile;
-use crate::tasks::codex_config_sandbox_policy;
+use crate::tasks::codex_config_plan_permission_profile;
+use crate::tasks::codex_config_plan_sandbox_policy;
 use crate::tasks::codex_config_workspace_for_target;
 use crate::tasks::execute_user_shell_command;
 use codex_mcp::collect_mcp_snapshot_from_manager;
@@ -571,21 +573,32 @@ pub async fn codex_config_intent(
         return;
     }
 
-    let (target_cwd, current_mode) = {
+    let (target_cwd, codex_home, current_mode) = {
         let state = sess.state.lock().await;
         (
             state.session_configuration.cwd.to_path_buf(),
+            state.session_configuration.codex_home.clone(),
             state.session_configuration.collaboration_mode.clone(),
         )
     };
     let workspace = codex_config_workspace_for_target(&target_cwd);
-    let sandbox_policy = codex_config_sandbox_policy();
-    let turn = codex_config_intent_turn(intent, context, &target_cwd, &workspace).await;
+    let turn =
+        codex_config_intent_turn(intent, context, &target_cwd, &workspace, &codex_home).await;
     let mode = match turn.mode {
         CodexConfigIntentMode::Investigate => ModeKind::Codex,
         CodexConfigIntentMode::ConfigEdit | CodexConfigIntentMode::AiResolve => {
             ModeKind::CodexConfigEdit
         }
+    };
+    let (sandbox_policy, permission_profile) = match turn.mode {
+        CodexConfigIntentMode::Investigate | CodexConfigIntentMode::AiResolve => (
+            codex_config_plan_sandbox_policy(),
+            codex_config_plan_permission_profile(),
+        ),
+        CodexConfigIntentMode::ConfigEdit => (
+            codex_config_edit_sandbox_policy(&codex_home),
+            codex_config_edit_permission_profile(&codex_home),
+        ),
     };
     let codex_mode = CollaborationMode {
         mode,
@@ -601,7 +614,7 @@ pub async fn codex_config_intent(
             SessionSettingsUpdate {
                 cwd: Some(workspace.clone()),
                 sandbox_policy: Some(sandbox_policy),
-                permission_profile: Some(codex_config_permission_profile()),
+                permission_profile: Some(permission_profile),
                 collaboration_mode: Some(codex_mode),
                 ..Default::default()
             },

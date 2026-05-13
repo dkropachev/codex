@@ -30,6 +30,28 @@ pub(super) fn selection_view_params(
     plan_markdown: Option<&str>,
     clear_context_usage_label: Option<&str>,
 ) -> SelectionViewParams {
+    selection_view_params_with_copy(
+        default_mask,
+        plan_markdown,
+        clear_context_usage_label,
+        "Switch to Default and start coding.",
+        PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE,
+        PLAN_IMPLEMENTATION_NO,
+        "Continue planning with the model.",
+        /*allow_clear_context*/ true,
+    )
+}
+
+pub(super) fn selection_view_params_with_copy(
+    default_mask: Option<CollaborationModeMask>,
+    plan_markdown: Option<&str>,
+    clear_context_usage_label: Option<&str>,
+    implement_description: &str,
+    clear_context_unavailable_reason: &str,
+    stay_name: &str,
+    stay_description: &str,
+    allow_clear_context: bool,
+) -> SelectionViewParams {
     let (implement_actions, implement_disabled_reason) = match default_mask.clone() {
         Some(mask) => {
             let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
@@ -47,27 +69,31 @@ pub(super) fn selection_view_params(
         ),
     };
 
-    let (clear_context_actions, clear_context_disabled_reason) = match (default_mask, plan_markdown)
-    {
-        (None, _) => (
-            Vec::new(),
-            Some(PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE.to_string()),
-        ),
-        (Some(_), Some(plan_markdown)) if !plan_markdown.trim().is_empty() => {
-            let user_text =
-                format!("{PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX}\n\n{plan_markdown}");
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::ClearUiAndSubmitUserMessage {
-                    text: user_text.clone(),
-                });
-            })];
-            (actions, None)
-        }
-        (Some(_), _) => (
-            Vec::new(),
-            Some(PLAN_IMPLEMENTATION_NO_APPROVED_PLAN.to_string()),
-        ),
-    };
+    let (clear_context_actions, clear_context_disabled_reason) =
+        match (allow_clear_context, default_mask, plan_markdown) {
+            (false, _, _) => (
+                Vec::new(),
+                Some(clear_context_unavailable_reason.to_string()),
+            ),
+            (true, None, _) => (
+                Vec::new(),
+                Some(PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE.to_string()),
+            ),
+            (true, Some(_), Some(plan_markdown)) if !plan_markdown.trim().is_empty() => {
+                let user_text =
+                    format!("{PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX}\n\n{plan_markdown}");
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::ClearUiAndSubmitUserMessage {
+                        text: user_text.clone(),
+                    });
+                })];
+                (actions, None)
+            }
+            (true, Some(_), _) => (
+                Vec::new(),
+                Some(PLAN_IMPLEMENTATION_NO_APPROVED_PLAN.to_string()),
+            ),
+        };
 
     let clear_context_description = clear_context_usage_label.map_or_else(
         || "Fresh thread with this plan.".to_string(),
@@ -81,7 +107,7 @@ pub(super) fn selection_view_params(
         items: vec![
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_YES.to_string(),
-                description: Some("Switch to Default and start coding.".to_string()),
+                description: Some(implement_description.to_string()),
                 selected_description: None,
                 is_current: false,
                 actions: implement_actions,
@@ -100,8 +126,8 @@ pub(super) fn selection_view_params(
                 ..Default::default()
             },
             SelectionItem {
-                name: PLAN_IMPLEMENTATION_NO.to_string(),
-                description: Some("Continue planning with the model.".to_string()),
+                name: stay_name.to_string(),
+                description: Some(stay_description.to_string()),
                 selected_description: None,
                 is_current: false,
                 actions: Vec::new(),

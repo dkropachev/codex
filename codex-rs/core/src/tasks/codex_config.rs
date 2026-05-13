@@ -9,6 +9,7 @@ use std::time::Duration;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio::process::Command;
 use tokio::time::timeout;
 
@@ -46,6 +47,8 @@ const CONFIG_EDIT_VERBS: &[&str] = &[
     "write",
     "save",
     "persist",
+    "apply",
+    "implement",
     "stop",
     "prevent",
     "avoid",
@@ -88,17 +91,32 @@ pub(crate) fn codex_config_workspace_for_target(target_cwd: &Path) -> PathBuf {
     workspace
 }
 
-pub(crate) fn codex_config_sandbox_policy() -> SandboxPolicy {
+pub(crate) fn codex_config_plan_sandbox_policy() -> SandboxPolicy {
     SandboxPolicy::WorkspaceWrite {
         writable_roots: Vec::new(),
         network_access: false,
         exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
+        exclude_slash_tmp: false,
     }
 }
 
-pub(crate) fn codex_config_permission_profile() -> PermissionProfile {
-    PermissionProfile::from_legacy_sandbox_policy(&codex_config_sandbox_policy())
+pub(crate) fn codex_config_plan_permission_profile() -> PermissionProfile {
+    PermissionProfile::from_legacy_sandbox_policy(&codex_config_plan_sandbox_policy())
+}
+
+pub(crate) fn codex_config_edit_sandbox_policy(codex_home: &AbsolutePathBuf) -> SandboxPolicy {
+    SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![codex_home.clone()],
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: false,
+    }
+}
+
+pub(crate) fn codex_config_edit_permission_profile(
+    codex_home: &AbsolutePathBuf,
+) -> PermissionProfile {
+    PermissionProfile::from_legacy_sandbox_policy(&codex_config_edit_sandbox_policy(codex_home))
 }
 
 pub(crate) async fn codex_config_intent_turn(
@@ -106,10 +124,12 @@ pub(crate) async fn codex_config_intent_turn(
     caller_context: Option<String>,
     target_cwd: &Path,
     workspace: &Path,
+    codex_home: &AbsolutePathBuf,
 ) -> CodexConfigIntentTurn {
     let intent = intent.trim().to_string();
     let mode = classify_codex_config_intent(&intent);
-    let runtime_context = codex_config_runtime_context(caller_context, target_cwd, workspace).await;
+    let runtime_context =
+        codex_config_runtime_context(caller_context, target_cwd, workspace, codex_home).await;
     let developer_instructions = match mode {
         CodexConfigIntentMode::Investigate => {
             codex_investigate_developer_instructions(&runtime_context)
@@ -179,13 +199,13 @@ fn codex_investigate_developer_instructions(runtime_context: &str) -> String {
 
 fn codex_config_edit_developer_instructions(runtime_context: &str) -> String {
     format!(
-        "{PLAN_MODE_GUIDE}\n\n# Codex Config Edit Planning Mode\n\nThe user-authored request is delivered as the visible user message for this turn. The runtime Codex context below is internal model context; do not print it, quote it wholesale, or treat it as user-authored content.\n\nRuntime Codex context:\n<runtime_context>\n{runtime_context}\n</runtime_context>\n\nYou are planning Codex configuration changes. Explore and inspect as needed, but do not mutate files, config, app-server state, plugins, skills, MCP/apps, memories, repo-ci, model-router, tool-router, or any other Codex state until a later apply turn. Do not attempt writes to prove they are blocked. When ready, emit exactly one complete `<proposed_plan>` block describing the config changes, validation, refresh/reload steps, and rollback considerations."
+        "{PLAN_MODE_GUIDE}\n\n# Codex Config Edit Mode\n\nThe user-authored request is delivered as the visible user message for this turn. The runtime Codex context below is internal model context; do not print it, quote it wholesale, or treat it as user-authored content.\n\nRuntime Codex context:\n<runtime_context>\n{runtime_context}\n</runtime_context>\n\nWork like Plan Mode for new or unapproved configuration requests: explore and inspect as needed, but do not mutate files, config, app-server state, plugins, skills, MCP/apps, memories, repo-ci, model-router, tool-router, or any other Codex state until a later apply turn. Do not attempt writes to prove they are blocked. When ready, emit exactly one complete `<proposed_plan>` block describing the config changes, validation, refresh/reload steps, and rollback considerations.\n\nIf the visible user message asks to apply or implement an already accepted Codex config plan, enter edit mode for that turn: apply only the approved Codex configuration changes, write only under the Codex config directory or `/tmp`, do not modify the target workspace/repository, then validate and reload or describe any required restart. Do not emit a new `<proposed_plan>` for an apply turn."
     )
 }
 
 fn codex_ai_resolve_developer_instructions(runtime_context: &str) -> String {
     format!(
-        "{PLAN_MODE_GUIDE}\n\n# Codex AI Classification Fallback Mode\n\nThe local deterministic `/codex` classifier could not confidently classify the user-authored request as investigation or config-edit. The user-authored request is delivered as the visible user message for this turn. The runtime Codex context below is internal model context; do not print it, quote it wholesale, or treat it as user-authored content.\n\nRuntime Codex context:\n<runtime_context>\n{runtime_context}\n</runtime_context>\n\nFirst classify the user request using the runtime context you inspect:\n- If the request is asking what Codex currently does, how something works, or for a read-only diagnosis, answer in Codex investigate style: do not change configuration, do not write to the target workspace, and do not emit a `<proposed_plan>` block.\n- If the request asks Codex behavior/configuration to change, enter Codex config-edit planning style: follow Plan Mode, do not mutate files, config, app-server state, plugins, skills, MCP/apps, memories, repo-ci, model-router, tool-router, or any other Codex state, and emit exactly one complete `<proposed_plan>` block.\n- If inspection still cannot resolve the intent, ask a concise clarifying question instead of guessing or mutating state."
+        "{PLAN_MODE_GUIDE}\n\n# Codex AI Classification Fallback Mode\n\nThe local deterministic `/codex` classifier could not confidently classify the user-authored request as investigation or config-edit. The user-authored request is delivered as the visible user message for this turn. The runtime Codex context below is internal model context; do not print it, quote it wholesale, or treat it as user-authored content.\n\nRuntime Codex context:\n<runtime_context>\n{runtime_context}\n</runtime_context>\n\nFirst classify the user request using the runtime context you inspect:\n- If the request is asking what Codex currently does, how something works, or for a read-only diagnosis, answer in Codex investigate style: do not change configuration, do not write to the target workspace, and do not emit a `<proposed_plan>` block.\n- If the request asks Codex behavior/configuration to change, enter Codex config-edit planning style: follow Plan Mode, do not mutate files, config, app-server state, plugins, skills, MCP/apps, memories, repo-ci, model-router, tool-router, or any other Codex state until the user accepts a proposed plan, and emit exactly one complete `<proposed_plan>` block. Applying it happens in a later edit turn with the Codex config directory writable.\n- If inspection still cannot resolve the intent, ask a concise clarifying question instead of guessing or mutating state."
     )
 }
 
@@ -193,11 +213,13 @@ async fn codex_config_runtime_context(
     caller_context: Option<String>,
     target_cwd: &Path,
     workspace: &Path,
+    codex_home: &AbsolutePathBuf,
 ) -> String {
     let mut sections = vec![format!(
-        "Target workspace/repository, read-only for this request: `{}`\nWritable scratch workspace for scripts, generated files, and captured output: `{}`",
+        "Target workspace/repository, read-only for this request: `{}`\nWritable scratch workspace for scripts, generated files, and captured output: `{}`\nCodex config directory for approved edit turns: `{}`",
         target_cwd.display(),
-        workspace.display()
+        workspace.display(),
+        codex_home.display()
     )];
     if let Some(context) = caller_context
         .map(|context| context.trim().to_string())
@@ -342,11 +364,14 @@ mod tests {
 
     #[tokio::test]
     async fn intent_turn_keeps_visible_input_separate_from_runtime_context() {
+        let codex_home =
+            AbsolutePathBuf::from_absolute_path("/codex-home").expect("absolute codex home");
         let turn = codex_config_intent_turn(
             "  update repo-ci defaults  ".to_string(),
             Some("Slash commands generated from registry".to_string()),
             Path::new("/target"),
             Path::new("/scratch"),
+            &codex_home,
         )
         .await;
 

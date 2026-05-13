@@ -752,6 +752,7 @@ impl ChatWidget {
                             self.set_collaboration_mask(
                                 crate::codex_config_context::codex_config_edit_mask(
                                     &self.config.cwd,
+                                    &self.config.codex_home,
                                 ),
                             );
                         }
@@ -760,6 +761,7 @@ impl ChatWidget {
                             self.set_collaboration_mask(
                                 crate::codex_config_context::codex_ai_resolve_mask(
                                     &self.config.cwd,
+                                    &self.config.codex_home,
                                 ),
                             );
                         }

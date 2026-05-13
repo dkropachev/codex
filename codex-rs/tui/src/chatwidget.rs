@@ -2318,7 +2318,7 @@ impl ChatWidget {
     }
 
     fn on_plan_delta(&mut self, delta: String) {
-        if self.active_mode_kind() != ModeKind::Plan {
+        if !self.active_mode_kind().is_plan_like() {
             return;
         }
         if !self.plan_item_active {
@@ -2597,7 +2597,7 @@ impl ChatWidget {
         if self.has_queued_follow_up_messages() {
             return;
         }
-        if self.active_mode_kind() != ModeKind::Plan {
+        if !self.active_mode_kind().is_plan_like() {
             return;
         }
         if !self.saw_plan_item_this_turn {
@@ -2618,15 +2618,35 @@ impl ChatWidget {
     }
 
     fn open_plan_implementation_prompt(&mut self) {
-        let default_mask = collaboration_modes::default_mode_mask(self.model_catalog.as_ref());
+        let default_mask = if self.active_mode_kind() == ModeKind::CodexConfigEdit {
+            Some(crate::codex_config_context::codex_config_edit_mask(
+                &self.config.cwd,
+                &self.config.codex_home,
+            ))
+        } else {
+            collaboration_modes::default_mode_mask(self.model_catalog.as_ref())
+        };
         let context_usage_label = self.plan_implementation_context_usage_label();
-
-        self.bottom_pane
-            .show_selection_view(plan_implementation::selection_view_params(
+        let params = if self.active_mode_kind() == ModeKind::CodexConfigEdit {
+            plan_implementation::selection_view_params_with_copy(
                 default_mask,
                 self.latest_proposed_plan_markdown.as_deref(),
                 context_usage_label.as_deref(),
-            ));
+                "Stay in Codex config edit mode and apply the approved config plan.",
+                "Fresh context is unavailable for Codex config edits.",
+                "No, keep planning Codex config",
+                "Continue planning Codex config with the model.",
+                /*allow_clear_context*/ false,
+            )
+        } else {
+            plan_implementation::selection_view_params(
+                default_mask,
+                self.latest_proposed_plan_markdown.as_deref(),
+                context_usage_label.as_deref(),
+            )
+        };
+
+        self.bottom_pane.show_selection_view(params);
         self.notify(Notification::PlanModePrompt {
             title: PLAN_IMPLEMENTATION_TITLE.to_string(),
         });
@@ -5865,12 +5885,15 @@ impl ChatWidget {
             }
         }
 
+        let mut codex_request_mode = None;
         if matches!(
             self.active_mode_kind(),
             ModeKind::Codex | ModeKind::CodexConfigEdit
         ) && !text.trim().is_empty()
         {
-            match crate::codex_config_context::classify_codex_request(&text) {
+            let request_mode = crate::codex_config_context::classify_codex_request(&text);
+            codex_request_mode = Some(request_mode);
+            match request_mode {
                 crate::codex_config_context::CodexRequestMode::Investigate => {
                     self.set_collaboration_mask(
                         crate::codex_config_context::codex_investigate_mask(&self.config.cwd),
@@ -5879,13 +5902,19 @@ impl ChatWidget {
                 crate::codex_config_context::CodexRequestMode::ConfigEdit => {
                     self.latest_proposed_plan_markdown = None;
                     self.set_collaboration_mask(
-                        crate::codex_config_context::codex_config_edit_mask(&self.config.cwd),
+                        crate::codex_config_context::codex_config_edit_mask(
+                            &self.config.cwd,
+                            &self.config.codex_home,
+                        ),
                     );
                 }
                 crate::codex_config_context::CodexRequestMode::AiResolve => {
                     self.latest_proposed_plan_markdown = None;
                     self.set_collaboration_mask(
-                        crate::codex_config_context::codex_ai_resolve_mask(&self.config.cwd),
+                        crate::codex_config_context::codex_ai_resolve_mask(
+                            &self.config.cwd,
+                            &self.config.codex_home,
+                        ),
                     );
                 }
             }
@@ -5949,7 +5978,21 @@ impl ChatWidget {
             self.config.cwd.to_path_buf()
         };
         let permission_profile = if codex_config_turn {
-            crate::codex_config_context::codex_config_permission_profile()
+            match codex_request_mode {
+                Some(crate::codex_config_context::CodexRequestMode::ConfigEdit) => {
+                    crate::codex_config_context::codex_config_edit_permission_profile(
+                        &self.config.codex_home,
+                    )
+                }
+                Some(
+                    crate::codex_config_context::CodexRequestMode::Investigate
+                    | crate::codex_config_context::CodexRequestMode::AiResolve,
+                ) => crate::codex_config_context::codex_config_plan_permission_profile(),
+                None => crate::codex_config_context::codex_permission_profile_for_mode(
+                    &effective_mode,
+                    &self.config.codex_home,
+                ),
+            }
         } else {
             self.config.permissions.permission_profile()
         };
