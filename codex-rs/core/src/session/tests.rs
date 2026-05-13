@@ -3009,7 +3009,7 @@ async fn routed_deepseek_turn_uses_chat_completions_and_records_usage() -> anyho
                 .model_providers
                 .get_mut(DEEPSEEK_PROVIDER_ID)
                 .expect("DeepSeek provider should be built in");
-            deepseek.base_url = Some(base_url.clone());
+            deepseek.base_url = Some(base_url);
             deepseek.env_key = None;
             deepseek.experimental_bearer_token = Some("deepseek-test-token".to_string());
             config.model_router = Some(codex_config::config_toml::ModelRouterToml {

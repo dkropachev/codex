@@ -226,7 +226,7 @@ fn chat_content_from_content_items(content: &[ContentItem]) -> Value {
                     image_url_value.insert("url".to_string(), Value::String(image_url.clone()));
                     if let Some(detail) = detail {
                         image_url_value
-                            .insert("detail".to_string(), Value::String(image_detail(detail)));
+                            .insert("detail".to_string(), Value::String(image_detail(*detail)));
                     }
                     json!({
                         "type": "image_url",
@@ -251,7 +251,7 @@ fn text_from_content_items(content: &[ContentItem]) -> String {
         .join("\n")
 }
 
-fn image_detail(detail: &ImageDetail) -> String {
+fn image_detail(detail: ImageDetail) -> String {
     match detail {
         ImageDetail::Auto => "auto",
         ImageDetail::Low => "low",

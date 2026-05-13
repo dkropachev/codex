@@ -483,7 +483,6 @@ mod tests {
     use codex_protocol::models::LocalShellExecAction;
     use futures::StreamExt;
     use futures::stream;
-    use pretty_assertions::assert_eq;
     use serde_json::Value;
     use serde_json::json;
 
