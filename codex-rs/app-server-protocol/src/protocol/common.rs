@@ -185,7 +185,161 @@ macro_rules! client_request_definitions {
             }
 
             pub fn serialization_scope(&self) -> Option<ClientRequestSerializationScope> {
-                None
+                let thread_scope = |thread_id: &str| {
+                    Some(ClientRequestSerializationScope::Thread {
+                        thread_id: thread_id.to_string(),
+                    })
+                };
+                let command_exec_scope = |process_id: &str| {
+                    Some(ClientRequestSerializationScope::CommandExecProcess {
+                        process_id: process_id.to_string(),
+                    })
+                };
+                let process_scope = |process_handle: &str| {
+                    Some(ClientRequestSerializationScope::Process {
+                        process_handle: process_handle.to_string(),
+                    })
+                };
+
+                match self {
+                    Self::ConfigValueWrite { .. }
+                    | Self::ConfigBatchWrite { .. }
+                    | Self::ExperimentalFeatureEnablementSet { .. }
+                    | Self::McpServerRefresh { .. }
+                    | Self::WorkflowConfigWrite { .. }
+                    | Self::SkillsConfigWrite { .. }
+                    | Self::PluginInstall { .. }
+                    | Self::PluginUninstall { .. }
+                    | Self::MarketplaceAdd { .. }
+                    | Self::MarketplaceRemove { .. }
+                    | Self::MarketplaceUpgrade { .. }
+                    | Self::ExternalAgentConfigImport { .. } => {
+                        Some(ClientRequestSerializationScope::Global("config"))
+                    }
+                    Self::ConfigRead { .. }
+                    | Self::ConfigRequirementsRead { .. }
+                    | Self::ModelProviderCapabilitiesRead { .. }
+                    | Self::HooksList { .. }
+                    | Self::ApiCatalogRead { .. }
+                    | Self::WorkflowConfigRead { .. }
+                    | Self::AppsList { .. }
+                    | Self::ModelList { .. }
+                    | Self::ExperimentalFeatureList { .. }
+                    | Self::PluginList { .. }
+                    | Self::PluginRead { .. }
+                    | Self::PluginSkillRead { .. }
+                    | Self::ExternalAgentConfigDetect { .. } => {
+                        Some(ClientRequestSerializationScope::GlobalSharedRead("config"))
+                    }
+                    Self::FuzzyFileSearchSessionStart { params, .. } => {
+                        Some(ClientRequestSerializationScope::FuzzyFileSearchSession {
+                            session_id: params.session_id.clone(),
+                        })
+                    }
+                    Self::FuzzyFileSearchSessionUpdate { params, .. } => {
+                        Some(ClientRequestSerializationScope::FuzzyFileSearchSession {
+                            session_id: params.session_id.clone(),
+                        })
+                    }
+                    Self::FuzzyFileSearchSessionStop { params, .. } => {
+                        Some(ClientRequestSerializationScope::FuzzyFileSearchSession {
+                            session_id: params.session_id.clone(),
+                        })
+                    }
+                    Self::OneOffCommandExec { params, .. } => {
+                        params
+                            .process_id
+                            .as_ref()
+                            .and_then(|process_id| command_exec_scope(process_id))
+                    }
+                    Self::CommandExecWrite { params, .. } => {
+                        command_exec_scope(&params.process_id)
+                    }
+                    Self::CommandExecTerminate { params, .. } => {
+                        command_exec_scope(&params.process_id)
+                    }
+                    Self::CommandExecResize { params, .. } => {
+                        command_exec_scope(&params.process_id)
+                    }
+                    Self::ProcessSpawn { params, .. } => process_scope(&params.process_handle),
+                    Self::ProcessWriteStdin { params, .. } => {
+                        process_scope(&params.process_handle)
+                    }
+                    Self::ProcessKill { params, .. } => process_scope(&params.process_handle),
+                    Self::ProcessResizePty { params, .. } => process_scope(&params.process_handle),
+                    Self::FsWatch { params, .. } => {
+                        Some(ClientRequestSerializationScope::FsWatch {
+                            watch_id: params.watch_id.clone(),
+                        })
+                    }
+                    Self::FsUnwatch { params, .. } => {
+                        Some(ClientRequestSerializationScope::FsWatch {
+                            watch_id: params.watch_id.clone(),
+                        })
+                    }
+                    Self::ThreadResume { params, .. } => params
+                        .path
+                        .as_ref()
+                        .map(|path| ClientRequestSerializationScope::ThreadPath { path: path.clone() })
+                        .or_else(|| Some(ClientRequestSerializationScope::Thread {
+                            thread_id: params.thread_id.clone(),
+                        })),
+                    Self::ThreadUnsubscribe { params, .. } => thread_scope(&params.thread_id),
+                    Self::ThreadFork { params, .. } => params
+                        .path
+                        .as_ref()
+                        .map(|path| ClientRequestSerializationScope::ThreadPath { path: path.clone() })
+                        .or_else(|| Some(ClientRequestSerializationScope::Thread {
+                            thread_id: params.thread_id.clone(),
+                        })),
+                    Self::ThreadArchive { params, .. } => thread_scope(&params.thread_id),
+                    Self::ThreadIncrementElicitation { params, .. } => {
+                        thread_scope(&params.thread_id)
+                    }
+                    Self::ThreadDecrementElicitation { params, .. } => {
+                        thread_scope(&params.thread_id)
+                    }
+                    Self::ThreadSetName { params, .. } => thread_scope(&params.thread_id),
+                    Self::ThreadGoalSet { params, .. } => thread_scope(&params.thread_id),
+                    Self::ThreadGoalGet { params, .. } => thread_scope(&params.thread_id),
+                    Self::ThreadGoalClear { params, .. } => thread_scope(&params.thread_id),
+                    Self::ThreadMetadataUpdate { params, .. } => thread_scope(&params.thread_id),
+                    Self::ThreadMemoryModeSet { params, .. } => thread_scope(&params.thread_id),
+                    Self::ThreadRepoCiSessionConfigSet { params, .. } => {
+                        thread_scope(&params.thread_id)
+                    }
+                    Self::ThreadCodexConfigIntentSubmit { params, .. } => {
+                        thread_scope(&params.thread_id)
+                    }
+                    Self::ThreadModelRouterSessionConfigSet { params, .. } => {
+                        thread_scope(&params.thread_id)
+                    }
+                    Self::ThreadUnarchive { params, .. } => thread_scope(&params.thread_id),
+                    Self::ThreadCompactStart { params, .. } => thread_scope(&params.thread_id),
+                    Self::ThreadBackgroundTerminalsClean { params, .. } => {
+                        thread_scope(&params.thread_id)
+                    }
+                    Self::ThreadRollback { params, .. } => thread_scope(&params.thread_id),
+                    Self::ThreadRead { params, .. } => thread_scope(&params.thread_id),
+                    Self::ThreadTurnsList { params, .. } => thread_scope(&params.thread_id),
+                    Self::ThreadShellCommand { params, .. } => thread_scope(&params.thread_id),
+                    Self::ThreadApproveGuardianDeniedAction { params, .. } => {
+                        thread_scope(&params.thread_id)
+                    }
+                    Self::ThreadInjectItems { params, .. } => thread_scope(&params.thread_id),
+                    Self::TurnStart { params, .. } => thread_scope(&params.thread_id),
+                    Self::TurnSteer { params, .. } => thread_scope(&params.thread_id),
+                    Self::TurnInterrupt { params, .. } => thread_scope(&params.thread_id),
+                    Self::ThreadRealtimeStart { params, .. } => thread_scope(&params.thread_id),
+                    Self::ThreadRealtimeAppendAudio { params, .. } => {
+                        thread_scope(&params.thread_id)
+                    }
+                    Self::ThreadRealtimeAppendText { params, .. } => {
+                        thread_scope(&params.thread_id)
+                    }
+                    Self::ThreadRealtimeStop { params, .. } => thread_scope(&params.thread_id),
+                    _ => None,
+                }
             }
         }
 

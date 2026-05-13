@@ -474,7 +474,13 @@ impl ThreadManager {
     }
 
     pub async fn list_thread_ids(&self) -> Vec<ThreadId> {
-        self.state.list_thread_ids().await
+        let threads = self.state.threads.read().await;
+        threads
+            .iter()
+            .filter_map(|(thread_id, thread)| {
+                (!matches!(thread.session_source, SessionSource::Internal(_))).then_some(*thread_id)
+            })
+            .collect()
     }
 
     pub async fn refresh_mcp_servers(&self, refresh_config: McpServerRefreshConfig) {
@@ -503,7 +509,11 @@ impl ThreadManager {
     }
 
     pub async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
-        self.state.get_thread(thread_id).await
+        let thread = self.state.get_thread(thread_id).await?;
+        if matches!(thread.session_source, SessionSource::Internal(_)) {
+            return Err(CodexErr::ThreadNotFound(thread_id));
+        }
+        Ok(thread)
     }
 
     /// List `thread_id` plus all known descendants in its spawn subtree.
@@ -671,6 +681,17 @@ impl ThreadManager {
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
+        if let InitialHistory::Resumed(resumed_history) = &initial_history
+            && let Ok(thread) = self.state.get_thread(resumed_history.conversation_id).await
+            && thread.is_running()
+        {
+            return Ok(NewThread {
+                thread_id: resumed_history.conversation_id,
+                thread: thread.clone(),
+                session_configured: thread.session_configured(),
+            });
+        }
+
         let thread_store = configured_thread_store(&config);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),

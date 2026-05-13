@@ -3077,32 +3077,10 @@ impl ThreadRequestProcessor {
             InitialHistory::Resumed(resumed) => {
                 let fallback_provider = config_snapshot.model_provider_id.as_str();
                 if let Some(stored_thread) = resume_source_thread {
-                    let stored_thread =
-                        if let Some(rollout_path) = stored_thread.rollout_path.clone() {
-                            self.thread_store
-                                .read_thread_by_rollout_path(StoreReadThreadByRolloutPathParams {
-                                    rollout_path,
-                                    include_archived: true,
-                                    include_history: false,
-                                })
-                                .await
-                                .unwrap_or(StoredThread {
-                                    history: None,
-                                    ..stored_thread
-                                })
-                        } else {
-                            self.thread_store
-                                .read_thread(StoreReadThreadParams {
-                                    thread_id: stored_thread.thread_id,
-                                    include_archived: true,
-                                    include_history: false,
-                                })
-                                .await
-                                .unwrap_or(StoredThread {
-                                    history: None,
-                                    ..stored_thread
-                                })
-                        };
+                    let stored_thread = StoredThread {
+                        history: None,
+                        ..stored_thread
+                    };
                     Ok(thread_from_stored_thread(
                         stored_thread,
                         fallback_provider,
