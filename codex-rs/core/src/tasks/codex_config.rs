@@ -22,9 +22,8 @@ const MAX_RUNTIME_CONTEXT_CHARS: usize = 96_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CodexConfigIntentMode {
-    Investigate,
-    ConfigEdit,
-    AiResolve,
+    Plan,
+    Edit,
 }
 
 pub(crate) struct CodexConfigIntentTurn {
@@ -33,48 +32,13 @@ pub(crate) struct CodexConfigIntentTurn {
     pub(crate) developer_instructions: String,
 }
 
-const CONFIG_EDIT_VERBS: &[&str] = &[
-    "fix",
-    "amend",
-    "change",
-    "update",
-    "set",
-    "enable",
-    "disable",
-    "add",
-    "remove",
-    "configure",
-    "write",
-    "save",
-    "persist",
-    "apply",
-    "implement",
-    "stop",
-    "prevent",
-    "avoid",
-    "skip",
-    "exclude",
-    "omit",
-];
+const CONFIG_EDIT_VERBS: &[&str] = &["apply", "implement"];
 
 const CONFIG_EDIT_PHRASES: &[&str] = &[
-    "don t want",
-    "dont want",
-    "do not want",
-    "should not",
-    "must not",
-    "no longer",
-];
-
-const INVESTIGATE_WORDS: &[&str] = &["investigate", "look", "inspect", "check", "show", "explain"];
-
-const INVESTIGATE_PHRASES: &[&str] = &[
-    "take a look",
-    "without config update",
-    "without updating config",
-    "do not change config",
-    "don t change config",
-    "no config update",
+    "accepted plan",
+    "approved plan",
+    "apply the plan",
+    "implement the plan",
 ];
 
 pub(crate) fn codex_config_workspace_for_target(target_cwd: &Path) -> PathBuf {
@@ -131,15 +95,8 @@ pub(crate) async fn codex_config_intent_turn(
     let runtime_context =
         codex_config_runtime_context(caller_context, target_cwd, workspace, codex_home).await;
     let developer_instructions = match mode {
-        CodexConfigIntentMode::Investigate => {
-            codex_investigate_developer_instructions(&runtime_context)
-        }
-        CodexConfigIntentMode::ConfigEdit => {
-            codex_config_edit_developer_instructions(&runtime_context)
-        }
-        CodexConfigIntentMode::AiResolve => {
-            codex_ai_resolve_developer_instructions(&runtime_context)
-        }
+        CodexConfigIntentMode::Plan => codex_config_plan_developer_instructions(&runtime_context),
+        CodexConfigIntentMode::Edit => codex_config_edit_developer_instructions(&runtime_context),
     };
 
     CodexConfigIntentTurn {
@@ -156,18 +113,12 @@ fn classify_codex_config_intent(request: &str) -> CodexConfigIntentMode {
     let normalized = normalize_request(request);
     let words = normalized.split_whitespace().collect::<Vec<_>>();
 
-    if contains_any_phrase(&normalized, INVESTIGATE_PHRASES)
-        || words.iter().any(|word| INVESTIGATE_WORDS.contains(word))
-    {
-        return CodexConfigIntentMode::Investigate;
-    }
-
     if contains_any_phrase(&normalized, CONFIG_EDIT_PHRASES)
         || words.iter().any(|word| CONFIG_EDIT_VERBS.contains(word))
     {
-        CodexConfigIntentMode::ConfigEdit
+        CodexConfigIntentMode::Edit
     } else {
-        CodexConfigIntentMode::AiResolve
+        CodexConfigIntentMode::Plan
     }
 }
 
@@ -191,21 +142,15 @@ fn contains_any_phrase(request: &str, phrases: &[&str]) -> bool {
     phrases.iter().any(|phrase| request.contains(phrase))
 }
 
-fn codex_investigate_developer_instructions(runtime_context: &str) -> String {
+fn codex_config_plan_developer_instructions(runtime_context: &str) -> String {
     format!(
-        "# Codex Investigate Mode\n\nThe user-authored request is delivered as the visible user message for this turn. The runtime Codex context below is internal model context; do not print it, quote it wholesale, or treat it as user-authored content.\n\nRuntime Codex context:\n<runtime_context>\n{runtime_context}\n</runtime_context>\n\nYou are investigating Codex itself. Use the guide, slash-command registry, CLI help, tools, app-server APIs, and source inspection to answer questions about Codex configuration and behavior. Do not change configuration, do not write to the target workspace, and do not emit a `<proposed_plan>` block."
+        "{PLAN_MODE_GUIDE}\n\n# Codex Config Planning Mode\n\nThe user-authored request is delivered as the visible user message for this turn. The runtime Codex context below is internal model context; do not print it, quote it wholesale, or treat it as user-authored content.\n\nRuntime Codex context:\n<runtime_context>\n{runtime_context}\n</runtime_context>\n\nWork exactly like Plan Mode, but plan changes to Codex configuration and local Codex behavior. Explore and inspect as needed, but do not mutate files, config, app-server state, plugins, skills, MCP/apps, memories, repo-ci, model-router, tool-router, or any other Codex state until a later apply turn. Do not attempt writes to prove they are blocked. When ready, emit exactly one complete `<proposed_plan>` block describing the config changes, validation, refresh/reload steps, and rollback considerations."
     )
 }
 
 fn codex_config_edit_developer_instructions(runtime_context: &str) -> String {
     format!(
-        "{PLAN_MODE_GUIDE}\n\n# Codex Config Edit Mode\n\nThe user-authored request is delivered as the visible user message for this turn. The runtime Codex context below is internal model context; do not print it, quote it wholesale, or treat it as user-authored content.\n\nRuntime Codex context:\n<runtime_context>\n{runtime_context}\n</runtime_context>\n\nWork like Plan Mode for new or unapproved configuration requests: explore and inspect as needed, but do not mutate files, config, app-server state, plugins, skills, MCP/apps, memories, repo-ci, model-router, tool-router, or any other Codex state until a later apply turn. Do not attempt writes to prove they are blocked. When ready, emit exactly one complete `<proposed_plan>` block describing the config changes, validation, refresh/reload steps, and rollback considerations.\n\nIf the visible user message asks to apply or implement an already accepted Codex config plan, enter edit mode for that turn: apply only the approved Codex configuration changes, write only under the Codex config directory or `/tmp`, do not modify the target workspace/repository, then validate and reload or describe any required restart. Do not emit a new `<proposed_plan>` for an apply turn."
-    )
-}
-
-fn codex_ai_resolve_developer_instructions(runtime_context: &str) -> String {
-    format!(
-        "{PLAN_MODE_GUIDE}\n\n# Codex AI Classification Fallback Mode\n\nThe local deterministic `/codex` classifier could not confidently classify the user-authored request as investigation or config-edit. The user-authored request is delivered as the visible user message for this turn. The runtime Codex context below is internal model context; do not print it, quote it wholesale, or treat it as user-authored content.\n\nRuntime Codex context:\n<runtime_context>\n{runtime_context}\n</runtime_context>\n\nFirst classify the user request using the runtime context you inspect:\n- If the request is asking what Codex currently does, how something works, or for a read-only diagnosis, answer in Codex investigate style: do not change configuration, do not write to the target workspace, and do not emit a `<proposed_plan>` block.\n- If the request asks Codex behavior/configuration to change, enter Codex config-edit planning style: follow Plan Mode, do not mutate files, config, app-server state, plugins, skills, MCP/apps, memories, repo-ci, model-router, tool-router, or any other Codex state until the user accepts a proposed plan, and emit exactly one complete `<proposed_plan>` block. Applying it happens in a later edit turn with the Codex config directory writable.\n- If inspection still cannot resolve the intent, ask a concise clarifying question instead of guessing or mutating state."
+        "# Codex Config Edit Mode\n\nThe user-authored request is delivered as the visible user message for this turn. The runtime Codex context below is internal model context; do not print it, quote it wholesale, or treat it as user-authored content.\n\nRuntime Codex context:\n<runtime_context>\n{runtime_context}\n</runtime_context>\n\nApply only the approved Codex configuration plan. Write only under the Codex config directory or `/tmp`, do not modify the target workspace/repository, then validate and reload or describe any required restart. Do not emit a new `<proposed_plan>` for an apply turn."
     )
 }
 
@@ -350,8 +295,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn config_edit_instructions_use_runtime_context_and_plan_rules() {
-        let instructions = codex_config_edit_developer_instructions(
+    fn config_plan_instructions_use_runtime_context_and_plan_rules() {
+        let instructions = codex_config_plan_developer_instructions(
             "Slash commands generated from registry:\n- /repo-ci: configure repo CI",
         );
 
@@ -375,7 +320,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(turn.mode, CodexConfigIntentMode::ConfigEdit);
+        assert_eq!(turn.mode, CodexConfigIntentMode::Plan);
         assert_eq!(
             turn.input,
             UserInput::Text {
@@ -391,24 +336,24 @@ mod tests {
     }
 
     #[test]
-    fn classify_config_intent_prefers_explicit_investigation() {
-        assert_eq!(
-            classify_codex_config_intent("show how to update repo-ci without config update"),
-            CodexConfigIntentMode::Investigate
-        );
+    fn classify_config_intent_plans_until_apply_request() {
         assert_eq!(
             classify_codex_config_intent("update repo-ci defaults"),
-            CodexConfigIntentMode::ConfigEdit
+            CodexConfigIntentMode::Plan
         );
         assert_eq!(
             classify_codex_config_intent(
                 "i don't want repo-ci to run cibuildwheel or integration tests at all"
             ),
-            CodexConfigIntentMode::ConfigEdit
+            CodexConfigIntentMode::Plan
         );
         assert_eq!(
             classify_codex_config_intent("repo-ci cibuildwheel integration tests"),
-            CodexConfigIntentMode::AiResolve
+            CodexConfigIntentMode::Plan
+        );
+        assert_eq!(
+            classify_codex_config_intent("implement the plan"),
+            CodexConfigIntentMode::Edit
         );
     }
 

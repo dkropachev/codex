@@ -54,6 +54,25 @@ impl App {
                 )
                 .await;
             }
+            AppEvent::ClearUiAndSubmitUserMessageWithMode {
+                text,
+                collaboration_mode,
+            } => {
+                self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
+                self.reset_app_ui_state_after_clear();
+
+                self.start_fresh_session_with_summary_hint(
+                    tui,
+                    app_server,
+                    Some(ThreadStartSource::Clear),
+                    /*initial_user_message*/ None,
+                )
+                .await;
+                if self.chat_widget.thread_id().is_some() {
+                    self.chat_widget
+                        .submit_user_message_with_mode(text, collaboration_mode);
+                }
+            }
             AppEvent::RunWorkflow { command } => {
                 self.run_workflow_command(command);
             }

@@ -585,17 +585,15 @@ pub async fn codex_config_intent(
     let turn =
         codex_config_intent_turn(intent, context, &target_cwd, &workspace, &codex_home).await;
     let mode = match turn.mode {
-        CodexConfigIntentMode::Investigate => ModeKind::Codex,
-        CodexConfigIntentMode::ConfigEdit | CodexConfigIntentMode::AiResolve => {
-            ModeKind::CodexConfigEdit
-        }
+        CodexConfigIntentMode::Plan => ModeKind::Codex,
+        CodexConfigIntentMode::Edit => ModeKind::CodexConfigEdit,
     };
     let (sandbox_policy, permission_profile) = match turn.mode {
-        CodexConfigIntentMode::Investigate | CodexConfigIntentMode::AiResolve => (
+        CodexConfigIntentMode::Plan => (
             codex_config_plan_sandbox_policy(),
             codex_config_plan_permission_profile(),
         ),
-        CodexConfigIntentMode::ConfigEdit => (
+        CodexConfigIntentMode::Edit => (
             codex_config_edit_sandbox_policy(&codex_home),
             codex_config_edit_permission_profile(&codex_home),
         ),

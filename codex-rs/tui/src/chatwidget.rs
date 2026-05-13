@@ -2618,7 +2618,10 @@ impl ChatWidget {
     }
 
     fn open_plan_implementation_prompt(&mut self) {
-        let default_mask = if self.active_mode_kind() == ModeKind::CodexConfigEdit {
+        let default_mask = if matches!(
+            self.active_mode_kind(),
+            ModeKind::Codex | ModeKind::CodexConfigEdit
+        ) {
             Some(crate::codex_config_context::codex_config_edit_mask(
                 &self.config.cwd,
                 &self.config.codex_home,
@@ -2627,16 +2630,23 @@ impl ChatWidget {
             collaboration_modes::default_mode_mask(self.model_catalog.as_ref())
         };
         let context_usage_label = self.plan_implementation_context_usage_label();
-        let params = if self.active_mode_kind() == ModeKind::CodexConfigEdit {
+        let params = if matches!(
+            self.active_mode_kind(),
+            ModeKind::Codex | ModeKind::CodexConfigEdit
+        ) {
             plan_implementation::selection_view_params_with_copy(
                 default_mask,
                 self.latest_proposed_plan_markdown.as_deref(),
                 context_usage_label.as_deref(),
-                "Stay in Codex config edit mode and apply the approved config plan.",
-                "Fresh context is unavailable for Codex config edits.",
-                "No, keep planning Codex config",
-                "Continue planning Codex config with the model.",
-                /*allow_clear_context*/ false,
+                "Switch to Codex config edit mode and apply the plan.",
+                plan_implementation::ClearContextAction::WithMode(
+                    crate::codex_config_context::codex_config_edit_mask(
+                        &self.config.cwd,
+                        &self.config.codex_home,
+                    ),
+                ),
+                "No, stay in Plan mode",
+                "Continue planning with the model.",
             )
         } else {
             plan_implementation::selection_view_params(
@@ -5885,41 +5895,6 @@ impl ChatWidget {
             }
         }
 
-        let mut codex_request_mode = None;
-        if matches!(
-            self.active_mode_kind(),
-            ModeKind::Codex | ModeKind::CodexConfigEdit
-        ) && !text.trim().is_empty()
-        {
-            let request_mode = crate::codex_config_context::classify_codex_request(&text);
-            codex_request_mode = Some(request_mode);
-            match request_mode {
-                crate::codex_config_context::CodexRequestMode::Investigate => {
-                    self.set_collaboration_mask(
-                        crate::codex_config_context::codex_investigate_mask(&self.config.cwd),
-                    );
-                }
-                crate::codex_config_context::CodexRequestMode::ConfigEdit => {
-                    self.latest_proposed_plan_markdown = None;
-                    self.set_collaboration_mask(
-                        crate::codex_config_context::codex_config_edit_mask(
-                            &self.config.cwd,
-                            &self.config.codex_home,
-                        ),
-                    );
-                }
-                crate::codex_config_context::CodexRequestMode::AiResolve => {
-                    self.latest_proposed_plan_markdown = None;
-                    self.set_collaboration_mask(
-                        crate::codex_config_context::codex_ai_resolve_mask(
-                            &self.config.cwd,
-                            &self.config.codex_home,
-                        ),
-                    );
-                }
-            }
-        }
-
         let effective_mode = self.effective_collaboration_mode();
         if effective_mode.model().trim().is_empty() {
             self.add_error_message(
@@ -5978,21 +5953,10 @@ impl ChatWidget {
             self.config.cwd.to_path_buf()
         };
         let permission_profile = if codex_config_turn {
-            match codex_request_mode {
-                Some(crate::codex_config_context::CodexRequestMode::ConfigEdit) => {
-                    crate::codex_config_context::codex_config_edit_permission_profile(
-                        &self.config.codex_home,
-                    )
-                }
-                Some(
-                    crate::codex_config_context::CodexRequestMode::Investigate
-                    | crate::codex_config_context::CodexRequestMode::AiResolve,
-                ) => crate::codex_config_context::codex_config_plan_permission_profile(),
-                None => crate::codex_config_context::codex_permission_profile_for_mode(
-                    &effective_mode,
-                    &self.config.codex_home,
-                ),
-            }
+            crate::codex_config_context::codex_permission_profile_for_mode(
+                &effective_mode,
+                &self.config.codex_home,
+            )
         } else {
             self.config.permissions.permission_profile()
         };

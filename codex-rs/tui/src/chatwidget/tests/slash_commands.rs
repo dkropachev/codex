@@ -74,7 +74,7 @@ async fn bare_workflow_slash_reports_disabled_when_feature_off() {
         "workflow_disabled_info_message",
         rendered,
         @"• Workflows are disabled. Enable [features].workflows to use /workflow.
-"
+    "
     );
     assert!(
         rendered.contains("Workflows are disabled."),
@@ -85,24 +85,23 @@ async fn bare_workflow_slash_reports_disabled_when_feature_off() {
 #[tokio::test]
 async fn bare_codex_slash_enters_codex_mode() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let initial = chat.current_collaboration_mode().clone();
 
     chat.dispatch_command(SlashCommand::Codex);
 
+    while let Ok(event) = rx.try_recv() {
+        assert!(
+            matches!(event, AppEvent::InsertHistoryCell(_)),
+            "codex should not emit a non-history app event: {event:?}"
+        );
+    }
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Codex);
+    assert_eq!(chat.current_collaboration_mode(), &initial);
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
-
-    let workspace = crate::codex_config_context::codex_config_workspace_for_cwd(&chat.config.cwd);
-    let rendered = drain_insert_history(&mut rx)
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .find(|rendered| rendered.contains("Codex mode enabled."))
-        .expect("expected Codex mode info message")
-        .replace(&workspace.display().to_string(), "<codex-config-workspace>");
-    assert_chatwidget_snapshot!("codex_mode_enabled_info_message", rendered);
 }
 
 #[tokio::test]
-async fn codex_slash_with_investigate_args_submits_codex_turn() {
+async fn codex_slash_with_args_submits_config_plan_turn() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
     let expected_cwd =
@@ -110,60 +109,11 @@ async fn codex_slash_with_investigate_args_submits_codex_turn() {
 
     chat.dispatch_command_with_args(
         SlashCommand::Codex,
-        "explain how repo-ci works".to_string(),
-        Vec::new(),
-    );
-
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Codex);
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            items,
-            cwd,
-            permission_profile,
-            collaboration_mode: Some(CollaborationMode { mode, settings }),
-            ..
-        } => {
-            assert_eq!(
-                items,
-                vec![UserInput::Text {
-                    text: "explain how repo-ci works".to_string(),
-                    text_elements: Vec::new(),
-                }]
-            );
-            assert_eq!(cwd, expected_cwd);
-            assert_eq!(
-                permission_profile,
-                crate::codex_config_context::codex_config_plan_permission_profile()
-            );
-            assert_eq!(mode, ModeKind::Codex);
-            let instructions = settings
-                .developer_instructions
-                .expect("expected Codex instructions");
-            assert!(instructions.contains("# Codex Investigate Mode"));
-            assert!(
-                instructions
-                    .contains("TUI slash commands generated from the SlashCommand registry")
-            );
-        }
-        other => panic!("expected Codex UserTurn, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn codex_slash_with_edit_args_submits_config_edit_turn() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.thread_id = Some(ThreadId::new());
-
-    chat.dispatch_command_with_args(
-        SlashCommand::Codex,
         "update repo-ci defaults".to_string(),
         Vec::new(),
     );
 
-    assert_eq!(
-        chat.active_collaboration_mode_kind(),
-        ModeKind::CodexConfigEdit
-    );
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Codex);
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
             items,
@@ -179,68 +129,32 @@ async fn codex_slash_with_edit_args_submits_config_edit_turn() {
                     text_elements: Vec::new(),
                 }]
             );
-            assert_eq!(
-                cwd,
-                crate::codex_config_context::codex_config_workspace_for_cwd(&chat.config.cwd)
-            );
-            assert_eq!(
-                permission_profile,
-                crate::codex_config_context::codex_config_edit_permission_profile(
-                    &chat.config.codex_home,
-                )
-            );
-            assert_eq!(mode, ModeKind::CodexConfigEdit);
-            let instructions = settings
-                .developer_instructions
-                .expect("expected Codex config-edit instructions");
-            assert!(instructions.contains("# Codex Config Edit Mode"));
-            assert!(instructions.contains(&chat.config.codex_home.display().to_string()));
-            assert!(instructions.contains("<proposed_plan>"));
-        }
-        other => panic!("expected Codex config-edit UserTurn, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn codex_slash_with_ambiguous_args_submits_ai_resolve_turn_without_config_writes() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.thread_id = Some(ThreadId::new());
-
-    chat.dispatch_command_with_args(
-        SlashCommand::Codex,
-        "repo-ci behavior".to_string(),
-        Vec::new(),
-    );
-
-    assert_eq!(
-        chat.active_collaboration_mode_kind(),
-        ModeKind::CodexConfigEdit
-    );
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            permission_profile,
-            collaboration_mode: Some(CollaborationMode { mode, settings }),
-            ..
-        } => {
+            assert_eq!(cwd, expected_cwd);
             assert_eq!(
                 permission_profile,
                 crate::codex_config_context::codex_config_plan_permission_profile()
             );
-            assert_eq!(mode, ModeKind::CodexConfigEdit);
+            assert_eq!(mode, ModeKind::Codex);
             let instructions = settings
                 .developer_instructions
-                .expect("expected Codex AI resolve instructions");
-            assert!(instructions.contains("# Codex AI Classification Fallback Mode"));
-            assert!(instructions.contains("Codex config directory for approved edit turns"));
+                .expect("expected Codex instructions");
+            assert!(instructions.contains("# Codex Config Planning Mode"));
+            assert!(instructions.contains("Plan Mode"));
+            assert!(instructions.contains("<proposed_plan>"));
+            assert!(instructions.contains(&chat.config.codex_home.display().to_string()));
+            assert!(
+                instructions
+                    .contains("TUI slash commands generated from the SlashCommand registry")
+            );
         }
-        other => panic!("expected Codex AI resolve UserTurn, got {other:?}"),
+        other => panic!("expected Codex UserTurn, got {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn codex_config_edit_proposed_plan_opens_apply_prompt() {
+async fn codex_config_plan_proposed_plan_opens_plan_implementation_prompt() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_collaboration_mask(crate::codex_config_context::codex_config_edit_mask(
+    chat.set_collaboration_mask(crate::codex_config_context::codex_config_plan_mask(
         &chat.config.cwd,
         &chat.config.codex_home,
     ));
@@ -255,13 +169,67 @@ async fn codex_config_edit_proposed_plan_opens_apply_prompt() {
     let popup = render_bottom_popup(&chat, /*width*/ 96);
     assert!(
         popup.contains(PLAN_IMPLEMENTATION_TITLE),
-        "expected Codex config-edit plan prompt, got {popup:?}"
+        "expected Codex config plan implementation prompt, got {popup:?}"
     );
-    assert_chatwidget_snapshot!("codex_config_edit_plan_implementation_popup", popup);
+    assert_chatwidget_snapshot!("codex_config_plan_implementation_popup", popup);
     assert!(
-        popup.contains("Codex config edit mode"),
-        "expected Codex config-edit apply copy, got {popup:?}"
+        popup.contains("Yes, clear context and implement"),
+        "expected normal Plan-mode clear-context option, got {popup:?}"
     );
+}
+
+#[tokio::test]
+async fn codex_config_plan_acceptance_enters_config_edit_mode() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_collaboration_mask(crate::codex_config_context::codex_config_plan_mask(
+        &chat.config.cwd,
+        &chat.config.codex_home,
+    ));
+    chat.on_plan_item_completed("- Update config\n".to_string());
+    let _ = drain_insert_history(&mut rx);
+
+    chat.open_plan_implementation_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    let AppEvent::SubmitUserMessageWithMode {
+        text,
+        collaboration_mode,
+    } = event
+    else {
+        panic!("expected SubmitUserMessageWithMode, got {event:?}");
+    };
+    assert_eq!(
+        text,
+        plan_implementation::PLAN_IMPLEMENTATION_CODING_MESSAGE
+    );
+    assert_eq!(collaboration_mode.mode, Some(ModeKind::CodexConfigEdit));
+}
+
+#[tokio::test]
+async fn codex_config_plan_clear_context_enters_config_edit_mode() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_collaboration_mask(crate::codex_config_context::codex_config_plan_mask(
+        &chat.config.cwd,
+        &chat.config.codex_home,
+    ));
+    chat.on_plan_item_completed("- Update config\n".to_string());
+    let _ = drain_insert_history(&mut rx);
+
+    chat.open_plan_implementation_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    let AppEvent::ClearUiAndSubmitUserMessageWithMode {
+        text,
+        collaboration_mode,
+    } = event
+    else {
+        panic!("expected ClearUiAndSubmitUserMessageWithMode, got {event:?}");
+    };
+    assert!(text.contains("- Update config"));
+    assert_eq!(collaboration_mode.mode, Some(ModeKind::CodexConfigEdit));
 }
 
 #[tokio::test]

@@ -84,23 +84,18 @@ impl ChatWidget {
     }
 
     fn apply_codex_slash_command(&mut self) -> bool {
-        if self.bottom_pane.is_task_running() {
-            self.add_error_message(
-                "Cannot enter Codex mode while a task is in progress.".to_string(),
+        if !self.collaboration_modes_enabled() {
+            self.add_info_message(
+                "Collaboration modes are disabled.".to_string(),
+                Some("Enable collaboration modes to use /codex.".to_string()),
             );
             return false;
         }
-        let mask = crate::codex_config_context::codex_investigate_mask(&self.config.cwd);
-        let workspace =
-            crate::codex_config_context::codex_config_workspace_for_cwd(&self.config.cwd);
-        self.set_collaboration_mask(mask);
-        self.add_info_message(
-            "Codex mode enabled.".to_string(),
-            Some(format!(
-                "Target workspace is read-only; scratch workspace is {}. Use /codex off to leave.",
-                workspace.display()
-            )),
+        let mask = crate::codex_config_context::codex_config_plan_mask(
+            &self.config.cwd,
+            &self.config.codex_home,
         );
+        self.set_collaboration_mask(mask);
         true
     }
 
@@ -734,38 +729,8 @@ impl ChatWidget {
                 let lowered = trimmed.to_ascii_lowercase();
                 if matches!(lowered.as_str(), "disable" | "off" | "cancel") {
                     self.disable_codex_slash_command();
-                } else if self.bottom_pane.is_task_running() {
-                    self.add_error_message(
-                        "'/codex <request>' is disabled while a task is in progress.".to_string(),
-                    );
-                } else {
-                    match crate::codex_config_context::classify_codex_request(trimmed) {
-                        crate::codex_config_context::CodexRequestMode::Investigate => {
-                            self.set_collaboration_mask(
-                                crate::codex_config_context::codex_investigate_mask(
-                                    &self.config.cwd,
-                                ),
-                            );
-                        }
-                        crate::codex_config_context::CodexRequestMode::ConfigEdit => {
-                            self.latest_proposed_plan_markdown = None;
-                            self.set_collaboration_mask(
-                                crate::codex_config_context::codex_config_edit_mask(
-                                    &self.config.cwd,
-                                    &self.config.codex_home,
-                                ),
-                            );
-                        }
-                        crate::codex_config_context::CodexRequestMode::AiResolve => {
-                            self.latest_proposed_plan_markdown = None;
-                            self.set_collaboration_mask(
-                                crate::codex_config_context::codex_ai_resolve_mask(
-                                    &self.config.cwd,
-                                    &self.config.codex_home,
-                                ),
-                            );
-                        }
-                    }
+                } else if self.apply_codex_slash_command() {
+                    self.latest_proposed_plan_markdown = None;
                     let user_message = self.prepared_inline_user_message(
                         args,
                         text_elements,
@@ -1047,7 +1012,6 @@ impl ChatWidget {
             SlashCommand::Fast
             | SlashCommand::Ide
             | SlashCommand::Status
-            | SlashCommand::Codex
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop
@@ -1077,6 +1041,7 @@ impl ChatWidget {
             | SlashCommand::Settings
             | SlashCommand::Personality
             | SlashCommand::Plan
+            | SlashCommand::Codex
             | SlashCommand::Goal
             | SlashCommand::Collab
             | SlashCommand::Side

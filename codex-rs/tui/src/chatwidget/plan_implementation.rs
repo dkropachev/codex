@@ -20,6 +20,11 @@ pub(super) const PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX: &str = concat!(
 pub(super) const PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE: &str = "Default mode unavailable";
 pub(super) const PLAN_IMPLEMENTATION_NO_APPROVED_PLAN: &str = "No approved plan available";
 
+pub(super) enum ClearContextAction {
+    CurrentMode,
+    WithMode(CollaborationModeMask),
+}
+
 /// Builds the confirmation prompt shown after a plan is approved in Plan mode.
 ///
 /// The optional usage label is already phrased for display, such as `89% used`
@@ -35,10 +40,9 @@ pub(super) fn selection_view_params(
         plan_markdown,
         clear_context_usage_label,
         "Switch to Default and start coding.",
-        PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE,
+        ClearContextAction::CurrentMode,
         PLAN_IMPLEMENTATION_NO,
         "Continue planning with the model.",
-        /*allow_clear_context*/ true,
     )
 }
 
@@ -47,10 +51,9 @@ pub(super) fn selection_view_params_with_copy(
     plan_markdown: Option<&str>,
     clear_context_usage_label: Option<&str>,
     implement_description: &str,
-    clear_context_unavailable_reason: &str,
+    clear_context_action: ClearContextAction,
     stay_name: &str,
     stay_description: &str,
-    allow_clear_context: bool,
 ) -> SelectionViewParams {
     let (implement_actions, implement_disabled_reason) = match default_mask.clone() {
         Some(mask) => {
@@ -69,19 +72,17 @@ pub(super) fn selection_view_params_with_copy(
         ),
     };
 
-    let (clear_context_actions, clear_context_disabled_reason) =
-        match (allow_clear_context, default_mask, plan_markdown) {
-            (false, _, _) => (
-                Vec::new(),
-                Some(clear_context_unavailable_reason.to_string()),
-            ),
-            (true, None, _) => (
-                Vec::new(),
-                Some(PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE.to_string()),
-            ),
-            (true, Some(_), Some(plan_markdown)) if !plan_markdown.trim().is_empty() => {
-                let user_text =
-                    format!("{PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX}\n\n{plan_markdown}");
+    let has_plan = plan_markdown.is_some_and(|plan_markdown| !plan_markdown.trim().is_empty());
+    let clear_context_text = plan_markdown.filter(|_| has_plan).map(|plan_markdown| {
+        format!("{PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX}\n\n{plan_markdown}")
+    });
+    let (clear_context_actions, clear_context_disabled_reason) = match clear_context_action {
+        ClearContextAction::CurrentMode if default_mask.is_none() => (
+            Vec::new(),
+            Some(PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE.to_string()),
+        ),
+        ClearContextAction::CurrentMode => match clear_context_text {
+            Some(user_text) => {
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                     tx.send(AppEvent::ClearUiAndSubmitUserMessage {
                         text: user_text.clone(),
@@ -89,11 +90,27 @@ pub(super) fn selection_view_params_with_copy(
                 })];
                 (actions, None)
             }
-            (true, Some(_), _) => (
+            None => (
                 Vec::new(),
                 Some(PLAN_IMPLEMENTATION_NO_APPROVED_PLAN.to_string()),
             ),
-        };
+        },
+        ClearContextAction::WithMode(mask) => match clear_context_text {
+            Some(user_text) => {
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::ClearUiAndSubmitUserMessageWithMode {
+                        text: user_text.clone(),
+                        collaboration_mode: mask.clone(),
+                    });
+                })];
+                (actions, None)
+            }
+            None => (
+                Vec::new(),
+                Some(PLAN_IMPLEMENTATION_NO_APPROVED_PLAN.to_string()),
+            ),
+        },
+    };
 
     let clear_context_description = clear_context_usage_label.map_or_else(
         || "Fresh thread with this plan.".to_string(),

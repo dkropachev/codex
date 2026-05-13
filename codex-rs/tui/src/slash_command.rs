@@ -97,7 +97,7 @@ impl SlashCommand {
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
-            SlashCommand::Codex => "investigate or plan Codex configuration changes",
+            SlashCommand::Codex => "plan Codex configuration changes",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
@@ -177,7 +177,6 @@ impl SlashCommand {
                 | SlashCommand::Diff
                 | SlashCommand::Mention
                 | SlashCommand::Status
-                | SlashCommand::Codex
                 | SlashCommand::Ide
         )
     }
@@ -202,6 +201,7 @@ impl SlashCommand {
             | SlashCommand::Memories
             | SlashCommand::Review
             | SlashCommand::Plan
+            | SlashCommand::Codex
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
@@ -226,7 +226,6 @@ impl SlashCommand {
             | SlashCommand::AutoReview
             | SlashCommand::Feedback
             | SlashCommand::Ide
-            | SlashCommand::Codex
             | SlashCommand::Quit
             | SlashCommand::Exit
             | SlashCommand::Side => true,
@@ -292,8 +291,8 @@ mod tests {
         assert_eq!(SlashCommand::from_str("codex"), Ok(SlashCommand::Codex));
         assert_eq!(SlashCommand::Codex.command(), "codex");
         assert!(SlashCommand::Codex.supports_inline_args());
-        assert!(SlashCommand::Codex.available_in_side_conversation());
-        assert!(SlashCommand::Codex.available_during_task());
+        assert!(!SlashCommand::Codex.available_in_side_conversation());
+        assert!(!SlashCommand::Codex.available_during_task());
     }
 
     #[test]

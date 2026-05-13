@@ -569,7 +569,7 @@ impl ModeKind {
     }
 
     pub const fn is_plan_like(self) -> bool {
-        matches!(self, Self::Plan | Self::CodexConfigEdit)
+        matches!(self, Self::Plan | Self::Codex | Self::CodexConfigEdit)
     }
 
     pub const fn allows_request_user_input(self) -> bool {
@@ -754,6 +754,15 @@ mod tests {
         assert!(!ModeKind::PairProgramming.is_tui_visible());
         assert!(!ModeKind::CodexConfigEdit.is_tui_visible());
         assert!(!ModeKind::Execute.is_tui_visible());
+    }
+
+    #[test]
+    fn codex_modes_are_plan_like() {
+        assert!(ModeKind::Plan.is_plan_like());
+        assert!(ModeKind::Codex.is_plan_like());
+        assert!(ModeKind::CodexConfigEdit.is_plan_like());
+        assert!(!ModeKind::Default.is_plan_like());
+        assert!(!ModeKind::Workflow.is_plan_like());
     }
 
     #[test]

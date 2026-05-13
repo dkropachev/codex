@@ -181,6 +181,13 @@ pub(crate) enum AppEvent {
         text: String,
     },
 
+    /// Clear the current context, start a fresh session, switch collaboration mode, and submit
+    /// a user message.
+    ClearUiAndSubmitUserMessageWithMode {
+        text: String,
+        collaboration_mode: CollaborationModeMask,
+    },
+
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 
