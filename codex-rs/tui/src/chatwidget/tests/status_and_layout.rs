@@ -993,7 +993,7 @@ async fn streaming_final_answer_keeps_task_running_state() {
     drain_insert_history(&mut rx);
 
     assert!(chat.bottom_pane.is_task_running());
-    assert!(!chat.bottom_pane.status_indicator_visible());
+    assert!(chat.bottom_pane.status_indicator_visible());
 
     chat.bottom_pane
         .set_composer_text("queued submission".to_string(), Vec::new(), Vec::new());
@@ -1015,7 +1015,34 @@ async fn streaming_final_answer_keeps_task_running_state() {
 }
 
 #[tokio::test]
-async fn idle_commit_ticks_do_not_restore_status_without_commentary_completion() {
+async fn streamed_final_answer_keeps_running_status_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.on_task_started();
+    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_indicator_visible());
+
+    let rendered = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!(
+        "streamed_final_answer_keeps_running_status",
+        rendered,
+        @r###"
+• Working (0s • esc to interrupt)
+
+
+› Ask Codex to do anything
+
+  gpt-5.5 default · /tmp/project
+"###
+    );
+}
+
+#[tokio::test]
+async fn idle_commit_ticks_restore_status_while_task_running() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.on_task_started();
@@ -1025,12 +1052,12 @@ async fn idle_commit_ticks_do_not_restore_status_without_commentary_completion()
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
     assert_eq!(chat.bottom_pane.is_task_running(), true);
 
-    // A second idle tick should not toggle the row back on and cause jitter.
+    // A second idle tick should leave the pending affordance visible.
     chat.on_commit_tick();
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
 }
 
 #[tokio::test]
@@ -1048,7 +1075,7 @@ async fn final_answer_completion_restores_status_indicator_for_pending_steer() {
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
     assert_eq!(chat.bottom_pane.is_task_running(), true);
 
     chat.bottom_pane.set_composer_text(

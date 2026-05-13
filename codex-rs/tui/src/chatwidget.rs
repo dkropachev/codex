@@ -1767,17 +1767,14 @@ impl ChatWidget {
                 .unwrap_or(true)
     }
 
-    /// Restore the status indicator only after commentary completion is pending,
-    /// the turn is still running, and all stream queues have drained.
+    /// Restore the status indicator after streamed output goes idle while the
+    /// turn is still running.
     ///
-    /// This gate prevents flicker while normal output is still actively
-    /// streaming, but still restores a visible "working" affordance when a
-    /// commentary block ends before the turn itself has completed.
+    /// Commit ticks hide the status row while text is actively streaming. If the
+    /// turn continues afterward, keep an explicit pending affordance visible so
+    /// the composer cannot look idle while slash commands are still blocked.
     fn maybe_restore_status_indicator_after_stream_idle(&mut self) {
-        if !self.pending_status_indicator_restore
-            || !self.bottom_pane.is_task_running()
-            || !self.stream_controllers_idle()
-        {
+        if !self.bottom_pane.is_task_running() || !self.stream_controllers_idle() {
             return;
         }
 
