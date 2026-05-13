@@ -1019,7 +1019,7 @@ impl ModelRouterDiscoveryCache {
             /*config_model_catalog*/ None,
             CollaborationModesConfig::default(),
         );
-        let models = models_manager
+        let models: Vec<AvailableRouterModel> = models_manager
             .raw_model_catalog(RefreshStrategy::Online)
             .await
             .models
