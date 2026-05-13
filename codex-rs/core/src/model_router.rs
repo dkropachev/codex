@@ -13,12 +13,9 @@ use codex_config::config_toml::AccountPoolToml;
 use codex_config::config_toml::ModelRouterCandidateToml;
 use codex_config::config_toml::ModelRouterDiscoveryToml;
 use codex_login::AuthManager;
-use codex_model_provider::list_provider_models_uncached;
-use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
-use codex_model_provider_info::DEEPSEEK_PROVIDER_ID;
-use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
+use codex_model_provider::create_model_provider;
+use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_model_router::CandidateMetrics;
 use codex_model_router::CandidateRoute;
@@ -33,6 +30,8 @@ use codex_model_router::policy;
 use codex_model_router::policy::PolicyAvailableModel;
 use codex_model_router::policy::PolicyRoute;
 use codex_model_router::select_candidate_with_score_bias;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::openai_models::ModelInfo;
@@ -62,7 +61,7 @@ use failover::selectable_routes;
 const LIFECYCLE_PHASE_PROMOTION: &str = "promotion";
 const LIFECYCLE_PHASE_MONITORING: &str = "monitoring";
 const LIFECYCLE_STATUS_PROMOTED: &str = MODEL_ROUTER_LIFECYCLE_EVENT_PROMOTED;
-const CUSTOM_PROVIDER_DISCOVERY_TTL: Duration = Duration::from_secs(60);
+const ADDITIONAL_PROVIDER_DISCOVERY_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ModelRouterSource {
@@ -251,6 +250,8 @@ fn apply_model_router_with_overlays_and_exclusions(
             model_router,
             &task_key,
             prompt_bytes,
+            &candidate_set,
+            &selectable_routes,
             &policy_routes,
             &policy_application,
             &filtered_routes,
@@ -554,6 +555,8 @@ fn select_lifecycle_production_route_index(
     model_router: &codex_config::config_toml::ModelRouterToml,
     task_key: &str,
     prompt_bytes: usize,
+    candidate_set: &CandidateSet,
+    selectable_routes: &[failover::SelectableRoute],
     policy_routes: &[PolicyRoute],
     policy_application: &policy::PolicyApplication,
     filtered_routes: &[CandidateRoute],
@@ -574,6 +577,9 @@ fn select_lifecycle_production_route_index(
     let mut production_score_biases = Vec::new();
     let mut production_policy_indices = Vec::new();
     for (policy_index, decision) in policy_application.routes.iter().enumerate() {
+        let Some(selectable_route) = selectable_routes.get(decision.route_index) else {
+            continue;
+        };
         let Some(route) = policy_routes.get(decision.route_index) else {
             continue;
         };
@@ -581,6 +587,7 @@ fn select_lifecycle_production_route_index(
             continue;
         };
         if !candidate_route.is_incumbent
+            && !candidate_route_is_lifecycle_exempt(candidate_set, selectable_route.index)
             && route_requires_lifecycle_promotion(model_router, task_key, route)
         {
             continue;
@@ -617,6 +624,17 @@ fn route_requires_lifecycle_promotion(
     policy::effective_lifecycle_for_route(Some(model_router), task_key, Some(route))
         .map(|lifecycle| lifecycle.shadow_allowed)
         .unwrap_or(false)
+}
+
+fn candidate_route_is_lifecycle_exempt(candidate_set: &CandidateSet, route_index: usize) -> bool {
+    let Some(candidate_index) = route_index.checked_sub(1) else {
+        return false;
+    };
+    let exempt_start = candidate_set
+        .candidates
+        .len()
+        .saturating_sub(candidate_set.lifecycle_exempt_candidate_count);
+    candidate_index >= exempt_start && candidate_index < candidate_set.candidates.len()
 }
 
 fn candidate_for_selectable_route<'a>(
@@ -986,6 +1004,7 @@ impl ModelRouterDiscoveryCache {
 
     async fn models_for_provider(
         &self,
+        config: &Config,
         provider_id: &str,
         provider: &ModelProviderInfo,
     ) -> Vec<AvailableRouterModel> {
@@ -993,25 +1012,20 @@ impl ModelRouterDiscoveryCache {
             return models;
         }
 
-        let models = match list_provider_models_uncached(
-            provider.clone(),
-            env!("CARGO_PKG_VERSION"),
-        )
-        .await
-        {
-            Ok(models) => models
-                .iter()
-                .map(|model| AvailableRouterModel::from_model_info(provider_id, model))
-                .collect(),
-            Err(err) => {
-                tracing::debug!(
-                    provider_id,
-                    error = %err,
-                    "failed to discover model router custom provider models"
-                );
-                Vec::new()
-            }
-        };
+        let provider_handle =
+            create_model_provider(provider_id, provider.clone(), /*auth_manager*/ None);
+        let models_manager = provider_handle.models_manager(
+            config.codex_home.to_path_buf(),
+            /*config_model_catalog*/ None,
+            CollaborationModesConfig::default(),
+        );
+        let models = models_manager
+            .raw_model_catalog(RefreshStrategy::Online)
+            .await
+            .models
+            .iter()
+            .map(|model| AvailableRouterModel::from_model_info(provider_id, model))
+            .collect();
 
         let mut entries = self.entries.lock().await;
         entries.insert(
@@ -1027,7 +1041,7 @@ impl ModelRouterDiscoveryCache {
     async fn cached_models(&self, provider_id: &str) -> Option<Vec<AvailableRouterModel>> {
         let entries = self.entries.lock().await;
         entries.get(provider_id).and_then(|entry| {
-            (entry.fetched_at.elapsed() < CUSTOM_PROVIDER_DISCOVERY_TTL)
+            (entry.fetched_at.elapsed() < ADDITIONAL_PROVIDER_DISCOVERY_TTL)
                 .then(|| entry.models.clone())
         })
     }
@@ -1056,11 +1070,11 @@ pub(crate) async fn available_router_models(
                     AvailableRouterModel::without_context(&config.model_provider_id, preset.model)
                 })
         })
-        .chain(custom_provider_router_models(config, discovery_cache).await)
+        .chain(additional_provider_router_models(config, discovery_cache).await)
         .collect()
 }
 
-async fn custom_provider_router_models(
+async fn additional_provider_router_models(
     config: &Config,
     discovery_cache: &ModelRouterDiscoveryCache,
 ) -> Vec<AvailableRouterModel> {
@@ -1081,55 +1095,101 @@ async fn custom_provider_router_models(
     let mut models = Vec::new();
     for (provider_id, provider) in providers {
         if provider_id == &config.model_provider_id
-            || is_builtin_model_provider_id(provider_id)
-            || !provider_is_custom_discovery_eligible(provider)
+            || !provider_is_additional_discovery_eligible(provider)
         {
             continue;
         }
         models.extend(
             discovery_cache
-                .models_for_provider(provider_id, provider)
+                .models_for_provider(config, provider_id, provider)
                 .await,
         );
     }
     models
 }
 
-fn provider_is_custom_discovery_eligible(provider: &ModelProviderInfo) -> bool {
-    if provider
-        .base_url
-        .as_deref()
-        .is_none_or(|base_url| base_url.trim().is_empty())
-    {
-        return false;
-    }
-
-    provider.env_key.is_some()
-        || provider.experimental_bearer_token.is_some()
-        || provider.auth.is_some()
-        || !provider.requires_openai_auth
+fn provider_is_additional_discovery_eligible(provider: &ModelProviderInfo) -> bool {
+    provider_has_non_empty_base_url(provider) && provider_has_discovery_auth(provider)
 }
 
-fn is_builtin_model_provider_id(provider_id: &str) -> bool {
-    matches!(
-        provider_id,
-        OPENAI_PROVIDER_ID
-            | DEEPSEEK_PROVIDER_ID
-            | AMAZON_BEDROCK_PROVIDER_ID
-            | OLLAMA_OSS_PROVIDER_ID
-            | LMSTUDIO_OSS_PROVIDER_ID
-    )
+fn provider_has_non_empty_base_url(provider: &ModelProviderInfo) -> bool {
+    provider
+        .base_url
+        .as_deref()
+        .is_some_and(|base_url| !base_url.trim().is_empty())
+}
+
+fn provider_has_discovery_auth(provider: &ModelProviderInfo) -> bool {
+    if provider
+        .experimental_bearer_token
+        .as_deref()
+        .is_some_and(|token| !token.trim().is_empty())
+    {
+        return true;
+    }
+    if provider.auth.is_some()
+        || provider_has_configured_http_headers(provider)
+        || provider_has_configured_env_http_headers(provider)
+    {
+        return true;
+    }
+    if let Some(aws) = provider.aws.as_ref() {
+        return provider_has_aws_discovery_auth(aws);
+    }
+    if let Some(env_key) = provider.env_key.as_deref() {
+        return std::env::var(env_key).is_ok_and(|value| !value.trim().is_empty());
+    }
+    !provider.requires_openai_auth
+}
+
+fn provider_has_configured_http_headers(provider: &ModelProviderInfo) -> bool {
+    provider
+        .http_headers
+        .as_ref()
+        .is_some_and(|headers| headers.values().any(|value| !value.trim().is_empty()))
+}
+
+fn provider_has_configured_env_http_headers(provider: &ModelProviderInfo) -> bool {
+    provider.env_http_headers.as_ref().is_some_and(|headers| {
+        headers
+            .values()
+            .any(|env_key| std::env::var(env_key).is_ok_and(|value| !value.trim().is_empty()))
+    })
+}
+
+fn provider_has_aws_discovery_auth(aws: &ModelProviderAwsAuthInfo) -> bool {
+    aws.profile
+        .as_deref()
+        .is_some_and(|profile| !profile.trim().is_empty())
+        || aws
+            .region
+            .as_deref()
+            .is_some_and(|region| !region.trim().is_empty())
+        || env_var_has_non_empty_value("AWS_PROFILE")
+        || (env_var_has_non_empty_value("AWS_ACCESS_KEY_ID")
+            && env_var_has_non_empty_value("AWS_SECRET_ACCESS_KEY"))
+        || (env_var_has_non_empty_value("AWS_BEARER_TOKEN_BEDROCK")
+            && (env_var_has_non_empty_value("AWS_REGION")
+                || env_var_has_non_empty_value("AWS_DEFAULT_REGION")))
+        || (env_var_has_non_empty_value("AWS_WEB_IDENTITY_TOKEN_FILE")
+            && env_var_has_non_empty_value("AWS_ROLE_ARN"))
+}
+
+fn env_var_has_non_empty_value(env_key: &str) -> bool {
+    std::env::var(env_key).is_ok_and(|value| !value.trim().is_empty())
 }
 
 struct CandidateSet {
     routes: Vec<CandidateRoute>,
     candidates: Vec<ModelRouterCandidateToml>,
     auto_candidate_count: usize,
+    lifecycle_exempt_candidate_count: usize,
 }
 
 struct ModelRouterCandidatePool {
     candidates: Vec<ModelRouterCandidateToml>,
     auto_candidate_count: usize,
+    lifecycle_exempt_candidate_count: usize,
 }
 
 pub(crate) fn model_router_candidate_pool(
@@ -1137,6 +1197,15 @@ pub(crate) fn model_router_candidate_pool(
     available_models: &[AvailableRouterModel],
 ) -> Result<Vec<ModelRouterCandidateToml>, String> {
     build_model_router_candidate_pool(config, available_models).map(|pool| pool.candidates)
+}
+
+pub async fn model_router_candidate_pool_for_config(
+    config: &Config,
+    models_manager: &SharedModelsManager,
+) -> Result<Vec<ModelRouterCandidateToml>, String> {
+    let discovery_cache = ModelRouterDiscoveryCache::new();
+    let available_models = available_router_models(config, models_manager, &discovery_cache).await;
+    model_router_candidate_pool(config, &available_models)
 }
 
 fn build_model_router_candidate_pool(
@@ -1147,12 +1216,14 @@ fn build_model_router_candidate_pool(
         return Ok(ModelRouterCandidatePool {
             candidates: Vec::new(),
             auto_candidate_count: 0,
+            lifecycle_exempt_candidate_count: 0,
         });
     };
     if !model_router.enabled {
         return Ok(ModelRouterCandidatePool {
             candidates: Vec::new(),
             auto_candidate_count: 0,
+            lifecycle_exempt_candidate_count: 0,
         });
     }
     let auto_candidates =
@@ -1172,15 +1243,21 @@ fn build_model_router_candidate_pool(
         &config.model_provider_id,
     )
     .map_err(|err| err.to_string())?;
-    let auto_candidate_count = match model_router.discovery.unwrap_or_default() {
+    let discovery = model_router.discovery.unwrap_or_default();
+    let auto_candidate_count = match discovery {
         ModelRouterDiscoveryToml::Curated => auto_candidates.len(),
         ModelRouterDiscoveryToml::Manual => 0,
         ModelRouterDiscoveryToml::FromRules => candidates.len(),
+    };
+    let lifecycle_exempt_candidate_count = match discovery {
+        ModelRouterDiscoveryToml::Curated => auto_candidates.len(),
+        ModelRouterDiscoveryToml::Manual | ModelRouterDiscoveryToml::FromRules => 0,
     };
 
     Ok(ModelRouterCandidatePool {
         candidates,
         auto_candidate_count,
+        lifecycle_exempt_candidate_count,
     })
 }
 
@@ -1196,11 +1273,13 @@ fn build_candidate_set(
             routes: Vec::new(),
             candidates: Vec::new(),
             auto_candidate_count: 0,
+            lifecycle_exempt_candidate_count: 0,
         });
     }
     let candidate_pool = build_model_router_candidate_pool(config, available_models)?;
     let candidates = candidate_pool.candidates;
     let auto_candidate_count = candidate_pool.auto_candidate_count;
+    let lifecycle_exempt_candidate_count = candidate_pool.lifecycle_exempt_candidate_count;
 
     let mut routes = Vec::with_capacity(candidates.len() + 1);
     routes.push(CandidateRoute {
@@ -1241,6 +1320,7 @@ fn build_candidate_set(
         routes,
         candidates,
         auto_candidate_count,
+        lifecycle_exempt_candidate_count,
     })
 }
 
@@ -1503,6 +1583,9 @@ mod tests {
     use codex_config::config_toml::ModelRouterReasoningEffortToml;
     use codex_config::config_toml::ModelRouterToml;
     use codex_login::AuthManager;
+    use codex_model_provider_info::DEEPSEEK_PROVIDER_ID;
+    use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
+    use codex_model_provider_info::OPENAI_PROVIDER_ID;
     use codex_model_router::RouterSavings;
     use codex_models_manager::manager::SharedModelsManager;
     use codex_models_manager::manager::StaticModelsManager;
@@ -1528,6 +1611,14 @@ mod tests {
 
     use super::*;
     use crate::config;
+
+    fn retain_only_additional_providers(config: &mut Config, additional_provider_ids: &[&str]) {
+        let active_provider_id = config.model_provider_id.clone();
+        config.model_providers.retain(|provider_id, _provider| {
+            provider_id == &active_provider_id
+                || additional_provider_ids.contains(&provider_id.as_str())
+        });
+    }
 
     #[test]
     fn chat_source_task_key_tracks_collaboration_mode() {
@@ -1611,6 +1702,7 @@ mod tests {
             "deepseek-custom".to_string(),
             custom_provider_for_base_url(server.uri()),
         );
+        retain_only_additional_providers(&mut config, &["deepseek-custom"]);
 
         let available_models = available_router_models(
             &config,
@@ -1634,6 +1726,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn available_router_models_discovers_ready_builtin_deepseek_provider() {
+        let server = MockServer::start().await;
+        mount_models_response(&server, 200, vec!["deepseek-v4-flash"]).await;
+        let mut config = config::test_config().await;
+        config.model = Some("gpt-5.4".to_string());
+        config.model_router = Some(ModelRouterToml {
+            enabled: true,
+            candidates: Vec::new(),
+            ..Default::default()
+        });
+        let deepseek = config
+            .model_providers
+            .get_mut(DEEPSEEK_PROVIDER_ID)
+            .expect("DeepSeek provider should be built in");
+        deepseek.base_url = Some(server.uri());
+        deepseek.env_key = None;
+        deepseek.experimental_bearer_token = Some("deepseek-token".to_string());
+        retain_only_additional_providers(&mut config, &[DEEPSEEK_PROVIDER_ID]);
+
+        let available_models = available_router_models(
+            &config,
+            &empty_models_manager(),
+            &ModelRouterDiscoveryCache::new(),
+        )
+        .await;
+        let candidate_set =
+            build_candidate_set(&config, "module.repo_ci.triage", 80, &available_models, &[])
+                .expect("candidate set should build");
+
+        assert_eq!(
+            candidate_set.candidates,
+            vec![ModelRouterCandidateToml {
+                id: Some("auto:deepseek:deepseek-v4-flash".to_string()),
+                model: Some("deepseek-v4-flash".to_string()),
+                model_provider: Some(DEEPSEEK_PROVIDER_ID.to_string()),
+                ..Default::default()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn available_router_models_discovers_ready_builtin_no_auth_provider() {
+        let server = MockServer::start().await;
+        mount_models_response(&server, 200, vec!["llama3.2"]).await;
+        let mut config = config::test_config().await;
+        config.model = Some("gpt-5.4".to_string());
+        config.model_router = Some(ModelRouterToml {
+            enabled: true,
+            candidates: Vec::new(),
+            ..Default::default()
+        });
+        let ollama = config
+            .model_providers
+            .get_mut(OLLAMA_OSS_PROVIDER_ID)
+            .expect("Ollama provider should be built in");
+        ollama.base_url = Some(server.uri());
+        retain_only_additional_providers(&mut config, &[OLLAMA_OSS_PROVIDER_ID]);
+
+        let available_models = available_router_models(
+            &config,
+            &empty_models_manager(),
+            &ModelRouterDiscoveryCache::new(),
+        )
+        .await;
+        let candidate_set =
+            build_candidate_set(&config, "module.repo_ci.triage", 80, &available_models, &[])
+                .expect("candidate set should build");
+
+        assert_eq!(
+            candidate_set.candidates,
+            vec![ModelRouterCandidateToml {
+                id: Some("auto:ollama:llama3.2".to_string()),
+                model: Some("llama3.2".to_string()),
+                model_provider: Some(OLLAMA_OSS_PROVIDER_ID.to_string()),
+                ..Default::default()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn ready_builtin_deepseek_candidate_is_production_selectable_by_default() {
+        let (_codex_home, runtime) = state_runtime().await;
+        let mut config = config::test_config().await;
+        config.model = Some("gpt-5.4".to_string());
+        config.model_router = Some(ModelRouterToml {
+            enabled: true,
+            candidates: Vec::new(),
+            ..Default::default()
+        });
+        let available_models = vec![available_model_for_provider(
+            DEEPSEEK_PROVIDER_ID,
+            "deepseek-v4-flash",
+            Some(64_000),
+            Some(64_000),
+        )];
+
+        apply_model_router_with_state(
+            &mut config,
+            ModelRouterSource::Module("repo_ci.triage"),
+            80,
+            &available_models,
+            Some(runtime.as_ref()),
+        )
+        .await
+        .expect("router should apply");
+
+        assert_eq!(config.model_provider_id, DEEPSEEK_PROVIDER_ID);
+        assert_eq!(config.model.as_deref(), Some("deepseek-v4-flash"));
+    }
+
+    #[tokio::test]
     async fn custom_discovered_candidate_switches_provider_and_model() {
         let server = MockServer::start().await;
         mount_models_response(&server, 200, vec!["deepseek-chat"]).await;
@@ -1648,6 +1851,7 @@ mod tests {
             "deepseek-custom".to_string(),
             custom_provider_for_base_url(server.uri()),
         );
+        retain_only_additional_providers(&mut config, &["deepseek-custom"]);
 
         let available_models = available_router_models(
             &config,
@@ -1682,6 +1886,7 @@ mod tests {
             "deepseek-custom".to_string(),
             custom_provider_for_base_url(server.uri()),
         );
+        retain_only_additional_providers(&mut config, &["deepseek-custom"]);
 
         let available_models = available_router_models(
             &config,

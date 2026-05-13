@@ -39,7 +39,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
 use serde::Serialize;
-use std::collections::BTreeSet;
 use std::io::IsTerminal;
 use std::io::Write;
 use std::path::Path;
@@ -80,6 +79,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
+use codex_core::model_router_candidate_pool_for_config;
 use codex_features::FEATURES;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
@@ -3623,7 +3623,6 @@ async fn model_router_policy_report(
     config: &Config,
     task_key: Option<&str>,
 ) -> ModelRouterPolicyReport {
-    let available_models = model_router_available_policy_models(config).await;
     let Some(model_router) = config.model_router.as_ref() else {
         return ModelRouterPolicyReport {
             enabled: false,
@@ -3635,17 +3634,14 @@ async fn model_router_policy_report(
             lifecycle: codex_model_router::policy::EffectiveLifecycle::default(),
         };
     };
-    let curated_candidates = curated_candidates_for_policy(config, &available_models);
+    let auth_manager =
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true);
+    let models_manager =
+        build_models_manager(config, auth_manager, CollaborationModesConfig::default());
     let (candidate_pool, mut policy_error) =
-        match codex_model_router::policy::candidate_pool_for_discovery(
-            model_router,
-            &model_router.candidates,
-            curated_candidates,
-            &available_models,
-            &config.model_provider_id,
-        ) {
+        match model_router_candidate_pool_for_config(config, &models_manager).await {
             Ok(candidates) => (candidates, None),
-            Err(err) => (model_router.candidates.clone(), Some(err.to_string())),
+            Err(err) => (model_router.candidates.clone(), Some(err)),
         };
 
     let mut routes = Vec::with_capacity(candidate_pool.len() + 1);
@@ -3717,59 +3713,6 @@ async fn model_router_policy_report(
         policy_error,
         lifecycle,
     }
-}
-
-async fn model_router_available_policy_models(
-    config: &Config,
-) -> Vec<codex_model_router::policy::PolicyAvailableModel> {
-    let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true);
-    let models_manager =
-        build_models_manager(config, auth_manager, CollaborationModesConfig::default());
-    let remote_models = models_manager.try_get_remote_models().unwrap_or_default();
-    models_manager
-        .build_available_models(remote_models)
-        .into_iter()
-        .map(|model| codex_model_router::policy::PolicyAvailableModel {
-            provider: config.model_provider_id.clone(),
-            model: model.model,
-        })
-        .collect()
-}
-
-fn curated_candidates_for_policy(
-    config: &Config,
-    available_models: &[codex_model_router::policy::PolicyAvailableModel],
-) -> Vec<codex_config::config_toml::ModelRouterCandidateToml> {
-    let mut seen = BTreeSet::new();
-    if let Some(model) = config.model.as_deref() {
-        seen.insert(format!("{}\u{1f}{model}", config.model_provider_id));
-    }
-    if let Some(model_router) = config.model_router.as_ref() {
-        for candidate in &model_router.candidates {
-            if let Some(model) = candidate.model.as_deref().or(config.model.as_deref()) {
-                seen.insert(format!(
-                    "{}\u{1f}{model}",
-                    candidate
-                        .model_provider
-                        .as_deref()
-                        .unwrap_or(&config.model_provider_id)
-                ));
-            }
-        }
-    }
-    let mut candidates = Vec::new();
-    for available in available_models {
-        let key = format!("{}\u{1f}{}", available.provider, available.model);
-        if seen.insert(key) {
-            candidates.push(codex_config::config_toml::ModelRouterCandidateToml {
-                model: Some(available.model.clone()),
-                model_provider: Some(available.provider.clone()),
-                ..Default::default()
-            });
-        }
-    }
-    candidates
 }
 
 fn push_policy_candidate_report(

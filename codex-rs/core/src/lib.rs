@@ -75,6 +75,7 @@ mod memory_support;
 mod model_router;
 pub mod model_router_tune;
 pub use memory_support::clear_memory_roots_contents;
+pub use model_router::model_router_candidate_pool_for_config;
 pub(crate) mod mention_syntax;
 pub(crate) mod message_history;
 pub(crate) mod utils;

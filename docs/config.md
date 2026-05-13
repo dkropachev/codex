@@ -237,9 +237,11 @@ token = "sk-..."
 ```
 
 Use `model_provider = "deepseek"` only when DeepSeek should be the primary
-provider. To keep another primary provider and make DeepSeek an additional route,
-reference `model_provider = "deepseek"` from a `[[model_router.candidates]]`
-entry.
+provider. When `[model_router]` is enabled with its default curated discovery,
+ready additional providers are discovered automatically and can be selected as
+additional production routes. For DeepSeek, adding either
+`[model_providers.deepseek] token = "sk-..."` or `DEEPSEEK_API_KEY` is enough for
+the built-in provider to become available to the router.
 
 ## Model router
 
@@ -319,11 +321,16 @@ min_success_rate = 0.95
 ```
 
 `discovery = "curated"` uses the incumbent, explicit `[[model_router.candidates]]`,
-the active provider's available model catalog, and user-defined registered
-providers that expose a compatible `/models` endpoint. Inactive built-in
-providers such as Bedrock, Ollama, and LM Studio are not probed. `manual` uses
-only the incumbent plus explicit candidates. `from_rules` uses the incumbent
-plus candidates inferred from
+the active provider's available model catalog, and every ready non-active
+provider in `model_providers`. A provider is ready when it has a non-empty base
+URL plus an auth signal such as a config token, populated `env_key`, command
+auth, configured HTTP headers, configured AWS auth, or no auth requirement.
+Provider-specific model managers are used, so OpenAI-compatible providers expand
+through `/models` and static-catalog providers expand through their local
+catalog. Auto-discovered curated candidates are production-selectable
+immediately; use explicit candidates and lifecycle rules when a provider needs a
+controlled shadow rollout. `manual` uses only the incumbent plus explicit
+candidates. `from_rules` uses the incumbent plus candidates inferred from
 `model_router.models.rules`, `model_router.bias.rules`, and
 `model_router.lifecycle.rules`; exact model selectors create candidates directly,
 while regex selectors expand only against discovered provider catalogs.
