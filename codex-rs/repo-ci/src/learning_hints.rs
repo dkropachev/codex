@@ -1,5 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
+use serde::Deserialize;
 use serde_yaml::Mapping;
 use serde_yaml::Value;
 use std::collections::HashSet;
@@ -88,8 +89,17 @@ fn extract_workflow_run_hints(
 ) -> Result<Vec<WorkflowRunHint>> {
     let contents = fs::read_to_string(workflow_path)
         .with_context(|| format!("failed to read {}", workflow_path.display()))?;
-    let workflow: Value = serde_yaml::from_str(&contents)
-        .with_context(|| format!("failed to parse {}", workflow_path.display()))?;
+    let mut workflow = Value::Null;
+    // Workflow hints are advisory; tolerate extra YAML documents and use the
+    // first non-empty document as the workflow definition.
+    for document in serde_yaml::Deserializer::from_str(&contents) {
+        let candidate = Value::deserialize(document)
+            .with_context(|| format!("failed to parse {}", workflow_path.display()))?;
+        if !candidate.is_null() {
+            workflow = candidate;
+            break;
+        }
+    }
 
     let workflow_default_working_directory = workflow
         .as_mapping()
@@ -433,6 +443,40 @@ jobs:
         assert_eq!(
             commands,
             vec!["make build".to_string(), "make lint".to_string()]
+        );
+    }
+
+    #[test]
+    fn workflow_run_hints_tolerate_multi_document_yaml() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(temp.path().join(".github/workflows")).expect("workflow dir");
+        fs::write(
+            temp.path().join(".github/workflows/ci.yml"),
+            r#"
+---
+name: CI
+jobs:
+  test:
+    steps:
+      - run: cargo test -p codex-repo-ci
+---
+name: Ignored
+jobs:
+  test:
+    steps:
+      - run: cargo test -p ignored
+"#,
+        )
+        .expect("workflow");
+
+        let hints = collect_workflow_run_hints(temp.path()).expect("collect hints");
+
+        assert_eq!(
+            hints,
+            vec![WorkflowRunHint {
+                origin: ".github/workflows/ci.yml::test (test)".to_string(),
+                command: "cargo test -p codex-repo-ci".to_string(),
+            }]
         );
     }
 
