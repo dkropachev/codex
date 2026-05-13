@@ -444,6 +444,79 @@ region = "us-west-2"
     );
 }
 
+#[test]
+fn accepts_deepseek_token_override() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+[model_providers.deepseek]
+token = "deepseek-token"
+"#,
+    )
+    .expect("DeepSeek token override should deserialize");
+
+    assert_eq!(
+        cfg.model_providers
+            .get("deepseek")
+            .and_then(|provider| provider.experimental_bearer_token.as_deref()),
+        Some("deepseek-token")
+    );
+}
+
+#[tokio::test]
+async fn load_config_applies_deepseek_token_override() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+model_provider = "deepseek"
+
+[model_providers.deepseek]
+token = "deepseek-token"
+"#,
+    )
+    .expect("DeepSeek token override should deserialize");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert_eq!(config.model_provider_id, "deepseek");
+    assert_eq!(config.model_provider.env_key, None);
+    assert_eq!(
+        config.model_provider.experimental_bearer_token.as_deref(),
+        Some("deepseek-token")
+    );
+}
+
+#[tokio::test]
+async fn load_config_rejects_unsupported_deepseek_overrides() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+model_provider = "deepseek"
+
+[model_providers.deepseek]
+base_url = "https://example.com/v1"
+token = "deepseek-token"
+"#,
+    )
+    .expect("DeepSeek unsupported overrides should deserialize");
+
+    let err = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains(
+        "model_providers.deepseek only supports changing `token`; other non-default provider fields are not supported"
+    ));
+}
+
 #[tokio::test]
 async fn load_config_applies_amazon_bedrock_aws_profile_override() {
     let cfg = toml::from_str::<ConfigToml>(

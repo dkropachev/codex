@@ -224,6 +224,23 @@ accounts = ["work-pro", "personal-pro"]
 policy = "drain"
 ```
 
+## Built-in DeepSeek provider
+
+Codex includes a built-in `deepseek` provider that uses DeepSeek's
+OpenAI-compatible Chat Completions API at `https://api.deepseek.com/v1`. By
+default it reads its bearer token from `DEEPSEEK_API_KEY`. To keep the token in
+`config.toml` instead, configure only the token override:
+
+```toml
+[model_providers.deepseek]
+token = "sk-..."
+```
+
+Use `model_provider = "deepseek"` only when DeepSeek should be the primary
+provider. To keep another primary provider and make DeepSeek an additional route,
+reference `model_provider = "deepseek"` from a `[[model_router.candidates]]`
+entry.
+
 ## Model router
 
 `[model_router]` enables adaptive routing for internal Codex model calls.

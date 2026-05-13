@@ -104,7 +104,14 @@ pub fn canonicalize(value: &Value) -> Value {
 /// Render the config schema as pretty-printed JSON.
 pub fn config_schema_json() -> anyhow::Result<Vec<u8>> {
     let schema = config_schema();
-    let value = serde_json::to_value(schema)?;
+    let mut value = serde_json::to_value(schema)?;
+    if let Some(properties) = value
+        .pointer_mut("/definitions/ModelProviderInfo/properties")
+        .and_then(Value::as_object_mut)
+        && let Some(token_schema) = properties.get("experimental_bearer_token").cloned()
+    {
+        properties.insert("token".to_string(), token_schema);
+    }
     let value = canonicalize(&value);
     let json = serde_json::to_vec_pretty(&value)?;
     Ok(json)

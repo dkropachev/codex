@@ -120,6 +120,22 @@ wire_api = "chat"
 }
 
 #[test]
+fn test_deserialize_deepseek_token_alias() {
+    let provider_toml = r#"
+token = "deepseek-token"
+        "#;
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+    assert_eq!(
+        provider,
+        ModelProviderInfo {
+            experimental_bearer_token: Some("deepseek-token".to_string()),
+            ..ModelProviderInfo::default()
+        }
+    );
+}
+
+#[test]
 fn test_deserialize_websocket_connect_timeout() {
     let provider_toml = r#"
 name = "OpenAI"
@@ -331,6 +347,55 @@ fn test_merge_configured_model_providers_adds_custom_provider() {
             configured_model_providers,
         ),
         Ok(expected)
+    );
+}
+
+#[test]
+fn test_merge_configured_model_providers_applies_deepseek_token_override() {
+    let configured_model_providers = std::collections::HashMap::from([(
+        DEEPSEEK_PROVIDER_ID.to_string(),
+        ModelProviderInfo {
+            experimental_bearer_token: Some("deepseek-token".to_string()),
+            ..ModelProviderInfo::default()
+        },
+    )]);
+
+    let mut expected = built_in_model_providers(/*openai_base_url*/ None);
+    let expected_deepseek = expected
+        .get_mut(DEEPSEEK_PROVIDER_ID)
+        .expect("DeepSeek provider should be built in");
+    expected_deepseek.experimental_bearer_token = Some("deepseek-token".to_string());
+    expected_deepseek.env_key = None;
+
+    assert_eq!(
+        merge_configured_model_providers(
+            built_in_model_providers(/*openai_base_url*/ None),
+            configured_model_providers,
+        ),
+        Ok(expected)
+    );
+}
+
+#[test]
+fn test_merge_configured_model_providers_rejects_deepseek_non_default_fields() {
+    let configured_model_providers = std::collections::HashMap::from([(
+        DEEPSEEK_PROVIDER_ID.to_string(),
+        ModelProviderInfo {
+            base_url: Some("https://example.com/v1".to_string()),
+            experimental_bearer_token: Some("deepseek-token".to_string()),
+            ..ModelProviderInfo::default()
+        },
+    )]);
+
+    assert_eq!(
+        merge_configured_model_providers(
+            built_in_model_providers(/*openai_base_url*/ None),
+            configured_model_providers,
+        ),
+        Err(
+            "model_providers.deepseek only supports changing `token`; other non-default provider fields are not supported"
+                .to_string()
+        )
     );
 }
 

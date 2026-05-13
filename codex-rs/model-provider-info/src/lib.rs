@@ -82,7 +82,9 @@ pub struct ModelProviderInfo {
     pub env_key_instructions: Option<String>,
     /// Value to use with `Authorization: Bearer <token>` header. Use of this
     /// config is discouraged in favor of `env_key` for security reasons, but
-    /// this may be necessary when using this programmatically.
+    /// this may be necessary when using this programmatically. The built-in
+    /// `deepseek` provider also accepts this as `token` in config.toml.
+    #[serde(alias = "token")]
     pub experimental_bearer_token: Option<String>,
     /// Command-backed bearer-token configuration for this provider.
     pub auth: Option<ModelProviderAuthInfo>,
@@ -437,8 +439,9 @@ pub fn built_in_model_providers(
 /// Merge configured providers into the built-in provider catalog.
 ///
 /// Configured providers extend the built-in set. Built-in providers are not
-/// generally overridable, but the built-in Amazon Bedrock provider allows the
-/// user to set `aws.profile` and `aws.region`.
+/// generally overridable, but specific providers allow narrow overrides:
+/// Amazon Bedrock supports `aws.profile` and `aws.region`, and DeepSeek
+/// supports `token` for a config-backed bearer token.
 pub fn merge_configured_model_providers(
     mut model_providers: HashMap<String, ModelProviderInfo>,
     configured_model_providers: HashMap<String, ModelProviderInfo>,
@@ -463,6 +466,21 @@ pub fn merge_configured_model_providers(
                 if let Some(region) = aws_override.region {
                     built_in_aws.region = Some(region);
                 }
+            }
+        } else if key == DEEPSEEK_PROVIDER_ID {
+            let token_override = provider.experimental_bearer_token.take();
+            if provider != ModelProviderInfo::default() {
+                return Err(format!(
+                    "model_providers.{DEEPSEEK_PROVIDER_ID} only supports changing `token`; \
+other non-default provider fields are not supported"
+                ));
+            }
+
+            if let Some(token) = token_override
+                && let Some(built_in_provider) = model_providers.get_mut(DEEPSEEK_PROVIDER_ID)
+            {
+                built_in_provider.experimental_bearer_token = Some(token);
+                built_in_provider.env_key = None;
             }
         } else {
             model_providers.entry(key).or_insert(provider);

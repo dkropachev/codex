@@ -73,3 +73,20 @@ fn config_schema_hides_unsupported_inline_mcp_bearer_token() {
         (false, true),
     );
 }
+
+#[test]
+fn config_schema_includes_deepseek_token_alias() {
+    let schema_json = config_schema_json().expect("serialize config schema");
+    let schema_value: serde_json::Value =
+        serde_json::from_slice(&schema_json).expect("decode schema json");
+    let properties = schema_value
+        .pointer("/definitions/ModelProviderInfo/properties")
+        .expect("ModelProviderInfo properties should exist")
+        .as_object()
+        .expect("ModelProviderInfo properties should be an object");
+
+    assert_eq!(
+        properties.get("token"),
+        properties.get("experimental_bearer_token")
+    );
+}
