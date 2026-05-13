@@ -9,7 +9,6 @@ use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_model_provider_info::WireApi;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
 use codex_otel::SessionTelemetry;
@@ -1870,7 +1869,6 @@ fn websocket_provider_with_connect_timeout(
         experimental_bearer_token: None,
         auth: None,
         aws: None,
-        wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -1954,6 +1952,7 @@ async fn websocket_harness_with_provider_options(
         session_id,
         thread_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
+        &config.model_provider_id,
         provider.clone(),
         SessionSource::Exec,
         config.model_verbosity,

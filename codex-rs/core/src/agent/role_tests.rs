@@ -224,8 +224,6 @@ async fn apply_role_preserves_active_profile_and_model_provider() {
 name = "Test Provider"
 base_url = "https://example.com/v1"
 env_key = "TEST_PROVIDER_API_KEY"
-wire_api = "responses"
-
 [profiles.test-profile]
 model_provider = "test-provider"
 "#,
@@ -335,14 +333,10 @@ async fn apply_role_uses_role_profile_instead_of_current_profile() {
 name = "Base Provider"
 base_url = "https://base.example.com/v1"
 env_key = "BASE_PROVIDER_API_KEY"
-wire_api = "responses"
-
 [model_providers.role-provider]
 name = "Role Provider"
 base_url = "https://role.example.com/v1"
 env_key = "ROLE_PROVIDER_API_KEY"
-wire_api = "responses"
-
 [profiles.base-profile]
 model_provider = "base-provider"
 
@@ -396,14 +390,10 @@ async fn apply_role_uses_role_model_provider_instead_of_current_profile_provider
 name = "Base Provider"
 base_url = "https://base.example.com/v1"
 env_key = "BASE_PROVIDER_API_KEY"
-wire_api = "responses"
-
 [model_providers.role-provider]
 name = "Role Provider"
 base_url = "https://role.example.com/v1"
 env_key = "ROLE_PROVIDER_API_KEY"
-wire_api = "responses"
-
 [profiles.base-profile]
 model_provider = "base-provider"
 "#,
@@ -454,14 +444,10 @@ async fn apply_role_uses_active_profile_model_provider_update() {
 name = "Base Provider"
 base_url = "https://base.example.com/v1"
 env_key = "BASE_PROVIDER_API_KEY"
-wire_api = "responses"
-
 [model_providers.role-provider]
 name = "Role Provider"
 base_url = "https://role.example.com/v1"
 env_key = "ROLE_PROVIDER_API_KEY"
-wire_api = "responses"
-
 [profiles.base-profile]
 model_provider = "base-provider"
 model_reasoning_effort = "low"

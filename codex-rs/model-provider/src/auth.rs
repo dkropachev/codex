@@ -127,15 +127,13 @@ pub fn auth_provider_from_auth(auth: &CodexAuth) -> SharedAuthProvider {
 
 #[cfg(test)]
 mod tests {
-    use codex_model_provider_info::WireApi;
     use codex_model_provider_info::create_oss_provider_with_base_url;
 
     use super::*;
 
     #[test]
     fn unauthenticated_auth_provider_adds_no_headers() {
-        let provider =
-            create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
+        let provider = create_oss_provider_with_base_url("http://localhost:11434/v1");
         let auth = resolve_provider_auth(/*auth*/ None, &provider).expect("auth should resolve");
 
         assert!(auth.to_auth_headers().is_empty());

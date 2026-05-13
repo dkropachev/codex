@@ -103,6 +103,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
     session.services.models_manager = models_manager;
     turn_context_raw.config = Arc::clone(&config);
     turn_context_raw.provider = create_model_provider(
+        &config.model_provider_id,
         config.model_provider.clone(),
         turn_context_raw.auth_manager.clone(),
     );
@@ -185,6 +186,7 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
         .models_manager = models_manager;
     turn_context_raw.config = Arc::clone(&config);
     turn_context_raw.provider = create_model_provider(
+        &config.model_provider_id,
         config.model_provider.clone(),
         turn_context_raw.auth_manager.clone(),
     );
@@ -293,6 +295,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
     session.services.models_manager = models_manager;
     turn_context_raw.config = Arc::clone(&config);
     turn_context_raw.provider = create_model_provider(
+        &config.model_provider_id,
         config.model_provider.clone(),
         turn_context_raw.auth_manager.clone(),
     );
@@ -443,6 +446,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_policy_skip() {
     session.services.models_manager = models_manager;
     turn_context_raw.config = Arc::clone(&config);
     turn_context_raw.provider = create_model_provider(
+        &config.model_provider_id,
         config.model_provider.clone(),
         turn_context_raw.auth_manager.clone(),
     );

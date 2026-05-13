@@ -60,7 +60,6 @@ mod thread_processor_behavior_tests {
     use codex_config::StaticThreadConfigLoader;
     use codex_config::ThreadConfigSource;
     use codex_model_provider_info::ModelProviderInfo;
-    use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::permissions::FileSystemAccessMode;
@@ -568,7 +567,6 @@ mod thread_processor_behavior_tests {
             experimental_bearer_token: None,
             auth: None,
             aws: None,
-            wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -606,7 +604,6 @@ mod thread_processor_behavior_tests {
                         json!({
                             "name": "request",
                             "base_url": "http://127.0.0.1:9999/api/codex",
-                            "wire_api": "responses",
                         }),
                     ),
                 ])),

@@ -37,7 +37,7 @@ async fn responses_mode_stream_cli() {
 
     let home = TempDir::new().unwrap();
     let provider_override = format!(
-        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"responses\" }}",
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\" }}",
         server.uri()
     );
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
@@ -148,10 +148,9 @@ async fn exec_cli_applies_model_instructions_file() {
     std::fs::write(&custom_path, marker).unwrap();
     let custom_path_str = custom_path.to_string_lossy().replace('\\', "/");
 
-    // Build a provider override that points at the mock server and instructs
-    // Codex to use the Responses API with the dummy env var.
+    // Build a provider override that points at the mock server with a dummy env var.
     let provider_override = format!(
-        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"responses\" }}",
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\" }}",
         server.uri()
     );
 
@@ -215,7 +214,7 @@ async fn exec_cli_profile_applies_model_instructions_file() {
     let custom_path_str = custom_path.to_string_lossy().replace('\\', "/");
 
     let provider_override = format!(
-        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"responses\" }}",
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\" }}",
         server.uri()
     );
 

@@ -344,6 +344,7 @@ async fn run_model_tune_turn(
         conversation_id.into(),
         conversation_id,
         runtime.installation_id.clone(),
+        &config.model_provider_id,
         config.model_provider.clone(),
         SessionSource::Cli,
         config.model_verbosity,

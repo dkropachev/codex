@@ -528,8 +528,11 @@ fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<App
     .then_some(turn_error)
 }
 
-async fn resolve_runtime_model_provider_base_url(provider: &ModelProviderInfo) -> Option<String> {
-    let provider = create_model_provider(provider.clone(), /*auth_manager*/ None);
+async fn resolve_runtime_model_provider_base_url(
+    provider_id: &str,
+    provider: &ModelProviderInfo,
+) -> Option<String> {
+    let provider = create_model_provider(provider_id, provider.clone(), /*auth_manager*/ None);
     match provider.api_provider().await {
         Ok(provider) => Some(provider.base_url),
         Err(err) => {
@@ -724,8 +727,11 @@ impl App {
         let workspace_command_runner: WorkspaceCommandRunner = Arc::new(
             AppServerWorkspaceCommandRunner::new(app_server.request_handle()),
         );
-        let runtime_model_provider_base_url =
-            resolve_runtime_model_provider_base_url(&config.model_provider).await;
+        let runtime_model_provider_base_url = resolve_runtime_model_provider_base_url(
+            &config.model_provider_id,
+            &config.model_provider,
+        )
+        .await;
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =

@@ -1,5 +1,4 @@
 use codex_model_provider_info::ModelProviderInfo;
-use codex_model_provider_info::WireApi;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -71,7 +70,6 @@ async fn continue_after_stream_error() {
         experimental_bearer_token: None,
         auth: None,
         aws: None,
-        wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
         env_http_headers: None,

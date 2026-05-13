@@ -19,7 +19,6 @@ base_url = "http://localhost:11434/v1"
         experimental_bearer_token: None,
         auth: None,
         aws: None,
-        wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -51,7 +50,6 @@ query_params = { api-version = "2025-04-01-preview" }
         experimental_bearer_token: None,
         auth: None,
         aws: None,
-        wire_api: WireApi::Responses,
         query_params: Some(maplit::hashmap! {
             "api-version".to_string() => "2025-04-01-preview".to_string(),
         }),
@@ -86,7 +84,6 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         experimental_bearer_token: None,
         auth: None,
         aws: None,
-        wire_api: WireApi::Responses,
         query_params: None,
         http_headers: Some(maplit::hashmap! {
             "X-Example-Header".to_string() => "example-value".to_string(),
@@ -107,7 +104,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
 }
 
 #[test]
-fn test_deserialize_chat_wire_api_shows_helpful_error() {
+fn test_deserialize_rejects_wire_api() {
     let provider_toml = r#"
 name = "OpenAI using Chat Completions"
 base_url = "https://api.openai.com/v1"
@@ -116,7 +113,10 @@ wire_api = "chat"
         "#;
 
     let err = toml::from_str::<ModelProviderInfo>(provider_toml).unwrap_err();
-    assert!(err.to_string().contains(CHAT_WIRE_API_REMOVED_ERROR));
+    assert!(
+        err.to_string().contains("unknown field `wire_api`"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
@@ -149,7 +149,6 @@ fn test_supports_remote_compaction_for_azure_name() {
         experimental_bearer_token: None,
         auth: None,
         aws: None,
-        wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -174,7 +173,6 @@ fn test_supports_remote_compaction_for_non_openai_non_azure_provider() {
         experimental_bearer_token: None,
         auth: None,
         aws: None,
-        wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -254,7 +252,31 @@ fn test_create_amazon_bedrock_provider() {
                 profile: None,
                 region: None,
             }),
-            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        }
+    );
+}
+
+#[test]
+fn test_create_deepseek_provider() {
+    assert_eq!(
+        ModelProviderInfo::create_deepseek_provider(),
+        ModelProviderInfo {
+            name: "DeepSeek".to_string(),
+            base_url: Some("https://api.deepseek.com/v1".to_string()),
+            env_key: Some("DEEPSEEK_API_KEY".to_string()),
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            aws: None,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -277,6 +299,16 @@ fn test_built_in_model_providers_include_amazon_bedrock() {
             .get(AMAZON_BEDROCK_PROVIDER_ID)
             .map(ModelProviderInfo::is_amazon_bedrock),
         Some(true)
+    );
+}
+
+#[test]
+fn test_built_in_model_providers_include_deepseek() {
+    let providers = built_in_model_providers(/*openai_base_url*/ None);
+
+    assert_eq!(
+        providers.get(DEEPSEEK_PROVIDER_ID),
+        Some(&ModelProviderInfo::create_deepseek_provider())
     );
 }
 
@@ -368,7 +400,6 @@ fn test_merge_configured_model_providers_allows_amazon_bedrock_default_fields() 
                 profile: None,
                 region: None,
             }),
-            wire_api: WireApi::Responses,
             ..ModelProviderInfo::default()
         },
     )]);

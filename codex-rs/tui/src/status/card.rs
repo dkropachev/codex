@@ -10,7 +10,7 @@ use crate::version::CODEX_CLI_VERSION;
 use chrono::DateTime;
 use chrono::Local;
 use codex_app_server_protocol::AskForApproval;
-use codex_model_provider_info::WireApi;
+use codex_model_provider_info::DEEPSEEK_PROVIDER_ID;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -267,7 +267,7 @@ impl StatusHistoryCell {
                 summarize_permission_profile(&permission_profile, config.cwd.as_path()),
             ),
         ];
-        if config.model_provider.wire_api == WireApi::Responses {
+        if config.model_provider_id != DEEPSEEK_PROVIDER_ID {
             let effort_value = reasoning_effort_override
                 .unwrap_or(config.model_reasoning_effort)
                 .map(|effort| effort.to_string())

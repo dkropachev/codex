@@ -1512,15 +1512,6 @@
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"
-        },
-        "wire_api": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/WireApi"
-            }
-          ],
-          "default": "responses",
-          "description": "Which wire protocol this provider expects."
         }
       },
       "type": "object"
@@ -4402,18 +4393,6 @@
         }
       },
       "type": "object"
-    },
-    "WireApi": {
-      "description": "Wire protocol that the provider speaks.",
-      "oneOf": [
-        {
-          "description": "The Responses API exposed by OpenAI at `/v1/responses`.",
-          "enum": [
-            "responses"
-          ],
-          "type": "string"
-        }
-      ]
     },
     "WorkflowDefaultLocation": {
       "enum": [

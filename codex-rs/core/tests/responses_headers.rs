@@ -6,7 +6,6 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_model_provider_info::WireApi;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -58,7 +57,6 @@ async fn responses_stream_includes_subagent_header_on_review() {
         experimental_bearer_token: None,
         auth: None,
         aws: None,
-        wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -103,6 +101,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         thread_id.into(),
         thread_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
+        &config.model_provider_id,
         provider.clone(),
         session_source,
         config.model_verbosity,
@@ -184,7 +183,6 @@ async fn responses_stream_includes_subagent_header_on_other() {
         experimental_bearer_token: None,
         auth: None,
         aws: None,
-        wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -230,6 +228,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         thread_id.into(),
         thread_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
+        &config.model_provider_id,
         provider.clone(),
         session_source,
         config.model_verbosity,
@@ -295,7 +294,6 @@ async fn responses_respects_model_info_overrides_from_config() {
         experimental_bearer_token: None,
         auth: None,
         aws: None,
-        wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -346,6 +344,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         thread_id.into(),
         thread_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
+        &config.model_provider_id,
         provider.clone(),
         session_source,
         config.model_verbosity,

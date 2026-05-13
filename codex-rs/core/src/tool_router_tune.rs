@@ -120,6 +120,7 @@ impl ToolRouterIntrospectionProvider for ToolRouterModelIntrospectionProvider {
             SessionId::new(),
             thread_id,
             self.installation_id.clone(),
+            &self.config.model_provider_id,
             self.config.model_provider.clone(),
             SessionSource::Cli,
             self.config.model_verbosity,

@@ -1,5 +1,5 @@
 use codex_core::config::Config;
-use codex_model_provider_info::WireApi;
+use codex_model_provider_info::DEEPSEEK_PROVIDER_ID;
 
 use crate::sandbox_summary::summarize_sandbox_policy;
 
@@ -22,7 +22,7 @@ pub fn create_config_summary_entries(config: &Config, model: &str) -> Vec<(&'sta
             ),
         ),
     ];
-    if config.model_provider.wire_api == WireApi::Responses {
+    if config.model_provider_id != DEEPSEEK_PROVIDER_ID {
         let reasoning_effort = config
             .model_reasoning_effort
             .map(|effort| effort.to_string());

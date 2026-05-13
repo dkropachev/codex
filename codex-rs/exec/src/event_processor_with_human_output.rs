@@ -10,7 +10,7 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::config::Config;
-use codex_model_provider_info::WireApi;
+use codex_model_provider_info::DEEPSEEK_PROVIDER_ID;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::num_format::format_with_separators;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -442,7 +442,7 @@ fn config_summary_entries(
             ),
         ),
     ];
-    if config.model_provider.wire_api == WireApi::Responses {
+    if config.model_provider_id != DEEPSEEK_PROVIDER_ID {
         entries.push((
             "reasoning effort",
             config

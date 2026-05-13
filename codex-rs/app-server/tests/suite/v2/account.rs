@@ -88,7 +88,6 @@ fn create_config_toml(codex_home: &Path, params: CreateConfigTomlParams) -> std:
             r#"[model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{base_url}"
-wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 {requires_line}

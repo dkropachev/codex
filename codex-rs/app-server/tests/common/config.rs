@@ -44,7 +44,6 @@ pub fn write_mock_responses_config_toml(
 [model_providers.{model_provider_id}]
 name = "{provider_name}"
 base_url = "{server_uri}/v1"
-wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 supports_websockets = false
@@ -99,7 +98,6 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
-wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#

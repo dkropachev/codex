@@ -33,7 +33,7 @@ pub(crate) struct Session {
 
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
-    /// Provider identifier ("openai", "openrouter", ...).
+    /// Provider metadata for model requests.
     pub(super) provider: ModelProviderInfo,
 
     pub(super) collaboration_mode: CollaborationMode,
@@ -845,6 +845,7 @@ impl Session {
                     codex_protocol::SessionId::from(conversation_id),
                     conversation_id,
                     installation_id,
+                    &config.model_provider_id,
                     session_configuration.provider.clone(),
                     session_configuration.session_source.clone(),
                     config.model_verbosity,

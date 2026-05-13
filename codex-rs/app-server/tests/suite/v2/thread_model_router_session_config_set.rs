@@ -137,7 +137,6 @@ approval_policy = "never"
 [model_providers.mock_provider]
 name = "Mock provider"
 base_url = "{server_uri}/v1"
-wire_api = "responses"
 request_max_retries = 0
 {model_router}
 "#

@@ -1534,6 +1534,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
     session.services.models_manager = models_manager;
     turn_context.config = Arc::clone(&config);
     turn_context.provider = create_model_provider(
+        &config.model_provider_id,
         config.model_provider.clone(),
         turn_context.auth_manager.clone(),
     );
@@ -1811,6 +1812,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
     session.services.models_manager = models_manager;
     turn_context.config = Arc::clone(&config);
     turn_context.provider = create_model_provider(
+        &config.model_provider_id,
         config.model_provider.clone(),
         turn_context.auth_manager.clone(),
     );
@@ -2275,6 +2277,7 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
     session.services.models_manager = models_manager;
     turn_context.config = Arc::clone(&config);
     turn_context.provider = create_model_provider(
+        &config.model_provider_id,
         config.model_provider.clone(),
         turn_context.auth_manager.clone(),
     );

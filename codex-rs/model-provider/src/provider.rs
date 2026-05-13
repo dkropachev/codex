@@ -7,7 +7,9 @@ use codex_api::SharedAuthProvider;
 use codex_login::AccountPoolBucket;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_model_provider_info::DEEPSEEK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -60,6 +62,11 @@ pub type ProviderAccountResult = std::result::Result<ProviderAccountState, Provi
 pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the configured provider metadata.
     fn info(&self) -> &ModelProviderInfo;
+
+    /// Returns the provider wire protocol used for model requests.
+    fn wire_api(&self) -> WireApi {
+        WireApi::Responses
+    }
 
     /// Returns the provider-scoped auth manager, when this provider uses one.
     ///
@@ -126,13 +133,61 @@ pub type SharedModelProvider = Arc<dyn ModelProvider>;
 
 /// Creates the default runtime model provider for configured provider metadata.
 pub fn create_model_provider(
+    provider_id: &str,
     provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
 ) -> SharedModelProvider {
-    if provider_info.is_amazon_bedrock() {
+    if provider_id == DEEPSEEK_PROVIDER_ID {
+        Arc::new(DeepSeekModelProvider {
+            inner: ConfiguredModelProvider::new(provider_info, auth_manager),
+        })
+    } else if provider_info.is_amazon_bedrock() {
         Arc::new(AmazonBedrockModelProvider::new(provider_info))
     } else {
         Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager))
+    }
+}
+
+/// Runtime provider for the built-in DeepSeek transport adapter.
+#[derive(Clone, Debug)]
+struct DeepSeekModelProvider {
+    inner: ConfiguredModelProvider,
+}
+
+#[async_trait::async_trait]
+impl ModelProvider for DeepSeekModelProvider {
+    fn info(&self) -> &ModelProviderInfo {
+        self.inner.info()
+    }
+
+    fn wire_api(&self) -> WireApi {
+        WireApi::Chat
+    }
+
+    fn auth_manager(&self) -> Option<Arc<AuthManager>> {
+        self.inner.auth_manager()
+    }
+
+    async fn auth(&self) -> Option<CodexAuth> {
+        self.inner.auth().await
+    }
+
+    async fn auth_for_model(&self, model: Option<&str>) -> Option<CodexAuth> {
+        self.inner.auth_for_model(model).await
+    }
+
+    fn account_state(&self) -> ProviderAccountResult {
+        self.inner.account_state()
+    }
+
+    fn models_manager(
+        &self,
+        codex_home: PathBuf,
+        config_model_catalog: Option<ModelsResponse>,
+        collaboration_modes_config: CollaborationModesConfig,
+    ) -> SharedModelsManager {
+        self.inner
+            .models_manager(codex_home, config_model_catalog, collaboration_modes_config)
     }
 }
 
@@ -277,8 +332,13 @@ fn uses_spark_account_pool_bucket(model: &str) -> bool {
 mod tests {
     use std::num::NonZeroU64;
 
+    use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
+    use codex_model_provider_info::DEEPSEEK_PROVIDER_ID;
+    use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
     use codex_model_provider_info::ModelProviderAwsAuthInfo;
-    use codex_model_provider_info::WireApi;
+    use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
+    use codex_model_provider_info::OPENAI_PROVIDER_ID;
+    use codex_model_provider_info::create_oss_provider_with_base_url;
     use codex_models_manager::manager::RefreshStrategy;
     use codex_protocol::config_types::ModelProviderAuthInfo;
     use codex_protocol::openai_models::ModelInfo;
@@ -324,7 +384,6 @@ mod tests {
             experimental_bearer_token: None,
             auth: None,
             aws: None,
-            wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -374,6 +433,7 @@ mod tests {
     #[test]
     fn create_model_provider_builds_command_auth_manager_without_base_manager() {
         let provider = create_model_provider(
+            "corp",
             provider_info_with_command_auth(),
             /*auth_manager*/ None,
         );
@@ -388,6 +448,7 @@ mod tests {
     #[test]
     fn create_model_provider_does_not_use_openai_auth_manager_for_amazon_bedrock_provider() {
         let provider = create_model_provider(
+            AMAZON_BEDROCK_PROVIDER_ID,
             ModelProviderInfo::create_amazon_bedrock_provider(Some(ModelProviderAwsAuthInfo {
                 profile: Some("codex-bedrock".to_string()),
                 region: None,
@@ -403,6 +464,7 @@ mod tests {
     #[test]
     fn openai_provider_returns_unauthenticated_openai_account_state() {
         let provider = create_model_provider(
+            OPENAI_PROVIDER_ID,
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             /*auth_manager*/ None,
         );
@@ -419,6 +481,7 @@ mod tests {
     #[test]
     fn openai_provider_returns_api_key_account_state() {
         let provider = create_model_provider(
+            OPENAI_PROVIDER_ID,
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
                 "openai-api-key",
@@ -437,10 +500,10 @@ mod tests {
     #[test]
     fn custom_non_openai_provider_returns_no_account_state() {
         let provider = create_model_provider(
+            "custom",
             ModelProviderInfo {
                 name: "Custom".to_string(),
                 base_url: Some("http://localhost:1234/v1".to_string()),
-                wire_api: WireApi::Responses,
                 requires_openai_auth: false,
                 ..Default::default()
             },
@@ -457,8 +520,48 @@ mod tests {
     }
 
     #[test]
+    fn deepseek_provider_uses_chat_wire_api() {
+        let provider = create_model_provider(
+            DEEPSEEK_PROVIDER_ID,
+            ModelProviderInfo::create_deepseek_provider(),
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(provider.wire_api(), WireApi::Chat);
+    }
+
+    #[test]
+    fn non_deepseek_providers_use_responses_wire_api() {
+        let providers = [
+            (
+                OPENAI_PROVIDER_ID,
+                ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            ),
+            (
+                AMAZON_BEDROCK_PROVIDER_ID,
+                ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
+            ),
+            (
+                OLLAMA_OSS_PROVIDER_ID,
+                create_oss_provider_with_base_url("http://localhost:11434/v1"),
+            ),
+            (
+                LMSTUDIO_OSS_PROVIDER_ID,
+                create_oss_provider_with_base_url("http://localhost:1234/v1"),
+            ),
+        ];
+
+        for (provider_id, provider_info) in providers {
+            let provider =
+                create_model_provider(provider_id, provider_info, /*auth_manager*/ None);
+            assert_eq!(provider.wire_api(), WireApi::Responses);
+        }
+    }
+
+    #[test]
     fn amazon_bedrock_provider_returns_bedrock_account_state() {
         let provider = create_model_provider(
+            AMAZON_BEDROCK_PROVIDER_ID,
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
             /*auth_manager*/ None,
         );
@@ -475,6 +578,7 @@ mod tests {
     #[tokio::test]
     async fn amazon_bedrock_provider_creates_static_models_manager() {
         let provider = create_model_provider(
+            AMAZON_BEDROCK_PROVIDER_ID,
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
             /*auth_manager*/ None,
         );
@@ -516,6 +620,7 @@ mod tests {
             codex_models_manager::model_info::model_info_from_slug("custom-bedrock-model");
 
         let provider = create_model_provider(
+            AMAZON_BEDROCK_PROVIDER_ID,
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
             /*auth_manager*/ None,
         );
@@ -555,6 +660,7 @@ mod tests {
         let mut provider_info = provider_for(server.uri());
         provider_info.experimental_bearer_token = Some("provider-token".to_string());
         let provider = create_model_provider(
+            OLLAMA_OSS_PROVIDER_ID,
             provider_info,
             Some(AuthManager::from_auth_for_testing(
                 CodexAuth::create_dummy_chatgpt_auth_for_testing(),

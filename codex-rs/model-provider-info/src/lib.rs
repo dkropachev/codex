@@ -34,48 +34,39 @@ const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
+const DEEPSEEK_PROVIDER_NAME: &str = "DeepSeek";
+pub const DEEPSEEK_PROVIDER_ID: &str = "deepseek";
+pub const DEEPSEEK_DEFAULT_BASE_URL: &str = "https://api.deepseek.com/v1";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
 pub const AMAZON_BEDROCK_DEFAULT_BASE_URL: &str =
     "https://bedrock-mantle.us-east-1.api.aws/openai/v1";
-const CHAT_WIRE_API_REMOVED_ERROR: &str = "`wire_api = \"chat\"` is no longer supported.\nHow to fix: set `wire_api = \"responses\"` in your provider config.\nMore info: https://github.com/openai/codex/discussions/7782";
 pub const LEGACY_OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
 pub const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer supported.\nHow to fix: replace `ollama-chat` with `ollama` in `model_provider`, `oss_provider`, or `--local-provider`.\nMore info: https://github.com/openai/codex/discussions/7782";
 
 /// Wire protocol that the provider speaks.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum WireApi {
     /// The Responses API exposed by OpenAI at `/v1/responses`.
     #[default]
     Responses,
+    /// The OpenAI-compatible Chat Completions API exposed at `/v1/chat/completions`.
+    Chat,
 }
 
 impl fmt::Display for WireApi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = match self {
             Self::Responses => "responses",
+            Self::Chat => "chat",
         };
         f.write_str(value)
     }
 }
 
-impl<'de> Deserialize<'de> for WireApi {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        match value.as_str() {
-            "responses" => Ok(Self::Responses),
-            "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
-            _ => Err(serde::de::Error::unknown_variant(&value, &["responses"])),
-        }
-    }
-}
-
 /// Serializable representation of a provider definition.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct ModelProviderInfo {
     /// Friendly display name.
@@ -97,9 +88,6 @@ pub struct ModelProviderInfo {
     pub auth: Option<ModelProviderAuthInfo>,
     /// AWS SigV4 auth configuration for this provider.
     pub aws: Option<ModelProviderAwsAuthInfo>,
-    /// Which wire protocol this provider expects.
-    #[serde(default)]
-    pub wire_api: WireApi,
     /// Optional query parameters to append to the base URL.
     pub query_params: Option<HashMap<String, String>>,
     /// Additional HTTP headers to include in requests to this provider where
@@ -320,7 +308,6 @@ impl ModelProviderInfo {
             experimental_bearer_token: None,
             auth: None,
             aws: None,
-            wire_api: WireApi::Responses,
             query_params: None,
             http_headers: Some(
                 [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
@@ -348,6 +335,27 @@ impl ModelProviderInfo {
         }
     }
 
+    pub fn create_deepseek_provider() -> ModelProviderInfo {
+        ModelProviderInfo {
+            name: DEEPSEEK_PROVIDER_NAME.into(),
+            base_url: Some(DEEPSEEK_DEFAULT_BASE_URL.into()),
+            env_key: Some("DEEPSEEK_API_KEY".to_string()),
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            aws: None,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        }
+    }
+
     pub fn create_amazon_bedrock_provider(
         aws: Option<ModelProviderAwsAuthInfo>,
     ) -> ModelProviderInfo {
@@ -362,7 +370,6 @@ impl ModelProviderInfo {
                 profile: None,
                 region: None,
             })),
-            wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -404,22 +411,22 @@ pub fn built_in_model_providers(
 ) -> HashMap<String, ModelProviderInfo> {
     use ModelProviderInfo as P;
     let openai_provider = P::create_openai_provider(openai_base_url);
+    let deepseek_provider = P::create_deepseek_provider();
     let amazon_bedrock_provider = P::create_amazon_bedrock_provider(/*aws*/ None);
 
-    // We do not want to be in the business of adjucating which third-party
-    // providers are bundled with Codex CLI, so we only include the OpenAI and
-    // open source ("oss") providers by default. Users are encouraged to add to
-    // `model_providers` in config.toml to add their own providers.
+    // Keep bundled third-party providers narrow and explicit. Users can add
+    // more providers through `model_providers` in config.toml.
     [
         (OPENAI_PROVIDER_ID, openai_provider),
+        (DEEPSEEK_PROVIDER_ID, deepseek_provider),
         (AMAZON_BEDROCK_PROVIDER_ID, amazon_bedrock_provider),
         (
             OLLAMA_OSS_PROVIDER_ID,
-            create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),
+            create_oss_provider(DEFAULT_OLLAMA_PORT),
         ),
         (
             LMSTUDIO_OSS_PROVIDER_ID,
-            create_oss_provider(DEFAULT_LMSTUDIO_PORT, WireApi::Responses),
+            create_oss_provider(DEFAULT_LMSTUDIO_PORT),
         ),
     ]
     .into_iter()
@@ -465,7 +472,7 @@ pub fn merge_configured_model_providers(
     Ok(model_providers)
 }
 
-pub fn create_oss_provider(default_provider_port: u16, wire_api: WireApi) -> ModelProviderInfo {
+pub fn create_oss_provider(default_provider_port: u16) -> ModelProviderInfo {
     // These CODEX_OSS_ environment variables are experimental: we may
     // switch to reading values from config.toml instead.
     let default_codex_oss_base_url = format!(
@@ -481,10 +488,10 @@ pub fn create_oss_provider(default_provider_port: u16, wire_api: WireApi) -> Mod
         .ok()
         .filter(|v| !v.trim().is_empty())
         .unwrap_or(default_codex_oss_base_url);
-    create_oss_provider_with_base_url(&codex_oss_base_url, wire_api)
+    create_oss_provider_with_base_url(&codex_oss_base_url)
 }
 
-pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> ModelProviderInfo {
+pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
     ModelProviderInfo {
         name: "gpt-oss".into(),
         base_url: Some(base_url.into()),
@@ -493,7 +500,6 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         experimental_bearer_token: None,
         auth: None,
         aws: None,
-        wire_api,
         query_params: None,
         http_headers: None,
         env_http_headers: None,

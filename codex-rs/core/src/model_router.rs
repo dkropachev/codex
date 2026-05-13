@@ -15,6 +15,7 @@ use codex_config::config_toml::ModelRouterDiscoveryToml;
 use codex_login::AuthManager;
 use codex_model_provider::list_provider_models_uncached;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
+use codex_model_provider_info::DEEPSEEK_PROVIDER_ID;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
@@ -891,6 +892,7 @@ pub(crate) fn model_client_for_config(
     parent_auth_manager: &Arc<AuthManager>,
 ) -> ModelClient {
     parent.with_provider_info(
+        &config.model_provider_id,
         config.model_provider.clone(),
         Some(auth_manager_for_config(config, parent_auth_manager)),
     )
@@ -1112,6 +1114,7 @@ fn is_builtin_model_provider_id(provider_id: &str) -> bool {
     matches!(
         provider_id,
         OPENAI_PROVIDER_ID
+            | DEEPSEEK_PROVIDER_ID
             | AMAZON_BEDROCK_PROVIDER_ID
             | OLLAMA_OSS_PROVIDER_ID
             | LMSTUDIO_OSS_PROVIDER_ID
@@ -1500,7 +1503,6 @@ mod tests {
     use codex_config::config_toml::ModelRouterReasoningEffortToml;
     use codex_config::config_toml::ModelRouterToml;
     use codex_login::AuthManager;
-    use codex_model_provider_info::WireApi;
     use codex_model_router::RouterSavings;
     use codex_models_manager::manager::SharedModelsManager;
     use codex_models_manager::manager::StaticModelsManager;
@@ -1606,7 +1608,7 @@ mod tests {
             ..Default::default()
         });
         config.model_providers.insert(
-            "deepseek".to_string(),
+            "deepseek-custom".to_string(),
             custom_provider_for_base_url(server.uri()),
         );
 
@@ -1623,9 +1625,9 @@ mod tests {
         assert_eq!(
             candidate_set.candidates,
             vec![ModelRouterCandidateToml {
-                id: Some("auto:deepseek:deepseek-chat".to_string()),
+                id: Some("auto:deepseek-custom:deepseek-chat".to_string()),
                 model: Some("deepseek-chat".to_string()),
-                model_provider: Some("deepseek".to_string()),
+                model_provider: Some("deepseek-custom".to_string()),
                 ..Default::default()
             }]
         );
@@ -1643,7 +1645,7 @@ mod tests {
             ..Default::default()
         });
         config.model_providers.insert(
-            "deepseek".to_string(),
+            "deepseek-custom".to_string(),
             custom_provider_for_base_url(server.uri()),
         );
 
@@ -1661,7 +1663,7 @@ mod tests {
         )
         .expect("router should apply");
 
-        assert_eq!(config.model_provider_id, "deepseek");
+        assert_eq!(config.model_provider_id, "deepseek-custom");
         assert_eq!(config.model.as_deref(), Some("deepseek-chat"));
     }
 
@@ -1677,7 +1679,7 @@ mod tests {
             ..Default::default()
         });
         config.model_providers.insert(
-            "deepseek".to_string(),
+            "deepseek-custom".to_string(),
             custom_provider_for_base_url(server.uri()),
         );
 
@@ -2778,7 +2780,6 @@ mod tests {
             experimental_bearer_token: None,
             auth: None,
             aws: None,
-            wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
             env_http_headers: None,

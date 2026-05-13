@@ -11,7 +11,6 @@ use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_model_provider::BearerAuthProvider;
-use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -51,13 +50,14 @@ use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
-    let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
+    let provider = create_oss_provider_with_base_url("https://example.com/v1");
     let thread_id = ThreadId::new();
     ModelClient::new(
         /*auth_manager*/ None,
         thread_id.into(),
         thread_id,
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+        "test",
         provider,
         session_source,
         /*model_verbosity*/ None,

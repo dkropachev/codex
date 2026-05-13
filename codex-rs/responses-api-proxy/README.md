@@ -16,7 +16,6 @@ echo $OPENAI_API_KEY | ./target/debug/codex-responses-api-proxy \
 [model_providers.codex-responses-api-proxy]
 name = 'codex-responses-api-proxy'
 base_url = 'http://127.0.0.1:60001/v1'
-wire_api='responses'
 
 [profiles.proxy]
 model_provider = "codex-responses-api-proxy"
@@ -45,7 +44,7 @@ A non-privileged user would then run Codex as follows, specifying the `model_pro
 ```shell
 PROXY_PORT=$(jq .port /tmp/server-info.json)
 PROXY_BASE_URL="http://127.0.0.1:${PROXY_PORT}"
-codex exec -c "model_providers.openai-proxy={ name = 'OpenAI Proxy', base_url = '${PROXY_BASE_URL}/v1', wire_api='responses' }" \
+codex exec -c "model_providers.openai-proxy={ name = 'OpenAI Proxy', base_url = '${PROXY_BASE_URL}/v1' }" \
     -c model_provider="openai-proxy" \
     'Your prompt here'
 ```

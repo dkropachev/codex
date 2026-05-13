@@ -23,6 +23,7 @@ use codex_config::loader::project_trust_key;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_login::CodexAuth;
+use codex_model_provider_info::DEEPSEEK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info;
@@ -153,6 +154,10 @@ use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use wiremock::Mock;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path as wiremock_path;
 
 use codex_protocol::mcp::CallToolResult as McpCallToolResult;
 use pretty_assertions::assert_eq;
@@ -352,6 +357,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         SessionId::from(thread_id),
         thread_id,
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+        "openai",
         ModelProviderInfo::create_openai_provider(/* base_url */ /*base_url*/ None),
         codex_protocol::protocol::SessionSource::Exec,
         /*model_verbosity*/ None,
@@ -2976,6 +2982,115 @@ async fn normal_chat_turn_applies_model_router_and_records_usage() -> anyhow::Re
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn routed_deepseek_turn_uses_chat_completions_and_records_usage() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let chat_sse = concat!(
+        "data: {\"id\":\"chatcmpl-1\",\"model\":\"deepseek-chat\",\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
+        "data: {\"id\":\"chatcmpl-1\",\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":50,\"total_tokens\":150}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(wiremock_path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(chat_sse),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let base_url = format!("{}/v1", server.uri());
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(move |config| {
+            let deepseek = config
+                .model_providers
+                .get_mut(DEEPSEEK_PROVIDER_ID)
+                .expect("DeepSeek provider should be built in");
+            deepseek.base_url = Some(base_url.clone());
+            deepseek.env_key = None;
+            deepseek.experimental_bearer_token = Some("deepseek-test-token".to_string());
+            config.model_router = Some(codex_config::config_toml::ModelRouterToml {
+                enabled: true,
+                candidates: vec![
+                    codex_config::config_toml::ModelRouterCandidateToml {
+                        id: Some("incumbent-price".to_string()),
+                        model: Some("gpt-5.4".to_string()),
+                        input_price_per_million: Some(5.0),
+                        output_price_per_million: Some(10.0),
+                        ..Default::default()
+                    },
+                    codex_config::config_toml::ModelRouterCandidateToml {
+                        id: Some("deepseek-chat".to_string()),
+                        model_provider: Some(DEEPSEEK_PROVIDER_ID.to_string()),
+                        model: Some("deepseek-chat".to_string()),
+                        input_price_per_million: Some(1.0),
+                        output_price_per_million: Some(2.0),
+                        ..Default::default()
+                    },
+                ],
+                models: Some(codex_config::config_toml::ModelRouterModelsToml {
+                    rules: vec![codex_config::config_toml::ModelRouterModelRuleToml {
+                        id: Some("chat-default-deepseek".to_string()),
+                        rule_type: codex_config::config_toml::ModelRouterModelRuleTypeToml::Require,
+                        tasks: vec!["chat.default".to_string()],
+                        except_tasks: Vec::new(),
+                        models: vec![codex_config::config_toml::ModelRouterModelSelectorToml {
+                            provider: Some(DEEPSEEK_PROVIDER_ID.to_string()),
+                            model: Some("deepseek-chat".to_string()),
+                        }],
+                    }],
+                }),
+                ..Default::default()
+            });
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("hello").await?;
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    let chat_requests = requests
+        .iter()
+        .filter(|request| {
+            request.method == wiremock::http::Method::POST
+                && request.url.path().ends_with("/chat/completions")
+        })
+        .collect::<Vec<_>>();
+    let responses_requests = requests
+        .iter()
+        .filter(|request| {
+            request.method == wiremock::http::Method::POST
+                && request.url.path().ends_with("/responses")
+        })
+        .count();
+
+    assert_eq!(chat_requests.len(), 1);
+    assert_eq!(responses_requests, 0);
+    let body: serde_json::Value = serde_json::from_slice(&chat_requests[0].body)?;
+    assert_eq!(body["model"].as_str(), Some("deepseek-chat"));
+
+    let runtime = codex_state::StateRuntime::init(
+        test.codex_home_path().to_path_buf(),
+        DEEPSEEK_PROVIDER_ID.to_string(),
+    )
+    .await?;
+    let summary = runtime
+        .model_router_usage_summary(codex_state::ModelRouterUsageQuery {
+            window_start_ms: None,
+            window_end_ms: chrono::Utc::now().timestamp_millis(),
+            task_key: Some("chat.default".to_string()),
+            group_by: codex_state::ModelRouterUsageGroupBy::Task,
+        })
+        .await?;
+
+    assert_eq!(summary.totals.request_count, 1);
+    assert_eq!(summary.totals.production_request_count, 1);
+    assert_eq!(summary.totals.token_usage.total_tokens, 150);
+    Ok(())
+}
+
 pub(crate) async fn make_session_configuration_for_tests() -> SessionConfiguration {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let config = build_test_config(codex_home.path()).await;
@@ -3699,6 +3814,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             codex_protocol::SessionId::from(conversation_id),
             conversation_id,
             /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+            &config.model_provider_id,
             session_configuration.provider.clone(),
             session_configuration.session_source.clone(),
             config.model_verbosity,
@@ -4988,6 +5104,7 @@ where
             codex_protocol::SessionId::from(conversation_id),
             conversation_id,
             /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+            &config.model_provider_id,
             session_configuration.provider.clone(),
             session_configuration.session_source.clone(),
             config.model_verbosity,

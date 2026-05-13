@@ -53,7 +53,6 @@ fn env_var_present(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_model_provider_info::WireApi;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -66,7 +65,6 @@ mod tests {
             experimental_bearer_token: None,
             auth: None,
             aws: None,
-            wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
             env_http_headers: None,

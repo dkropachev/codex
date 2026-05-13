@@ -212,7 +212,6 @@ fn session_thread_config_to_toml(
 #[cfg(test)]
 mod tests {
     use codex_model_provider_info::ModelProviderInfo;
-    use codex_model_provider_info::WireApi;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -282,7 +281,6 @@ mod tests {
                     [model_providers.local]
                     name = "local"
                     base_url = "http://127.0.0.1:8061/api/codex"
-                    wire_api = "responses"
                     requires_openai_auth = false
                     supports_websockets = true
 
@@ -303,7 +301,6 @@ mod tests {
             experimental_bearer_token: None,
             auth: None,
             aws: None,
-            wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
             env_http_headers: None,

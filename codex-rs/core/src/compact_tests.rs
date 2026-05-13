@@ -1,6 +1,5 @@
 use super::*;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_model_provider_info::WireApi;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use pretty_assertions::assert_eq;
 
@@ -194,7 +193,6 @@ fn should_use_remote_compact_task_for_azure_provider() {
         experimental_bearer_token: None,
         auth: None,
         aws: None,
-        wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
         env_http_headers: None,

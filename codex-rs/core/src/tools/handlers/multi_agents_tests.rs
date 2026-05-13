@@ -377,7 +377,7 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
     turn.approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy should be set");
-    turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+    turn.provider = create_model_provider("test", provider_info, turn.auth_manager.clone());
     turn.config = Arc::new(config);
 
     let invocation = invocation(

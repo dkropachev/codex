@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_model_provider_info::WireApi;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -151,18 +150,6 @@ fn model_provider_from_proto(
         ));
     }
     let id = provider.id;
-    let wire_api = match proto::WireApi::try_from(provider.wire_api) {
-        Ok(proto::WireApi::Responses) => WireApi::Responses,
-        Ok(proto::WireApi::Unspecified) => {
-            return Err(parse_error("remote thread config omitted wire_api"));
-        }
-        Err(_) => {
-            return Err(parse_error(format!(
-                "remote thread config returned unknown wire_api: {}",
-                provider.wire_api
-            )));
-        }
-    };
     let info = ModelProviderInfo {
         name: provider.name,
         base_url: provider.base_url,
@@ -174,7 +161,6 @@ fn model_provider_from_proto(
             .map(model_provider_auth_from_proto)
             .transpose()?,
         aws: None,
-        wire_api,
         query_params: provider.query_params.map(|map| map.values),
         http_headers: provider.http_headers.map(|map| map.values),
         env_http_headers: provider.env_http_headers.map(|map| map.values),
@@ -201,7 +187,6 @@ fn model_provider_to_proto(
         experimental_bearer_token,
         auth,
         aws: _,
-        wire_api,
         query_params,
         http_headers,
         env_http_headers,
@@ -221,7 +206,6 @@ fn model_provider_to_proto(
         env_key_instructions,
         experimental_bearer_token,
         auth: auth.map(model_provider_auth_to_proto),
-        wire_api: proto_wire_api(wire_api).into(),
         query_params: query_params.map(proto_string_map),
         http_headers: http_headers.map(proto_string_map),
         env_http_headers: env_http_headers.map(proto_string_map),
@@ -279,13 +263,6 @@ fn proto_string_map(values: HashMap<String, String>) -> proto::StringMap {
     proto::StringMap { values }
 }
 
-#[cfg(test)]
-fn proto_wire_api(wire_api: WireApi) -> proto::WireApi {
-    match wire_api {
-        WireApi::Responses => proto::WireApi::Responses,
-    }
-}
-
 fn parse_error(message: impl Into<String>) -> ThreadConfigLoadError {
     ThreadConfigLoadError::new(
         ThreadConfigLoadErrorCode::Parse,
@@ -301,7 +278,6 @@ mod tests {
     use std::num::NonZeroU64;
 
     use codex_model_provider_info::ModelProviderInfo;
-    use codex_model_provider_info::WireApi;
     use codex_protocol::config_types::ModelProviderAuthInfo;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -423,7 +399,6 @@ mod tests {
                                 refresh_interval_ms: 300_000,
                                 cwd: workspace_cwd,
                             }),
-                            wire_api: proto::WireApi::Responses.into(),
                             query_params: Some(proto::StringMap {
                                 values: HashMap::from([(
                                     "api-version".to_string(),
@@ -492,7 +467,6 @@ mod tests {
                 refresh_interval_ms: 300_000,
                 cwd: workspace_dir(),
             }),
-            wire_api: WireApi::Responses,
             query_params: Some(HashMap::from([(
                 "api-version".to_string(),
                 "2026-04-16".to_string(),

@@ -1990,6 +1990,7 @@ impl CodexMessageProcessor {
         self.refresh_token_if_requested(do_refresh).await;
 
         let provider = create_model_provider(
+            &self.config.model_provider_id,
             self.config.model_provider.clone(),
             Some(self.auth_manager.clone()),
         );
@@ -10886,7 +10887,6 @@ mod tests {
     use codex_config::StaticThreadConfigLoader;
     use codex_config::ThreadConfigSource;
     use codex_model_provider_info::ModelProviderInfo;
-    use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::permissions::FileSystemAccessMode;
@@ -11267,7 +11267,6 @@ mod tests {
             experimental_bearer_token: None,
             auth: None,
             aws: None,
-            wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -11305,7 +11304,6 @@ mod tests {
                         json!({
                             "name": "request",
                             "base_url": "http://127.0.0.1:9999/api/codex",
-                            "wire_api": "responses",
                         }),
                     ),
                 ])),

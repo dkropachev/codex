@@ -54,7 +54,6 @@ use codex_features::Feature;
 use codex_features::FeaturesToml;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
-use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -2495,7 +2494,7 @@ async fn legacy_toggles_map_to_features() -> std::io::Result<()> {
 }
 
 #[tokio::test]
-async fn responses_websocket_features_do_not_change_wire_api() -> std::io::Result<()> {
+async fn responses_websocket_features_do_not_change_model_provider() -> std::io::Result<()> {
     for feature_key in ["responses_websockets", "responses_websockets_v2"] {
         let codex_home = TempDir::new()?;
         let mut entries = BTreeMap::new();
@@ -2512,7 +2511,8 @@ async fn responses_websocket_features_do_not_change_wire_api() -> std::io::Resul
         )
         .await?;
 
-        assert_eq!(config.model_provider.wire_api, WireApi::Responses);
+        assert_eq!(config.model_provider_id, "openai");
+        assert!(config.model_provider.supports_websockets);
     }
 
     Ok(())
@@ -5360,7 +5360,6 @@ enabled = true
 name = "OpenAI custom"
 base_url = "https://api.openai.com/v1"
 env_key = "OPENAI_API_KEY"
-wire_api = "responses"
 request_max_retries = 4            # retry failed HTTP requests
 stream_max_retries = 10            # retry dropped SSE streams
 stream_idle_timeout_ms = 300000    # 5m idle timeout
@@ -5410,7 +5409,6 @@ model_verbosity = "high"
         name: "OpenAI custom".to_string(),
         base_url: Some("https://api.openai.com/v1".to_string()),
         env_key: Some("OPENAI_API_KEY".to_string()),
-        wire_api: WireApi::Responses,
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,

@@ -38,7 +38,6 @@ message ModelProvider {
   optional string env_key_instructions = 5;
   optional string experimental_bearer_token = 6;
   optional ModelProviderAuthInfo auth = 7;
-  WireApi wire_api = 8;
   optional StringMap query_params = 9;
   optional StringMap http_headers = 10;
   optional StringMap env_http_headers = 11;
@@ -60,9 +59,4 @@ message ModelProviderAuthInfo {
   uint64 timeout_ms = 3;
   uint64 refresh_interval_ms = 4;
   string cwd = 5;
-}
-
-enum WireApi {
-  WIRE_API_UNSPECIFIED = 0;
-  WIRE_API_RESPONSES = 1;
 }

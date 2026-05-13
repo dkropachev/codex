@@ -809,6 +809,7 @@ impl AccountRequestProcessor {
         self.refresh_token_if_requested(do_refresh).await;
 
         let provider = create_model_provider(
+            &self.config.model_provider_id,
             self.config.model_provider.clone(),
             Some(self.auth_manager.clone()),
         );

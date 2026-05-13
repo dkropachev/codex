@@ -33,6 +33,8 @@ use std::sync::atomic::Ordering;
 
 use codex_api::ApiError;
 use codex_api::AuthProvider;
+use codex_api::ChatCompletionsClient as ApiChatCompletionsClient;
+use codex_api::ChatCompletionsOptions as ApiChatCompletionsOptions;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::Compression;
@@ -141,6 +143,7 @@ pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const RESPONSES_ENDPOINT: &str = "/responses";
+const CHAT_COMPLETIONS_ENDPOINT: &str = "/chat/completions";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 #[cfg(test)]
@@ -309,6 +312,7 @@ impl ModelClient {
         session_id: SessionId,
         thread_id: ThreadId,
         installation_id: String,
+        provider_id: &str,
         provider_info: ModelProviderInfo,
         session_source: SessionSource,
         model_verbosity: Option<VerbosityConfig>,
@@ -316,7 +320,7 @@ impl ModelClient {
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
     ) -> Self {
-        let model_provider = create_model_provider(provider_info, auth_manager);
+        let model_provider = create_model_provider(provider_id, provider_info, auth_manager);
         let codex_api_key_env_enabled = model_provider
             .auth_manager()
             .as_ref()
@@ -344,6 +348,7 @@ impl ModelClient {
 
     pub(crate) fn with_provider_info(
         &self,
+        provider_id: &str,
         provider_info: ModelProviderInfo,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
@@ -352,6 +357,7 @@ impl ModelClient {
             self.state.session_id,
             self.state.thread_id,
             self.state.installation_id.clone(),
+            provider_id,
             provider_info,
             self.state.session_source.clone(),
             self.state.model_verbosity,
@@ -774,7 +780,8 @@ impl ModelClient {
     ///
     /// WebSocket use is controlled by provider capability and session-scoped fallback state.
     pub fn responses_websocket_enabled(&self) -> bool {
-        if !self.state.provider.info().supports_websockets
+        if self.state.provider.wire_api() != WireApi::Responses
+            || !self.state.provider.info().supports_websockets
             || self.state.disable_websockets.load(Ordering::Relaxed)
             || (*CODEX_RS_SSE_FIXTURE).is_some()
         {
@@ -1004,6 +1011,32 @@ impl ModelClientSession {
         }
     }
 
+    /// Builds shared Chat Completions transport options from the same session metadata used by
+    /// Responses, without exposing `/chat/completions` to higher-level model logic.
+    fn build_chat_completions_options(
+        &self,
+        turn_metadata_header: Option<&str>,
+    ) -> ApiChatCompletionsOptions {
+        let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
+        let session_id = self.client.state.session_id.to_string();
+        let thread_id = self.client.state.thread_id.to_string();
+        ApiChatCompletionsOptions {
+            session_id: Some(session_id),
+            thread_id: Some(thread_id),
+            session_source: Some(self.client.state.session_source.clone()),
+            extra_headers: {
+                let mut headers = build_responses_headers(
+                    self.client.state.beta_features_header.as_deref(),
+                    Some(&self.turn_state),
+                    turn_metadata_header.as_ref(),
+                );
+                headers.extend(self.client.build_responses_identity_headers());
+                headers
+            },
+            turn_state: Some(Arc::clone(&self.turn_state)),
+        }
+    }
+
     fn get_incremental_items(
         &self,
         request: &ResponsesApiRequest,
@@ -1135,7 +1168,7 @@ impl ModelClientSession {
         skip_all,
         fields(
             provider = %self.client.state.provider.info().name,
-            wire_api = %self.client.state.provider.info().wire_api,
+            wire_api = %self.client.state.provider.wire_api(),
             transport = "responses_websocket",
             api.path = "responses",
             turn.has_metadata_header = params.turn_metadata_header.is_some()
@@ -1227,7 +1260,7 @@ impl ModelClientSession {
         skip_all,
         fields(
             model = %model_info.slug,
-            wire_api = %self.client.state.provider.info().wire_api,
+            wire_api = %self.client.state.provider.wire_api(),
             transport = "responses_http",
             http.method = "POST",
             api.path = "responses",
@@ -1348,6 +1381,122 @@ impl ModelClientSession {
         }
     }
 
+    /// Streams a turn via a provider-compatible Chat Completions endpoint.
+    ///
+    /// The adapter keeps the rest of Codex on the same request and event abstractions used by the
+    /// Responses API path.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(
+        name = "model_client.stream_chat_completions_api",
+        level = "info",
+        skip_all,
+        fields(
+            model = %model_info.slug,
+            wire_api = %self.client.state.provider.wire_api(),
+            transport = "chat_completions_http",
+            http.method = "POST",
+            api.path = "chat/completions",
+            turn.has_metadata_header = turn_metadata_header.is_some()
+        )
+    )]
+    async fn stream_chat_completions_api(
+        &self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        session_telemetry: &SessionTelemetry,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+        service_tier: Option<String>,
+        turn_metadata_header: Option<&str>,
+        inference_trace: &InferenceTraceContext,
+    ) -> Result<ResponseStream> {
+        let auth_manager = self.client.state.provider.auth_manager();
+        let mut auth_recovery = auth_manager
+            .as_ref()
+            .map(AuthManager::unauthorized_recovery);
+        let mut pending_retry = PendingUnauthorizedRetry::default();
+        loop {
+            let client_setup = self
+                .client
+                .current_client_setup(Some(model_info.slug.as_str()))
+                .await?;
+            let transport = ReqwestTransport::new(build_reqwest_client());
+            let request_auth_context = AuthRequestTelemetryContext::new(
+                client_setup.auth.as_ref().map(CodexAuth::auth_mode),
+                client_setup.api_auth.as_ref(),
+                pending_retry,
+            );
+            let (request_telemetry, sse_telemetry) = Self::build_streaming_telemetry(
+                session_telemetry,
+                request_auth_context,
+                RequestRouteTelemetry::for_endpoint(CHAT_COMPLETIONS_ENDPOINT),
+                client_setup.account_route.clone(),
+                self.client.state.auth_env_telemetry.clone(),
+            );
+            let options = self.build_chat_completions_options(turn_metadata_header);
+
+            let request = self.client.build_responses_request(
+                &client_setup.api_provider,
+                prompt,
+                model_info,
+                effort,
+                summary,
+                service_tier.clone(),
+            )?;
+            let inference_trace_attempt = inference_trace.start_attempt();
+            inference_trace_attempt.record_started(&request);
+            let client = ApiChatCompletionsClient::new(
+                transport,
+                client_setup.api_provider,
+                client_setup.api_auth,
+            )
+            .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
+            let stream_result = client.stream_request(request, options).await;
+
+            match stream_result {
+                Ok(stream) => {
+                    let (stream, _) = map_response_stream(
+                        stream,
+                        session_telemetry.clone(),
+                        inference_trace_attempt,
+                    );
+                    return Ok(stream);
+                }
+                Err(ApiError::Transport(
+                    unauthorized_transport @ TransportError::Http { status, .. },
+                )) if status == StatusCode::UNAUTHORIZED => {
+                    let response_debug_context =
+                        extract_response_debug_context(&unauthorized_transport);
+                    inference_trace_attempt.record_failed(
+                        &unauthorized_transport,
+                        response_debug_context.request_id.as_deref(),
+                        /*output_items*/ &[],
+                    );
+                    pending_retry = PendingUnauthorizedRetry::from_recovery(
+                        handle_unauthorized(
+                            unauthorized_transport,
+                            &mut auth_recovery,
+                            session_telemetry,
+                        )
+                        .await?,
+                    );
+                    continue;
+                }
+                Err(err) => {
+                    let response_debug_context =
+                        extract_response_debug_context_from_api_error(&err);
+                    let err = map_api_error(err);
+                    inference_trace_attempt.record_failed(
+                        &err,
+                        response_debug_context.request_id.as_deref(),
+                        /*output_items*/ &[],
+                    );
+                    return Err(err);
+                }
+            }
+        }
+    }
+
     /// Streams a turn via the Responses API over WebSocket transport.
     #[allow(clippy::too_many_arguments)]
     #[instrument(
@@ -1356,7 +1505,7 @@ impl ModelClientSession {
         skip_all,
         fields(
             model = %model_info.slug,
-            wire_api = %self.client.state.provider.info().wire_api,
+            wire_api = %self.client.state.provider.wire_api(),
             transport = "responses_websocket",
             api.path = "responses",
             turn.has_metadata_header = turn_metadata_header.is_some(),
@@ -1603,7 +1752,7 @@ impl ModelClientSession {
         turn_metadata_header: Option<&str>,
         inference_trace: &InferenceTraceContext,
     ) -> Result<ResponseStream> {
-        let wire_api = self.client.state.provider.info().wire_api;
+        let wire_api = self.client.state.provider.wire_api();
         match wire_api {
             WireApi::Responses => {
                 if self.client.responses_websocket_enabled() {
@@ -1631,6 +1780,19 @@ impl ModelClientSession {
                 }
 
                 self.stream_responses_api(
+                    prompt,
+                    model_info,
+                    session_telemetry,
+                    effort,
+                    summary,
+                    service_tier,
+                    turn_metadata_header,
+                    inference_trace,
+                )
+                .await
+            }
+            WireApi::Chat => {
+                self.stream_chat_completions_api(
                     prompt,
                     model_info,
                     session_telemetry,

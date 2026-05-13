@@ -11,7 +11,6 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::originator;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_model_provider_info::WireApi;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
 use codex_otel::SessionTelemetry;
@@ -850,7 +849,6 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         experimental_bearer_token: None,
         auth: Some(auth),
         aws: None,
-        wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -893,6 +891,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         thread_id.into(),
         thread_id,
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+        &config.model_provider_id,
         provider,
         SessionSource::Exec,
         config.model_verbosity,
@@ -2252,7 +2251,6 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         experimental_bearer_token: None,
         auth: None,
         aws: None,
-        wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -2296,6 +2294,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         thread_id.into(),
         thread_id,
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+        &config.model_provider_id,
         provider.clone(),
         SessionSource::Exec,
         config.model_verbosity,
@@ -2882,7 +2881,6 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
             "2025-04-01-preview".to_string(),
         )])),
         env_key_instructions: None,
-        wire_api: WireApi::Responses,
         http_headers: Some(std::collections::HashMap::from([(
             "Custom-Header".to_string(),
             "Value".to_string(),
@@ -2970,7 +2968,6 @@ async fn env_var_overrides_loaded_auth() {
         experimental_bearer_token: None,
         auth: None,
         aws: None,
-        wire_api: WireApi::Responses,
         http_headers: Some(std::collections::HashMap::from([(
             "Custom-Header".to_string(),
             "Value".to_string(),

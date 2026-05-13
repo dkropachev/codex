@@ -219,7 +219,6 @@ mod tests {
     use std::num::NonZeroU64;
 
     use super::*;
-    use codex_model_provider_info::WireApi;
     use codex_protocol::config_types::ModelProviderAuthInfo;
     use codex_protocol::openai_models::ModelsResponse;
     use pretty_assertions::assert_eq;
@@ -257,7 +256,6 @@ mod tests {
             experimental_bearer_token: None,
             auth: None,
             aws: None,
-            wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
