@@ -67,18 +67,21 @@ mod tests {
     use anyhow::Result;
     use std::fs;
     use std::path::Path;
+    use std::process::Output;
     use tempfile::TempDir;
     use tokio::process::Command;
+    use tokio::time::Duration;
+    use tokio::time::sleep;
+
+    const EXECUTABLE_FILE_BUSY_RETRY_DELAY_MILLIS: u64 = 25;
+    const EXECUTABLE_FILE_BUSY_RETRIES: usize = 3;
 
     /// Unix: Verifies the OS handles script execution without file extensions.
     #[cfg(unix)]
     #[tokio::test]
     async fn test_unix_executes_script_without_extension() -> Result<()> {
         let env = TestExecutableEnv::new()?;
-        let mut cmd = Command::new(&env.program_name);
-        cmd.envs(&env.mcp_env);
-
-        let output = cmd.output().await;
+        let output = command_output_with_retry(&env.program_name, &env.mcp_env).await;
         assert!(
             output.is_ok(),
             "Unix should execute PATH-resolved scripts directly: {output:?}"
@@ -130,15 +133,36 @@ mod tests {
         let resolved = resolve(program, &env.mcp_env, std::env::current_dir()?.as_path())?;
 
         // Verify resolved path executes successfully
-        let mut cmd = Command::new(resolved);
-        cmd.envs(&env.mcp_env);
-        let output = cmd.output().await;
+        let output = command_output_with_retry(resolved, &env.mcp_env).await;
 
         assert!(
             output.is_ok(),
             "Resolved program should execute successfully"
         );
         Ok(())
+    }
+
+    async fn command_output_with_retry(
+        program: impl AsRef<std::ffi::OsStr>,
+        mcp_env: &HashMap<OsString, OsString>,
+    ) -> std::io::Result<Output> {
+        for attempt in 1..=EXECUTABLE_FILE_BUSY_RETRIES {
+            let mut cmd = Command::new(program.as_ref());
+            cmd.envs(mcp_env);
+            match cmd.output().await {
+                Err(err)
+                    if err.kind() == std::io::ErrorKind::ExecutableFileBusy
+                        && attempt < EXECUTABLE_FILE_BUSY_RETRIES =>
+                {
+                    sleep(Duration::from_millis(
+                        EXECUTABLE_FILE_BUSY_RETRY_DELAY_MILLIS,
+                    ))
+                    .await;
+                }
+                result => return result,
+            }
+        }
+        unreachable!("retry loop always returns from the final attempt")
     }
 
     // Test fixture for creating temporary executables in a controlled environment.

@@ -14,6 +14,12 @@ pub(crate) enum MessageDeliveryMode {
     TriggerTurn,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MessageInterruptMode {
+    LeaveRunning,
+    InterruptFirst,
+}
+
 impl MessageDeliveryMode {
     /// Returns whether the produced communication should start a turn immediately.
     fn apply(self, communication: InterAgentCommunication) -> InterAgentCommunication {
@@ -44,6 +50,8 @@ pub(crate) struct SendMessageArgs {
 pub(crate) struct FollowupTaskArgs {
     pub(crate) target: String,
     pub(crate) message: String,
+    #[serde(default)]
+    pub(crate) interrupt: bool,
 }
 
 fn message_content(message: String) -> Result<String, FunctionCallError> {
@@ -59,6 +67,7 @@ fn message_content(message: String) -> Result<String, FunctionCallError> {
 pub(crate) async fn handle_message_string_tool(
     invocation: ToolInvocation,
     mode: MessageDeliveryMode,
+    interrupt: MessageInterruptMode,
     target: String,
     message: String,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
@@ -84,6 +93,14 @@ pub(crate) async fn handle_message_string_tool(
         return Err(FunctionCallError::RespondToModel(
             "Tasks can't be assigned to the root agent".to_string(),
         ));
+    }
+    if interrupt == MessageInterruptMode::InterruptFirst {
+        session
+            .services
+            .agent_control
+            .interrupt_agent(receiver_thread_id)
+            .await
+            .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
     }
     session
         .send_event(

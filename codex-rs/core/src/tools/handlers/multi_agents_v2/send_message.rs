@@ -1,4 +1,5 @@
 use super::message_tool::MessageDeliveryMode;
+use super::message_tool::MessageInterruptMode;
 use super::message_tool::SendMessageArgs;
 use super::message_tool::handle_message_string_tool;
 use super::*;
@@ -27,6 +28,7 @@ impl ToolHandler for Handler {
         handle_message_string_tool(
             invocation,
             MessageDeliveryMode::QueueOnly,
+            MessageInterruptMode::LeaveRunning,
             args.target,
             args.message,
         )

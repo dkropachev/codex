@@ -513,7 +513,7 @@ impl AgentControl {
             let _ = config.features.disable(Feature::Collab);
         }
         let state = self.upgrade()?;
-        let state_db_ctx: Option<crate::StateDbHandle> = None;
+        let state_db_ctx = crate::get_state_db(&config).await;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
         let (session_source, agent_metadata) = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {

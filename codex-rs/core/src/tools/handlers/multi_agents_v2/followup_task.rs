@@ -1,5 +1,6 @@
 use super::message_tool::FollowupTaskArgs;
 use super::message_tool::MessageDeliveryMode;
+use super::message_tool::MessageInterruptMode;
 use super::message_tool::handle_message_string_tool;
 use super::*;
 use crate::tools::context::FunctionToolOutput;
@@ -27,6 +28,11 @@ impl ToolHandler for Handler {
         handle_message_string_tool(
             invocation,
             MessageDeliveryMode::TriggerTurn,
+            if args.interrupt {
+                MessageInterruptMode::InterruptFirst
+            } else {
+                MessageInterruptMode::LeaveRunning
+            },
             args.target,
             args.message,
         )

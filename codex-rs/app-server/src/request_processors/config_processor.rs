@@ -173,10 +173,12 @@ impl ConfigRequestProcessor {
     pub(crate) async fn model_provider_capabilities_read(
         &self,
     ) -> Result<ModelProviderCapabilitiesReadResponse, JSONRPCErrorError> {
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        let supports_openai_tools = config.model_provider.is_openai();
         Ok(ModelProviderCapabilitiesReadResponse {
-            namespace_tools: true,
-            image_generation: true,
-            web_search: true,
+            namespace_tools: supports_openai_tools,
+            image_generation: supports_openai_tools,
+            web_search: supports_openai_tools,
         })
     }
 

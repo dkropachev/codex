@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -61,6 +63,8 @@ pub(crate) struct TurnMetadataBag {
     thread_source: Option<&'static str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    turn_started_at_unix_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -91,6 +95,7 @@ fn build_turn_metadata_bag(
     session_id: Option<String>,
     thread_source: Option<&'static str>,
     turn_id: Option<String>,
+    turn_started_at_unix_ms: Option<i64>,
     sandbox: Option<String>,
     repo_root: Option<String>,
     workspace_git_metadata: Option<WorkspaceGitMetadata>,
@@ -106,6 +111,7 @@ fn build_turn_metadata_bag(
         session_id,
         thread_source,
         turn_id,
+        turn_started_at_unix_ms,
         workspaces,
         sandbox,
     }
@@ -135,6 +141,7 @@ pub async fn build_turn_metadata_header(
         /*session_id*/ None,
         /*thread_source*/ None,
         /*turn_id*/ None,
+        /*turn_started_at_unix_ms*/ None,
         sandbox.map(ToString::to_string),
         repo_root,
         Some(WorkspaceGitMetadata {
@@ -176,10 +183,15 @@ impl TurnMetadataState {
             )
             .to_string(),
         );
+        let turn_started_at_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX));
         let base_metadata = build_turn_metadata_bag(
             Some(session_id),
             session_source.thread_source_name(),
             Some(turn_id),
+            turn_started_at_unix_ms,
             sandbox,
             /*repo_root*/ None,
             /*workspace_git_metadata*/ None,
@@ -260,6 +272,7 @@ impl TurnMetadataState {
                 state.base_metadata.session_id.clone(),
                 state.base_metadata.thread_source,
                 state.base_metadata.turn_id.clone(),
+                state.base_metadata.turn_started_at_unix_ms,
                 state.base_metadata.sandbox.clone(),
                 Some(repo_root),
                 Some(workspace_git_metadata),

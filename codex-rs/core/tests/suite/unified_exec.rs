@@ -322,7 +322,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
             saw_exec_end = true;
             false
         }
-        EventMsg::TurnComplete(_) => true,
+        EventMsg::TurnComplete(_) => patch_end.is_some(),
         _ => false,
     })
     .await;

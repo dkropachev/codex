@@ -212,11 +212,7 @@ macro_rules! assert_chatwidget_snapshot {
         settings.set_prepend_module_to_snapshot(false);
         settings.set_snapshot_path(crate::chatwidget::tests::chatwidget_snapshot_dir());
         settings.bind(|| {
-            insta::assert_snapshot!(
-                format!("codex_tui__chatwidget__tests__{}", $name),
-                &($value),
-                @$snapshot
-            );
+            insta::assert_snapshot!(&($value), @$snapshot);
         });
     }};
 }

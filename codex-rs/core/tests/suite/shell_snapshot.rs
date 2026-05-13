@@ -602,9 +602,9 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
         }
         EventMsg::PatchApplyEnd(end) if end.call_id == call_id => {
             patch_end = Some(end.clone());
-            false
+            true
         }
-        EventMsg::TurnComplete(_) => true,
+        EventMsg::TurnComplete(_) => false,
         _ => false,
     })
     .await;

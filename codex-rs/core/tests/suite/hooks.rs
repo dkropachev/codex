@@ -21,6 +21,8 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
+use core_test_support::responses::ResponseMock;
+use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -732,6 +734,43 @@ fn request_message_input_texts(body: &[u8], role: &str) -> Vec<String> {
         .collect()
 }
 
+async fn wait_for_response_requests(
+    responses: &ResponseMock,
+    expected_len: usize,
+) -> Vec<ResponsesRequest> {
+    timeout(Duration::from_secs(30), async {
+        loop {
+            let requests = responses.requests();
+            if requests.len() >= expected_len {
+                break requests;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("expected {expected_len} response requests"))
+}
+
+async fn wait_for_hook_inputs(
+    home: &Path,
+    expected_len: usize,
+    read_inputs: fn(&Path) -> Result<Vec<Value>>,
+    description: &str,
+) -> Result<Vec<Value>> {
+    timeout(Duration::from_secs(30), async {
+        loop {
+            if let Ok(inputs) = read_inputs(home)
+                && inputs.len() >= expected_len
+            {
+                break inputs;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .with_context(|| format!("timed out waiting for {description}"))
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -778,7 +817,7 @@ async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
 
     test.submit_turn("hello from the sea").await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 3).await;
     assert_eq!(requests.len(), 3);
     assert_eq!(
         request_hook_prompt_texts(&requests[1]),
@@ -877,7 +916,13 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
 
     test.submit_turn("hello").await?;
 
-    let hook_inputs = read_session_start_hook_inputs(test.codex_home_path())?;
+    let hook_inputs = wait_for_hook_inputs(
+        test.codex_home_path(),
+        1,
+        read_session_start_hook_inputs,
+        "session start hook inputs",
+    )
+    .await?;
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(
         hook_inputs[0]
@@ -935,7 +980,8 @@ async fn resumed_thread_keeps_stop_continuation_prompt_in_history() -> Result<()
 
     initial.submit_turn("tell me something").await?;
 
-    assert_eq!(initial_responses.requests().len(), 2);
+    let initial_requests = wait_for_response_requests(&initial_responses, 2).await;
+    assert_eq!(initial_requests.len(), 2);
 
     let resumed_response = mount_sse_once(
         &server,
@@ -1008,7 +1054,7 @@ async fn multiple_blocking_stop_hooks_persist_multiple_hook_prompt_fragments() -
 
     test.submit_turn("hello again").await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     assert_eq!(
         request_hook_prompt_texts(&requests[1]),
@@ -1202,7 +1248,13 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
             .await?;
     }
 
-    sleep(Duration::from_millis(100)).await;
+    let hook_inputs = wait_for_hook_inputs(
+        test.codex_home_path(),
+        3,
+        read_user_prompt_submit_hook_inputs,
+        "queued user prompt hook inputs",
+    )
+    .await?;
     let _ = gate_completed_tx.send(());
 
     let requests = tokio::time::timeout(Duration::from_secs(30), async {
@@ -1219,8 +1271,6 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
     .into_iter()
     .collect::<Vec<_>>();
 
-    sleep(Duration::from_millis(100)).await;
-
     assert_eq!(requests.len(), 2);
 
     let second_user_texts = request_message_input_texts(&requests[1], "user");
@@ -1233,7 +1283,6 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
         "second request should not include the blocked queued prompt",
     );
 
-    let hook_inputs = read_user_prompt_submit_hook_inputs(test.codex_home_path())?;
     assert_eq!(hook_inputs.len(), 3);
     assert_eq!(
         hook_inputs
@@ -1334,7 +1383,7 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
     )
     .await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     requests[1].function_call_output(call_id);
     assert!(
@@ -1424,7 +1473,7 @@ async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result
     )
     .await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     requests[1].function_call_output(call_id);
     assert!(
@@ -1506,7 +1555,7 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
     )
     .await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     requests[1].function_call_output(call_id);
     assert!(
@@ -1543,24 +1592,6 @@ allow_local_binding = true
 "#,
     )?;
     let call_id = "permissionrequest-network-approval";
-    let command = r#"python3 -c "import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://codex-network-test.invalid', timeout=2).read().decode(errors='replace'))""#;
-    let args = serde_json::json!({ "command": command });
-    let _responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("msg-1", "permission request hook allowed network access"),
-                ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
 
     let approval_policy = AskForApproval::OnFailure;
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
@@ -1624,10 +1655,33 @@ allow_local_binding = true
         test.config.permissions.network.is_some(),
         "expected managed network proxy config to be present"
     );
-    test.session_configured
+    let network_proxy = test
+        .session_configured
         .network_proxy
         .as_ref()
         .expect("expected runtime managed network proxy addresses");
+    let proxy_url_json = serde_json::to_string(&format!("http://{}", network_proxy.http_addr))?;
+    let python = format!(
+        "import urllib.request; proxy = urllib.request.ProxyHandler({{'http': {proxy_url_json}}}); opener = urllib.request.build_opener(proxy); print('OK:' + opener.open('http://codex-network-test.invalid', timeout=10).read().decode(errors='replace'))"
+    );
+    let command = shlex::try_join(["python3", "-c", python.as_str()])?;
+    let args = serde_json::json!({ "command": command });
+    let _responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "permission request hook allowed network access"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
 
     test.submit_turn_with_policies(
         "run the shell command after network hook approval",
@@ -1666,7 +1720,7 @@ allow_local_binding = true
 
     assert_single_permission_request_hook_input(
         test.codex_home_path(),
-        command,
+        &command,
         Some("network-access http://codex-network-test.invalid:80"),
     )?;
 
@@ -1733,7 +1787,7 @@ async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Re
     )
     .await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     requests[1].function_call_output(call_id);
     assert_eq!(
@@ -1806,7 +1860,7 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
     )
     .await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -1906,7 +1960,7 @@ async fn pre_tool_use_blocks_shell_when_defined_in_config_toml() -> Result<()> {
     )
     .await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -1984,7 +2038,7 @@ async fn pre_tool_use_merges_hooks_json_and_config_toml() -> Result<()> {
     test.submit_turn("run the shell command with merged hook sources")
         .await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -2092,7 +2146,7 @@ async fn pre_tool_use_blocks_local_shell_before_execution() -> Result<()> {
     test.submit_turn("run the blocked local shell command")
         .await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -2187,7 +2241,7 @@ async fn pre_tool_use_blocks_exec_command_before_execution() -> Result<()> {
 
     test.submit_turn("run the blocked exec command").await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -2269,7 +2323,7 @@ async fn pre_tool_use_blocks_apply_patch_before_execution() -> Result<()> {
 
     test.submit_turn("apply the blocked patch").await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -2344,7 +2398,7 @@ async fn pre_tool_use_blocks_apply_patch_with_write_alias() -> Result<()> {
     test.submit_turn("apply the patch blocked by Write alias")
         .await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -2420,7 +2474,7 @@ async fn pre_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
 
     test.submit_turn("update the plan").await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -2490,7 +2544,7 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
     test.submit_turn("run the shell command with post hook")
         .await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     assert!(
         requests[1]
@@ -2587,16 +2641,20 @@ async fn post_tool_use_block_decision_replaces_shell_command_output_with_reason(
     test.submit_turn("run the shell command with blocking post hook")
         .await?;
 
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
-    let output_item = requests[1].function_call_output(call_id);
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
+    let requests = wait_for_response_requests(&responses, 2).await;
+    let output = requests
+        .iter()
+        .find_map(|request| request.function_call_output_text(call_id))
         .expect("shell command output string");
     assert_eq!(output, reason);
 
-    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    let hook_inputs = wait_for_hook_inputs(
+        test.codex_home_path(),
+        1,
+        read_post_tool_use_hook_inputs,
+        "post tool use hook inputs",
+    )
+    .await?;
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(
         hook_inputs[0]["tool_response"],
@@ -2656,7 +2714,7 @@ async fn post_tool_use_continue_false_replaces_shell_command_output_with_stop_re
     test.submit_turn("run the shell command with stop-style post hook")
         .await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -2727,7 +2785,7 @@ async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()
     test.submit_turn("run the local shell command with post hook")
         .await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     assert!(
         requests[1]
@@ -2803,7 +2861,7 @@ async fn post_tool_use_exit_two_replaces_one_shot_exec_command_output_with_feedb
     test.submit_turn("run the exec command with post hook")
         .await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -2898,22 +2956,32 @@ async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> R
     test.submit_turn("run the exec command session with post hook")
         .await?;
 
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 3);
-    let output_item = requests[2].function_call_output(poll_call_id);
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
+    let requests = wait_for_response_requests(&responses, 3).await;
+    let output = requests
+        .iter()
+        .find_map(|request| request.function_call_output_text(poll_call_id))
         .expect("write_stdin output string");
     assert_eq!(output, feedback);
 
-    let pre_hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
+    let pre_hook_inputs = wait_for_hook_inputs(
+        test.codex_home_path(),
+        1,
+        read_pre_tool_use_hook_inputs,
+        "pre tool use hook inputs",
+    )
+    .await?;
     assert_eq!(pre_hook_inputs.len(), 1);
     assert_eq!(pre_hook_inputs[0]["tool_name"], "Bash");
     assert_eq!(pre_hook_inputs[0]["tool_use_id"], start_call_id);
     assert_eq!(pre_hook_inputs[0]["tool_input"]["command"], command);
 
-    let post_hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    let post_hook_inputs = wait_for_hook_inputs(
+        test.codex_home_path(),
+        1,
+        read_post_tool_use_hook_inputs,
+        "post tool use hook inputs",
+    )
+    .await?;
     assert_eq!(post_hook_inputs.len(), 1);
     assert_eq!(post_hook_inputs[0]["hook_event_name"], "PostToolUse");
     assert_eq!(post_hook_inputs[0]["tool_name"], "Bash");
@@ -2980,12 +3048,12 @@ async fn post_tool_use_records_additional_context_for_apply_patch() -> Result<()
 
     test.submit_turn("apply the patch with post hook").await?;
 
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
+    let requests = wait_for_response_requests(&responses, 2).await;
+    let post_context = post_context.to_string();
     assert!(
-        requests[1]
+        requests.iter().any(|request| request
             .message_input_texts("developer")
-            .contains(&post_context.to_string()),
+            .contains(&post_context)),
         "follow-up request should include apply_patch post tool use context",
     );
     assert!(
@@ -2993,7 +3061,13 @@ async fn post_tool_use_records_additional_context_for_apply_patch() -> Result<()
         "apply_patch should create the file"
     );
 
-    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    let hook_inputs = wait_for_hook_inputs(
+        test.codex_home_path(),
+        1,
+        read_post_tool_use_hook_inputs,
+        "post tool use hook inputs",
+    )
+    .await?;
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(hook_inputs[0]["tool_name"], "apply_patch");
     assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
@@ -3072,12 +3146,12 @@ async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<(
     test.submit_turn("apply the patch with edit alias post hook")
         .await?;
 
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
+    let requests = wait_for_response_requests(&responses, 2).await;
+    let post_context = post_context.to_string();
     assert!(
-        requests[1]
+        requests.iter().any(|request| request
             .message_input_texts("developer")
-            .contains(&post_context.to_string()),
+            .contains(&post_context)),
         "follow-up request should include apply_patch post tool use context",
     );
     assert!(
@@ -3085,7 +3159,13 @@ async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<(
         "apply_patch should create the file"
     );
 
-    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    let hook_inputs = wait_for_hook_inputs(
+        test.codex_home_path(),
+        1,
+        read_post_tool_use_hook_inputs,
+        "post tool use hook inputs",
+    )
+    .await?;
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(hook_inputs[0]["tool_name"], "apply_patch");
     assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
@@ -3148,7 +3228,7 @@ async fn post_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
 
     test.submit_turn("update the plan").await?;
 
-    let requests = responses.requests();
+    let requests = wait_for_response_requests(&responses, 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item

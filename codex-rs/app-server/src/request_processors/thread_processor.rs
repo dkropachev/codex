@@ -43,7 +43,7 @@ fn collect_resume_override_mismatches(
     {
         mismatch_details.push(format!(
             "service_tier requested={:?} active={:?}",
-            request.service_tier, config_snapshot.service_tier
+            requested_service_tier, config_snapshot.service_tier
         ));
     }
     if let Some(requested_cwd) = request.cwd.as_deref() {
@@ -498,6 +498,44 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_repo_ci_session_config_set(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadRepoCiSessionConfigSetParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_repo_ci_session_config_set_inner(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn repo_ci_learning_instruction_read(
+        &self,
+        params: RepoCiLearningInstructionReadParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.repo_ci_learning_instruction_read_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn repo_ci_learning_instruction_write(
+        &self,
+        params: RepoCiLearningInstructionWriteParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.repo_ci_learning_instruction_write_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_model_router_session_config_set(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadModelRouterSessionConfigSetParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_model_router_session_config_set_inner(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn memory_reset(
         &self,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
@@ -597,6 +635,16 @@ impl ThreadRequestProcessor {
         params: ThreadShellCommandParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_shell_command_inner(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_codex_config_intent_submit(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadCodexConfigIntentSubmitParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_codex_config_intent_submit_inner(request_id, params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -816,6 +864,7 @@ impl ThreadRequestProcessor {
                 .await;
         }
         let environment_selections = self.parse_environment_selections(environments)?;
+        let requested_service_tier = service_tier.clone().flatten();
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -854,6 +903,7 @@ impl ThreadRequestProcessor {
                 config,
                 typesafe_overrides,
                 dynamic_tools,
+                requested_service_tier,
                 session_start_source,
                 thread_source.map(Into::into),
                 environment_selections,
@@ -938,6 +988,7 @@ impl ThreadRequestProcessor {
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
+        requested_service_tier: Option<String>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
         thread_source: Option<codex_protocol::protocol::ThreadSource>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
@@ -1142,12 +1193,13 @@ impl ThreadRequestProcessor {
         );
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
+        let service_tier = config_snapshot.service_tier.or(requested_service_tier);
 
         let response = ThreadStartResponse {
             thread: thread.clone(),
             model: config_snapshot.model,
             model_provider: config_snapshot.model_provider_id,
-            service_tier: config_snapshot.service_tier,
+            service_tier,
             cwd: config_snapshot.cwd,
             instruction_sources,
             approval_policy: config_snapshot.approval_policy.into(),
@@ -1713,6 +1765,173 @@ impl ThreadRequestProcessor {
         Ok(ThreadBackgroundTerminalsCleanResponse {})
     }
 
+    async fn thread_repo_ci_session_config_set_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadRepoCiSessionConfigSetParams,
+    ) -> Result<ThreadRepoCiSessionConfigSetResponse, JSONRPCErrorError> {
+        let ThreadRepoCiSessionConfigSetParams {
+            thread_id,
+            mode,
+            issue_types,
+            review_rounds,
+            long_ci,
+            implement_enabled,
+            implement_mode,
+            implement_max_cycles,
+        } = params;
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        self.submit_core_op(
+            request_id,
+            thread.as_ref(),
+            Op::SetRepoCiSessionConfig {
+                mode: mode
+                    .map(|mode| mode.map(codex_app_server_protocol::RepoCiSessionMode::to_core)),
+                issue_types: issue_types.map(|issue_types| {
+                    issue_types.map(|values| {
+                        values
+                            .into_iter()
+                            .map(codex_app_server_protocol::RepoCiIssueType::to_core)
+                            .collect()
+                    })
+                }),
+                review_rounds,
+                long_ci,
+                implement_enabled,
+                implement_mode: implement_mode
+                    .map(|mode| mode.map(codex_app_server_protocol::ImplementMode::to_core)),
+                implement_max_cycles,
+            },
+        )
+        .await
+        .map_err(|err| internal_error(format!("failed to set repo CI session config: {err}")))?;
+        Ok(ThreadRepoCiSessionConfigSetResponse {})
+    }
+
+    fn repo_ci_learning_instruction_scope(
+        &self,
+        scope: &RepoCiLearningInstructionScopeParams,
+    ) -> Result<ResolvedRepoCiLearningInstructionScope, String> {
+        let cwd_requested = scope.cwd == Some(true);
+        let specified = usize::from(cwd_requested) + usize::from(scope.github_repo.is_some());
+        if specified != 1 {
+            return Err(
+                "repoCiLearningInstruction scope requires exactly one of cwd or githubRepo"
+                    .to_string(),
+            );
+        }
+        if cwd_requested {
+            let repo_root = git_repo_root(self.config.cwd.as_path())
+                .unwrap_or_else(|| self.config.cwd.to_path_buf());
+            let github_repo = github_repo_slug_for_root(&repo_root);
+            let label = github_repo
+                .as_deref()
+                .map(|repo| format!("githubRepo:{repo}"))
+                .unwrap_or_else(|| format!("directory:{}", repo_root.display()));
+            let segments = github_repo
+                .map(|repo| vec!["repo_ci".to_string(), "github_repos".to_string(), repo])
+                .unwrap_or_else(|| {
+                    vec![
+                        "repo_ci".to_string(),
+                        "directories".to_string(),
+                        repo_root.to_string_lossy().to_string(),
+                    ]
+                });
+            return Ok(ResolvedRepoCiLearningInstructionScope { label, segments });
+        }
+        let Some(repo) = scope.github_repo.as_ref() else {
+            return Err(
+                "repoCiLearningInstruction scope requires exactly one of cwd or githubRepo"
+                    .to_string(),
+            );
+        };
+        validate_repo_ci_github_repo(repo)?;
+        Ok(ResolvedRepoCiLearningInstructionScope {
+            label: format!("githubRepo:{repo}"),
+            segments: vec![
+                "repo_ci".to_string(),
+                "github_repos".to_string(),
+                repo.clone(),
+            ],
+        })
+    }
+
+    async fn repo_ci_learning_instruction_read_inner(
+        &self,
+        params: RepoCiLearningInstructionReadParams,
+    ) -> Result<RepoCiLearningInstructionReadResponse, JSONRPCErrorError> {
+        let resolved = self
+            .repo_ci_learning_instruction_scope(&params.scope)
+            .map_err(invalid_request)?;
+        let instruction =
+            configured_repo_ci_learning_instruction(&self.config.codex_home, &resolved.segments)
+                .map_err(|err| {
+                    internal_error(format!("failed to read repo CI learner instruction: {err}"))
+                })?;
+        Ok(RepoCiLearningInstructionReadResponse {
+            scope: resolved.label,
+            instruction,
+        })
+    }
+
+    async fn repo_ci_learning_instruction_write_inner(
+        &self,
+        params: RepoCiLearningInstructionWriteParams,
+    ) -> Result<RepoCiLearningInstructionWriteResponse, JSONRPCErrorError> {
+        let resolved = self
+            .repo_ci_learning_instruction_scope(&params.scope)
+            .map_err(invalid_request)?;
+        let old_instruction =
+            configured_repo_ci_learning_instruction(&self.config.codex_home, &resolved.segments)
+                .map_err(|err| {
+                    internal_error(format!("failed to read repo CI learner instruction: {err}"))
+                })?;
+        let new_instruction = normalize_repo_ci_learning_instruction(&params.instruction);
+        persist_repo_ci_learning_instruction(
+            &self.config.codex_home,
+            &resolved.segments,
+            new_instruction.as_deref(),
+        )
+        .await
+        .map_err(|err| {
+            internal_error(format!(
+                "failed to write repo CI learner instruction: {err}"
+            ))
+        })?;
+        Ok(RepoCiLearningInstructionWriteResponse {
+            scope: resolved.label,
+            old_instruction,
+            new_instruction,
+        })
+    }
+
+    async fn thread_model_router_session_config_set_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadModelRouterSessionConfigSetParams,
+    ) -> Result<ThreadModelRouterSessionConfigSetResponse, JSONRPCErrorError> {
+        let ThreadModelRouterSessionConfigSetParams { thread_id, enabled } = params;
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        if enabled == Some(true) && self.config.model_router.is_none() {
+            return Err(invalid_request(
+                "cannot enable model router for this session because no [model_router] is configured",
+            ));
+        }
+
+        self.submit_core_op(
+            request_id,
+            thread.as_ref(),
+            Op::SetModelRouterSessionConfig { enabled },
+        )
+        .await
+        .map_err(|err| {
+            internal_error(format!("failed to set model router session config: {err}"))
+        })?;
+        Ok(ThreadModelRouterSessionConfigSetResponse {})
+    }
+
     async fn thread_shell_command_inner(
         &self,
         request_id: &ConnectionRequestId,
@@ -1733,6 +1952,32 @@ impl ThreadRequestProcessor {
         .await
         .map_err(|err| internal_error(format!("failed to start shell command: {err}")))?;
         Ok(ThreadShellCommandResponse {})
+    }
+
+    async fn thread_codex_config_intent_submit_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadCodexConfigIntentSubmitParams,
+    ) -> Result<ThreadCodexConfigIntentSubmitResponse, JSONRPCErrorError> {
+        let ThreadCodexConfigIntentSubmitParams {
+            thread_id,
+            intent,
+            context,
+        } = params;
+        let intent = intent.trim().to_string();
+        if intent.is_empty() {
+            return Err(invalid_request("intent must not be empty"));
+        }
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        self.submit_core_op(
+            request_id,
+            thread.as_ref(),
+            Op::CodexConfigIntent { intent, context },
+        )
+        .await
+        .map_err(|err| internal_error(format!("failed to submit Codex config intent: {err}")))?;
+        Ok(ThreadCodexConfigIntentSubmitResponse {})
     }
 
     async fn thread_approve_guardian_denied_action_inner(

@@ -186,7 +186,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
             assert_matches!(update.plan[1].status, StepStatus::Pending);
             false
         }
-        EventMsg::TurnComplete(_) => true,
+        EventMsg::TurnComplete(_) => saw_plan_update,
         _ => false,
     })
     .await;
@@ -460,7 +460,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
             patch_end_success = Some(end.success);
             false
         }
-        EventMsg::TurnComplete(_) => true,
+        EventMsg::TurnComplete(_) => patch_end_success.is_some(),
         _ => false,
     })
     .await;
