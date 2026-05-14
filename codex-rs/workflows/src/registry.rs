@@ -501,8 +501,8 @@ mod tests {
         let config = WorkflowsConfigToml::default();
         let global = home.path().join("workflows").join("reports").join("jira");
         let local = project.path().join(".codex/workflows/reports/jira");
-        create_minimal_workflow(&global, "reports/jira", None, None);
-        create_minimal_workflow(&local, "reports/jira", None, None);
+        create_minimal_workflow(&global, "reports/jira", None);
+        create_minimal_workflow(&local, "reports/jira", None);
 
         let err = find_workflow(home.path(), project.path(), &config, "reports/jira").unwrap_err();
         assert!(matches!(err, WorkflowRegistryError::Duplicate(_)));
@@ -513,37 +513,13 @@ mod tests {
         let home = TempDir::new().unwrap();
         let project = TempDir::new().unwrap();
         let workflow = home.path().join("workflows/reports/jira-summary");
-        create_minimal_workflow(&workflow, "reports/jira-summary", None, None);
+        create_minimal_workflow(&workflow, "reports/jira-summary", None);
 
         let discovered =
             discover_workflows(home.path(), project.path(), &WorkflowsConfigToml::default())
                 .unwrap();
         assert_eq!(discovered[0].id, "reports/jira-summary");
         assert_eq!(discovered[0].command, None);
-    }
-
-    #[test]
-    fn workflow_discovery_uses_explicit_command_alias() {
-        let home = TempDir::new().unwrap();
-        let project = TempDir::new().unwrap();
-        let workflow = home.path().join("workflows/reports/jira-summary");
-        create_minimal_workflow(
-            &workflow,
-            "reports/jira-summary",
-            Some("jira-summary"),
-            None,
-        );
-
-        let discovered =
-            discover_workflows(home.path(), project.path(), &WorkflowsConfigToml::default())
-                .unwrap();
-        assert_eq!(discovered[0].command, Some("jira-summary".to_string()));
-        assert_eq!(
-            find_workflow_by_command(&discovered, "jira-summary")
-                .unwrap()
-                .id,
-            "reports/jira-summary"
-        );
     }
 
     #[test]
@@ -554,7 +530,6 @@ mod tests {
         create_minimal_workflow(
             &workflow,
             "reports/jira-summary",
-            None,
             Some(WorkflowToolSpec {
                 description: "Run the Jira summary workflow".to_string(),
                 input_schema: serde_json::json!({ "type": "object" }),
@@ -575,12 +550,7 @@ mod tests {
         assert_eq!(tools[0].tool.description, "Run the Jira summary workflow");
     }
 
-    fn create_minimal_workflow(
-        dir: &Path,
-        id: &str,
-        command: Option<&str>,
-        tool: Option<WorkflowToolSpec>,
-    ) {
+    fn create_minimal_workflow(dir: &Path, id: &str, tool: Option<WorkflowToolSpec>) {
         fs::create_dir_all(dir.join("src")).unwrap();
         fs::write(dir.join("README.md"), "# Test\n").unwrap();
         fs::write(dir.join("src/workflow.ts"), "export {};\n").unwrap();
@@ -589,7 +559,6 @@ mod tests {
             &dir.join(WORKFLOW_YAML),
             &crate::spec::WorkflowSpec {
                 id: id.to_string(),
-                command: command.map(ToString::to_string),
                 tool,
                 ..Default::default()
             },

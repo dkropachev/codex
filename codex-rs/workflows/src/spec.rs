@@ -139,7 +139,6 @@ pub fn scaffold_workflow_spec(
             "commands": ["npm run build", "npm test"]
         }),
         tool: None,
-        command,
         repair: Some(WorkflowRepairSpec {
             mode: Some(repair_mode),
             max_repair_cycles: config.max_repair_cycles,
