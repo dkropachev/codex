@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "namespace": {
+      "type": "string"
+    },
+    "relativePath": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "namespace",
+    "relativePath"
+  ],
+  "title": "ArtifactFileFindParams",
+  "type": "object"
+}

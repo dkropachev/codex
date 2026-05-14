@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ArtifactFileInfo": {
+      "properties": {
+        "relativePath": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "sizeBytes": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "stateId": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "updatedAtUnixSec": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "relativePath",
+        "sha256",
+        "sizeBytes",
+        "stateId",
+        "updatedAtUnixSec"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "file": {
+      "$ref": "#/definitions/ArtifactFileInfo"
+    }
+  },
+  "required": [
+    "file"
+  ],
+  "title": "ArtifactFileIndexResponse",
+  "type": "object"
+}

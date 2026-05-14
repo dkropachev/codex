@@ -14,12 +14,14 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 chrono = { workspace = true }
+codex-artifactory = { workspace = true }
 codex-config = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+sha2 = { workspace = true }
 shlex = { workspace = true }
 thiserror = { workspace = true }
 toml_edit = { workspace = true }

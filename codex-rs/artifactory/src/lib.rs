@@ -1,6 +1,7 @@
 mod keys;
 mod schema;
 mod store;
+mod workflow_tool_registration;
 
 pub use keys::ArtifactSource;
 pub use keys::changed_source_paths;
@@ -14,5 +15,6 @@ pub use store::Artifactory;
 pub use store::CacheEntry;
 pub use store::PruneOptions;
 pub use store::StateRegistration;
+pub use workflow_tool_registration::WorkflowToolRegistrationRecord;
 
 pub const DB_FILENAME: &str = "artifactory_1.sqlite";

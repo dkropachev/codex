@@ -2,6 +2,7 @@ mod account;
 mod analytics;
 mod api_catalog;
 mod app_list;
+mod artifact;
 mod client_metadata;
 mod collaboration_mode_list;
 #[cfg(unix)]

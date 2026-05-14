@@ -21,6 +21,9 @@ use codex_tools::ToolsConfig;
 use codex_tools::WaitAgentTimeoutOptions;
 use codex_tools::augment_tool_spec_for_code_mode;
 use codex_tools::build_tool_registry_plan;
+use codex_tools::coalesce_loadable_tool_specs;
+use codex_tools::dynamic_tool_to_loadable_tool_spec;
+use codex_workflows::WorkflowPublishedTool;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -74,6 +77,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     unavailable_called_tools: Vec<ToolName>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
+    workflow_tools: Option<&[WorkflowPublishedTool]>,
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::CodeModeExecuteHandler;
@@ -100,6 +104,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::UpdateGoalHandler;
     use crate::tools::handlers::ViewImageHandler;
+    use crate::tools::handlers::WorkflowHandler;
     use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
     use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
     use crate::tools::handlers::multi_agents::CloseAgentHandler;
@@ -341,6 +346,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
             ToolHandlerKind::WaitAgentV2 => {
                 builder.register_handler(handler.name, Arc::new(WaitAgentHandlerV2));
             }
+            ToolHandlerKind::Workflow => {
+                builder.register_handler(handler.name, Arc::new(WorkflowHandler));
+            }
         }
     }
     if let Some(deferred_mcp_tools) = deferred_mcp_tools.as_ref() {
@@ -350,6 +358,37 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 .is_some_and(|tools| tools.contains_key(*name))
         }) {
             builder.register_handler(name.clone(), Arc::new(McpHandler::new(name.clone().into())));
+        }
+    }
+
+    if let Some(workflow_tools) = workflow_tools {
+        let mut workflow_tool_specs = Vec::new();
+        for workflow_tool in workflow_tools {
+            let tool_spec = workflow_tool.to_dynamic_tool_spec();
+            let tool_name = ToolName::plain(tool_spec.name.clone());
+            if !existing_spec_names.insert(tool_name.display().to_string()) {
+                continue;
+            }
+            match dynamic_tool_to_loadable_tool_spec(&tool_spec) {
+                Ok(loadable_tool) => {
+                    workflow_tool_specs.push(loadable_tool);
+                    builder.register_handler(tool_name, Arc::new(WorkflowHandler));
+                }
+                Err(error) => {
+                    tracing::error!(
+                        "Failed to convert workflow tool {:?} to OpenAI tool: {error:?}",
+                        workflow_tool.workflow.id
+                    );
+                }
+            }
+        }
+        for spec in coalesce_loadable_tool_specs(workflow_tool_specs) {
+            let spec = if config.code_mode_enabled {
+                augment_tool_spec_for_code_mode(spec.into())
+            } else {
+                spec.into()
+            };
+            builder.push_spec(spec);
         }
     }
 

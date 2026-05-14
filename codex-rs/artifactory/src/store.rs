@@ -468,8 +468,10 @@ fn unix_now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::WorkflowToolRegistrationRecord;
     use pretty_assertions::assert_eq;
     use rusqlite::params;
+    use serde_json::json;
 
     #[test]
     fn open_creates_database_schema() {
@@ -671,6 +673,54 @@ mod tests {
         );
     }
 
+    #[test]
+    fn workflow_tool_registration_metadata_round_trips_through_state_lookup() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut store = Artifactory::open_at(temp.path().join("db.sqlite")).expect("open");
+        let state_dir = temp.path().join("workflow-tools/active");
+        let registration = workflow_tool_registration_record(&state_dir, None, None);
+
+        let state = store
+            .register_state(&StateRegistration {
+                namespace: "workflow-tools".to_string(),
+                scope_key: "afterAgent".to_string(),
+                source_key: registration.source_digest.clone(),
+                state_dir: state_dir.clone(),
+                sources: vec![ArtifactSource::new(
+                    PathBuf::from("workflow.yaml"),
+                    "workflow_yaml",
+                    "abc".to_string(),
+                )],
+                metadata_json: serde_json::to_string(&registration).expect("metadata"),
+            })
+            .expect("register");
+
+        let looked_up = store
+            .state_by_keys("workflow-tools", "afterAgent", &registration.source_digest)
+            .expect("lookup")
+            .expect("state");
+        let looked_up_registration: WorkflowToolRegistrationRecord =
+            serde_json::from_str(&looked_up.metadata_json).expect("registration metadata");
+
+        assert_eq!(state, looked_up);
+        assert_eq!(looked_up_registration, registration);
+    }
+
+    #[test]
+    fn workflow_tool_registration_expiry_metadata_controls_staleness() {
+        let registration = workflow_tool_registration_record(
+            Path::new("/tmp/workflow-tools/active"),
+            Some(80),
+            Some(90),
+        );
+
+        assert!(!registration.is_expired(79));
+        assert!(registration.is_expired(80));
+        assert!(!registration.is_stale(79, &registration.source_digest));
+        assert!(registration.is_stale(80, &registration.source_digest));
+        assert!(registration.is_stale(79, "different"));
+    }
+
     fn registration(state_dir: PathBuf) -> StateRegistration {
         registration_for(&state_dir, "source")
     }
@@ -687,6 +737,40 @@ mod tests {
                 "abc".to_string(),
             )],
             metadata_json: "{}".to_string(),
+        }
+    }
+
+    fn workflow_tool_registration_record(
+        state_dir: &Path,
+        expires_at_unix_sec: Option<i64>,
+        refresh_after_unix_sec: Option<i64>,
+    ) -> WorkflowToolRegistrationRecord {
+        WorkflowToolRegistrationRecord {
+            workflow_id: "reports/jira-summary".to_string(),
+            workflow: json!({
+                "id": "reports/jira-summary",
+                "rootPath": "/tmp/workflows",
+                "rootKind": "global",
+                "rootLabel": "global",
+                "path": state_dir,
+                "workflowYamlPath": "/tmp/workflows/reports/jira-summary/workflow.yaml",
+                "mentionTarget": "workflow://reports%2Fjira-summary?root=%2Ftmp%2Fworkflows",
+                "validation": { "status": "valid", "messages": [] },
+                "repairMode": "threshold:3",
+            }),
+            tool_name: "workflow__reports__jira-summary".to_string(),
+            source_hook: "afterAgent".to_string(),
+            source_digest: "source-digest".to_string(),
+            published_at_unix_sec: 70,
+            updated_at_unix_sec: 70,
+            refresh_after_unix_sec,
+            expires_at_unix_sec,
+            tool_spec: json!({
+                "description": "Run the Jira summary workflow",
+                "inputSchema": { "type": "object" },
+                "outputSchema": null,
+                "registerOn": ["afterAgent"],
+            }),
         }
     }
 }

@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "namespace": {
+      "type": "string"
+    },
+    "relativePath": {
+      "type": "string"
+    },
+    "stateDir": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "namespace",
+    "relativePath",
+    "stateDir"
+  ],
+  "title": "ArtifactFileIndexParams",
+  "type": "object"
+}

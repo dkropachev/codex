@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "namespace": {
+      "type": "string"
+    },
+    "retentionSecs": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "throttleSecs": {
+      "format": "int64",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "namespace",
+    "retentionSecs",
+    "throttleSecs"
+  ],
+  "title": "ArtifactStatePruneParams",
+  "type": "object"
+}

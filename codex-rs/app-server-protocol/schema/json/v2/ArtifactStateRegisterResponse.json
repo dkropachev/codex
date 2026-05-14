@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ArtifactStateInfo": {
+      "properties": {
+        "createdAtUnixSec": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "lastHitAtUnixSec": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "metadata": true,
+        "namespace": {
+          "type": "string"
+        },
+        "scopeKey": {
+          "type": "string"
+        },
+        "sourceKey": {
+          "type": "string"
+        },
+        "stateDir": {
+          "type": "string"
+        },
+        "updatedAtUnixSec": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "createdAtUnixSec",
+        "id",
+        "metadata",
+        "namespace",
+        "scopeKey",
+        "sourceKey",
+        "stateDir",
+        "updatedAtUnixSec"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "state": {
+      "$ref": "#/definitions/ArtifactStateInfo"
+    }
+  },
+  "required": [
+    "state"
+  ],
+  "title": "ArtifactStateRegisterResponse",
+  "type": "object"
+}

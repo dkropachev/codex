@@ -37,12 +37,16 @@ class FakeAppServerProcess extends EventEmitter {
   apiCatalogReadParams: JsonMessage | null = null;
   workflowRunParams: JsonMessage | null = null;
   workflowCommandExecuteParams: JsonMessage | null = null;
+  artifactRequests: Array<{ method: string; params: JsonMessage }> = [];
   sendApprovalRequestOnThreadStart = false;
 
   private buffer = "";
   private startCount = 0;
   private threadId = "thread-1";
   private turnId = "turn-1";
+  private artifactState: JsonMessage | null = null;
+  private artifactFile: JsonMessage | null = null;
+  private artifactCacheEntry: JsonMessage | null = null;
 
   constructor() {
     super();
@@ -176,6 +180,89 @@ class FakeAppServerProcess extends EventEmitter {
       this.write({ id: message.id, result: { exitCode: 0, stdout: "done", stderr: "" } });
       return;
     }
+    if (typeof message.method === "string" && message.method.startsWith("artifact/")) {
+      this.artifactRequests.push({ method: message.method, params: message.params as JsonMessage });
+      if (message.method === "artifact/state/register") {
+        const params = message.params as JsonMessage;
+        this.artifactState = {
+          id: 1,
+          namespace: String(params.namespace),
+          scopeKey: String(params.scopeKey),
+          sourceKey: String(params.sourceKey),
+          stateDir: String(params.stateDir),
+          metadata: params.metadata,
+          createdAtUnixSec: 123,
+          updatedAtUnixSec: 123,
+          lastHitAtUnixSec: null,
+        };
+        this.write({ id: message.id, result: { state: this.artifactState } });
+        return;
+      }
+      if (message.method === "artifact/state/read") {
+        this.write({ id: message.id, result: { state: this.artifactState } });
+        return;
+      }
+      if (message.method === "artifact/state/list") {
+        this.write({ id: message.id, result: { states: this.artifactState ? [this.artifactState] : [] } });
+        return;
+      }
+      if (message.method === "artifact/state/hit") {
+        if (this.artifactState) {
+          this.artifactState = { ...this.artifactState, lastHitAtUnixSec: 124, updatedAtUnixSec: 124 };
+        }
+        this.write({ id: message.id, result: {} });
+        return;
+      }
+      if (message.method === "artifact/state/prune") {
+        this.write({ id: message.id, result: { pruned: 0 } });
+        return;
+      }
+      if (message.method === "artifact/file/index") {
+        const params = message.params as JsonMessage;
+        this.artifactFile = {
+          stateId: 1,
+          relativePath: String(params.relativePath),
+          sizeBytes: 18,
+          sha256: "abc123",
+          updatedAtUnixSec: 125,
+        };
+        this.write({ id: message.id, result: { file: this.artifactFile } });
+        return;
+      }
+      if (message.method === "artifact/file/find") {
+        this.write({
+          id: message.id,
+          result: this.artifactState && this.artifactFile
+            ? { entry: { state: this.artifactState, file: this.artifactFile } }
+            : { entry: null },
+        });
+        return;
+      }
+      if (message.method === "artifact/cache/write") {
+        const params = message.params as JsonMessage;
+        this.artifactCacheEntry = {
+          namespace: String(params.namespace),
+          key: String(params.key),
+          artifactId: String(params.artifactId),
+          status: String(params.status),
+          metadata: params.metadata,
+          createdAtUnixSec: 126,
+          updatedAtUnixSec: 126,
+          lastHitAtUnixSec: null,
+        };
+        this.write({ id: message.id, result: { entry: this.artifactCacheEntry } });
+        return;
+      }
+      if (message.method === "artifact/cache/read") {
+        this.write({ id: message.id, result: { entry: this.artifactCacheEntry } });
+        return;
+      }
+      if (message.method === "artifact/cache/delete") {
+        this.artifactCacheEntry = null;
+        this.write({ id: message.id, result: {} });
+        return;
+      }
+    }
     if (message.method === "apiCatalog/read") {
       this.apiCatalogReadParams = message.params as JsonMessage;
       this.write({
@@ -191,13 +278,27 @@ class FakeAppServerProcess extends EventEmitter {
               experimental: false,
               description: null,
             },
+            {
+              method: "artifact/state/read",
+              paramsType: "v2::ArtifactStateReadParams",
+              responseType: "v2::ArtifactStateReadResponse",
+              experimental: false,
+              description: null,
+            },
           ],
           mcpServers: [],
           builtInTools: [],
           workflowRuntime: {
             package: "@openai/codex-sdk",
             importSpecifier: "@openai/codex-sdk/workflow",
-            symbols: [],
+            symbols: [
+              {
+                name: "WorkflowContext.artifacts.readState",
+                kind: "method",
+                signature: "ctx.artifacts.readState(params): Promise<ArtifactStateReadResponse>",
+                description: "Read a workflow artifact state by namespace, scope key, and source key.",
+              },
+            ],
           },
           workflows: [],
         },
@@ -550,10 +651,94 @@ describe("CodexWorkflow", () => {
 
     expect(fake.apiCatalogReadParams).toEqual({ mcpDetail: "toolsAndAuthOnly" });
     expect(catalog.schemaVersion).toBe(1);
-    expect(catalog.appServerMethods.map((method) => method.method)).toEqual(["thread/start"]);
+    expect(catalog.appServerMethods.map((method) => method.method)).toEqual(
+      expect.arrayContaining(["thread/start", "artifact/state/read"]),
+    );
+    expect(catalog.appServerMethods.some((method) => method.method === "artifact/state/read")).toBe(
+      true,
+    );
+    expect(
+      catalog.workflowRuntime.symbols.some(
+        (symbol) => symbol.name === "WorkflowContext.artifacts.readState",
+      ),
+    ).toBe(true);
     expect(catalog.workflows).toEqual([]);
 
     await workflow.close();
+  });
+
+  it("exposes artifact storage APIs on workflow contexts", async () => {
+    const fake = new FakeAppServerProcess();
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+
+    const result = await runWorkflow(
+      defineWorkflow<{ key: string }, string>({
+        name: "artifact-context",
+        async run(context, input) {
+          const register = await context.artifacts.registerState({
+            namespace: "workflow",
+            scopeKey: input.key,
+            sourceKey: `${input.key}:state`,
+            stateDir: "/tmp/workflow-state",
+            sources: [{ path: "report.txt", kind: "report", sha256: "abc123" }],
+            metadata: { revision: 1 },
+          });
+          const read = await context.artifacts.readState({
+            namespace: "workflow",
+            scopeKey: input.key,
+            sourceKey: `${input.key}:state`,
+          });
+          const hit = await context.artifacts.recordStateHit({
+            namespace: "workflow",
+            stateDir: "/tmp/workflow-state",
+          });
+          const index = await context.artifacts.indexFile({
+            namespace: "workflow",
+            stateDir: "/tmp/workflow-state",
+            relativePath: "report.txt",
+          });
+          const cacheWrite = await context.artifacts.writeCacheEntry({
+            namespace: "workflow",
+            key: input.key,
+            artifactId: `${input.key}:state`,
+            status: "fresh",
+            metadata: { revision: 1 },
+          });
+          const cacheRead = await context.artifacts.readCacheEntry({
+            namespace: "workflow",
+            key: input.key,
+          });
+          await context.artifacts.deleteCacheEntry({
+            namespace: "workflow",
+            key: input.key,
+          });
+
+          expect(register.state.namespace).toBe("workflow");
+          expect(read.state?.sourceKey).toBe(`${input.key}:state`);
+          expect(hit).toEqual({});
+          expect(index.file.relativePath).toBe("report.txt");
+          expect(cacheRead.entry).toEqual(cacheWrite.entry);
+          return read.state?.namespace ?? "missing";
+        },
+      }),
+      {
+        codexPathOverride: "codex",
+        input: { key: "reports/jira" },
+      },
+    );
+
+    expect(result).toBe("workflow");
+    expect(fake.artifactRequests.map((request) => request.method)).toEqual([
+      "artifact/state/register",
+      "artifact/state/read",
+      "artifact/state/hit",
+      "artifact/file/index",
+      "artifact/cache/write",
+      "artifact/cache/read",
+      "artifact/cache/delete",
+    ]);
+
+    expect(fake.killed).toBe(true);
   });
 
   it("wraps workflow registry commands", async () => {

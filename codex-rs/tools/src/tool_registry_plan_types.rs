@@ -38,6 +38,7 @@ pub enum ToolHandlerKind {
     TestSync,
     ToolSearch,
     ToolSuggest,
+    Workflow,
     UnifiedExec,
     ViewImage,
     WaitAgentV1,

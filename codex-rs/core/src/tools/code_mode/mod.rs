@@ -38,6 +38,7 @@ use codex_tools::collect_code_mode_tool_definitions;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text_content_items_with_policy;
 use codex_utils_output_truncation::truncate_function_output_items_with_policy;
+use codex_workflows::discover_workflow_tools;
 
 pub(crate) use execute_handler::CodeModeExecuteHandler;
 use response_adapter::into_function_call_output_content_items;
@@ -294,6 +295,13 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
                 .then_some(server_name.clone())
         })
         .collect::<HashSet<_>>();
+    let workflow_tools = discover_workflow_tools(
+        exec.turn.config.codex_home.as_path(),
+        exec.turn.cwd.as_path(),
+        &exec.turn.config.workflows,
+    )
+    .ok()
+    .filter(|tools| !tools.is_empty());
 
     ToolRouter::from_config(
         &nested_tools_config,
@@ -304,6 +312,7 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
             parallel_mcp_server_names,
             discoverable_tools: None,
             dynamic_tools: exec.turn.dynamic_tools.as_slice(),
+            workflow_tools,
         },
     )
 }

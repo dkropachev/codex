@@ -293,6 +293,7 @@ fn build_specs_with_unavailable_tools(
         unavailable_called_tools,
         /*discoverable_tools*/ None,
         dynamic_tools,
+        /*workflow_tools*/ None,
     )
 }
 
@@ -379,6 +380,7 @@ async fn assert_model_tools(
             parallel_mcp_server_names: std::collections::HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: &[],
+            workflow_tools: None,
         },
     );
     let model_visible_specs = router.model_visible_specs();

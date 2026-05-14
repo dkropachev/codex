@@ -39,6 +39,7 @@ use codex_tools::create_tool_router_tool;
 use codex_tools::estimate_router_text_tokens;
 use codex_tools::tool_router_format_description;
 use codex_tools::toolset_hash_from_specs;
+use codex_workflows::WorkflowPublishedTool;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -75,6 +76,7 @@ pub(crate) struct ToolRouterParams<'a> {
     pub(crate) parallel_mcp_server_names: HashSet<String>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
+    pub(crate) workflow_tools: Option<Vec<WorkflowPublishedTool>>,
 }
 
 #[derive(Clone, Copy)]
@@ -115,6 +117,7 @@ impl ToolRouter {
             parallel_mcp_server_names,
             discoverable_tools,
             dynamic_tools,
+            workflow_tools,
         } = params;
         let builder = build_specs_with_discoverable_tools(
             config,
@@ -123,6 +126,7 @@ impl ToolRouter {
             unavailable_called_tools,
             discoverable_tools,
             dynamic_tools,
+            workflow_tools.as_deref(),
         );
         let (specs, registry) = builder.build();
         let index = ToolRouterIndex::build(&specs, &registry, &parallel_mcp_server_names);

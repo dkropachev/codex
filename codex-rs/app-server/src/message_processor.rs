@@ -14,6 +14,7 @@ use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
 use crate::request_processors::AccountRequestProcessor;
 use crate::request_processors::AppsRequestProcessor;
+use crate::request_processors::ArtifactRequestProcessor;
 use crate::request_processors::CatalogRequestProcessor;
 use crate::request_processors::CommandExecRequestProcessor;
 use crate::request_processors::ConfigRequestProcessor;
@@ -171,6 +172,7 @@ pub(crate) struct MessageProcessor {
     initialize_processor: InitializeRequestProcessor,
     marketplace_processor: MarketplaceRequestProcessor,
     mcp_processor: McpRequestProcessor,
+    artifact_processor: ArtifactRequestProcessor,
     plugin_processor: PluginRequestProcessor,
     search_processor: SearchRequestProcessor,
     thread_goal_processor: ThreadGoalRequestProcessor,
@@ -419,6 +421,7 @@ impl MessageProcessor {
         );
         let workflow_processor =
             WorkflowRequestProcessor::new(Arc::clone(&config), config_manager.clone());
+        let artifact_processor = ArtifactRequestProcessor::new(Arc::clone(&config));
         if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {
             // Keep plugin startup warmups aligned at app-server startup.
             let on_effective_plugins_changed =
@@ -478,6 +481,7 @@ impl MessageProcessor {
             initialize_processor,
             marketplace_processor,
             mcp_processor,
+            artifact_processor,
             plugin_processor,
             search_processor,
             thread_goal_processor,
@@ -1136,6 +1140,36 @@ impl MessageProcessor {
                 self.workflow_processor
                     .authoring_context_prepare(params)
                     .await
+            }
+            ClientRequest::ArtifactStateRegister { params, .. } => {
+                self.artifact_processor.state_register(params).await
+            }
+            ClientRequest::ArtifactStateRead { params, .. } => {
+                self.artifact_processor.state_read(params).await
+            }
+            ClientRequest::ArtifactStateList { params, .. } => {
+                self.artifact_processor.state_list(params).await
+            }
+            ClientRequest::ArtifactStateHit { params, .. } => {
+                self.artifact_processor.state_hit(params).await
+            }
+            ClientRequest::ArtifactStatePrune { params, .. } => {
+                self.artifact_processor.state_prune(params).await
+            }
+            ClientRequest::ArtifactFileIndex { params, .. } => {
+                self.artifact_processor.file_index(params).await
+            }
+            ClientRequest::ArtifactFileFind { params, .. } => {
+                self.artifact_processor.file_find(params).await
+            }
+            ClientRequest::ArtifactCacheRead { params, .. } => {
+                self.artifact_processor.cache_read(params).await
+            }
+            ClientRequest::ArtifactCacheWrite { params, .. } => {
+                self.artifact_processor.cache_write(params).await
+            }
+            ClientRequest::ArtifactCacheDelete { params, .. } => {
+                self.artifact_processor.cache_delete(params).await
             }
             ClientRequest::MarketplaceAdd { params, .. } => {
                 self.marketplace_processor.marketplace_add(params).await

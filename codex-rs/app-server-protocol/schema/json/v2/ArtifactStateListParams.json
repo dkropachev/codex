@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "namespace": {
+      "type": "string"
+    },
+    "scopeKey": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "namespace",
+    "scopeKey"
+  ],
+  "title": "ArtifactStateListParams",
+  "type": "object"
+}

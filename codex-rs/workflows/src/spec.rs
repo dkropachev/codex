@@ -11,6 +11,34 @@ use serde_json::json;
 
 pub const WORKFLOW_YAML: &str = "workflow.yaml";
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkflowHookKind {
+    #[default]
+    AfterAgent,
+    PreToolUse,
+    PostToolUse,
+    SessionStart,
+    UserPromptSubmit,
+    PreCompact,
+    PostCompact,
+    Stop,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowToolSpec {
+    pub description: String,
+    pub input_schema: JsonValue,
+    #[serde(default, skip_serializing_if = "JsonValue::is_null")]
+    pub output_schema: JsonValue,
+    #[serde(
+        default = "default_workflow_tool_hooks",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub register_on: Vec<WorkflowHookKind>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowSpec {
@@ -34,6 +62,8 @@ pub struct WorkflowSpec {
     pub dependencies: JsonValue,
     #[serde(default, skip_serializing_if = "JsonValue::is_null")]
     pub validation: JsonValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<WorkflowToolSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repair: Option<WorkflowRepairSpec>,
     #[serde(default, skip_serializing_if = "JsonValue::is_null")]
@@ -97,6 +127,7 @@ pub fn scaffold_workflow_spec(
             "profile": config.validation_profile.clone().unwrap_or_else(|| "default".to_string()),
             "commands": ["npm run build", "npm test"]
         }),
+        tool: None,
         repair: Some(WorkflowRepairSpec {
             mode: Some(repair_mode),
             max_repair_cycles: config.max_repair_cycles,
@@ -105,4 +136,29 @@ pub fn scaffold_workflow_spec(
             "commitPolicy": config.commit_policy.clone().unwrap_or_else(|| "auto".to_string())
         }),
     }
+}
+
+pub fn workflow_tool_name(id: &str) -> String {
+    let mut tool_name = String::from("workflow__");
+    for (index, segment) in id.split('/').enumerate() {
+        if index > 0 {
+            tool_name.push_str("__");
+        }
+        for ch in segment.chars() {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                tool_name.push(ch);
+            } else {
+                tool_name.push('_');
+            }
+        }
+    }
+    if tool_name == "workflow__" {
+        "workflow".to_string()
+    } else {
+        tool_name
+    }
+}
+
+fn default_workflow_tool_hooks() -> Vec<WorkflowHookKind> {
+    vec![WorkflowHookKind::AfterAgent]
 }

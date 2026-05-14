@@ -86,6 +86,19 @@ async fn api_catalog_read_returns_methods_tools_and_workflow_runtime() -> Result
             .iter()
             .any(|method| method.method == "workflow/list")
     );
+    assert!(
+        response
+            .app_server_methods
+            .iter()
+            .any(|method| method.method == "artifact/state/read")
+    );
+    assert!(
+        response
+            .workflow_runtime
+            .symbols
+            .iter()
+            .any(|symbol| symbol.name == "WorkflowContext.artifacts.readState")
+    );
     assert_eq!(response.workflows, Vec::new());
 
     Ok(())

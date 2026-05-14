@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "namespace": {
+      "type": "string"
+    },
+    "scopeKey": {
+      "type": "string"
+    },
+    "sourceKey": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "namespace",
+    "scopeKey",
+    "sourceKey"
+  ],
+  "title": "ArtifactStateReadParams",
+  "type": "object"
+}

@@ -8,7 +8,9 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_config::types::WorkflowDefaultLocation;
 use codex_config::types::WorkflowsConfigToml;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
@@ -17,12 +19,15 @@ use thiserror::Error;
 use crate::id::mention_target;
 use crate::id::normalize_workflow_id;
 use crate::spec::WORKFLOW_YAML;
+use crate::spec::WorkflowHookKind;
+use crate::spec::WorkflowToolSpec;
 use crate::spec::read_workflow_spec;
+use crate::spec::workflow_tool_name;
 
 pub const DEFAULT_REPAIR_MODE: &str = "threshold:3";
 pub const DEFAULT_MAX_REPAIR_CYCLES: u32 = 3;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WorkflowRootKind {
     Global,
@@ -38,21 +43,21 @@ pub struct WorkflowRoot {
     pub path: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WorkflowValidationStatus {
     Valid,
     Invalid,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowValidation {
     pub status: WorkflowValidationStatus,
     pub messages: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowSummary {
     pub id: String,
@@ -67,6 +72,29 @@ pub struct WorkflowSummary {
     pub mention_target: String,
     pub validation: WorkflowValidation,
     pub repair_mode: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowPublishedTool {
+    pub workflow: WorkflowSummary,
+    pub tool: WorkflowToolSpec,
+}
+
+impl WorkflowPublishedTool {
+    pub fn tool_name(&self) -> String {
+        workflow_tool_name(&self.workflow.id)
+    }
+
+    pub fn to_dynamic_tool_spec(&self) -> DynamicToolSpec {
+        DynamicToolSpec {
+            namespace: None,
+            name: self.tool_name(),
+            description: self.tool.description.clone(),
+            input_schema: self.tool.input_schema.clone(),
+            defer_loading: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -249,6 +277,51 @@ pub fn workflow_impact(summary: &WorkflowSummary) -> Result<WorkflowImpact> {
     })
 }
 
+pub fn discover_workflow_tools(
+    codex_home: &Path,
+    cwd: &Path,
+    config: &WorkflowsConfigToml,
+) -> Result<Vec<WorkflowPublishedTool>> {
+    crate::publication::discover_workflow_tools(codex_home, cwd, config)
+}
+
+pub fn discover_workflow_tools_for_hook(
+    codex_home: &Path,
+    cwd: &Path,
+    config: &WorkflowsConfigToml,
+    hook: WorkflowHookKind,
+) -> Result<Vec<WorkflowPublishedTool>> {
+    crate::publication::discover_workflow_tools_for_hook(codex_home, cwd, config, hook)
+}
+
+pub(crate) fn discover_workflow_tools_from_filesystem_for_hook(
+    codex_home: &Path,
+    cwd: &Path,
+    config: &WorkflowsConfigToml,
+    hook: WorkflowHookKind,
+) -> Result<Vec<WorkflowPublishedTool>> {
+    let mut tools = Vec::new();
+    for workflow in discover_workflows(codex_home, cwd, config)? {
+        let Ok(spec) = read_workflow_spec(&workflow.workflow_yaml_path) else {
+            continue;
+        };
+        let Some(tool) = spec.tool else {
+            continue;
+        };
+        if !tool.register_on.contains(&hook) {
+            continue;
+        }
+        tools.push(WorkflowPublishedTool { workflow, tool });
+    }
+    tools.sort_by(|left, right| {
+        left.workflow
+            .id
+            .cmp(&right.workflow.id)
+            .then_with(|| left.workflow.root_path.cmp(&right.workflow.root_path))
+    });
+    Ok(tools)
+}
+
 fn push_root(
     roots: &mut Vec<WorkflowRoot>,
     seen: &mut BTreeSet<PathBuf>,
@@ -287,7 +360,7 @@ fn collect_workflows(
     Ok(())
 }
 
-fn summarize_workflow(
+pub(crate) fn summarize_workflow(
     root: &WorkflowRoot,
     workflow_dir: &Path,
     config: &WorkflowsConfigToml,
@@ -389,6 +462,8 @@ pub fn default_workflow_root(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec::WorkflowHookKind;
+    use crate::spec::WorkflowToolSpec;
     use crate::spec::write_workflow_spec;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
@@ -400,8 +475,8 @@ mod tests {
         let config = WorkflowsConfigToml::default();
         let global = home.path().join("workflows").join("reports").join("jira");
         let local = project.path().join(".codex/workflows/reports/jira");
-        create_minimal_workflow(&global, "reports/jira");
-        create_minimal_workflow(&local, "reports/jira");
+        create_minimal_workflow(&global, "reports/jira", None);
+        create_minimal_workflow(&local, "reports/jira", None);
 
         let err = find_workflow(home.path(), project.path(), &config, "reports/jira").unwrap_err();
         assert!(matches!(err, WorkflowRegistryError::Duplicate(_)));
@@ -412,7 +487,7 @@ mod tests {
         let home = TempDir::new().unwrap();
         let project = TempDir::new().unwrap();
         let workflow = home.path().join("workflows/reports/jira-summary");
-        create_minimal_workflow(&workflow, "reports/jira-summary");
+        create_minimal_workflow(&workflow, "reports/jira-summary", None);
 
         let discovered =
             discover_workflows(home.path(), project.path(), &WorkflowsConfigToml::default())
@@ -420,7 +495,35 @@ mod tests {
         assert_eq!(discovered[0].id, "reports/jira-summary");
     }
 
-    fn create_minimal_workflow(dir: &Path, id: &str) {
+    #[test]
+    fn workflow_tools_published_for_after_agent_hook() {
+        let home = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        let workflow = home.path().join("workflows/reports/jira-summary");
+        create_minimal_workflow(
+            &workflow,
+            "reports/jira-summary",
+            Some(WorkflowToolSpec {
+                description: "Run the Jira summary workflow".to_string(),
+                input_schema: serde_json::json!({ "type": "object" }),
+                output_schema: serde_json::Value::Null,
+                register_on: vec![WorkflowHookKind::AfterAgent],
+            }),
+        );
+
+        let tools =
+            discover_workflow_tools(home.path(), project.path(), &WorkflowsConfigToml::default())
+                .unwrap();
+
+        assert_eq!(tools.len(), 1);
+        assert_eq!(
+            tools[0].tool_name(),
+            workflow_tool_name("reports/jira-summary")
+        );
+        assert_eq!(tools[0].tool.description, "Run the Jira summary workflow");
+    }
+
+    fn create_minimal_workflow(dir: &Path, id: &str, tool: Option<WorkflowToolSpec>) {
         fs::create_dir_all(dir.join("src")).unwrap();
         fs::write(dir.join("README.md"), "# Test\n").unwrap();
         fs::write(dir.join("src/workflow.ts"), "export {};\n").unwrap();
@@ -429,6 +532,7 @@ mod tests {
             &dir.join(WORKFLOW_YAML),
             &crate::spec::WorkflowSpec {
                 id: id.to_string(),
+                tool,
                 ..Default::default()
             },
         )

@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ArtifactCacheEntryInfo": {
+      "properties": {
+        "artifactId": {
+          "type": "string"
+        },
+        "createdAtUnixSec": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "key": {
+          "type": "string"
+        },
+        "lastHitAtUnixSec": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "metadata": true,
+        "namespace": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updatedAtUnixSec": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "artifactId",
+        "createdAtUnixSec",
+        "key",
+        "metadata",
+        "namespace",
+        "status",
+        "updatedAtUnixSec"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "entry": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ArtifactCacheEntryInfo"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "title": "ArtifactCacheReadResponse",
+  "type": "object"
+}

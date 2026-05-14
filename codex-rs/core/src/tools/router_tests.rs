@@ -19,7 +19,15 @@ use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_workflows::WorkflowHookKind;
+use codex_workflows::WorkflowPublishedTool;
+use codex_workflows::WorkflowRootKind;
+use codex_workflows::WorkflowSummary;
+use codex_workflows::WorkflowToolSpec;
+use codex_workflows::WorkflowValidation;
+use codex_workflows::WorkflowValidationStatus;
 use serde_json::json;
+use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -52,6 +60,7 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn.dynamic_tools.as_slice(),
+            workflow_tools: None,
         },
     );
 
@@ -102,6 +111,7 @@ async fn tool_router_fanout_does_not_use_general_parallel_support() -> anyhow::R
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn.dynamic_tools.as_slice(),
+            workflow_tools: None,
         },
     );
 
@@ -127,6 +137,62 @@ async fn tool_router_fanout_does_not_use_general_parallel_support() -> anyhow::R
 
     assert!(router.tool_supports_parallel(&call));
     assert!(!router.tool_router_fanout_safe(&call));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn published_workflow_tools_are_added_to_router_specs() -> anyhow::Result<()> {
+    let (_, turn) = make_session_and_context().await;
+    let published_tool = WorkflowPublishedTool {
+        workflow: WorkflowSummary {
+            id: "reports/jira-summary".to_string(),
+            title: Some("Jira Summary".to_string()),
+            user_description: Some("Summarize Jira work".to_string()),
+            search_terms: vec!["jira".to_string()],
+            root_label: "global".to_string(),
+            root_kind: WorkflowRootKind::Global,
+            root_path: PathBuf::from("/tmp/workflows"),
+            path: PathBuf::from("/tmp/workflows/reports/jira-summary"),
+            workflow_yaml_path: PathBuf::from("/tmp/workflows/reports/jira-summary/workflow.yaml"),
+            mention_target: "@workflow/reports/jira-summary".to_string(),
+            validation: WorkflowValidation {
+                status: WorkflowValidationStatus::Valid,
+                messages: Vec::new(),
+            },
+            repair_mode: "threshold:3".to_string(),
+        },
+        tool: WorkflowToolSpec {
+            description: "Run the Jira summary workflow".to_string(),
+            input_schema: json!({ "type": "object" }),
+            output_schema: serde_json::Value::Null,
+            register_on: vec![WorkflowHookKind::AfterAgent],
+        },
+    };
+    let router = ToolRouter::from_config(
+        &turn.tools_config,
+        ToolRouterParams {
+            deferred_mcp_tools: None,
+            mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
+            discoverable_tools: None,
+            dynamic_tools: turn.dynamic_tools.as_slice(),
+            workflow_tools: Some(vec![published_tool]),
+        },
+    );
+
+    assert!(
+        router
+            .specs()
+            .iter()
+            .any(|spec| spec.name() == "workflow__reports__jira-summary")
+    );
+    assert!(
+        router
+            .find_spec(&ToolName::plain("workflow__reports__jira-summary"))
+            .is_some()
+    );
 
     Ok(())
 }
@@ -177,6 +243,7 @@ async fn mcp_parallel_support_uses_exact_payload_server() -> anyhow::Result<()> 
             parallel_mcp_server_names: HashSet::from(["echo".to_string()]),
             discoverable_tools: None,
             dynamic_tools: turn.dynamic_tools.as_slice(),
+            workflow_tools: None,
         },
     );
 

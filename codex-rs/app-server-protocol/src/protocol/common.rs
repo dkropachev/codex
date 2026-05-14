@@ -231,6 +231,20 @@ macro_rules! client_request_definitions {
                     | Self::ExternalAgentConfigDetect { .. } => {
                         Some(ClientRequestSerializationScope::GlobalSharedRead("config"))
                     }
+                    Self::ArtifactStateRead { .. }
+                    | Self::ArtifactStateList { .. }
+                    | Self::ArtifactFileFind { .. }
+                    | Self::ArtifactCacheRead { .. } => {
+                        Some(ClientRequestSerializationScope::GlobalSharedRead("artifactory"))
+                    }
+                    Self::ArtifactStateRegister { .. }
+                    | Self::ArtifactStateHit { .. }
+                    | Self::ArtifactStatePrune { .. }
+                    | Self::ArtifactFileIndex { .. }
+                    | Self::ArtifactCacheWrite { .. }
+                    | Self::ArtifactCacheDelete { .. } => {
+                        Some(ClientRequestSerializationScope::Global("artifactory"))
+                    }
                     Self::FuzzyFileSearchSessionStart { params, .. } => {
                         Some(ClientRequestSerializationScope::FuzzyFileSearchSession {
                             session_id: params.session_id.clone(),
@@ -766,6 +780,56 @@ client_request_definitions! {
     WorkflowAuthoringContextPrepare => "workflow/authoringContext/prepare" {
         params: v2::WorkflowAuthoringContextPrepareParams,
         response: v2::WorkflowAuthoringContextPrepareResponse,
+    },
+    /// Register or refresh an artifact state for a workflow namespace.
+    ArtifactStateRegister => "artifact/state/register" {
+        params: v2::ArtifactStateRegisterParams,
+        response: v2::ArtifactStateRegisterResponse,
+    },
+    /// Read a single artifact state by namespace, scope key, and source key.
+    ArtifactStateRead => "artifact/state/read" {
+        params: v2::ArtifactStateReadParams,
+        response: v2::ArtifactStateReadResponse,
+    },
+    /// List artifact states for a namespace and scope key.
+    ArtifactStateList => "artifact/state/list" {
+        params: v2::ArtifactStateListParams,
+        response: v2::ArtifactStateListResponse,
+    },
+    /// Record that a state was used so it stays warm in the store.
+    ArtifactStateHit => "artifact/state/hit" {
+        params: v2::ArtifactStateHitParams,
+        response: v2::ArtifactStateHitResponse,
+    },
+    /// Prune stale artifact states for a namespace.
+    ArtifactStatePrune => "artifact/state/prune" {
+        params: v2::ArtifactStatePruneParams,
+        response: v2::ArtifactStatePruneResponse,
+    },
+    /// Index a file that belongs to a registered artifact state.
+    ArtifactFileIndex => "artifact/file/index" {
+        params: v2::ArtifactFileIndexParams,
+        response: v2::ArtifactFileIndexResponse,
+    },
+    /// Find the newest indexed artifact file for a relative path.
+    ArtifactFileFind => "artifact/file/find" {
+        params: v2::ArtifactFileFindParams,
+        response: v2::ArtifactFileFindResponse,
+    },
+    /// Read a cache entry stored in the generic artifact cache.
+    ArtifactCacheRead => "artifact/cache/read" {
+        params: v2::ArtifactCacheReadParams,
+        response: v2::ArtifactCacheReadResponse,
+    },
+    /// Write or update a cache entry in the generic artifact cache.
+    ArtifactCacheWrite => "artifact/cache/write" {
+        params: v2::ArtifactCacheWriteParams,
+        response: v2::ArtifactCacheWriteResponse,
+    },
+    /// Delete a cache entry from the generic artifact cache.
+    ArtifactCacheDelete => "artifact/cache/delete" {
+        params: v2::ArtifactCacheDeleteParams,
+        response: v2::ArtifactCacheDeleteResponse,
     },
     AppsList => "app/list" {
         params: v2::AppsListParams,

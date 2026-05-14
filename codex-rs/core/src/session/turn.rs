@@ -107,6 +107,7 @@ use codex_utils_stream_parser::AssistantTextStreamParser;
 use codex_utils_stream_parser::ProposedPlanSegment;
 use codex_utils_stream_parser::extract_proposed_plan_text;
 use codex_utils_stream_parser::strip_citations;
+use codex_workflows::discover_workflow_tools;
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
@@ -1388,6 +1389,14 @@ pub(crate) async fn built_tools(
         })
         .collect::<HashSet<_>>();
 
+    let workflow_tools = discover_workflow_tools(
+        turn_context.config.codex_home.as_path(),
+        turn_context.cwd.as_path(),
+        &turn_context.config.workflows,
+    )
+    .ok()
+    .filter(|tools| !tools.is_empty());
+
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         ToolRouterParams {
@@ -1397,6 +1406,7 @@ pub(crate) async fn built_tools(
             parallel_mcp_server_names,
             discoverable_tools,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
+            workflow_tools,
         },
     )))
 }

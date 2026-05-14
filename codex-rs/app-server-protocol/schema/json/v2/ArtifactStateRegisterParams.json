@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ArtifactSourceInfo": {
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "path",
+        "sha256"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "metadata": true,
+    "namespace": {
+      "type": "string"
+    },
+    "scopeKey": {
+      "type": "string"
+    },
+    "sourceKey": {
+      "type": "string"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/definitions/ArtifactSourceInfo"
+      },
+      "type": "array"
+    },
+    "stateDir": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "metadata",
+    "namespace",
+    "scopeKey",
+    "sourceKey",
+    "sources",
+    "stateDir"
+  ],
+  "title": "ArtifactStateRegisterParams",
+  "type": "object"
+}
