@@ -472,7 +472,6 @@ impl TurnRequestProcessor {
                 service_tier: service_tier_for_op,
                 collaboration_mode,
                 personality,
-                repo_ci: None,
             }
         } else {
             Op::UserInput {

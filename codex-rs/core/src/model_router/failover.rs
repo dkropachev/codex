@@ -274,7 +274,7 @@ mod tests {
         let mut first = base.clone();
         let route = apply_model_router_with_exclusions(
             &mut first,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &[],
             &[],
@@ -287,7 +287,7 @@ mod tests {
         let exclusion = route.exclusion_for_failure(ModelRouterFailureScope::Model);
         let route = apply_model_router_with_exclusions(
             &mut failover,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &[],
             &[exclusion],

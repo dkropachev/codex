@@ -18,7 +18,6 @@ mod realtime_context;
 mod realtime_conversation;
 mod realtime_prompt;
 mod realtime_tool_context;
-mod repo_ci_automation;
 pub(crate) mod session;
 pub use session::SteerInputError;
 mod codex_thread;

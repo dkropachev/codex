@@ -1025,24 +1025,9 @@ impl MessageProcessor {
             ClientRequest::ThreadMemoryModeSet { params, .. } => {
                 self.thread_processor.thread_memory_mode_set(params).await
             }
-            ClientRequest::ThreadRepoCiSessionConfigSet { params, .. } => {
-                self.thread_processor
-                    .thread_repo_ci_session_config_set(&request_id, params)
-                    .await
-            }
             ClientRequest::ThreadCodexConfigIntentSubmit { params, .. } => {
                 self.thread_processor
                     .thread_codex_config_intent_submit(&request_id, params)
-                    .await
-            }
-            ClientRequest::RepoCiLearningInstructionRead { params, .. } => {
-                self.thread_processor
-                    .repo_ci_learning_instruction_read(params)
-                    .await
-            }
-            ClientRequest::RepoCiLearningInstructionWrite { params, .. } => {
-                self.thread_processor
-                    .repo_ci_learning_instruction_write(params)
                     .await
             }
             ClientRequest::ThreadModelRouterSessionConfigSet { params, .. } => {

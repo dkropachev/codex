@@ -2227,7 +2227,6 @@ dependencies = [
  "codex-model-router",
  "codex-models-manager",
  "codex-protocol",
- "codex-repo-ci",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
  "codex-rollout-trace",
@@ -2495,7 +2494,6 @@ dependencies = [
  "codex-otel",
  "codex-plugin",
  "codex-protocol",
- "codex-repo-ci",
  "codex-response-debug-context",
  "codex-rmcp-client",
  "codex-rollout",
@@ -3410,21 +3408,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-repo-ci"
-version = "0.129.0"
-dependencies = [
- "anyhow",
- "codex-cicd-artifacts",
- "codex-protocol",
- "pretty_assertions",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "tempfile",
-]
-
-[[package]]
 name = "codex-response-debug-context"
 version = "0.129.0"
 dependencies = [
@@ -4097,13 +4080,16 @@ version = "0.129.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "codex-artifactory",
  "codex-config",
+ "codex-protocol",
  "codex-utils-absolute-path",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "shlex",
  "tempfile",
  "thiserror 2.0.18",

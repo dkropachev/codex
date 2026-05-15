@@ -3547,7 +3547,6 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
         summary: None,
         output_schema: None,
         collaboration_mode: None,
-        repo_ci: None,
         personality: None,
     };
     let serialized_without_override =

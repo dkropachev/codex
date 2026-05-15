@@ -544,10 +544,6 @@ pub enum Op {
         /// Updated personality preference.
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
-
-        /// Turn-scoped repo CI overrides. These do not persist to later turns.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        repo_ci: Option<RepoCiTurnOverrides>,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
@@ -785,63 +781,6 @@ pub enum Op {
         context: Option<String>,
     },
 
-    /// Patch repository CI review settings for this session.
-    ///
-    /// Omitted fields leave the current session value unchanged. Explicit
-    /// `null` clears the session override for that field and returns to
-    /// repo/user config.
-    SetRepoCiSessionConfig {
-        #[serde(
-            default,
-            deserialize_with = "double_option_serde::deserialize",
-            serialize_with = "double_option_serde::serialize",
-            skip_serializing_if = "Option::is_none"
-        )]
-        mode: Option<Option<RepoCiSessionMode>>,
-        #[serde(
-            default,
-            deserialize_with = "double_option_serde::deserialize",
-            serialize_with = "double_option_serde::serialize",
-            skip_serializing_if = "Option::is_none"
-        )]
-        issue_types: Option<Option<Vec<RepoCiIssueType>>>,
-        #[serde(
-            default,
-            deserialize_with = "double_option_serde::deserialize",
-            serialize_with = "double_option_serde::serialize",
-            skip_serializing_if = "Option::is_none"
-        )]
-        review_rounds: Option<Option<u8>>,
-        #[serde(
-            default,
-            deserialize_with = "double_option_serde::deserialize",
-            serialize_with = "double_option_serde::serialize",
-            skip_serializing_if = "Option::is_none"
-        )]
-        long_ci: Option<Option<bool>>,
-        #[serde(
-            default,
-            deserialize_with = "double_option_serde::deserialize",
-            serialize_with = "double_option_serde::serialize",
-            skip_serializing_if = "Option::is_none"
-        )]
-        implement_enabled: Option<Option<bool>>,
-        #[serde(
-            default,
-            deserialize_with = "double_option_serde::deserialize",
-            serialize_with = "double_option_serde::serialize",
-            skip_serializing_if = "Option::is_none"
-        )]
-        implement_mode: Option<Option<ImplementMode>>,
-        #[serde(
-            default,
-            deserialize_with = "double_option_serde::deserialize",
-            serialize_with = "double_option_serde::serialize",
-            skip_serializing_if = "Option::is_none"
-        )]
-        implement_max_cycles: Option<Option<u8>>,
-    },
-
     /// Override model router enablement for this session.
     ///
     /// `None` clears the session override and returns to repo/user config.
@@ -1012,7 +951,6 @@ impl Op {
             Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
             Self::ReloadUserConfig => "reload_user_config",
             Self::CodexConfigIntent { .. } => "codex_config_intent",
-            Self::SetRepoCiSessionConfig { .. } => "set_repo_ci_session_config",
             Self::SetModelRouterSessionConfig { .. } => "set_model_router_session_config",
             Self::ListSkills { .. } => "list_skills",
             Self::Compact => "compact",
@@ -1509,9 +1447,6 @@ pub enum EventMsg {
 
     /// Warning issued by the guardian automatic approval reviewer.
     GuardianWarning(WarningEvent),
-
-    /// Structured lifecycle update for automatic repository CI checks.
-    RepoCiStatus(RepoCiStatusEvent),
 
     /// Realtime conversation lifecycle start event.
     RealtimeConversationStarted(RealtimeConversationStartedEvent),
@@ -2180,100 +2115,11 @@ pub struct WarningEvent {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-pub enum RepoCiPhase {
-    Learning,
-    Local,
-    Remote,
-    Triage,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-pub enum RepoCiState {
-    Started,
-    Passed,
-    Failed,
-    Skipped,
-    Ignored,
-    Retrying,
-    Exhausted,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-pub enum RepoCiScope {
-    Local,
-    Remote,
-    None,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-pub struct RepoCiStatusEvent {
-    pub phase: RepoCiPhase,
-    pub state: RepoCiState,
-    pub scope: RepoCiScope,
-    pub attempt: Option<u8>,
-    pub max_attempts: Option<u8>,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum RepoCiSessionMode {
-    Off,
-    Local,
-    Remote,
-    LocalAndRemote,
-}
-
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ImplementMode {
     Auto,
     Implicit,
-}
-
-#[derive(
-    Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, JsonSchema, TS,
-)]
-#[serde(rename_all = "kebab-case")]
-#[ts(rename_all = "kebab-case")]
-pub enum RepoCiIssueType {
-    Correctness,
-    Reliability,
-    Performance,
-    Scalability,
-    Security,
-    Maintainability,
-    Testability,
-    Observability,
-    Compatibility,
-    #[serde(rename = "ux-config-cli")]
-    #[ts(rename = "ux-config-cli")]
-    UxConfigCli,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
-pub struct RepoCiTurnOverrides {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<Option<RepoCiSessionMode>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub issue_types: Option<Option<Vec<RepoCiIssueType>>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub review_rounds: Option<Option<u8>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub long_ci: Option<Option<bool>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub implement_enabled: Option<Option<bool>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub implement_mode: Option<Option<ImplementMode>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub implement_max_cycles: Option<Option<u8>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

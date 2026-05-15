@@ -5,8 +5,6 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::BTreeMap;
 
-const REPO_CI_SHELL_GUIDANCE: &str = "When repo-ci tools are available, do not use shell commands for regular linting, formatting checks, compiling, building, testing, CI polling, or CI reruns. Use repo_ci.status, repo_ci.learn, repo_ci.run, or repo_ci.result instead.";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommandToolOptions {
     pub allow_login_shell: bool,
@@ -83,12 +81,12 @@ pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
         name: "exec_command".to_string(),
         description: if cfg!(windows) {
             format!(
-                "Runs a command in a PTY, returning output or a session ID for ongoing interaction.\n\n{REPO_CI_SHELL_GUIDANCE}\n\n{}",
+                "Runs a command in a PTY, returning output or a session ID for ongoing interaction.\n\n{}",
                 windows_shell_guidance()
             )
         } else {
             format!(
-                "Runs a command in a PTY, returning output or a session ID for ongoing interaction.\n\n{REPO_CI_SHELL_GUIDANCE}"
+                "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
             )
         },
         strict: false,
@@ -185,8 +183,6 @@ Examples of valid command strings:
 - setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
 - running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]
 
-{REPO_CI_SHELL_GUIDANCE}
-
 {}"#,
             windows_shell_guidance()
         )
@@ -195,8 +191,7 @@ Examples of valid command strings:
             r#"Runs a shell command and returns its output.
 - The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
 - Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary.
-
-{REPO_CI_SHELL_GUIDANCE}"#
+"#
         )
     };
 
@@ -261,8 +256,6 @@ Examples of valid command strings:
 - setting an env var: "$env:FOO='bar'; echo $env:FOO"
 - running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"
 
-{REPO_CI_SHELL_GUIDANCE}
-
 {}"#,
             windows_shell_guidance()
         )
@@ -270,8 +263,7 @@ Examples of valid command strings:
         format!(
             r#"Runs a shell command and returns its output.
 - Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary.
-
-{REPO_CI_SHELL_GUIDANCE}"#
+"#
         )
     };
 

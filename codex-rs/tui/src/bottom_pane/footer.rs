@@ -88,6 +88,7 @@ pub(crate) struct FooterProps {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CollaborationModeIndicator {
     Plan,
+    Codex,
     Workflow,
     #[allow(dead_code)] // Hidden by current mode filtering; kept for future UI re-enablement.
     PairProgramming,
@@ -145,6 +146,7 @@ impl CollaborationModeIndicator {
         };
         match self {
             CollaborationModeIndicator::Plan => format!("Plan mode{suffix}"),
+            CollaborationModeIndicator::Codex => format!("Codex mode{suffix}"),
             CollaborationModeIndicator::Workflow => format!("Workflow mode{suffix}"),
             CollaborationModeIndicator::PairProgramming => {
                 format!("Pair Programming mode{suffix}")
@@ -157,6 +159,7 @@ impl CollaborationModeIndicator {
         let label = self.label(show_cycle_hint);
         match self {
             CollaborationModeIndicator::Plan => Span::from(label).magenta(),
+            CollaborationModeIndicator::Codex => Span::from(label).cyan(),
             CollaborationModeIndicator::Workflow => Span::from(label).green(),
             CollaborationModeIndicator::PairProgramming => Span::from(label).cyan(),
             CollaborationModeIndicator::Execute => Span::from(label).dim(),
@@ -1733,6 +1736,13 @@ mod tests {
         );
 
         snapshot_footer_with_mode_indicator(
+            "footer_mode_indicator_codex",
+            /*width*/ 120,
+            &props,
+            Some(CollaborationModeIndicator::Codex),
+        );
+
+        snapshot_footer_with_mode_indicator(
             "footer_mode_indicator_narrow_overlap_hides",
             /*width*/ 50,
             &props,
@@ -1834,6 +1844,14 @@ mod tests {
             /*width*/ 120,
             &props,
             Some(CollaborationModeIndicator::Plan),
+            context_window_line(Some(50), /*used_tokens*/ None),
+        );
+
+        snapshot_footer_with_mode_indicator_and_context(
+            "footer_status_line_enabled_codex_mode_right",
+            /*width*/ 120,
+            &props,
+            Some(CollaborationModeIndicator::Codex),
             context_window_line(Some(50), /*used_tokens*/ None),
         );
 

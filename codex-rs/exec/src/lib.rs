@@ -422,10 +422,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
         ephemeral: ephemeral.then_some(true),
-        repo_ci_session_mode: None,
-        repo_ci_issue_types: None,
-        repo_ci_review_rounds: None,
-        repo_ci_long_ci: None,
         additional_writable_roots: add_dir,
     };
 
@@ -784,7 +780,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         personality: None,
                         output_schema,
                         collaboration_mode: None,
-                        repo_ci: None,
                     },
                 },
                 "turn/start",

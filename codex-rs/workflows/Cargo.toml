@@ -16,6 +16,7 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 codex-artifactory = { workspace = true }
 codex-config = { workspace = true }
+codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

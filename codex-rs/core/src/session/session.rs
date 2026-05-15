@@ -1,7 +1,6 @@
 use super::*;
 use crate::config::ConstraintError;
 use codex_protocol::protocol::ImplementMode;
-use codex_protocol::protocol::RepoCiIssueType;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
@@ -90,10 +89,6 @@ pub(crate) struct SessionConfiguration {
     pub(super) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(super) user_shell_override: Option<shell::Shell>,
     pub(super) model_router_enabled_override: Option<bool>,
-    pub(super) repo_ci_session_mode: Option<RepoCiSessionMode>,
-    pub(super) repo_ci_issue_types: Option<Vec<RepoCiIssueType>>,
-    pub(super) repo_ci_review_rounds: Option<u8>,
-    pub(super) repo_ci_long_ci: Option<bool>,
     pub(super) implement_enabled: Option<bool>,
     pub(super) implement_mode: Option<ImplementMode>,
     pub(super) implement_max_cycles: Option<u8>,
@@ -249,18 +244,6 @@ impl SessionConfiguration {
         if let Some(model_router_enabled_override) = updates.model_router_enabled_override {
             next_configuration.model_router_enabled_override = model_router_enabled_override;
         }
-        if let Some(repo_ci_session_mode) = updates.repo_ci_session_mode {
-            next_configuration.repo_ci_session_mode = repo_ci_session_mode;
-        }
-        if let Some(repo_ci_issue_types) = updates.repo_ci_issue_types.clone() {
-            next_configuration.repo_ci_issue_types = repo_ci_issue_types;
-        }
-        if let Some(repo_ci_review_rounds) = updates.repo_ci_review_rounds {
-            next_configuration.repo_ci_review_rounds = repo_ci_review_rounds;
-        }
-        if let Some(repo_ci_long_ci) = updates.repo_ci_long_ci {
-            next_configuration.repo_ci_long_ci = repo_ci_long_ci;
-        }
         if let Some(implement_enabled) = updates.implement_enabled {
             next_configuration.implement_enabled = implement_enabled;
         }
@@ -294,14 +277,9 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
     pub(crate) model_router_enabled_override: Option<Option<bool>>,
-    pub(crate) repo_ci_session_mode: Option<Option<RepoCiSessionMode>>,
-    pub(crate) repo_ci_issue_types: Option<Option<Vec<RepoCiIssueType>>>,
-    pub(crate) repo_ci_review_rounds: Option<Option<u8>>,
-    pub(crate) repo_ci_long_ci: Option<Option<bool>>,
     pub(crate) implement_enabled: Option<Option<bool>>,
     pub(crate) implement_mode: Option<Option<ImplementMode>>,
     pub(crate) implement_max_cycles: Option<Option<u8>>,
-    pub(crate) repo_ci_turn_overrides: Option<RepoCiTurnOverrides>,
 }
 
 pub(crate) struct AppServerClientMetadata {

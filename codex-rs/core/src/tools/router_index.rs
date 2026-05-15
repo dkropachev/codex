@@ -350,19 +350,6 @@ mod tests {
     }
 
     #[test]
-    fn exact_lookup_accepts_dot_qualified_namespace_names() {
-        let tool_name = ToolName::namespaced("repo_ci", "run");
-        let registry =
-            ToolRegistry::with_handler_for_test(tool_name.clone(), Arc::new(TestHandler));
-        let index = ToolRouterIndex::build(&[], &registry, &HashSet::new());
-
-        assert_eq!(
-            index.find_exact("repo_ci.run", None).expect("lookup"),
-            Some(tool_name)
-        );
-    }
-
-    #[test]
     fn parallel_mcp_namespace_is_fanout_safe() {
         let tool_name = ToolName::namespaced("mcp__echo__", "query");
         let registry =

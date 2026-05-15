@@ -617,12 +617,13 @@ async fn run_review_on_session(
 
         (send_followup_reminder, prompt_mode)
     };
+    let had_prior_review_context = had_prior_review_context(&prompt_mode);
     let mut analytics_result = GuardianReviewAnalyticsResult::from_session(
         review_session.codex.session.conversation_id.to_string(),
         guardian_session_kind,
         params.model.clone(),
         params.reasoning_effort.map(|effort| effort.to_string()),
-        had_prior_review_context(&prompt_mode),
+        had_prior_review_context,
     );
     let prompt_items = run_before_review_deadline(
         deadline,
@@ -711,7 +712,7 @@ async fn run_review_on_session(
         guardian_session_kind,
         routed_model.clone(),
         guardian_reasoning_effort.map(|effort| effort.to_string()),
-        had_prior_review_context(&prompt_mode),
+        had_prior_review_context,
     );
     if send_followup_reminder {
         append_guardian_followup_reminder(review_session).await;
@@ -739,7 +740,7 @@ async fn run_review_on_session(
             model: routed_model,
             effort: guardian_reasoning_effort,
             summary: Some(reasoning_summary),
-            service_tier: routed_config.service_tier,
+            service_tier: routed_config.service_tier.map(Some),
             final_output_json_schema: Some(params.schema.clone()),
             collaboration_mode: None,
             personality: params.personality,

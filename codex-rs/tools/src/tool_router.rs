@@ -62,7 +62,6 @@ fn router_where_schema() -> JsonSchema {
                     json!("filesystem"),
                     json!("shell"),
                     json!("git"),
-                    json!("repo_ci"),
                     json!("process"),
                     json!("mcp"),
                     json!("app"),
@@ -134,7 +133,7 @@ fn router_action_schema() -> JsonSchema {
     let properties = BTreeMap::from([
         (
             "kind".to_string(),
-            JsonSchema::string(Some("Action kind, such as exec, exec_wait, batch, inspect, git_snapshot, repo_ci status/learn/run/result, status, git, apply_patch, write_stdin, mcp, spawn_agent, wait_agent, tool_search, view_image, or direct_tool.".to_string())),
+            JsonSchema::string(Some("Action kind, such as exec, exec_wait, batch, inspect, git_snapshot, status, git, apply_patch, write_stdin, mcp, spawn_agent, wait_agent, tool_search, view_image, or direct_tool.".to_string())),
         ),
         ("description".to_string(), JsonSchema::string(None)),
         ("tool".to_string(), JsonSchema::string(None)),

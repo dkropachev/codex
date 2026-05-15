@@ -666,7 +666,7 @@ mod tests {
             bias: Some(ModelRouterBiasToml {
                 rules: vec![ModelRouterBiasRuleToml {
                     id: Some("spark".to_string()),
-                    tasks: vec!["module.repo_ci.triage".to_string()],
+                    tasks: vec!["module.review.triage".to_string()],
                     except_tasks: Vec::new(),
                     models: vec![ModelRouterModelSelectorToml {
                         provider: Some("openai".to_string()),
@@ -680,7 +680,7 @@ mod tests {
 
         let application = apply_model_router_policy(
             &router,
-            "module.repo_ci.triage",
+            "module.review.triage",
             &[
                 route(/*index*/ 0, "openai", "gpt-5.5"),
                 route(/*index*/ 1, "openai", "gpt-5.3-codex-spark"),

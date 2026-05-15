@@ -319,9 +319,6 @@ macro_rules! client_request_definitions {
                     Self::ThreadGoalClear { params, .. } => thread_scope(&params.thread_id),
                     Self::ThreadMetadataUpdate { params, .. } => thread_scope(&params.thread_id),
                     Self::ThreadMemoryModeSet { params, .. } => thread_scope(&params.thread_id),
-                    Self::ThreadRepoCiSessionConfigSet { params, .. } => {
-                        thread_scope(&params.thread_id)
-                    }
                     Self::ThreadCodexConfigIntentSubmit { params, .. } => {
                         thread_scope(&params.thread_id)
                     }
@@ -610,21 +607,9 @@ client_request_definitions! {
         params: v2::ThreadMemoryModeSetParams,
         response: v2::ThreadMemoryModeSetResponse,
     },
-    ThreadRepoCiSessionConfigSet => "thread/repoCiSessionConfig/set" {
-        params: v2::ThreadRepoCiSessionConfigSetParams,
-        response: v2::ThreadRepoCiSessionConfigSetResponse,
-    },
     ThreadCodexConfigIntentSubmit => "thread/codexConfigIntent/submit" {
         params: v2::ThreadCodexConfigIntentSubmitParams,
         response: v2::ThreadCodexConfigIntentSubmitResponse,
-    },
-    RepoCiLearningInstructionRead => "repoCiLearningInstruction/read" {
-        params: v2::RepoCiLearningInstructionReadParams,
-        response: v2::RepoCiLearningInstructionReadResponse,
-    },
-    RepoCiLearningInstructionWrite => "repoCiLearningInstruction/write" {
-        params: v2::RepoCiLearningInstructionWriteParams,
-        response: v2::RepoCiLearningInstructionWriteResponse,
     },
     ThreadModelRouterSessionConfigSet => "thread/modelRouterSessionConfig/set" {
         params: v2::ThreadModelRouterSessionConfigSetParams,
@@ -1578,7 +1563,6 @@ server_notification_definitions! {
     ModelVerification => "model/verification" (v2::ModelVerificationNotification),
     Warning => "warning" (v2::WarningNotification),
     GuardianWarning => "guardianWarning" (v2::GuardianWarningNotification),
-    RepoCiStatus => "repoCi/status" (v2::RepoCiStatusNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
     FuzzyFileSearchSessionUpdated => "fuzzyFileSearch/sessionUpdated" (FuzzyFileSearchSessionUpdatedNotification),
@@ -2365,75 +2349,13 @@ mod tests {
     }
 
     #[test]
-    fn serialize_thread_repo_ci_session_config_set() -> Result<()> {
-        let request = ClientRequest::ThreadRepoCiSessionConfigSet {
-            request_id: RequestId::Integer(9),
-            params: v2::ThreadRepoCiSessionConfigSetParams {
-                thread_id: "thr_123".to_string(),
-                mode: Some(Some(v2::RepoCiSessionMode::Remote)),
-                issue_types: Some(Some(vec![
-                    v2::RepoCiIssueType::Correctness,
-                    v2::RepoCiIssueType::Security,
-                ])),
-                review_rounds: Some(Some(3)),
-                long_ci: Some(Some(true)),
-                implement_enabled: Some(Some(true)),
-                implement_mode: Some(Some(v2::ImplementMode::Implicit)),
-                implement_max_cycles: Some(Some(4)),
-            },
-        };
-        assert_eq!(
-            json!({
-                "method": "thread/repoCiSessionConfig/set",
-                "id": 9,
-                "params": {
-                    "threadId": "thr_123",
-                    "mode": "remote",
-                    "issueTypes": ["correctness", "security"],
-                    "reviewRounds": 3,
-                    "longCi": true,
-                    "implementEnabled": true,
-                    "implementMode": "implicit",
-                    "implementMaxCycles": 4
-                }
-            }),
-            serde_json::to_value(&request)?,
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn deserialize_thread_repo_ci_session_config_set_preserves_omitted_vs_null() -> Result<()> {
-        let request: ClientRequest = serde_json::from_value(json!({
-            "method": "thread/repoCiSessionConfig/set",
-            "id": 9,
-            "params": {
-                "threadId": "thr_123",
-                "mode": "remote",
-                "issueTypes": null
-            }
-        }))?;
-        let ClientRequest::ThreadRepoCiSessionConfigSet { params, .. } = request else {
-            panic!("expected repo CI session config request");
-        };
-        assert_eq!(params.mode, Some(Some(v2::RepoCiSessionMode::Remote)));
-        assert_eq!(params.issue_types, Some(None));
-        assert_eq!(params.review_rounds, None);
-        assert_eq!(params.long_ci, None);
-        assert_eq!(params.implement_enabled, None);
-        assert_eq!(params.implement_mode, None);
-        assert_eq!(params.implement_max_cycles, None);
-        Ok(())
-    }
-
-    #[test]
     fn serialize_thread_codex_config_intent_submit() -> Result<()> {
         let request = ClientRequest::ThreadCodexConfigIntentSubmit {
             request_id: RequestId::Integer(10),
             params: v2::ThreadCodexConfigIntentSubmitParams {
                 thread_id: "thr_123".to_string(),
-                intent: "prefer nextest for repo-ci learning".to_string(),
-                context: Some("slash commands: /repo-ci".to_string()),
+                intent: "prefer nextest for review learning".to_string(),
+                context: Some("slash commands: /review".to_string()),
             },
         };
         assert_eq!(
@@ -2442,8 +2364,8 @@ mod tests {
                 "id": 10,
                 "params": {
                     "threadId": "thr_123",
-                    "intent": "prefer nextest for repo-ci learning",
-                    "context": "slash commands: /repo-ci"
+                    "intent": "prefer nextest for review learning",
+                    "context": "slash commands: /review"
                 }
             }),
             serde_json::to_value(&request)?,

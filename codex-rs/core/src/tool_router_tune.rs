@@ -733,7 +733,7 @@ fn dynamic_guidance_for_observation(observation: &ToolRouterTuneObservation) -> 
     {
         guidance.push("Script fallbacks were observed; for shell work set `where.kind` to `shell` and provide concrete `action.cmd`, `action.command`, or `action.commands`.".to_string());
     }
-    guidance.push("For filesystem, search, image, MCP, repo-ci, and process work, include the relevant path/query/namespace/session targets plus the smallest sufficient `action.kind`.".to_string());
+    guidance.push("For filesystem, search, image, MCP, and process work, include the relevant path/query/namespace/session targets plus the smallest sufficient `action.kind`.".to_string());
     guidance.join(" ")
 }
 

@@ -217,6 +217,36 @@ pub struct ThreadStartResponse {
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadCodexConfigIntentSubmitParams {
+    pub thread_id: String,
+    pub intent: String,
+    #[ts(optional = nullable)]
+    pub context: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadCodexConfigIntentSubmitResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadModelRouterSessionConfigSetParams {
+    pub thread_id: String,
+    /// Null clears the session override and returns to repo/user config.
+    #[ts(optional = nullable)]
+    pub enabled: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadModelRouterSessionConfigSetResponse {}
+
 #[derive(
     Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
 )]

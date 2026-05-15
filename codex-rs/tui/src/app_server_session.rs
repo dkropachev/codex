@@ -599,7 +599,6 @@ impl AppServerSession {
                     personality,
                     output_schema,
                     collaboration_mode,
-                    repo_ci: None,
                 },
             })
             .await

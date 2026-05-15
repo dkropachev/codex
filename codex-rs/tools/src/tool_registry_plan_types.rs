@@ -27,7 +27,6 @@ pub enum ToolHandlerKind {
     RequestPermissions,
     RequestPluginInstall,
     RequestUserInput,
-    RepoCi,
     ResumeAgentV1,
     SendInputV1,
     SendMessageV2,

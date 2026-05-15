@@ -65,8 +65,6 @@ use codex_app_server_protocol::ProcessKillParams;
 use codex_app_server_protocol::ProcessResizePtyParams;
 use codex_app_server_protocol::ProcessSpawnParams;
 use codex_app_server_protocol::ProcessWriteStdinParams;
-use codex_app_server_protocol::RepoCiLearningInstructionReadParams;
-use codex_app_server_protocol::RepoCiLearningInstructionWriteParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
@@ -87,7 +85,6 @@ use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
 use codex_app_server_protocol::ThreadRealtimeListVoicesParams;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
-use codex_app_server_protocol::ThreadRepoCiSessionConfigSetParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSetNameParams;
@@ -717,36 +714,6 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/memoryMode/set", params).await
-    }
-
-    /// Send a `thread/repoCiSessionConfig/set` JSON-RPC request (v2).
-    pub async fn send_thread_repo_ci_session_config_set_request(
-        &mut self,
-        params: ThreadRepoCiSessionConfigSetParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/repoCiSessionConfig/set", params)
-            .await
-    }
-
-    /// Send a `repoCiLearningInstruction/read` JSON-RPC request (v2).
-    pub async fn send_repo_ci_learning_instruction_read_request(
-        &mut self,
-        params: RepoCiLearningInstructionReadParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("repoCiLearningInstruction/read", params)
-            .await
-    }
-
-    /// Send a `repoCiLearningInstruction/write` JSON-RPC request (v2).
-    pub async fn send_repo_ci_learning_instruction_write_request(
-        &mut self,
-        params: RepoCiLearningInstructionWriteParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("repoCiLearningInstruction/write", params)
-            .await
     }
 
     /// Send a `thread/modelRouterSessionConfig/set` JSON-RPC request (v2).

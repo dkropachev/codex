@@ -25,6 +25,26 @@ fn submit_current_composer(chat: &mut ChatWidget) {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 }
 
+fn codex_config_backup_paths_in(codex_home: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let prefix = format!("{}.codex-backup-", codex_config::CONFIG_TOML_FILE);
+    let mut paths = std::fs::read_dir(codex_home)
+        .expect("read codex home")
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name();
+            name.to_string_lossy()
+                .starts_with(&prefix)
+                .then(|| entry.path())
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+}
+
+fn codex_config_backup_paths(chat: &ChatWidget) -> Vec<std::path::PathBuf> {
+    codex_config_backup_paths_in(chat.config.codex_home.as_path())
+}
+
 #[tokio::test]
 async fn workflow_slash_with_args_emits_run_workflow_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -96,8 +116,131 @@ async fn bare_codex_slash_enters_codex_mode() {
         );
     }
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Codex);
+    assert_eq!(
+        chat.collaboration_mode_indicator(),
+        Some(CollaborationModeIndicator::Codex)
+    );
     assert_eq!(chat.current_collaboration_mode(), &initial);
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn codex_slash_creates_config_backup_and_drops_when_unchanged() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let original_config = "model = \"gpt-5\"\n";
+    let config_path = chat
+        .config
+        .codex_home
+        .as_path()
+        .join(codex_config::CONFIG_TOML_FILE);
+    std::fs::create_dir_all(chat.config.codex_home.as_path()).expect("create codex home");
+    std::fs::write(&config_path, original_config).expect("write config.toml");
+
+    chat.dispatch_command(SlashCommand::Codex);
+
+    let backups = codex_config_backup_paths(&chat);
+    assert_eq!(backups.len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(&backups[0]).expect("read backup"),
+        original_config
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Codex, "off".to_string(), Vec::new());
+
+    assert!(codex_config_backup_paths(&chat).is_empty());
+}
+
+#[tokio::test]
+async fn codex_config_backup_drops_on_widget_drop_when_unchanged() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let original_config = "model = \"gpt-5\"\n";
+    let codex_home = chat.config.codex_home.clone();
+    let config_path = codex_home.as_path().join(codex_config::CONFIG_TOML_FILE);
+    std::fs::create_dir_all(codex_home.as_path()).expect("create codex home");
+    std::fs::write(&config_path, original_config).expect("write config.toml");
+
+    chat.dispatch_command(SlashCommand::Codex);
+
+    assert_eq!(codex_config_backup_paths(&chat).len(), 1);
+
+    drop(chat);
+
+    assert!(codex_config_backup_paths_in(codex_home.as_path()).is_empty());
+}
+
+#[tokio::test]
+async fn codex_slash_keeps_config_backup_after_config_edit() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let original_config = "model = \"gpt-5\"\n";
+    let config_path = chat
+        .config
+        .codex_home
+        .as_path()
+        .join(codex_config::CONFIG_TOML_FILE);
+    std::fs::create_dir_all(chat.config.codex_home.as_path()).expect("create codex home");
+    std::fs::write(&config_path, original_config).expect("write config.toml");
+
+    chat.dispatch_command(SlashCommand::Codex);
+    let backups = codex_config_backup_paths(&chat);
+    assert_eq!(backups.len(), 1);
+    std::fs::write(&config_path, "model = \"gpt-5-codex\"\n").expect("edit config.toml");
+
+    chat.dispatch_command_with_args(SlashCommand::Codex, "off".to_string(), Vec::new());
+
+    assert_eq!(codex_config_backup_paths(&chat), backups);
+    assert_eq!(
+        std::fs::read_to_string(&backups[0]).expect("read backup"),
+        original_config
+    );
+}
+
+#[tokio::test]
+async fn codex_config_backup_stays_on_widget_drop_after_config_edit() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let original_config = "model = \"gpt-5\"\n";
+    let codex_home = chat.config.codex_home.clone();
+    let config_path = codex_home.as_path().join(codex_config::CONFIG_TOML_FILE);
+    std::fs::create_dir_all(codex_home.as_path()).expect("create codex home");
+    std::fs::write(&config_path, original_config).expect("write config.toml");
+
+    chat.dispatch_command(SlashCommand::Codex);
+    let backups = codex_config_backup_paths(&chat);
+    assert_eq!(backups.len(), 1);
+    std::fs::write(&config_path, "model = \"gpt-5-codex\"\n").expect("edit config.toml");
+
+    drop(chat);
+
+    assert_eq!(codex_config_backup_paths_in(codex_home.as_path()), backups);
+    assert_eq!(
+        std::fs::read_to_string(&backups[0]).expect("read backup"),
+        original_config
+    );
+}
+
+#[tokio::test]
+async fn codex_config_backup_is_reused_when_switching_to_config_edit_mode() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let config_path = chat
+        .config
+        .codex_home
+        .as_path()
+        .join(codex_config::CONFIG_TOML_FILE);
+    std::fs::create_dir_all(chat.config.codex_home.as_path()).expect("create codex home");
+    std::fs::write(&config_path, "model = \"gpt-5\"\n").expect("write config.toml");
+
+    chat.dispatch_command(SlashCommand::Codex);
+    let backups = codex_config_backup_paths(&chat);
+
+    chat.set_collaboration_mask(crate::codex_config_context::codex_config_edit_mask(
+        &chat.config.cwd,
+        &chat.config.codex_home,
+    ));
+
+    assert_eq!(
+        chat.active_collaboration_mode_kind(),
+        ModeKind::CodexConfigEdit
+    );
+    assert_eq!(codex_config_backup_paths(&chat), backups);
 }
 
 #[tokio::test]
@@ -109,7 +252,7 @@ async fn codex_slash_with_args_submits_config_plan_turn() {
 
     chat.dispatch_command_with_args(
         SlashCommand::Codex,
-        "update repo-ci defaults".to_string(),
+        "update review defaults".to_string(),
         Vec::new(),
     );
 
@@ -125,20 +268,27 @@ async fn codex_slash_with_args_submits_config_plan_turn() {
             assert_eq!(
                 items,
                 vec![UserInput::Text {
-                    text: "update repo-ci defaults".to_string(),
+                    text: "update review defaults".to_string(),
                     text_elements: Vec::new(),
                 }]
             );
             assert_eq!(cwd, expected_cwd);
             assert_eq!(
                 permission_profile,
-                crate::codex_config_context::codex_config_plan_permission_profile()
+                crate::codex_config_context::codex_config_plan_permission_profile(
+                    &chat.config.codex_home
+                )
             );
+            let file_system = permission_profile.file_system_sandbox_policy();
+            assert!(file_system.can_read_path_with_cwd(chat.config.cwd.as_path(), &cwd));
+            assert!(!file_system.can_write_path_with_cwd(chat.config.cwd.as_path(), &cwd));
+            assert!(file_system.can_write_path_with_cwd(chat.config.codex_home.as_path(), &cwd));
+            assert!(file_system.can_write_path_with_cwd(&cwd, &cwd));
             assert_eq!(mode, ModeKind::Codex);
             let instructions = settings
                 .developer_instructions
                 .expect("expected Codex instructions");
-            assert!(instructions.contains("# Codex Config Planning Mode"));
+            assert!(instructions.contains("# Codex Config Mode"));
             assert!(instructions.contains("Plan Mode"));
             assert!(instructions.contains("<proposed_plan>"));
             assert!(instructions.contains(&chat.config.codex_home.display().to_string()));

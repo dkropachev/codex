@@ -230,9 +230,7 @@ fn case_budget(
 
 fn task_key_for_rollout(rollout: &ModelRouterTuneRollout) -> String {
     let source = rollout.source.to_ascii_lowercase();
-    if source.contains("repo_ci") {
-        "module.repo_ci.history".to_string()
-    } else if source.contains("subagent") {
+    if source.contains("subagent") {
         "subagent.history".to_string()
     } else {
         format!("history.{}", source.replace(' ', "_"))

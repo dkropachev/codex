@@ -85,7 +85,6 @@ mod mcp_refresh;
 mod message_processor;
 mod models;
 mod outgoing_message;
-mod repo_ci_learning_instruction;
 mod request_processors;
 mod request_serialization;
 mod server_request_error;

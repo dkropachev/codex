@@ -243,8 +243,6 @@ pub enum Feature {
     RemoteCompactionV2,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
-    /// Enable repository CI learning and validation.
-    RepoCi,
     /// Enable JavaScript workflows that can share the TUI app-server.
     Workflows,
 }
@@ -1186,12 +1184,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "workspace_dependencies",
         stage: Stage::Stable,
         default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::RepoCi,
-        key: "repo_ci",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Workflows,

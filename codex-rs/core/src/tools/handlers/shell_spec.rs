@@ -5,7 +5,7 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::BTreeMap;
 
-const REPO_CI_SHELL_GUIDANCE: &str = "When repo-ci tools are available, do not use shell commands for regular linting, formatting checks, compiling, building, testing, CI polling, or CI reruns. Use repo_ci.status, repo_ci.learn, repo_ci.run, or repo_ci.result instead.";
+const REPO_CI_SHELL_GUIDANCE: &str = "Use shell commands directly for regular linting, formatting checks, compiling, building, testing, and CI polling when those commands are needed.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommandToolOptions {

@@ -542,7 +542,7 @@ mod tests {
         ];
 
         assert_eq!(
-            select_candidate("module.repo_ci.triage", 1_000, &candidates)
+            select_candidate("module.review.triage", 1_000, &candidates)
                 .map(|selection| (selection.index, selection.task_class)),
             Some((1, RouterTaskClass::LatencySensitive))
         );
@@ -577,7 +577,7 @@ mod tests {
         ];
 
         assert_eq!(
-            select_candidate("module.repo_ci.learn", 100_000, &candidates)
+            select_candidate("module.review.learn", 100_000, &candidates)
                 .map(|selection| { (selection.index, selection.task_class) }),
             Some((1, RouterTaskClass::RareQualitySensitive))
         );
@@ -608,7 +608,7 @@ mod tests {
         ];
 
         assert_eq!(
-            select_candidate("module.repo_ci.triage", 8_000, &candidates)
+            select_candidate("module.review.triage", 8_000, &candidates)
                 .map(|selection| { (selection.index, selection.task_class) }),
             Some((0, RouterTaskClass::LatencySensitive))
         );
@@ -637,7 +637,7 @@ mod tests {
 
         assert_eq!(
             select_candidate_with_score_bias(
-                "module.repo_ci.review",
+                "module.review.review",
                 /*prompt_bytes*/ 1_000,
                 &candidates,
                 &[0.0, 0.40]

@@ -181,14 +181,9 @@ pub(super) async fn user_input_or_turn_inner(
                     app_server_client_name: None,
                     app_server_client_version: None,
                     model_router_enabled_override: None,
-                    repo_ci_session_mode: None,
-                    repo_ci_issue_types: None,
-                    repo_ci_review_rounds: None,
-                    repo_ci_long_ci: None,
                     implement_enabled: None,
                     implement_mode: None,
                     implement_max_cycles: None,
-                    repo_ci_turn_overrides: None,
                 },
                 None,
             )
@@ -210,7 +205,6 @@ pub(super) async fn user_input_or_turn_inner(
             collaboration_mode,
             personality,
             environments,
-            repo_ci,
         } => {
             let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
                 Some(collab_mode)
@@ -241,14 +235,9 @@ pub(super) async fn user_input_or_turn_inner(
                     app_server_client_name: None,
                     app_server_client_version: None,
                     model_router_enabled_override: None,
-                    repo_ci_session_mode: None,
-                    repo_ci_issue_types: None,
-                    repo_ci_review_rounds: None,
-                    repo_ci_long_ci: None,
                     implement_enabled: None,
                     implement_mode: None,
                     implement_max_cycles: None,
-                    repo_ci_turn_overrides: repo_ci,
                 },
                 responsesapi_client_metadata,
             )
@@ -590,8 +579,8 @@ pub async fn codex_config_intent(
     };
     let (sandbox_policy, permission_profile) = match turn.mode {
         CodexConfigIntentMode::Plan => (
-            codex_config_plan_sandbox_policy(),
-            codex_config_plan_permission_profile(),
+            codex_config_plan_sandbox_policy(&codex_home),
+            codex_config_plan_permission_profile(&codex_home),
         ),
         CodexConfigIntentMode::Edit => (
             codex_config_edit_sandbox_policy(&codex_home),
@@ -1263,32 +1252,6 @@ pub(super) async fn submission_loop(
                 }
                 Op::CodexConfigIntent { intent, context } => {
                     codex_config_intent(&sess, sub.id.clone(), intent, context).await;
-                    false
-                }
-                Op::SetRepoCiSessionConfig {
-                    mode,
-                    issue_types,
-                    review_rounds,
-                    long_ci,
-                    implement_enabled,
-                    implement_mode,
-                    implement_max_cycles,
-                } => {
-                    override_turn_context(
-                        &sess,
-                        sub.id.clone(),
-                        SessionSettingsUpdate {
-                            repo_ci_session_mode: mode,
-                            repo_ci_issue_types: issue_types,
-                            repo_ci_review_rounds: review_rounds,
-                            repo_ci_long_ci: long_ci,
-                            implement_enabled,
-                            implement_mode,
-                            implement_max_cycles,
-                            ..Default::default()
-                        },
-                    )
-                    .await;
                     false
                 }
                 Op::SetModelRouterSessionConfig { enabled } => {

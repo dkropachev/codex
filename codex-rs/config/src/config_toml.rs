@@ -52,7 +52,6 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ImplementMode;
-use codex_protocol::protocol::RepoCiIssueType;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path::normalize_for_path_comparison;
@@ -373,10 +372,6 @@ pub struct ConfigToml {
     #[schemars(schema_with = "crate::schema::features_schema")]
     pub features: Option<FeaturesToml>,
 
-    /// Repository CI learning and validation settings.
-    #[serde(default)]
-    pub repo_ci: Option<RepoCiToml>,
-
     /// Suppress warnings about unstable (under development) features.
     pub suppress_unstable_features_warning: Option<bool>,
 
@@ -438,102 +433,6 @@ pub struct ConfigToml {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct RepoCiToml {
-    /// Default settings used when no narrower scope matches.
-    #[serde(default)]
-    pub defaults: Option<RepoCiScopeToml>,
-
-    /// Per-directory settings keyed by absolute or user-relative path.
-    #[serde(default)]
-    pub directories: BTreeMap<String, RepoCiScopeToml>,
-
-    /// Per-GitHub-repository settings keyed by `owner/name`.
-    #[serde(default)]
-    pub github_repos: BTreeMap<String, RepoCiScopeToml>,
-
-    /// Per-GitHub-organization settings keyed by org name.
-    #[serde(default)]
-    pub github_orgs: BTreeMap<String, RepoCiScopeToml>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[schemars(deny_unknown_fields)]
-pub struct RepoCiScopeToml {
-    /// Whether repo CI should run automatically for this scope.
-    pub enabled: Option<bool>,
-
-    /// Where checks should run.
-    pub automation: Option<RepoCiAutomationToml>,
-
-    /// Local integration/e2e/ui tests above this budget are not selected for the fast runner.
-    pub local_test_time_budget_sec: Option<u64>,
-
-    /// Whether local repo CI should run the full runner, including long integration/e2e checks.
-    pub long_ci: Option<bool>,
-
-    /// Maximum number of local fix attempts before surfacing the failure.
-    pub max_local_fix_rounds: Option<u8>,
-
-    /// Maximum number of remote CI fix attempts before surfacing the failure.
-    pub max_remote_fix_rounds: Option<u8>,
-
-    /// Targeted review issue categories for repo CI preflight review.
-    #[serde(default)]
-    pub review_issue_types: Option<Vec<RepoCiIssueType>>,
-
-    /// Maximum number of repo CI targeted review/fix rounds before surfacing the result.
-    pub max_review_fix_rounds: Option<u8>,
-
-    /// Concise repo CI learner instruction blob for command selection.
-    #[serde(
-        default,
-        alias = "learning_instructions",
-        deserialize_with = "deserialize_repo_ci_learning_instruction"
-    )]
-    pub learning_instruction: Option<String>,
-}
-
-fn deserialize_repo_ci_learning_instruction<'de, D>(
-    deserializer: D,
-) -> Result<Option<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum RepoCiLearningInstruction {
-        Blob(String),
-        LegacyList(Vec<String>),
-    }
-
-    let value = Option::<RepoCiLearningInstruction>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(RepoCiLearningInstruction::Blob(value)) => {
-            normalize_repo_ci_learning_instruction(value)
-        }
-        Some(RepoCiLearningInstruction::LegacyList(values)) => {
-            normalize_repo_ci_learning_instruction(values.join(" "))
-        }
-        None => None,
-    })
-}
-
-fn normalize_repo_ci_learning_instruction(value: String) -> Option<String> {
-    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    (!normalized.is_empty()).then_some(normalized)
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum RepoCiAutomationToml {
-    Local,
-    Remote,
-    LocalAndRemote,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -1746,7 +1645,7 @@ mod tests {
 
             [[model_router.bias.rules]]
             id = "spark-triage-bias"
-            tasks = ["module.repo_ci.triage"]
+            tasks = ["module.review.triage"]
             models = [{ provider = "openai", model = "/spark/" }]
             score_bias = 0.15
 
@@ -1874,7 +1773,7 @@ mod tests {
 
             [[model_router.models.rules]]
             type = "require"
-            tasks = ["module.repo_ci.review"]
+            tasks = ["module.review.review"]
             "#,
         )
         .expect_err("models rule without selectors should be rejected");
@@ -1890,7 +1789,7 @@ mod tests {
             enabled = true
 
             [[model_router.bias.rules]]
-            tasks = ["module.repo_ci.triage"]
+            tasks = ["module.review.triage"]
             models = [{ model = "/spark/" }]
             score_bias = 1.5
             "#,
@@ -1949,20 +1848,6 @@ mod tests {
         .expect_err("ambiguous account target should be rejected");
 
         assert!(err.to_string().contains("mutually exclusive"));
-    }
-
-    #[test]
-    fn rejects_repo_ci_models_config() {
-        let err = toml::from_str::<ConfigToml>(
-            r#"
-            [repo_ci.defaults]
-            enabled = true
-            models = [{ inherit = true }]
-            "#,
-        )
-        .expect_err("repo_ci.models should be rejected");
-
-        assert!(err.to_string().contains("unknown field `models`"));
     }
 
     #[test]
@@ -2027,60 +1912,6 @@ mod tests {
                 "{message}"
             );
         }
-    }
-
-    #[test]
-    fn parses_repo_ci_github_repo_scope_and_empty_issue_types() {
-        let config: ConfigToml = toml::from_str(
-            r#"
-            [repo_ci.github_repos."openai/codex"]
-            enabled = true
-            long_ci = true
-            review_issue_types = []
-            max_review_fix_rounds = 4
-            "#,
-        )
-        .expect("config should parse");
-
-        let repo_ci = config.repo_ci.expect("repo_ci");
-        let scope = repo_ci
-            .github_repos
-            .get("openai/codex")
-            .expect("github repo scope");
-        assert_eq!(scope.enabled, Some(true));
-        assert_eq!(scope.long_ci, Some(true));
-        assert_eq!(scope.review_issue_types, Some(Vec::new()));
-        assert_eq!(scope.max_review_fix_rounds, Some(4));
-    }
-
-    #[test]
-    fn parses_repo_ci_learning_instruction_and_legacy_list() {
-        let config: ConfigToml = toml::from_str(
-            r#"
-            [repo_ci.defaults]
-            learning_instruction = "Use cargo nextest.  Skip slow integration tests."
-
-            [repo_ci.github_repos."openai/codex"]
-            learning_instructions = ["Use just test.", "Skip networked tests."]
-            "#,
-        )
-        .expect("config should parse");
-
-        let repo_ci = config.repo_ci.expect("repo_ci");
-        let defaults = repo_ci.defaults.expect("defaults");
-        let github_repo = repo_ci
-            .github_repos
-            .get("openai/codex")
-            .expect("github repo scope");
-
-        assert_eq!(
-            defaults.learning_instruction,
-            Some("Use cargo nextest. Skip slow integration tests.".to_string())
-        );
-        assert_eq!(
-            github_repo.learning_instruction,
-            Some("Use just test. Skip networked tests.".to_string())
-        );
     }
 
     #[test]

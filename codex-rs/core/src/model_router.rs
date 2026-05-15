@@ -1690,7 +1690,7 @@ mod tests {
 
         apply_model_router(
             &mut config,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &available_models,
         )
@@ -1723,7 +1723,7 @@ mod tests {
         )
         .await;
         let candidate_set =
-            build_candidate_set(&config, "module.repo_ci.triage", 80, &available_models, &[])
+            build_candidate_set(&config, "module.review.triage", 80, &available_models, &[])
                 .expect("candidate set should build");
 
         assert_eq!(
@@ -1764,7 +1764,7 @@ mod tests {
         )
         .await;
         let candidate_set =
-            build_candidate_set(&config, "module.repo_ci.triage", 80, &available_models, &[])
+            build_candidate_set(&config, "module.review.triage", 80, &available_models, &[])
                 .expect("candidate set should build");
 
         assert_eq!(
@@ -1803,7 +1803,7 @@ mod tests {
         )
         .await;
         let candidate_set =
-            build_candidate_set(&config, "module.repo_ci.triage", 80, &available_models, &[])
+            build_candidate_set(&config, "module.review.triage", 80, &available_models, &[])
                 .expect("candidate set should build");
 
         assert_eq!(
@@ -1836,7 +1836,7 @@ mod tests {
 
         apply_model_router_with_state(
             &mut config,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &available_models,
             Some(runtime.as_ref()),
@@ -1873,7 +1873,7 @@ mod tests {
         .await;
         apply_model_router(
             &mut config,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &available_models,
         )
@@ -1908,7 +1908,7 @@ mod tests {
         .await;
         apply_model_router(
             &mut config,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &available_models,
         )
@@ -1932,7 +1932,7 @@ mod tests {
 
         apply_model_router(
             &mut config,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &available_models,
         )
@@ -1951,7 +1951,7 @@ mod tests {
             bias: Some(ModelRouterBiasToml {
                 rules: vec![ModelRouterBiasRuleToml {
                     id: Some("spark".to_string()),
-                    tasks: vec!["module.repo_ci.triage".to_string()],
+                    tasks: vec!["module.review.triage".to_string()],
                     except_tasks: Vec::new(),
                     models: vec![ModelRouterModelSelectorToml {
                         provider: Some("openai".to_string()),
@@ -1966,7 +1966,7 @@ mod tests {
 
         apply_model_router(
             &mut config,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &available_models,
         )
@@ -2081,7 +2081,7 @@ mod tests {
 
         apply_model_router(
             &mut config,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &[],
         )
@@ -2127,7 +2127,7 @@ mod tests {
 
         apply_model_router_with_state(
             &mut config,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &[],
             Some(runtime.as_ref()),
@@ -2152,7 +2152,7 @@ mod tests {
             .model_router_usage_summary(ModelRouterUsageQuery {
                 window_start_ms: None,
                 window_end_ms: Utc::now().timestamp_millis(),
-                task_key: Some("module.repo_ci.triage".to_string()),
+                task_key: Some("module.review.triage".to_string()),
                 group_by: ModelRouterUsageGroupBy::Task,
             })
             .await
@@ -2177,7 +2177,7 @@ mod tests {
     async fn routed_request_usage_records_one_row_per_terminal_outcome() {
         let (_codex_home, runtime) = state_runtime().await;
         let accounting = ModelRouterAccounting {
-            task_key: "module.repo_ci.triage".to_string(),
+            task_key: "module.review.triage".to_string(),
             model_provider: "openai".to_string(),
             model: Some("gpt-5.3-codex-spark".to_string()),
             account_id: None,
@@ -2219,7 +2219,7 @@ mod tests {
             .model_router_usage_summary(ModelRouterUsageQuery {
                 window_start_ms: None,
                 window_end_ms: Utc::now().timestamp_millis(),
-                task_key: Some("module.repo_ci.triage".to_string()),
+                task_key: Some("module.review.triage".to_string()),
                 group_by: ModelRouterUsageGroupBy::RequestKind,
             })
             .await
@@ -2264,7 +2264,7 @@ mod tests {
         let sources = [
             ModelRouterSource::SubAgent(SubAgentSource::Compact),
             ModelRouterSource::Module("memories.extract"),
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
         ];
 
         for source in sources {
@@ -2329,7 +2329,7 @@ mod tests {
             keys,
             vec![
                 "module.memories.extract",
-                "module.repo_ci.triage",
+                "module.review.triage",
                 "subagent.compact"
             ]
         );
@@ -2415,7 +2415,7 @@ mod tests {
 
         apply_model_router(
             &mut config,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             8_000,
             &available_models,
         )
@@ -2485,7 +2485,7 @@ mod tests {
 
         apply_model_router_with_state(
             &mut config,
-            ModelRouterSource::Module("repo_ci.review"),
+            ModelRouterSource::Module("review.review"),
             80,
             &[],
             Some(runtime.as_ref()),
@@ -2527,7 +2527,7 @@ mod tests {
 
         apply_model_router_with_state(
             &mut config,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &[],
             Some(runtime.as_ref()),
@@ -2613,7 +2613,7 @@ mod tests {
 
         apply_model_router_with_state(
             &mut config,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &[],
             Some(runtime.as_ref()),
@@ -2644,7 +2644,7 @@ mod tests {
 
         apply_model_router_with_state(
             &mut config,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &[],
             Some(runtime.as_ref()),
@@ -2678,7 +2678,7 @@ mod tests {
         });
         record_shadow(
             runtime.as_ref(),
-            "module.repo_ci.triage",
+            "module.review.triage",
             LIFECYCLE_PHASE_PROMOTION,
             &candidate_identity,
             &base_identity,
@@ -2688,7 +2688,7 @@ mod tests {
         .await;
         record_shadow(
             runtime.as_ref(),
-            "module.repo_ci.triage",
+            "module.review.triage",
             LIFECYCLE_PHASE_PROMOTION,
             &candidate_identity,
             &base_identity,
@@ -2699,7 +2699,7 @@ mod tests {
 
         apply_model_router_with_state(
             &mut config,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &[],
             Some(runtime.as_ref()),
@@ -2710,14 +2710,14 @@ mod tests {
         assert_eq!(config.model.as_deref(), Some("gpt-5.3-codex-spark"));
         assert_eq!(
             runtime
-                .model_router_lifecycle_promotions(Some("module.repo_ci.triage"))
+                .model_router_lifecycle_promotions(Some("module.review.triage"))
                 .await
                 .expect("promotions")
                 .first()
                 .map(|promotion| promotion.status.as_str()),
             Some(LIFECYCLE_STATUS_PROMOTED)
         );
-        let events = lifecycle_events(runtime.as_ref(), "module.repo_ci.triage").await;
+        let events = lifecycle_events(runtime.as_ref(), "module.review.triage").await;
         assert_eq!(events.len(), 1);
         assert_eq!(
             events[0].event_type,
@@ -2754,7 +2754,7 @@ mod tests {
         });
         runtime
             .upsert_model_router_lifecycle_promotion(ModelRouterLifecyclePromotionRecord {
-                task_key: "module.repo_ci.triage".to_string(),
+                task_key: "module.review.triage".to_string(),
                 candidate_identity: candidate_identity.clone(),
                 base_candidate_identity: base_identity.clone(),
                 status: LIFECYCLE_STATUS_PROMOTED.to_string(),
@@ -2771,7 +2771,7 @@ mod tests {
             .expect("upsert promotion");
         record_shadow(
             runtime.as_ref(),
-            "module.repo_ci.triage",
+            "module.review.triage",
             LIFECYCLE_PHASE_MONITORING,
             &candidate_identity,
             &base_identity,
@@ -2781,7 +2781,7 @@ mod tests {
         .await;
         record_shadow(
             runtime.as_ref(),
-            "module.repo_ci.triage",
+            "module.review.triage",
             LIFECYCLE_PHASE_MONITORING,
             &candidate_identity,
             &base_identity,
@@ -2792,7 +2792,7 @@ mod tests {
 
         apply_model_router_with_state(
             &mut config,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &[],
             Some(runtime.as_ref()),
@@ -2803,14 +2803,14 @@ mod tests {
         assert_eq!(config.model.as_deref(), Some("gpt-5.4"));
         assert_eq!(
             runtime
-                .model_router_lifecycle_promotions(Some("module.repo_ci.triage"))
+                .model_router_lifecycle_promotions(Some("module.review.triage"))
                 .await
                 .expect("promotions")
                 .first()
                 .map(|promotion| promotion.status.as_str()),
             Some("demoted")
         );
-        let events = lifecycle_events(runtime.as_ref(), "module.repo_ci.triage").await;
+        let events = lifecycle_events(runtime.as_ref(), "module.review.triage").await;
         assert_eq!(events.len(), 1);
         assert_eq!(
             events[0].event_type,
@@ -2848,7 +2848,7 @@ mod tests {
         });
         record_shadow(
             runtime.as_ref(),
-            "module.repo_ci.triage",
+            "module.review.triage",
             LIFECYCLE_PHASE_PROMOTION,
             &candidate_identity,
             &base_identity,
@@ -2858,7 +2858,7 @@ mod tests {
         .await;
         record_shadow(
             runtime.as_ref(),
-            "module.repo_ci.triage",
+            "module.review.triage",
             LIFECYCLE_PHASE_PROMOTION,
             &candidate_identity,
             &base_identity,
@@ -2869,7 +2869,7 @@ mod tests {
 
         apply_model_router_with_state(
             &mut config,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &[],
             Some(runtime.as_ref()),
@@ -2878,7 +2878,7 @@ mod tests {
         .expect("router should apply");
         apply_model_router_with_state(
             &mut config,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &[],
             Some(runtime.as_ref()),
@@ -2887,7 +2887,7 @@ mod tests {
         .expect("router should apply again");
 
         assert_eq!(config.model.as_deref(), Some("gpt-5.4"));
-        let events = lifecycle_events(runtime.as_ref(), "module.repo_ci.triage").await;
+        let events = lifecycle_events(runtime.as_ref(), "module.review.triage").await;
         assert_eq!(events.len(), 1);
         assert_eq!(
             events[0].event_type,
@@ -2926,7 +2926,7 @@ mod tests {
         });
         record_shadow(
             runtime.as_ref(),
-            "module.repo_ci.triage",
+            "module.review.triage",
             LIFECYCLE_PHASE_PROMOTION,
             &candidate_identity,
             &base_identity,
@@ -2937,7 +2937,7 @@ mod tests {
 
         apply_model_router_with_state(
             &mut config,
-            ModelRouterSource::Module("repo_ci.triage"),
+            ModelRouterSource::Module("review.triage"),
             80,
             &[],
             Some(runtime.as_ref()),
@@ -2947,7 +2947,7 @@ mod tests {
 
         assert_eq!(config.model.as_deref(), Some("gpt-5.4"));
         assert!(
-            lifecycle_events(runtime.as_ref(), "module.repo_ci.triage")
+            lifecycle_events(runtime.as_ref(), "module.review.triage")
                 .await
                 .is_empty()
         );

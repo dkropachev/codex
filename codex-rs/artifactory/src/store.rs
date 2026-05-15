@@ -525,7 +525,7 @@ mod tests {
 
         assert_eq!(
             store
-                .state_by_keys("repo-ci", "scope", "source")
+                .state_by_keys("model-router", "scope", "source")
                 .expect("lookup"),
             Some(state.clone())
         );
@@ -567,13 +567,13 @@ mod tests {
 
         store
             .index_file(
-                "repo-ci",
+                "model-router",
                 &state_dir,
                 Path::new("run-artifacts/artifact.json"),
             )
             .expect("index");
         let (state, file) = store
-            .find_file("repo-ci", Path::new("run-artifacts/artifact.json"))
+            .find_file("model-router", Path::new("run-artifacts/artifact.json"))
             .expect("find")
             .expect("file");
 
@@ -591,14 +591,14 @@ mod tests {
         let store = Artifactory::open_at(temp.path().join("db.sqlite")).expect("open");
 
         store
-            .put_cache_entry("repo-ci", "key", "artifact", "passed", "{}")
+            .put_cache_entry("model-router", "key", "artifact", "passed", "{}")
             .expect("put");
         let entry = store
-            .cache_entry("repo-ci", "key")
+            .cache_entry("model-router", "key")
             .expect("cache")
             .expect("entry");
         let updated = store
-            .cache_entry("repo-ci", "key")
+            .cache_entry("model-router", "key")
             .expect("cache")
             .expect("entry");
 
@@ -611,12 +611,17 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = Artifactory::open_at(temp.path().join("db.sqlite")).expect("open");
         store
-            .put_cache_entry("repo-ci", "key", "artifact", "passed", "{}")
+            .put_cache_entry("model-router", "key", "artifact", "passed", "{}")
             .expect("put");
 
-        store.delete_cache_entry("repo-ci", "key").expect("delete");
+        store
+            .delete_cache_entry("model-router", "key")
+            .expect("delete");
 
-        assert_eq!(store.cache_entry("repo-ci", "key").expect("cache"), None);
+        assert_eq!(
+            store.cache_entry("model-router", "key").expect("cache"),
+            None
+        );
     }
 
     #[test]
@@ -644,7 +649,7 @@ mod tests {
 
         let removed = store
             .prune_stale_states(
-                "repo-ci",
+                "model-router",
                 PruneOptions::with_now(
                     /*retention_secs*/ 50, /*throttle_secs*/ 100,
                     /*now_unix_sec*/ 80,
@@ -653,7 +658,7 @@ mod tests {
             .expect("prune");
         let throttled = store
             .prune_stale_states(
-                "repo-ci",
+                "model-router",
                 PruneOptions::with_now(
                     /*retention_secs*/ 50, /*throttle_secs*/ 100,
                     /*now_unix_sec*/ 81,
@@ -667,7 +672,7 @@ mod tests {
         assert!(fresh_dir.exists());
         assert!(
             store
-                .state_by_keys("repo-ci", "scope", "old-source")
+                .state_by_keys("model-router", "scope", "old-source")
                 .expect("old lookup")
                 .is_none()
         );
@@ -727,7 +732,7 @@ mod tests {
 
     fn registration_for(state_dir: &Path, source_key: &str) -> StateRegistration {
         StateRegistration {
-            namespace: "repo-ci".to_string(),
+            namespace: "model-router".to_string(),
             scope_key: "scope".to_string(),
             source_key: source_key.to_string(),
             state_dir: state_dir.to_path_buf(),

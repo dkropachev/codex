@@ -103,7 +103,6 @@ use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::RawResponseItemEvent;
-use codex_protocol::protocol::RepoCiTurnOverrides;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -341,7 +340,6 @@ use codex_protocol::protocol::NetworkApprovalContext;
 use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::RepoCiSessionMode;
 use codex_protocol::protocol::RequestUserInputEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
@@ -551,12 +549,6 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
-        if config.features.enabled(Feature::RepoCi) && config.active_project.is_trusted() {
-            base_instructions.push_str(
-                "\n\n## Repo CI\nWhen repo-ci tools are available, do not run regular linting, formatting checks, compiling, building, testing, CI polling, or CI reruns directly through shell tools. Use repo_ci.status, repo_ci.learn, repo_ci.run, or repo_ci.result so Codex can manage discovery, hashing, caching, execution, polling, and log artifacts. Brief repo-ci failures include a compact error_output and artifact_id; request detailed repo-ci results only when full logs are needed.",
-            );
-        }
-
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
         let persisted_tools = if dynamic_tools.is_empty() {
@@ -633,10 +625,6 @@ impl Codex {
             inherited_shell_snapshot,
             user_shell_override,
             model_router_enabled_override: None,
-            repo_ci_session_mode: config.repo_ci_session_mode,
-            repo_ci_issue_types: config.repo_ci_issue_types.clone(),
-            repo_ci_review_rounds: config.repo_ci_review_rounds,
-            repo_ci_long_ci: config.repo_ci_long_ci,
             implement_enabled: None,
             implement_mode: None,
             implement_max_cycles: None,

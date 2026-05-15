@@ -768,6 +768,7 @@ pub(crate) struct ChatWidget {
     current_collaboration_mode: CollaborationMode,
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
+    codex_config_backup: Option<crate::codex_config_context::CodexConfigBackup>,
     has_chatgpt_account: bool,
     model_catalog: Arc<ModelCatalog>,
     session_telemetry: SessionTelemetry,
@@ -3340,7 +3341,10 @@ impl ChatWidget {
         let restored_task_running = input_state.as_ref().is_some_and(|state| state.task_running);
         if let Some(input_state) = input_state {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
+            let previous_mode = self.active_mode_kind();
             self.active_collaboration_mask = input_state.active_collaboration_mask;
+            let next_mode = self.active_mode_kind();
+            self.sync_codex_config_backup_for_mode_change(previous_mode, next_mode);
             self.agent_turn_running = input_state.agent_turn_running;
             self.goal_status_active_turn_started_at =
                 self.agent_turn_running.then_some(Instant::now());
@@ -4949,6 +4953,7 @@ impl ChatWidget {
             skills_initial_state: None,
             current_collaboration_mode,
             active_collaboration_mask,
+            codex_config_backup: None,
             has_chatgpt_account,
             model_catalog,
             session_telemetry,
@@ -6510,7 +6515,6 @@ impl ChatWidget {
             | ServerNotification::AppListUpdated(_)
             | ServerNotification::RemoteControlStatusChanged(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
-            | ServerNotification::RepoCiStatus(_)
             | ServerNotification::FsChanged(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
             | ServerNotification::FuzzyFileSearchSessionCompleted(_)
@@ -9786,12 +9790,49 @@ impl ChatWidget {
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
+            ModeKind::Codex | ModeKind::CodexConfigEdit => Some(CollaborationModeIndicator::Codex),
             ModeKind::Workflow => Some(CollaborationModeIndicator::Workflow),
-            ModeKind::Default
-            | ModeKind::Codex
-            | ModeKind::CodexConfigEdit
-            | ModeKind::PairProgramming
-            | ModeKind::Execute => None,
+            ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => None,
+        }
+    }
+
+    fn sync_codex_config_backup_for_mode_change(
+        &mut self,
+        previous_mode: ModeKind,
+        next_mode: ModeKind,
+    ) {
+        let previous_codex_mode =
+            matches!(previous_mode, ModeKind::Codex | ModeKind::CodexConfigEdit);
+        let next_codex_mode = matches!(next_mode, ModeKind::Codex | ModeKind::CodexConfigEdit);
+        if previous_codex_mode == next_codex_mode {
+            return;
+        }
+
+        if next_codex_mode {
+            if self.codex_config_backup.is_some() {
+                return;
+            }
+            match crate::codex_config_context::create_codex_config_backup(&self.config.codex_home) {
+                Ok(backup) => {
+                    self.codex_config_backup = Some(backup);
+                }
+                Err(err) => {
+                    warn!(%err, "failed to back up Codex config before entering Codex mode");
+                    self.add_error_message(format!(
+                        "Failed to back up Codex config before entering /codex mode: {err}"
+                    ));
+                }
+            }
+        } else {
+            self.finish_codex_config_backup();
+        }
+    }
+
+    fn finish_codex_config_backup(&mut self) {
+        if let Some(backup) = self.codex_config_backup.take()
+            && let Err(err) = backup.finalize()
+        {
+            warn!(%err, "failed to finalize Codex config backup");
         }
     }
 
@@ -9900,10 +9941,11 @@ impl ChatWidget {
                 .insert(self.plan_mode_nudge_scope());
         }
         self.active_collaboration_mask = Some(mask);
+        let next_mode = self.active_mode_kind();
+        self.sync_codex_config_backup_for_mode_change(previous_mode, next_mode);
         self.update_collaboration_mode_indicator();
         self.refresh_plan_mode_nudge();
         self.refresh_model_dependent_surfaces();
-        let next_mode = self.active_mode_kind();
         let next_model = self.current_model();
         let next_effort = self.effective_reasoning_effort();
         if previous_mode != next_mode
@@ -11103,6 +11145,7 @@ fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
 
 impl Drop for ChatWidget {
     fn drop(&mut self) {
+        self.finish_codex_config_backup();
         self.reset_realtime_conversation_state();
         self.stop_rate_limit_poller();
     }

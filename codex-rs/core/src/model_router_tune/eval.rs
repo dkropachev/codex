@@ -546,7 +546,7 @@ mod tests {
 
         record_model_router_tune_ledger_entry(
             &runtime,
-            "module.repo_ci.review",
+            "module.review.review",
             RouterRequestKind::Judge,
             "openai",
             Some("judge-model".to_string()),
@@ -562,7 +562,7 @@ mod tests {
             .model_router_usage_summary(ModelRouterUsageQuery {
                 window_start_ms: None,
                 window_end_ms: i64::MAX,
-                task_key: Some("module.repo_ci.review".to_string()),
+                task_key: Some("module.review.review".to_string()),
                 group_by: ModelRouterUsageGroupBy::RequestKind,
             })
             .await

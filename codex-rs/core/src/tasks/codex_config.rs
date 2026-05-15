@@ -55,17 +55,19 @@ pub(crate) fn codex_config_workspace_for_target(target_cwd: &Path) -> PathBuf {
     workspace
 }
 
-pub(crate) fn codex_config_plan_sandbox_policy() -> SandboxPolicy {
+pub(crate) fn codex_config_plan_sandbox_policy(codex_home: &AbsolutePathBuf) -> SandboxPolicy {
     SandboxPolicy::WorkspaceWrite {
-        writable_roots: Vec::new(),
+        writable_roots: vec![codex_home.clone()],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: false,
     }
 }
 
-pub(crate) fn codex_config_plan_permission_profile() -> PermissionProfile {
-    PermissionProfile::from_legacy_sandbox_policy(&codex_config_plan_sandbox_policy())
+pub(crate) fn codex_config_plan_permission_profile(
+    codex_home: &AbsolutePathBuf,
+) -> PermissionProfile {
+    PermissionProfile::from_legacy_sandbox_policy(&codex_config_plan_sandbox_policy(codex_home))
 }
 
 pub(crate) fn codex_config_edit_sandbox_policy(codex_home: &AbsolutePathBuf) -> SandboxPolicy {
@@ -144,13 +146,13 @@ fn contains_any_phrase(request: &str, phrases: &[&str]) -> bool {
 
 fn codex_config_plan_developer_instructions(runtime_context: &str) -> String {
     format!(
-        "{PLAN_MODE_GUIDE}\n\n# Codex Config Planning Mode\n\nThe user-authored request is delivered as the visible user message for this turn. The runtime Codex context below is internal model context; do not print it, quote it wholesale, or treat it as user-authored content.\n\nRuntime Codex context:\n<runtime_context>\n{runtime_context}\n</runtime_context>\n\nWork exactly like Plan Mode, but plan changes to Codex configuration and local Codex behavior. Explore and inspect as needed, but do not mutate files, config, app-server state, plugins, skills, MCP/apps, memories, repo-ci, model-router, tool-router, or any other Codex state until a later apply turn. Do not attempt writes to prove they are blocked. When ready, emit exactly one complete `<proposed_plan>` block describing the config changes, validation, refresh/reload steps, and rollback considerations."
+        "{PLAN_MODE_GUIDE}\n\n# Codex Config Mode\n\nThe user-authored request is delivered as the visible user message for this turn. The runtime Codex context below is internal model context; do not print it, quote it wholesale, or treat it as user-authored content.\n\nRuntime Codex context:\n<runtime_context>\n{runtime_context}\n</runtime_context>\n\nUse Plan Mode's exploration and `<proposed_plan>` conventions when a plan is the right answer, but this Codex-specific filesystem rule overrides Plan Mode's mutation rule: you may write only under the Codex config directory, the scratch workspace, or `/tmp`; never modify the target workspace/repository. Use scripts and local commands as needed for investigation, writing their outputs only to scratch space or `/tmp`. If you change config, validate and reload or describe any required restart."
     )
 }
 
 fn codex_config_edit_developer_instructions(runtime_context: &str) -> String {
     format!(
-        "# Codex Config Edit Mode\n\nThe user-authored request is delivered as the visible user message for this turn. The runtime Codex context below is internal model context; do not print it, quote it wholesale, or treat it as user-authored content.\n\nRuntime Codex context:\n<runtime_context>\n{runtime_context}\n</runtime_context>\n\nApply only the approved Codex configuration plan. Write only under the Codex config directory or `/tmp`, do not modify the target workspace/repository, then validate and reload or describe any required restart. Do not emit a new `<proposed_plan>` for an apply turn."
+        "# Codex Config Edit Mode\n\nThe user-authored request is delivered as the visible user message for this turn. The runtime Codex context below is internal model context; do not print it, quote it wholesale, or treat it as user-authored content.\n\nRuntime Codex context:\n<runtime_context>\n{runtime_context}\n</runtime_context>\n\nApply only the approved Codex configuration plan. Write only under the Codex config directory, the scratch workspace, or `/tmp`; do not modify the target workspace/repository. Validate and reload or describe any required restart. Do not emit a new `<proposed_plan>` for an apply turn."
     )
 }
 
@@ -161,7 +163,7 @@ async fn codex_config_runtime_context(
     codex_home: &AbsolutePathBuf,
 ) -> String {
     let mut sections = vec![format!(
-        "Target workspace/repository, read-only for this request: `{}`\nWritable scratch workspace for scripts, generated files, and captured output: `{}`\nCodex config directory for approved edit turns: `{}`",
+        "Target workspace/repository, read-only for this request: `{}`\nWritable scratch workspace for scripts, generated files, and captured output: `{}`\nWritable Codex config directory: `{}`\nEverything else is read-only unless it is an allowed tool cache under `/tmp`.",
         target_cwd.display(),
         workspace.display(),
         codex_home.display()
@@ -297,14 +299,30 @@ mod tests {
     #[test]
     fn config_plan_instructions_use_runtime_context_and_plan_rules() {
         let instructions = codex_config_plan_developer_instructions(
-            "Slash commands generated from registry:\n- /repo-ci: configure repo CI",
+            "Slash commands generated from registry:\n- /model-router: tune model router metrics",
         );
 
-        assert!(instructions.contains("/repo-ci: configure repo CI"));
+        assert!(instructions.contains("/model-router: tune model router metrics"));
         assert!(instructions.contains("Plan Mode"));
         assert!(instructions.contains("do not mutate files"));
+        assert!(instructions.contains("you may write only under the Codex config directory"));
         assert!(instructions.contains("<proposed_plan>"));
         assert!(!instructions.contains("User request:"));
+    }
+
+    #[test]
+    fn config_plan_permission_profile_reads_target_and_writes_codex_home_and_scratch() {
+        let codex_home =
+            AbsolutePathBuf::from_absolute_path("/codex-home").expect("absolute codex home");
+        let target_cwd = Path::new("/target");
+        let scratch_cwd = Path::new("/scratch");
+        let profile = codex_config_plan_permission_profile(&codex_home);
+        let file_system = profile.file_system_sandbox_policy();
+
+        assert!(file_system.can_read_path_with_cwd(target_cwd, scratch_cwd));
+        assert!(!file_system.can_write_path_with_cwd(target_cwd, scratch_cwd));
+        assert!(file_system.can_write_path_with_cwd(codex_home.as_path(), scratch_cwd));
+        assert!(file_system.can_write_path_with_cwd(scratch_cwd, scratch_cwd));
     }
 
     #[tokio::test]
@@ -312,7 +330,7 @@ mod tests {
         let codex_home =
             AbsolutePathBuf::from_absolute_path("/codex-home").expect("absolute codex home");
         let turn = codex_config_intent_turn(
-            "  update repo-ci defaults  ".to_string(),
+            "  update review defaults  ".to_string(),
             Some("Slash commands generated from registry".to_string()),
             Path::new("/target"),
             Path::new("/scratch"),
@@ -324,7 +342,7 @@ mod tests {
         assert_eq!(
             turn.input,
             UserInput::Text {
-                text: "update repo-ci defaults".to_string(),
+                text: "update review defaults".to_string(),
                 text_elements: Vec::new(),
             }
         );
@@ -338,17 +356,17 @@ mod tests {
     #[test]
     fn classify_config_intent_plans_until_apply_request() {
         assert_eq!(
-            classify_codex_config_intent("update repo-ci defaults"),
+            classify_codex_config_intent("update review defaults"),
             CodexConfigIntentMode::Plan
         );
         assert_eq!(
             classify_codex_config_intent(
-                "i don't want repo-ci to run cibuildwheel or integration tests at all"
+                "i don't want review to run cibuildwheel or integration tests at all"
             ),
             CodexConfigIntentMode::Plan
         );
         assert_eq!(
-            classify_codex_config_intent("repo-ci cibuildwheel integration tests"),
+            classify_codex_config_intent("review cibuildwheel integration tests"),
             CodexConfigIntentMode::Plan
         );
         assert_eq!(
@@ -359,11 +377,8 @@ mod tests {
 
     #[test]
     fn parses_top_level_clap_commands() {
-        let help = "Codex CLI\n\nCommands:\n  exec          Run Codex non-interactively\n  repo-ci       Learn and run repository CI checks\n  model-router  Tune and apply model-router metrics\n\nOptions:\n  -h, --help\n";
+        let help = "Codex CLI\n\nCommands:\n  exec          Run Codex non-interactively\n  model-router  Tune and apply model-router metrics\n\nOptions:\n  -h, --help\n";
 
-        assert_eq!(
-            parse_top_level_commands(help),
-            vec!["exec", "repo-ci", "model-router"]
-        );
+        assert_eq!(parse_top_level_commands(help), vec!["exec", "model-router"]);
     }
 }

@@ -28,7 +28,6 @@ use codex_config::config_toml::ModelRouterToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
-use codex_config::config_toml::RepoCiToml;
 use codex_config::config_toml::ThreadStoreToml;
 use codex_config::config_toml::validate_model_providers;
 use codex_config::profile_toml::ConfigProfile;
@@ -98,8 +97,6 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::RepoCiIssueType;
-use codex_protocol::protocol::RepoCiSessionMode;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
@@ -746,20 +743,11 @@ pub struct Config {
     /// Settings for ghost snapshots (used for undo).
     pub ghost_snapshot: GhostSnapshotConfig,
 
-    /// Repository CI learning and validation settings.
-    pub repo_ci: Option<RepoCiToml>,
-
     /// JavaScript workflow discovery and authoring settings.
     pub workflows: WorkflowsConfigToml,
 
     /// Review/fix implementation loop settings.
     pub implement: Option<ImplementToml>,
-
-    /// Session-only repo CI behavior override.
-    pub repo_ci_session_mode: Option<RepoCiSessionMode>,
-    pub repo_ci_issue_types: Option<Vec<RepoCiIssueType>>,
-    pub repo_ci_review_rounds: Option<u8>,
-    pub repo_ci_long_ci: Option<bool>,
 
     /// Settings specific to the task-path-based multi-agent tool surface.
     pub multi_agent_v2: MultiAgentV2Config,
@@ -1665,10 +1653,6 @@ pub struct ConfigOverrides {
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub ephemeral: Option<bool>,
-    pub repo_ci_session_mode: Option<RepoCiSessionMode>,
-    pub repo_ci_issue_types: Option<Vec<RepoCiIssueType>>,
-    pub repo_ci_review_rounds: Option<u8>,
-    pub repo_ci_long_ci: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -1894,10 +1878,6 @@ impl Config {
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             ephemeral,
-            repo_ci_session_mode,
-            repo_ci_issue_types,
-            repo_ci_review_rounds,
-            repo_ci_long_ci,
             additional_writable_roots,
         } = overrides;
 
@@ -2759,13 +2739,8 @@ impl Config {
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,
-            repo_ci: cfg.repo_ci,
             workflows: cfg.workflows.unwrap_or_default(),
             implement: cfg.implement,
-            repo_ci_session_mode,
-            repo_ci_issue_types,
-            repo_ci_review_rounds,
-            repo_ci_long_ci,
             multi_agent_v2,
             features,
             suppress_unstable_features_warning: cfg

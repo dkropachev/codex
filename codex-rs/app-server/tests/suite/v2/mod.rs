@@ -42,7 +42,6 @@ mod rate_limits;
 mod realtime_conversation;
 #[cfg(debug_assertions)]
 mod remote_thread_store;
-mod repo_ci_learning_instruction;
 mod request_permissions;
 mod request_user_input;
 mod review;
@@ -58,7 +57,6 @@ mod thread_metadata_update;
 mod thread_model_router_session_config_set;
 mod thread_name_websocket;
 mod thread_read;
-mod thread_repo_ci_session_config_set;
 mod thread_resume;
 mod thread_rollback;
 mod thread_shell_command;

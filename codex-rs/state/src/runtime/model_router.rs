@@ -1159,7 +1159,7 @@ mod tests {
 
         runtime
             .record_model_router_ledger_entry(ModelRouterLedgerEntry {
-                task_key: "module.repo_ci.review".to_string(),
+                task_key: "module.review.review".to_string(),
                 request_kind: RouterRequestKind::Production,
                 model_provider: Some("openai".to_string()),
                 model: Some("routed-model".to_string()),
@@ -1180,7 +1180,7 @@ mod tests {
             .expect("record production");
         runtime
             .record_model_router_ledger_entry(ModelRouterLedgerEntry {
-                task_key: "module.repo_ci.review".to_string(),
+                task_key: "module.review.review".to_string(),
                 request_kind: RouterRequestKind::Judge,
                 model_provider: Some("openai".to_string()),
                 model: Some("judge-model".to_string()),
@@ -1196,11 +1196,11 @@ mod tests {
 
         assert_eq!(
             runtime
-                .model_router_savings_summary(Some("module.repo_ci.review"))
+                .model_router_savings_summary(Some("module.review.review"))
                 .await
                 .expect("summary"),
             ModelRouterSavingsSummary {
-                task_key: Some("module.repo_ci.review".to_string()),
+                task_key: Some("module.review.review".to_string()),
                 savings: RouterSavings {
                     actual_production_cost_usd_micros: 100,
                     router_overhead_cost_usd_micros: 50,
@@ -1221,7 +1221,7 @@ mod tests {
 
         runtime
             .record_model_router_ledger_entry(ModelRouterLedgerEntry {
-                task_key: "module.repo_ci.review".to_string(),
+                task_key: "module.review.review".to_string(),
                 request_kind: RouterRequestKind::Production,
                 model_provider: Some("openai".to_string()),
                 model: Some("routed-model".to_string()),
@@ -1242,7 +1242,7 @@ mod tests {
             .expect("record production");
         runtime
             .record_model_router_ledger_entry(ModelRouterLedgerEntry {
-                task_key: "module.repo_ci.review".to_string(),
+                task_key: "module.review.review".to_string(),
                 request_kind: RouterRequestKind::Production,
                 model_provider: Some("openai".to_string()),
                 model: Some("routed-model".to_string()),
@@ -1263,7 +1263,7 @@ mod tests {
             .expect("record low confidence production");
         runtime
             .record_model_router_ledger_entry(ModelRouterLedgerEntry {
-                task_key: "module.repo_ci.review".to_string(),
+                task_key: "module.review.review".to_string(),
                 request_kind: RouterRequestKind::Judge,
                 model_provider: Some("openai".to_string()),
                 model: Some("judge-model".to_string()),
@@ -1281,13 +1281,13 @@ mod tests {
             .model_router_usage_summary(ModelRouterUsageQuery {
                 window_start_ms: None,
                 window_end_ms: Utc::now().timestamp_millis(),
-                task_key: Some("module.repo_ci.review".to_string()),
+                task_key: Some("module.review.review".to_string()),
                 group_by: ModelRouterUsageGroupBy::RequestKind,
             })
             .await
             .expect("usage summary");
 
-        assert_eq!(summary.task_key, Some("module.repo_ci.review".to_string()));
+        assert_eq!(summary.task_key, Some("module.review.review".to_string()));
         assert_eq!(summary.group_by, ModelRouterUsageGroupBy::RequestKind);
         assert_eq!(summary.groups.len(), 2);
         assert_eq!(
@@ -1332,7 +1332,7 @@ mod tests {
 
         runtime
             .record_model_router_ledger_entry(ModelRouterLedgerEntry {
-                task_key: "module.repo_ci.review".to_string(),
+                task_key: "module.review.review".to_string(),
                 request_kind: RouterRequestKind::Production,
                 model_provider: Some("openai".to_string()),
                 model: Some("routed-model".to_string()),
@@ -1353,7 +1353,7 @@ mod tests {
             .expect("record review production");
         runtime
             .record_model_router_ledger_entry(ModelRouterLedgerEntry {
-                task_key: "module.repo_ci.review".to_string(),
+                task_key: "module.review.review".to_string(),
                 request_kind: RouterRequestKind::Judge,
                 model_provider: Some("openai".to_string()),
                 model: Some("judge-model".to_string()),
@@ -1368,7 +1368,7 @@ mod tests {
             .expect("record review overhead");
         runtime
             .record_model_router_ledger_entry(ModelRouterLedgerEntry {
-                task_key: "module.repo_ci.triage".to_string(),
+                task_key: "module.review.triage".to_string(),
                 request_kind: RouterRequestKind::Production,
                 model_provider: Some("anthropic".to_string()),
                 model: Some("claude".to_string()),
@@ -1401,8 +1401,8 @@ mod tests {
         assert_eq!(
             usage_group_projection(&task_summary),
             vec![
-                ("module.repo_ci.review".to_string(), 2, 1, 1, 130, 25),
-                ("module.repo_ci.triage".to_string(), 1, 1, 0, 15, 30),
+                ("module.review.review".to_string(), 2, 1, 1, 130, 25),
+                ("module.review.triage".to_string(), 1, 1, 0, 15, 30),
             ]
         );
 
@@ -1550,7 +1550,7 @@ mod tests {
 
         runtime
             .upsert_model_router_lifecycle_promotion(ModelRouterLifecyclePromotionRecord {
-                task_key: "module.repo_ci.review".to_string(),
+                task_key: "module.review.review".to_string(),
                 candidate_identity: "candidate".to_string(),
                 base_candidate_identity: "base".to_string(),
                 status: "promoted".to_string(),
@@ -1568,11 +1568,11 @@ mod tests {
 
         assert_eq!(
             runtime
-                .model_router_lifecycle_promotions(Some("module.repo_ci.review"))
+                .model_router_lifecycle_promotions(Some("module.review.review"))
                 .await
                 .expect("promotions"),
             vec![ModelRouterLifecyclePromotionRecord {
-                task_key: "module.repo_ci.review".to_string(),
+                task_key: "module.review.review".to_string(),
                 candidate_identity: "candidate".to_string(),
                 base_candidate_identity: "base".to_string(),
                 status: "promoted".to_string(),
@@ -1591,7 +1591,7 @@ mod tests {
             .record_model_router_shadow_evaluation(ModelRouterShadowEvaluationRecord {
                 id: None,
                 created_at_ms: 11,
-                task_key: "module.repo_ci.review".to_string(),
+                task_key: "module.review.review".to_string(),
                 phase: "promotion".to_string(),
                 candidate_identity: "candidate".to_string(),
                 base_candidate_identity: "base".to_string(),
@@ -1609,7 +1609,7 @@ mod tests {
             .record_model_router_shadow_evaluation(ModelRouterShadowEvaluationRecord {
                 id: None,
                 created_at_ms: 12,
-                task_key: "module.repo_ci.review".to_string(),
+                task_key: "module.review.review".to_string(),
                 phase: "promotion".to_string(),
                 candidate_identity: "candidate".to_string(),
                 base_candidate_identity: "base".to_string(),
@@ -1626,11 +1626,11 @@ mod tests {
 
         assert_eq!(
             runtime
-                .model_router_shadow_evaluation_summaries(Some("module.repo_ci.review"))
+                .model_router_shadow_evaluation_summaries(Some("module.review.review"))
                 .await
                 .expect("summaries"),
             vec![ModelRouterShadowEvaluationSummary {
-                task_key: "module.repo_ci.review".to_string(),
+                task_key: "module.review.review".to_string(),
                 phase: "promotion".to_string(),
                 candidate_identity: "candidate".to_string(),
                 base_candidate_identity: "base".to_string(),
@@ -1648,7 +1648,7 @@ mod tests {
 
         let rows = runtime
             .demote_model_router_lifecycle_promotion(
-                "module.repo_ci.review",
+                "module.review.review",
                 "candidate",
                 Some("monitoring failed"),
             )
@@ -1657,7 +1657,7 @@ mod tests {
         assert_eq!(rows, 1);
         assert_eq!(
             runtime
-                .model_router_lifecycle_promotions(Some("module.repo_ci.review"))
+                .model_router_lifecycle_promotions(Some("module.review.review"))
                 .await
                 .expect("promotions")
                 .first()
@@ -1685,7 +1685,7 @@ mod tests {
         assert!(columns.contains(&"shadow_latest_evaluation_id".to_string()));
         assert!(columns.contains(&"failed_gates_json".to_string()));
 
-        let task_key = "module.repo_ci.review";
+        let task_key = "module.review.review";
         let candidate_identity = "candidate";
         let base_candidate_identity = "base";
         runtime
