@@ -1076,6 +1076,11 @@ impl Config {
             .set_legacy_sandbox_policy(sandbox_policy, self.cwd.as_path())
     }
 
+    /// Clear any runtime-only model-router accounting metadata.
+    pub fn clear_model_router_accounting(&mut self) {
+        self.model_router_accounting = None;
+    }
+
     pub fn legacy_sandbox_policy(&self) -> SandboxPolicy {
         self.permissions.legacy_sandbox_policy(self.cwd.as_path())
     }

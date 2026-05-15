@@ -95,3 +95,23 @@ fn default_mode_instructions_include_workflow_name_when_enabled() {
     assert!(default_instructions.contains(&expected_snippet));
     assert!(default_instructions.contains("Workflow"));
 }
+
+#[test]
+fn workflow_mode_instructions_are_workflow_specialist_guidance() {
+    let workflow_instructions = workflow_preset()
+        .developer_instructions
+        .expect("workflow preset should include instructions")
+        .expect("workflow instructions should be set");
+
+    assert!(workflow_instructions.contains(
+        "Workflow mode exists to design, inspect, tune, validate, repair, and explain Codex workflows."
+    ));
+    assert!(workflow_instructions.contains(
+        "Do not bounce the request back with a meta question like \"can you develop a workflow for me\"."
+    ));
+    assert!(workflow_instructions.contains("/workflow list"));
+    assert!(
+        workflow_instructions
+            .contains("Do not use broad file search, web search, or unrelated repo spelunking")
+    );
+}

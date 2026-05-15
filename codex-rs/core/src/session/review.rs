@@ -1,12 +1,70 @@
 use super::turn_context::image_generation_tool_auth_allowed;
 use super::*;
+use codex_model_provider::ModelProvider;
+use codex_model_provider::create_model_provider;
+use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
+use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_protocol::protocol::SubAgentSource;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
+use std::time::Duration;
 
 use crate::model_router::ModelRouterSource;
 use crate::model_router::apply_model_router_with_state;
 use crate::model_router::available_router_models;
+
+fn review_provider_connection_error(provider_id: &str) -> &'static str {
+    match provider_id {
+        LMSTUDIO_OSS_PROVIDER_ID => {
+            "LM Studio is not responding. Install from https://lmstudio.ai/download and run 'lms server start'."
+        }
+        OLLAMA_OSS_PROVIDER_ID => {
+            "No running Ollama server detected. Start it with: `ollama serve` (after installing). Install instructions: https://github.com/ollama/ollama?tab=readme-ov-file#ollama"
+        }
+        _ => "review provider is not reachable",
+    }
+}
+
+async fn ensure_review_provider_ready(
+    provider_id: &str,
+    provider: &dyn ModelProvider,
+) -> Result<(), std::io::Error> {
+    match provider_id {
+        LMSTUDIO_OSS_PROVIDER_ID | OLLAMA_OSS_PROVIDER_ID => {}
+        _ => return Ok(()),
+    }
+
+    let base_url = provider.info().base_url.as_deref().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("review provider {provider_id} must have a base_url"),
+        )
+    })?;
+    let probe_url = url::Url::parse(base_url)
+        .and_then(|url| url.join("models"))
+        .map_err(|err| std::io::Error::other(format!("invalid review provider base URL: {err}")))?;
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    let response = client.get(probe_url).send().await.map_err(|err| {
+        tracing::warn!(error = %err, provider_id, "review provider preflight failed");
+        std::io::Error::other(review_provider_connection_error(provider_id))
+    })?;
+    if response.status().is_success() {
+        return Ok(());
+    }
+
+    tracing::warn!(
+        status = %response.status(),
+        provider_id,
+        "review provider preflight returned a non-success status"
+    );
+    Err(std::io::Error::other(review_provider_connection_error(
+        provider_id,
+    )))
+}
 
 /// Spawn a review thread using the given prompt.
 pub(super) async fn spawn_review_thread(
@@ -43,6 +101,27 @@ pub(super) async fn spawn_review_thread(
         per_turn_config.model_router_accounting = None;
     }
     let routed_model = per_turn_config.model.clone().unwrap_or(model);
+    let auth_manager = parent_turn_context.auth_manager.clone();
+    let provider = create_model_provider(
+        &per_turn_config.model_provider_id,
+        per_turn_config.model_provider.clone(),
+        auth_manager.clone(),
+    );
+
+    if let Err(err) =
+        ensure_review_provider_ready(&per_turn_config.model_provider_id, provider.as_ref()).await
+    {
+        sess.send_event(
+            parent_turn_context.as_ref(),
+            EventMsg::Error(ErrorEvent {
+                message: err.to_string(),
+                codex_error_info: Some(CodexErrorInfo::Other),
+            }),
+        )
+        .await;
+        return;
+    }
+
     let review_model_info = sess
         .services
         .models_manager
@@ -87,8 +166,6 @@ pub(super) async fn spawn_review_thread(
         &config.agent_roles,
     ));
 
-    let provider = parent_turn_context.provider.clone();
-    let auth_manager = parent_turn_context.auth_manager.clone();
     let model_info = review_model_info.clone();
 
     // Build per‑turn client with the requested model/family.
@@ -198,4 +275,61 @@ pub(super) async fn spawn_review_thread(
     };
     sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
         .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_model_provider_info::create_oss_provider_with_base_url;
+    use pretty_assertions::assert_eq;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    #[tokio::test]
+    async fn review_provider_preflight_allows_reachable_ollama_server() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let provider = create_model_provider(
+            OLLAMA_OSS_PROVIDER_ID,
+            create_oss_provider_with_base_url(&format!("{}/v1", server.uri())),
+            /*auth_manager*/ None,
+        );
+
+        ensure_review_provider_ready(OLLAMA_OSS_PROVIDER_ID, provider.as_ref())
+            .await
+            .expect("reachable Ollama server should pass preflight");
+    }
+
+    #[tokio::test]
+    async fn review_provider_preflight_surfaces_friendly_ollama_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let provider = create_model_provider(
+            OLLAMA_OSS_PROVIDER_ID,
+            create_oss_provider_with_base_url(&format!("{}/v1", server.uri())),
+            /*auth_manager*/ None,
+        );
+
+        let err = ensure_review_provider_ready(OLLAMA_OSS_PROVIDER_ID, provider.as_ref())
+            .await
+            .expect_err("unhealthy Ollama server should fail preflight");
+
+        assert_eq!(
+            err.to_string(),
+            review_provider_connection_error(OLLAMA_OSS_PROVIDER_ID)
+        );
+    }
 }

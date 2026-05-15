@@ -1860,6 +1860,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-app-server-transport",
  "codex-arg0",
+ "codex-artifactory",
  "codex-backend-client",
  "codex-chatgpt",
  "codex-cloud-requirements",

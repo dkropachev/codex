@@ -179,7 +179,7 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
         .await
     {
         tracing::warn!("failed to apply memory consolidation model router: {err}");
-        agent_config.model_router_accounting = None;
+        agent_config.clear_model_router_accounting();
     }
     let agent = match context
         .spawn_consolidation_agent(agent_config, prompt)

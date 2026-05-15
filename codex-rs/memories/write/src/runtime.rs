@@ -70,7 +70,7 @@ impl StageOneRequestContext {
             .await
         {
             tracing::warn!("failed to apply memory extraction model router: {err}");
-            config.model_router_accounting = None;
+            config.clear_model_router_accounting();
         }
 
         let model_name = config
@@ -82,6 +82,13 @@ impl StageOneRequestContext {
             .get_models_manager()
             .get_model_info(&model_name, &config.to_models_manager_config())
             .await;
+        let reasoning_effort = config.model_reasoning_effort;
+        let reasoning_summary = config
+            .model_reasoning_summary
+            .unwrap_or(model_info.default_reasoning_summary);
+        let service_tier = config
+            .service_tier
+            .map(|service_tier| service_tier.request_value().to_string());
 
         Self {
             config,
@@ -90,11 +97,9 @@ impl StageOneRequestContext {
                 .session_telemetry
                 .clone()
                 .with_model(model_name.as_str(), model_info.slug.as_str()),
-            reasoning_effort: config.model_reasoning_effort,
-            reasoning_summary: config
-                .model_reasoning_summary
-                .unwrap_or(model_info.default_reasoning_summary),
-            service_tier: config.service_tier.clone(),
+            reasoning_effort,
+            reasoning_summary,
+            service_tier,
             turn_metadata_header: self.turn_metadata_header.clone(),
         }
     }
