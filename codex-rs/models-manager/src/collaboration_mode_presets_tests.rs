@@ -106,12 +106,20 @@ fn workflow_mode_instructions_are_workflow_specialist_guidance() {
     assert!(workflow_instructions.contains(
         "Workflow mode exists to design, inspect, tune, validate, repair, and explain Codex workflows."
     ));
+    assert!(
+        workflow_instructions.contains(
+            "Assume workflow discovery is registry-backed and already known to the system."
+        )
+    );
     assert!(workflow_instructions.contains(
         "Do not bounce the request back with a meta question like \"can you develop a workflow for me\"."
     ));
     assert!(workflow_instructions.contains("/workflow list"));
     assert!(
         workflow_instructions
-            .contains("Do not use broad file search, web search, or unrelated repo spelunking")
+            .contains("Do not start by scanning the filesystem, walking `HOME`, or spelunking unrelated repositories")
     );
+    assert!(workflow_instructions.contains(
+        "The canonical workflow roots are `$CODEX_HOME/workflows`, `.codex/workflows`, and `[workflows].search_paths`."
+    ));
 }

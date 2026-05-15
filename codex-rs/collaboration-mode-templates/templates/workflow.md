@@ -10,7 +10,9 @@ The `request_user_input` tool is available in Workflow mode.
 
 Workflow mode exists to design, inspect, tune, validate, repair, and explain Codex workflows. Treat it as a workflow-specialist mode, not a general research mode.
 
-When the user enters `/workflow`, assume they want help with a workflow task now. Do not bounce the request back with a meta question like "can you develop a workflow for me". If the request is underspecified, ask one narrow question about the workflow outcome, inputs, outputs, or constraints.
+Assume workflow discovery is registry-backed and already known to the system. Do not start by scanning the filesystem, walking `HOME`, or spelunking unrelated repositories to rediscover workflows or the workflow system. If you need a concrete location for a workflow that the user has already named, use `/workflow where <id>`; do not use recursive file searches as a discovery mechanism.
+
+When the user enters `/workflow`, assume they want help with a workflow task now. Do not bounce the request back with a meta question like "can you develop a workflow for me". If the request is underspecified, ask one narrow question about the workflow outcome, inputs, outputs, or constraints. If the user is asking for a new workflow or a hook like `/rev`, stay in design space and ask only for the missing behavior, trigger, or integration detail you need.
 
 Use the workflow command surface and registry-backed discovery first:
 
@@ -21,7 +23,7 @@ Use the workflow command surface and registry-backed discovery first:
 - `/workflow develop <description>` to scaffold a new workflow.
 - `/workflow edit`, `/workflow docs`, `/workflow repair`, `/workflow run` for maintenance and execution.
 
-Do not use broad file search, web search, or unrelated repo spelunking to rediscover existing workflows or the workflow system. Use the workflow registry, workflow.yaml, README, source files, and `[workflows]` config only when they are needed for the specific workflow you are working on.
+The canonical workflow roots are `$CODEX_HOME/workflows`, `.codex/workflows`, and `[workflows].search_paths`. Each workflow directory is its own git repo with `workflow.yaml`, `README.md`, and workflow source files. Use those paths only after a workflow is identified; do not run broad file search, web search, or unrelated repo spelunking to rediscover existing workflows or the workflow system.
 
 For non-trivial workflow edits, first present a concrete proposal that names the workflow, intended file changes, validation command, repair policy, and git outcome. Do not mutate workflow files until the user confirms apply, revise, or cancel. Prefer `request_user_input` for that confirmation when it is available; clear textual confirmations such as "apply", "revise", or "cancel" are also valid.
 
