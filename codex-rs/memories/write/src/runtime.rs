@@ -1,5 +1,7 @@
 use codex_core::CodexThread;
 use codex_core::ModelClient;
+use codex_core::ModelRouterDiscoveryCache;
+use codex_core::ModelRouterSource;
 use codex_core::NewThread;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
@@ -7,7 +9,9 @@ use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::content_items_to_text;
+use codex_core::record_model_router_request_usage_for_config;
 use codex_core::resolve_installation_id;
+use codex_core::route_config_for_model_router;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -41,6 +45,7 @@ pub(crate) struct SpawnedConsolidationAgent {
 
 #[derive(Clone, Debug)]
 pub(crate) struct StageOneRequestContext {
+    pub(crate) config: Config,
     pub(crate) model_info: ModelInfo,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) reasoning_effort: Option<ReasoningEffort>,
@@ -50,6 +55,50 @@ pub(crate) struct StageOneRequestContext {
 }
 
 impl StageOneRequestContext {
+    pub(crate) async fn routed_for_prompt(
+        &self,
+        context: &MemoryStartupContext,
+        prompt_bytes: usize,
+    ) -> Self {
+        let mut config = self.config.clone();
+        if let Err(err) = context
+            .route_config_for_model_router(
+                &mut config,
+                ModelRouterSource::Module("memories.extract"),
+                prompt_bytes,
+            )
+            .await
+        {
+            tracing::warn!("failed to apply memory extraction model router: {err}");
+            config.model_router_accounting = None;
+        }
+
+        let model_name = config
+            .model
+            .clone()
+            .unwrap_or_else(|| self.model_info.slug.clone());
+        let model_info = context
+            .thread_manager
+            .get_models_manager()
+            .get_model_info(&model_name, &config.to_models_manager_config())
+            .await;
+
+        Self {
+            config,
+            model_info: model_info.clone(),
+            session_telemetry: self
+                .session_telemetry
+                .clone()
+                .with_model(model_name.as_str(), model_info.slug.as_str()),
+            reasoning_effort: config.model_reasoning_effort,
+            reasoning_summary: config
+                .model_reasoning_summary
+                .unwrap_or(model_info.default_reasoning_summary),
+            service_tier: config.service_tier.clone(),
+            turn_metadata_header: self.turn_metadata_header.clone(),
+        }
+    }
+
     pub(crate) fn start_timer(&self, name: &str) -> Option<codex_otel::Timer> {
         self.session_telemetry.start_timer(name, &[]).ok()
     }
@@ -69,6 +118,7 @@ pub(crate) struct MemoryStartupContext {
     thread_manager: Arc<ThreadManager>,
     auth_manager: Arc<AuthManager>,
     session_telemetry: SessionTelemetry,
+    model_router_discovery_cache: ModelRouterDiscoveryCache,
 }
 
 impl MemoryStartupContext {
@@ -110,6 +160,7 @@ impl MemoryStartupContext {
             thread_manager,
             auth_manager,
             session_telemetry,
+            model_router_discovery_cache: ModelRouterDiscoveryCache::new(),
         }
     }
 
@@ -119,6 +170,23 @@ impl MemoryStartupContext {
 
     pub(crate) fn state_db(&self) -> Option<Arc<StateRuntime>> {
         self.thread.state_db()
+    }
+
+    pub(crate) async fn route_config_for_model_router(
+        &self,
+        config: &mut Config,
+        source: ModelRouterSource,
+        prompt_bytes: usize,
+    ) -> Result<(), String> {
+        route_config_for_model_router(
+            config,
+            source,
+            prompt_bytes,
+            &self.thread_manager.get_models_manager(),
+            &self.model_router_discovery_cache,
+            self.state_db().as_deref(),
+        )
+        .await
     }
 
     pub(crate) fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {
@@ -152,6 +220,7 @@ impl MemoryStartupContext {
             .unwrap_or(model_info.default_reasoning_summary);
 
         StageOneRequestContext {
+            config: config.clone(),
             model_info,
             turn_metadata_header,
             session_telemetry: self
@@ -187,7 +256,7 @@ impl MemoryStartupContext {
         );
 
         let mut client_session = model_client.new_session();
-        let mut stream = client_session
+        let mut stream = match client_session
             .stream(
                 prompt,
                 &context.model_info,
@@ -198,11 +267,37 @@ impl MemoryStartupContext {
                 context.turn_metadata_header.as_deref(),
                 &InferenceTraceContext::disabled(),
             )
-            .await?;
+            .await
+        {
+            Ok(stream) => stream,
+            Err(err) => {
+                record_model_router_request_usage_for_config(
+                    self.state_db().as_deref(),
+                    config,
+                    &TokenUsage::default(),
+                    "stream_error",
+                )
+                .await;
+                return Err(err.into());
+            }
+        };
 
         let mut result = String::new();
         let mut token_usage = None;
-        while let Some(message) = stream.next().await.transpose()? {
+        while let Some(message) = stream.next().await {
+            let message = match message {
+                Ok(message) => message,
+                Err(err) => {
+                    record_model_router_request_usage_for_config(
+                        self.state_db().as_deref(),
+                        config,
+                        &TokenUsage::default(),
+                        "error",
+                    )
+                    .await;
+                    return Err(err.into());
+                }
+            };
             match message {
                 ResponseEvent::OutputTextDelta(delta) => result.push_str(&delta),
                 ResponseEvent::OutputItemDone(item) => {
@@ -217,10 +312,28 @@ impl MemoryStartupContext {
                     token_usage: usage, ..
                 } => {
                     token_usage = usage;
+                    let accounting_usage = token_usage.clone().unwrap_or_default();
+                    record_model_router_request_usage_for_config(
+                        self.state_db().as_deref(),
+                        config,
+                        &accounting_usage,
+                        "completed",
+                    )
+                    .await;
                     break;
                 }
                 _ => {}
             }
+        }
+
+        if token_usage.is_none() {
+            record_model_router_request_usage_for_config(
+                self.state_db().as_deref(),
+                config,
+                &TokenUsage::default(),
+                "error",
+            )
+            .await;
         }
 
         Ok((result, token_usage))

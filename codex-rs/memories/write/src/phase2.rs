@@ -14,12 +14,14 @@ use crate::workspace::prepare_memory_workspace;
 use crate::workspace::reset_memory_workspace_baseline;
 use crate::workspace::write_workspace_diff;
 use codex_config::Constrained;
+use codex_core::ModelRouterSource;
 use codex_core::config::Config;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use codex_state::Stage1Output;
@@ -76,7 +78,7 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
     }
 
     // 3. Build the locked-down config used by the consolidation agent.
-    let Some(agent_config) = agent::get_config(config.as_ref()) else {
+    let Some(mut agent_config) = agent::get_config(config.as_ref()) else {
         // If we can't get the config, we can't consolidate.
         tracing::error!("failed to get agent config");
         job::failed(
@@ -168,6 +170,17 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
 
     // 8. Spawn the consolidation agent.
     let prompt = agent::get_prompt(&root);
+    if let Err(err) = context
+        .route_config_for_model_router(
+            &mut agent_config,
+            ModelRouterSource::SubAgent(SubAgentSource::MemoryConsolidation),
+            prompt.len(),
+        )
+        .await
+    {
+        tracing::warn!("failed to apply memory consolidation model router: {err}");
+        agent_config.model_router_accounting = None;
+    }
     let agent = match context
         .spawn_consolidation_agent(agent_config, prompt)
         .await

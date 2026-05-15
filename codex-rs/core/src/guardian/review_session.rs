@@ -33,7 +33,9 @@ use crate::config::NetworkProxySpec;
 use crate::config::Permissions;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianFollowupReviewReminder;
+use crate::model_router::ModelRouterSource;
 use crate::rollout::recorder::RolloutRecorder;
+use crate::route_config_for_model_router;
 use crate::session::Codex;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -615,33 +617,13 @@ async fn run_review_on_session(
 
         (send_followup_reminder, prompt_mode)
     };
-    let model_info = params
-        .parent_session
-        .services
-        .models_manager
-        .get_model_info(
-            params.model.as_str(),
-            &params.spawn_config.to_models_manager_config(),
-        )
-        .await;
-    let guardian_reasoning_effort = if model_info.supports_reasoning_summaries {
-        params
-            .reasoning_effort
-            .or(model_info.default_reasoning_level)
-    } else {
-        None
-    };
     let mut analytics_result = GuardianReviewAnalyticsResult::from_session(
         review_session.codex.session.conversation_id.to_string(),
         guardian_session_kind,
         params.model.clone(),
-        guardian_reasoning_effort.map(|effort| effort.to_string()),
+        params.reasoning_effort.map(|effort| effort.to_string()),
         had_prior_review_context(&prompt_mode),
     );
-    if send_followup_reminder {
-        append_guardian_followup_reminder(review_session).await;
-    }
-
     let prompt_items = run_before_review_deadline(
         deadline,
         params.external_cancel.as_ref(),
@@ -679,6 +661,61 @@ async fn run_review_on_session(
             );
         }
     };
+    let prompt_bytes = review_session
+        .codex
+        .session
+        .model_router_prompt_bytes_for_turn(&prompt_items.items)
+        .await;
+    let mut routed_config = params.spawn_config.clone();
+    if let Some(model_router) = routed_config.model_router.as_mut() {
+        model_router.enabled = true;
+    }
+    if let Err(err) = route_config_for_model_router(
+        &mut routed_config,
+        ModelRouterSource::Module("guardian.review"),
+        prompt_bytes,
+        &params.parent_session.services.models_manager,
+        &params.parent_session.services.model_router_discovery_cache,
+        params.parent_session.services.state_db.as_deref(),
+    )
+    .await
+    {
+        warn!("failed to apply guardian review model router: {err}");
+        routed_config.model_router_accounting = None;
+    }
+    let routed_model = routed_config
+        .model
+        .clone()
+        .unwrap_or_else(|| params.model.clone());
+    let model_info = params
+        .parent_session
+        .services
+        .models_manager
+        .get_model_info(
+            routed_model.as_str(),
+            &routed_config.to_models_manager_config(),
+        )
+        .await;
+    let guardian_reasoning_effort = if model_info.supports_reasoning_summaries {
+        routed_config
+            .model_reasoning_effort
+            .or(model_info.default_reasoning_level)
+    } else {
+        None
+    };
+    let reasoning_summary = routed_config
+        .model_reasoning_summary
+        .unwrap_or(params.reasoning_summary);
+    analytics_result = GuardianReviewAnalyticsResult::from_session(
+        review_session.codex.session.conversation_id.to_string(),
+        guardian_session_kind,
+        routed_model.clone(),
+        guardian_reasoning_effort.map(|effort| effort.to_string()),
+        had_prior_review_context(&prompt_mode),
+    );
+    if send_followup_reminder {
+        append_guardian_followup_reminder(review_session).await;
+    }
     let reviewed_action_truncated = prompt_items.reviewed_action_truncated;
     let transcript_cursor = prompt_items.transcript_cursor;
     let token_usage_at_review_start = review_session
@@ -699,10 +736,10 @@ async fn run_review_on_session(
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             permission_profile: None,
-            model: params.model.clone(),
-            effort: params.reasoning_effort,
-            summary: Some(params.reasoning_summary),
-            service_tier: None,
+            model: routed_model,
+            effort: guardian_reasoning_effort,
+            summary: Some(reasoning_summary),
+            service_tier: routed_config.service_tier,
             final_output_json_schema: Some(params.schema.clone()),
             collaboration_mode: None,
             personality: params.personality,
@@ -844,6 +881,9 @@ pub(crate) fn build_guardian_review_session_config(
     let mut guardian_config = parent_config.clone();
     guardian_config.model = Some(active_model.to_string());
     guardian_config.model_reasoning_effort = reasoning_effort;
+    if let Some(model_router) = guardian_config.model_router.as_mut() {
+        model_router.enabled = false;
+    }
     guardian_config.include_skill_instructions = false;
     guardian_config.base_instructions = Some(
         parent_config
@@ -1012,6 +1052,27 @@ mod tests {
         .expect("guardian config");
 
         assert!(!guardian_config.features.enabled(Feature::CodexHooks));
+    }
+
+    #[tokio::test]
+    async fn guardian_review_session_config_disables_model_router() {
+        let mut parent_config = crate::config::test_config().await;
+        parent_config.model_router = Some(codex_config::config_toml::ModelRouterToml {
+            enabled: true,
+            candidates: Vec::new(),
+            ..Default::default()
+        });
+
+        let guardian_config = build_guardian_review_session_config(
+            &parent_config,
+            /*live_network_config*/ None,
+            "active-model",
+            /*reasoning_effort*/ None,
+        )
+        .expect("guardian config");
+
+        assert!(guardian_config.model_router.is_some());
+        assert!(!guardian_config.model_router.expect("model router").enabled);
     }
 
     #[tokio::test]

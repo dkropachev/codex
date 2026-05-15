@@ -277,13 +277,19 @@ mod job {
     /// Extract the rollout and perform the actual sampling.
     async fn sample(
         context: &MemoryStartupContext,
-        config: &Config,
+        _config: &Config,
         rollout_path: &Path,
         rollout_cwd: &Path,
         stage_one_context: &StageOneRequestContext,
     ) -> anyhow::Result<(StageOneOutput, Option<TokenUsage>)> {
         let (rollout_items, _, _) = RolloutRecorder::load_rollout_items(rollout_path).await?;
         let rollout_contents = serialize_filtered_rollout_response_items(&rollout_items)?;
+        let stage_one_context = stage_one_context
+            .routed_for_prompt(
+                context,
+                rollout_contents.len() + crate::stage_one::PROMPT.len(),
+            )
+            .await;
 
         let mut prompt = Prompt::default();
         prompt.input = vec![ResponseItem::Message {
@@ -306,7 +312,7 @@ mod job {
         prompt.output_schema_strict = true;
 
         let (result, token_usage) = context
-            .stream_stage_one_prompt(config, &prompt, stage_one_context)
+            .stream_stage_one_prompt(&stage_one_context.config, &prompt, &stage_one_context)
             .await?;
 
         let mut output: StageOneOutput = serde_json::from_str(&result)?;

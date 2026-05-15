@@ -1,7 +1,12 @@
 use super::turn_context::image_generation_tool_auth_allowed;
 use super::*;
+use codex_protocol::protocol::SubAgentSource;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
+
+use crate::model_router::ModelRouterSource;
+use crate::model_router::apply_model_router_with_state;
+use crate::model_router::available_router_models;
 
 /// Spawn a review thread using the given prompt.
 pub(super) async fn spawn_review_thread(
@@ -11,14 +16,37 @@ pub(super) async fn spawn_review_thread(
     sub_id: String,
     resolved: crate::review_prompts::ResolvedReviewRequest,
 ) {
-    let model = config
+    let review_prompt = resolved.prompt.clone();
+    let mut per_turn_config = (*config).clone();
+    let model = per_turn_config
         .review_model
         .clone()
         .unwrap_or_else(|| parent_turn_context.model_info.slug.clone());
+    per_turn_config.model = Some(model.clone());
+    let prompt_bytes = format!("{review_prompt:?}").len();
+    let available_models = available_router_models(
+        &per_turn_config,
+        &sess.services.models_manager,
+        &sess.services.model_router_discovery_cache,
+    )
+    .await;
+    if let Err(err) = apply_model_router_with_state(
+        &mut per_turn_config,
+        ModelRouterSource::SubAgent(SubAgentSource::Review),
+        prompt_bytes,
+        &available_models,
+        sess.services.state_db.as_deref(),
+    )
+    .await
+    {
+        tracing::warn!("failed to apply review model router for turn context: {err}");
+        per_turn_config.model_router_accounting = None;
+    }
+    let routed_model = per_turn_config.model.clone().unwrap_or(model);
     let review_model_info = sess
         .services
         .models_manager
-        .get_model_info(&model, &config.to_models_manager_config())
+        .get_model_info(&routed_model, &per_turn_config.to_models_manager_config())
         .await;
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = sess.features.clone();
@@ -59,14 +87,11 @@ pub(super) async fn spawn_review_thread(
         &config.agent_roles,
     ));
 
-    let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.provider.clone();
     let auth_manager = parent_turn_context.auth_manager.clone();
     let model_info = review_model_info.clone();
 
     // Build per‑turn client with the requested model/family.
-    let mut per_turn_config = (*config).clone();
-    per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
     if let Err(err) = per_turn_config.web_search_mode.set(review_web_search_mode) {
         let fallback_value = per_turn_config.web_search_mode.value();
@@ -81,7 +106,7 @@ pub(super) async fn spawn_review_thread(
     let session_telemetry = parent_turn_context
         .session_telemetry
         .clone()
-        .with_model(model.as_str(), review_model_info.slug.as_str());
+        .with_model(routed_model.as_str(), review_model_info.slug.as_str());
     let auth_manager_for_context = auth_manager.clone();
     let provider_for_context = provider.clone();
     let session_telemetry_for_context = session_telemetry.clone();

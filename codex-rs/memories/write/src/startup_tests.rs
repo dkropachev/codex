@@ -1,4 +1,6 @@
 use crate::start_memories_startup_task;
+use codex_config::config_toml::ModelRouterCandidateToml;
+use codex_config::config_toml::ModelRouterToml;
 use codex_features::Feature;
 use codex_git_utils::diff_since_latest_init;
 use codex_git_utils::reset_git_repository;
@@ -285,6 +287,50 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
         request_context.service_tier,
         Some(ServiceTier::Fast.request_value().to_string())
     );
+
+    shutdown_test_codex(&test).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn memories_startup_phase1_routes_model_for_prompt() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let test = test_codex()
+        .with_home(home)
+        .with_config(|config| {
+            config.model = Some("gpt-5.4".to_string());
+            config.model_router = Some(ModelRouterToml {
+                enabled: true,
+                candidates: vec![ModelRouterCandidateToml {
+                    model: Some("gpt-5.3-codex-spark".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+            config
+                .features
+                .enable(Feature::Sqlite)
+                .expect("test config should allow feature update");
+        })
+        .build(&server)
+        .await?;
+    let config_snapshot = test.codex.config_snapshot().await;
+
+    let context = crate::runtime::MemoryStartupContext::new(
+        Arc::clone(&test.thread_manager),
+        test.thread_manager.auth_manager(),
+        test.session_configured.session_id,
+        Arc::clone(&test.codex),
+        &test.config,
+        config_snapshot.session_source.clone(),
+    );
+    let request_context = context
+        .stage_one_request_context(&test.config, "gpt-5.4", ReasoningEffort::Low)
+        .await;
+    let routed = request_context.routed_for_prompt(&context, 1024).await;
+
+    assert_eq!(routed.config.model.as_deref(), Some("gpt-5.3-codex-spark"));
 
     shutdown_test_codex(&test).await?;
     Ok(())

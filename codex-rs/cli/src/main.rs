@@ -533,9 +533,9 @@ struct ToolRouterTuneCommand {
     #[arg(long = "max-guidance-tokens", default_value_t = 600)]
     max_guidance_tokens: usize,
 
-    /// Optional model slug reserved for future introspection passes.
-    #[arg(long = "introspection-model", value_name = "SLUG")]
-    introspection_model: Option<String>,
+    /// Run an introspection pass with model-router-selected model when no override is set.
+    #[arg(long = "introspect", default_value_t = false)]
+    introspect: bool,
 
     /// Persist only passing dynamic guidance with positive estimated net savings.
     #[arg(long = "apply", default_value_t = false)]
@@ -3255,7 +3255,7 @@ async fn run_tool_router_tune_command(
     };
     let state_db =
         StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone()).await?;
-    let introspection_provider = if cmd.introspection_model.is_some() {
+    let introspection_provider = if cmd.introspect {
         let auth_manager =
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true);
         let models_manager = build_models_manager(
@@ -3283,7 +3283,6 @@ async fn run_tool_router_tune_command(
             window: cmd.window,
             model_slug,
             max_guidance_tokens: cmd.max_guidance_tokens,
-            introspection_model: cmd.introspection_model,
             introspection_provider,
             apply: cmd.apply,
         },
@@ -4940,8 +4939,7 @@ mod tests {
             "gpt-test",
             "--max-guidance-tokens",
             "500",
-            "--introspection-model",
-            "gpt-introspect",
+            "--introspect",
             "--apply",
             "--json",
         ])
@@ -4957,7 +4955,7 @@ mod tests {
         assert_eq!(cmd.window, "24h");
         assert_eq!(cmd.model.as_deref(), Some("gpt-test"));
         assert_eq!(cmd.max_guidance_tokens, 500);
-        assert_eq!(cmd.introspection_model.as_deref(), Some("gpt-introspect"));
+        assert!(cmd.introspect);
         assert!(cmd.apply);
         assert!(cmd.json);
     }

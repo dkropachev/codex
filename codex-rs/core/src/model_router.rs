@@ -64,7 +64,7 @@ const LIFECYCLE_STATUS_PROMOTED: &str = MODEL_ROUTER_LIFECYCLE_EVENT_PROMOTED;
 const ADDITIONAL_PROVIDER_DISCOVERY_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ModelRouterSource {
+pub enum ModelRouterSource {
     Chat(ModeKind),
     SubAgent(SubAgentSource),
     Module(&'static str),
@@ -916,7 +916,7 @@ pub(crate) fn model_client_for_config(
     )
 }
 
-pub(crate) async fn record_model_router_request_usage_for_config(
+pub async fn record_model_router_request_usage_for_config(
     state_db: Option<&StateRuntime>,
     config: &Config,
     token_usage: &TokenUsage,
@@ -987,7 +987,7 @@ impl AvailableRouterModel {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct ModelRouterDiscoveryCache {
+pub struct ModelRouterDiscoveryCache {
     entries: Mutex<BTreeMap<String, ProviderDiscoveryCacheEntry>>,
 }
 
@@ -998,7 +998,7 @@ struct ProviderDiscoveryCacheEntry {
 }
 
 impl ModelRouterDiscoveryCache {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -1072,6 +1072,18 @@ pub(crate) async fn available_router_models(
         })
         .chain(additional_provider_router_models(config, discovery_cache).await)
         .collect()
+}
+
+pub async fn route_config_for_model_router(
+    config: &mut Config,
+    source: ModelRouterSource,
+    prompt_bytes: usize,
+    models_manager: &SharedModelsManager,
+    discovery_cache: &ModelRouterDiscoveryCache,
+    state_db: Option<&StateRuntime>,
+) -> Result<(), String> {
+    let available_models = available_router_models(config, models_manager, discovery_cache).await;
+    apply_model_router_with_state(config, source, prompt_bytes, &available_models, state_db).await
 }
 
 async fn additional_provider_router_models(

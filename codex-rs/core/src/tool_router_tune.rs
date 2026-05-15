@@ -3,6 +3,10 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
 use crate::installation_id::resolve_installation_id;
+use crate::model_router::ModelRouterDiscoveryCache;
+use crate::model_router::ModelRouterSource;
+use crate::model_router::apply_model_router_with_state;
+use crate::model_router::available_router_models;
 use chrono::Utc;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -31,6 +35,7 @@ use serde::Serialize;
 use serde_json::Value;
 use serde_json::json;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 const DYNAMIC_GUIDANCE_VERSION: i64 = 3;
 
@@ -39,7 +44,6 @@ pub struct ToolRouterTuneOptions {
     pub window: String,
     pub model_slug: Option<String>,
     pub max_guidance_tokens: usize,
-    pub introspection_model: Option<String>,
     pub introspection_provider: Option<Arc<dyn ToolRouterIntrospectionProvider>>,
     pub apply: bool,
 }
@@ -50,7 +54,6 @@ impl std::fmt::Debug for ToolRouterTuneOptions {
             .field("window", &self.window)
             .field("model_slug", &self.model_slug)
             .field("max_guidance_tokens", &self.max_guidance_tokens)
-            .field("introspection_model", &self.introspection_model)
             .field(
                 "introspection_provider",
                 &self.introspection_provider.as_ref().map(|_| "<provider>"),
@@ -62,20 +65,25 @@ impl std::fmt::Debug for ToolRouterTuneOptions {
 
 #[async_trait::async_trait]
 pub trait ToolRouterIntrospectionProvider: Send + Sync {
+    /// Run a tool-router introspection pass and return the raw model output.
+    ///
+    /// Implementations may route the request through model-router when the request does not pin
+    /// a model explicitly.
     async fn run(
         &self,
+        state_db: Option<&StateRuntime>,
         request: ToolRouterIntrospectionRequest,
     ) -> anyhow::Result<ToolRouterIntrospectionRawResponse>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolRouterIntrospectionRequest {
-    pub model: String,
     pub prompt: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolRouterIntrospectionRawResponse {
+    pub model: String,
     pub output_text: String,
     pub token_usage: ToolRouterTuneTokenUsage,
 }
@@ -85,6 +93,8 @@ pub struct ToolRouterModelIntrospectionProvider {
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
     installation_id: String,
+    discovery_cache: ModelRouterDiscoveryCache,
+    routed_config: Mutex<Option<Config>>,
 }
 
 impl ToolRouterModelIntrospectionProvider {
@@ -99,6 +109,8 @@ impl ToolRouterModelIntrospectionProvider {
             auth_manager,
             models_manager,
             installation_id,
+            discovery_cache: ModelRouterDiscoveryCache::new(),
+            routed_config: Mutex::new(None),
         })
     }
 }
@@ -107,11 +119,35 @@ impl ToolRouterModelIntrospectionProvider {
 impl ToolRouterIntrospectionProvider for ToolRouterModelIntrospectionProvider {
     async fn run(
         &self,
+        state_db: Option<&StateRuntime>,
         request: ToolRouterIntrospectionRequest,
     ) -> anyhow::Result<ToolRouterIntrospectionRawResponse> {
+        let routed_config = if let Some(config) = self.routed_config.lock().await.clone() {
+            config
+        } else {
+            let mut config = self.config.clone();
+            let available_models =
+                available_router_models(&config, &self.models_manager, &self.discovery_cache).await;
+            apply_model_router_with_state(
+                &mut config,
+                ModelRouterSource::Module("tool_router.tune"),
+                request.prompt.len(),
+                &available_models,
+                state_db,
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+            let mut routed_config = self.routed_config.lock().await;
+            *routed_config = Some(config.clone());
+            config
+        };
+        let model = routed_config
+            .model
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("tool-router introspection requires a model"))?;
         let model_info = self
             .models_manager
-            .get_model_info(&request.model, &self.config.to_models_manager_config())
+            .get_model_info(&model, &routed_config.to_models_manager_config())
             .await;
         let auth_manager = Some(Arc::clone(&self.auth_manager));
         let thread_id = ThreadId::new();
@@ -120,21 +156,21 @@ impl ToolRouterIntrospectionProvider for ToolRouterModelIntrospectionProvider {
             SessionId::new(),
             thread_id,
             self.installation_id.clone(),
-            &self.config.model_provider_id,
-            self.config.model_provider.clone(),
+            &routed_config.model_provider_id,
+            routed_config.model_provider.clone(),
             SessionSource::Cli,
-            self.config.model_verbosity,
-            self.config
+            routed_config.model_verbosity,
+            routed_config
                 .features
                 .enabled(codex_features::Feature::EnableRequestCompression),
-            self.config
+            routed_config
                 .features
                 .enabled(codex_features::Feature::RuntimeMetrics),
             /*beta_features_header*/ None,
         );
         let session_telemetry = SessionTelemetry::new(
             thread_id,
-            &request.model,
+            &model,
             &model_info.slug,
             /*account_id*/ None,
             /*account_email*/ None,
@@ -168,11 +204,11 @@ impl ToolRouterIntrospectionProvider for ToolRouterModelIntrospectionProvider {
                 &prompt,
                 &model_info,
                 &session_telemetry,
-                self.config
+                routed_config
                     .model_reasoning_effort
                     .or(model_info.default_reasoning_level),
-                self.config.model_reasoning_summary.unwrap_or_default(),
-                self.config
+                routed_config.model_reasoning_summary.unwrap_or_default(),
+                routed_config
                     .service_tier
                     .map(|service_tier| service_tier.request_value().to_string()),
                 None,
@@ -221,6 +257,7 @@ impl ToolRouterIntrospectionProvider for ToolRouterModelIntrospectionProvider {
             output_text = delta_text;
         }
         Ok(ToolRouterIntrospectionRawResponse {
+            model,
             output_text,
             token_usage,
         })
@@ -309,14 +346,15 @@ pub async fn tune_tool_router(
     let observations = state_db
         .tool_router_tune_observations(window, options.model_slug.as_deref())
         .await?;
-    if options.introspection_model.is_some() && options.introspection_provider.is_none() {
-        anyhow::bail!("--introspection-model requires a tune introspection provider");
-    }
     let mut introspection_tokens = ToolRouterTuneTokenUsage::default();
+    let mut introspection_model = None;
     let mut optimizations = Vec::new();
     for observation in &observations {
         let introspection = introspection_for_observation(state_db, observation, &options).await?;
         introspection_tokens = add_token_usage(introspection_tokens, introspection.token_usage);
+        if introspection_model.is_none() {
+            introspection_model = introspection.model;
+        }
         optimizations.extend(optimizations_for_observation(
             observation,
             &options,
@@ -331,7 +369,7 @@ pub async fn tune_tool_router(
     Ok(ToolRouterTuneReport {
         window: options.window,
         apply: options.apply,
-        introspection_model: options.introspection_model,
+        introspection_model,
         introspection_tokens,
         schema_format_tokens: schema_format_tokens(&observations),
         optimizations,
@@ -339,6 +377,7 @@ pub async fn tune_tool_router(
 }
 
 struct ToolRouterIntrospectionObservation {
+    model: Option<String>,
     guidance_result: Option<Result<String, String>>,
     token_usage: ToolRouterTuneTokenUsage,
 }
@@ -348,20 +387,15 @@ async fn introspection_for_observation(
     observation: &ToolRouterTuneObservation,
     options: &ToolRouterTuneOptions,
 ) -> anyhow::Result<ToolRouterIntrospectionObservation> {
-    let Some(model) = options.introspection_model.as_ref() else {
-        return Ok(ToolRouterIntrospectionObservation {
-            guidance_result: None,
-            token_usage: ToolRouterTuneTokenUsage::default(),
-        });
-    };
     if observation.fallback_call_count == 0 && observation.invalid_route_errors == 0 {
         return Ok(ToolRouterIntrospectionObservation {
+            model: None,
             guidance_result: None,
             token_usage: ToolRouterTuneTokenUsage::default(),
         });
     }
     let Some(provider) = options.introspection_provider.as_ref() else {
-        anyhow::bail!("--introspection-model requires a tune introspection provider");
+        anyhow::bail!("tool-router introspection requires a tune introspection provider");
     };
 
     let current_guidance = state_db
@@ -374,28 +408,30 @@ async fn introspection_for_observation(
         .await?
         .map(|record| record.guidance_text);
     let request = ToolRouterIntrospectionRequest {
-        model: model.clone(),
         prompt: tool_router_introspection_prompt(
             observation,
             current_guidance.as_deref(),
             options.max_guidance_tokens,
         ),
     };
-    let raw = match provider.run(request).await {
+    let raw = match provider.run(Some(state_db), request).await {
         Ok(raw) => raw,
         Err(err) => {
             return Ok(ToolRouterIntrospectionObservation {
+                model: None,
                 guidance_result: Some(Err(format!("Introspection failed: {err:#}"))),
                 token_usage: ToolRouterTuneTokenUsage::default(),
             });
         }
     };
+    let model = raw.model;
     let guidance_result = parse_tool_router_introspection_output(
         raw.output_text.as_str(),
         options.max_guidance_tokens,
     )
     .map_err(|err| format!("Introspection guidance rejected: {err}"));
     Ok(ToolRouterIntrospectionObservation {
+        model: Some(model),
         guidance_result: Some(guidance_result),
         token_usage: raw.token_usage,
     })
@@ -973,6 +1009,7 @@ mod tests {
             introspection_options(
                 /*apply*/ true,
                 600,
+                "gpt-introspect",
                 valid_introspection_output(guidance),
             ),
         )
@@ -983,12 +1020,46 @@ mod tests {
         assert_eq!(dynamic.message, guidance);
         assert!(dynamic.persisted);
         assert_eq!(report.introspection_tokens.total_tokens, 7);
+        assert_eq!(
+            report.introspection_model.as_deref(),
+            Some("gpt-introspect")
+        );
         let record = runtime
             .lookup_tool_router_guidance(&guidance_key())
             .await
             .expect("lookup guidance")
             .expect("guidance record");
         assert_eq!(record.guidance_text, guidance);
+    }
+
+    #[tokio::test]
+    async fn introspection_without_explicit_model_override_still_runs() {
+        let (_codex_home, runtime) = state_runtime().await;
+        runtime
+            .record_tool_router_ledger_entry(ledger_entry("spark", 30, 6))
+            .await
+            .expect("record ledger");
+        let guidance = "For this shell-heavy toolset, route known shell execution directly with `action.tool` and `action.cmd`.";
+
+        let report = tune_tool_router(
+            &runtime,
+            introspection_options(
+                /*apply*/ true,
+                600,
+                "gpt-router-selected",
+                valid_introspection_output(guidance),
+            ),
+        )
+        .await
+        .expect("tune report");
+
+        let dynamic = dynamic_optimization(&report);
+        assert_eq!(dynamic.message, guidance);
+        assert!(dynamic.persisted);
+        assert_eq!(
+            report.introspection_model.as_deref(),
+            Some("gpt-router-selected")
+        );
     }
 
     #[tokio::test]
@@ -1004,6 +1075,7 @@ mod tests {
             introspection_options(
                 /*apply*/ true,
                 20,
+                "gpt-introspect",
                 valid_introspection_output(&"route direct tools ".repeat(200)),
             ),
         )
@@ -1036,7 +1108,12 @@ mod tests {
 
         let report = tune_tool_router(
             &runtime,
-            introspection_options(/*apply*/ true, 600, "not json".to_string()),
+            introspection_options(
+                /*apply*/ true,
+                600,
+                "gpt-introspect",
+                "not json".to_string(),
+            ),
         )
         .await
         .expect("tune report");
@@ -1118,7 +1195,6 @@ mod tests {
             window: "all".to_string(),
             model_slug: Some("gpt-test".to_string()),
             max_guidance_tokens,
-            introspection_model: None,
             introspection_provider: None,
             apply,
         }
@@ -1127,14 +1203,17 @@ mod tests {
     fn introspection_options(
         apply: bool,
         max_guidance_tokens: usize,
+        selected_model: &str,
         output_text: String,
     ) -> ToolRouterTuneOptions {
         ToolRouterTuneOptions {
             window: "all".to_string(),
             model_slug: Some("gpt-test".to_string()),
             max_guidance_tokens,
-            introspection_model: Some("gpt-introspect".to_string()),
-            introspection_provider: Some(Arc::new(StaticIntrospectionProvider { output_text })),
+            introspection_provider: Some(Arc::new(StaticIntrospectionProvider {
+                selected_model: selected_model.to_string(),
+                output_text,
+            })),
             apply,
         }
     }
@@ -1161,6 +1240,7 @@ mod tests {
     }
 
     struct StaticIntrospectionProvider {
+        selected_model: String,
         output_text: String,
     }
 
@@ -1168,9 +1248,11 @@ mod tests {
     impl ToolRouterIntrospectionProvider for StaticIntrospectionProvider {
         async fn run(
             &self,
+            _state_db: Option<&StateRuntime>,
             _request: ToolRouterIntrospectionRequest,
         ) -> anyhow::Result<ToolRouterIntrospectionRawResponse> {
             Ok(ToolRouterIntrospectionRawResponse {
+                model: self.selected_model.clone(),
                 output_text: self.output_text.clone(),
                 token_usage: ToolRouterTuneTokenUsage {
                     prompt_tokens: 3,
