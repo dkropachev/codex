@@ -45,6 +45,8 @@ pub struct WorkflowSpec {
     #[serde(default)]
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(
         default,
@@ -103,6 +105,13 @@ pub fn scaffold_workflow_spec(
     user_description: String,
     config: &WorkflowsConfigToml,
 ) -> WorkflowSpec {
+    let command = id
+        .split('/')
+        .next_back()
+        .filter(|command| !command.is_empty() && !command.contains('/'))
+        .map(ToString::to_string);
+    let command_label = command.as_deref().unwrap_or("<cmd>");
+    let id_for_usage = id.clone();
     let repair_mode = config
         .repair_mode
         .clone()
@@ -117,7 +126,9 @@ pub fn scaffold_workflow_spec(
             "outputSchema": { "type": "object" }
         }),
         usage: json!({
-            "summary": "Run this workflow with `codex workflow run <id> --input '{...}'`."
+            "summary": format!(
+                "Run this workflow with `/{command_label}` or `codex {command_label}`. Use `codex workflow run {id_for_usage} --input '{{...}}'` for raw JSON input."
+            )
         }),
         dependencies: json!({
             "runtime": ["@openai/codex-sdk"],
@@ -128,6 +139,7 @@ pub fn scaffold_workflow_spec(
             "commands": ["npm run build", "npm test"]
         }),
         tool: None,
+        command,
         repair: Some(WorkflowRepairSpec {
             mode: Some(repair_mode),
             max_repair_cycles: config.max_repair_cycles,

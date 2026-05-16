@@ -61,6 +61,7 @@ pub struct WorkflowValidation {
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowSummary {
     pub id: String,
+    pub command: Option<String>,
     pub title: Option<String>,
     pub user_description: Option<String>,
     pub search_terms: Vec<String>,
@@ -375,10 +376,13 @@ pub(crate) fn summarize_workflow(
         .and_then(|repair| repair.mode.clone())
         .or_else(|| config.repair_mode.clone())
         .unwrap_or_else(|| DEFAULT_REPAIR_MODE.to_string());
+    let command =
+        normalize_workflow_command(spec.command).or_else(|| default_workflow_command(&id));
     let validation = validate_workflow_dir(&root.path, workflow_dir, &id);
     let mention_target = mention_target(&root.path, &id).ok()?;
     Some(WorkflowSummary {
         id,
+        command,
         title: spec.title,
         user_description: spec.user_description,
         search_terms: spec.search_terms,
@@ -391,6 +395,28 @@ pub(crate) fn summarize_workflow(
         validation,
         repair_mode,
     })
+}
+
+pub fn find_workflow_by_command<'a>(
+    workflows: &'a [WorkflowSummary],
+    command: &str,
+) -> Option<&'a WorkflowSummary> {
+    workflows
+        .iter()
+        .find(|workflow| workflow.command.as_deref() == Some(command))
+}
+
+fn normalize_workflow_command(command: Option<String>) -> Option<String> {
+    let command = command?;
+    let command = command.trim();
+    if command.is_empty() || command.contains('/') || command.chars().any(char::is_whitespace) {
+        return None;
+    }
+    Some(command.to_string())
+}
+
+fn default_workflow_command(id: &str) -> Option<String> {
+    (!id.contains('/')).then_some(id.to_string())
 }
 
 fn relative_workflow_id(relative: &Path) -> Option<String> {
@@ -475,8 +501,8 @@ mod tests {
         let config = WorkflowsConfigToml::default();
         let global = home.path().join("workflows").join("reports").join("jira");
         let local = project.path().join(".codex/workflows/reports/jira");
-        create_minimal_workflow(&global, "reports/jira", None);
-        create_minimal_workflow(&local, "reports/jira", None);
+        create_minimal_workflow(&global, "reports/jira", None, None);
+        create_minimal_workflow(&local, "reports/jira", None, None);
 
         let err = find_workflow(home.path(), project.path(), &config, "reports/jira").unwrap_err();
         assert!(matches!(err, WorkflowRegistryError::Duplicate(_)));
@@ -487,12 +513,37 @@ mod tests {
         let home = TempDir::new().unwrap();
         let project = TempDir::new().unwrap();
         let workflow = home.path().join("workflows/reports/jira-summary");
-        create_minimal_workflow(&workflow, "reports/jira-summary", None);
+        create_minimal_workflow(&workflow, "reports/jira-summary", None, None);
 
         let discovered =
             discover_workflows(home.path(), project.path(), &WorkflowsConfigToml::default())
                 .unwrap();
         assert_eq!(discovered[0].id, "reports/jira-summary");
+        assert_eq!(discovered[0].command, None);
+    }
+
+    #[test]
+    fn workflow_discovery_uses_explicit_command_alias() {
+        let home = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        let workflow = home.path().join("workflows/reports/jira-summary");
+        create_minimal_workflow(
+            &workflow,
+            "reports/jira-summary",
+            Some("jira-summary"),
+            None,
+        );
+
+        let discovered =
+            discover_workflows(home.path(), project.path(), &WorkflowsConfigToml::default())
+                .unwrap();
+        assert_eq!(discovered[0].command, Some("jira-summary".to_string()));
+        assert_eq!(
+            find_workflow_by_command(&discovered, "jira-summary")
+                .unwrap()
+                .id,
+            "reports/jira-summary"
+        );
     }
 
     #[test]
@@ -503,6 +554,7 @@ mod tests {
         create_minimal_workflow(
             &workflow,
             "reports/jira-summary",
+            None,
             Some(WorkflowToolSpec {
                 description: "Run the Jira summary workflow".to_string(),
                 input_schema: serde_json::json!({ "type": "object" }),
@@ -523,7 +575,12 @@ mod tests {
         assert_eq!(tools[0].tool.description, "Run the Jira summary workflow");
     }
 
-    fn create_minimal_workflow(dir: &Path, id: &str, tool: Option<WorkflowToolSpec>) {
+    fn create_minimal_workflow(
+        dir: &Path,
+        id: &str,
+        command: Option<&str>,
+        tool: Option<WorkflowToolSpec>,
+    ) {
         fs::create_dir_all(dir.join("src")).unwrap();
         fs::write(dir.join("README.md"), "# Test\n").unwrap();
         fs::write(dir.join("src/workflow.ts"), "export {};\n").unwrap();
@@ -532,6 +589,7 @@ mod tests {
             &dir.join(WORKFLOW_YAML),
             &crate::spec::WorkflowSpec {
                 id: id.to_string(),
+                command: command.map(ToString::to_string),
                 tool,
                 ..Default::default()
             },

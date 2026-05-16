@@ -216,6 +216,7 @@ mod double_option_serde {
     use serde::Serialize;
     use serde::Serializer;
 
+    #[allow(dead_code)]
     pub(crate) fn deserialize<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
     where
         T: Deserialize<'de>,
@@ -224,6 +225,7 @@ mod double_option_serde {
         serde_with::rust::double_option::deserialize(deserializer)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn serialize<T, S>(
         value: &Option<Option<T>>,
         serializer: S,

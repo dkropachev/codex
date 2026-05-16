@@ -85,9 +85,8 @@ pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
                 windows_shell_guidance()
             )
         } else {
-            format!(
-                "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
-            )
+            "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
+                .to_string()
         },
         strict: false,
         defer_loading: None,
@@ -187,12 +186,11 @@ Examples of valid command strings:
             windows_shell_guidance()
         )
     } else {
-        format!(
-            r#"Runs a shell command and returns its output.
+        r#"Runs a shell command and returns its output.
 - The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
 - Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary.
 "#
-        )
+            .to_string()
     };
 
     ToolSpec::Function(ResponsesApiTool {
