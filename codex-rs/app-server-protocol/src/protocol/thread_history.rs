@@ -540,14 +540,7 @@ impl ThreadHistoryBuilder {
         };
         let duration_ms = i64::try_from(payload.duration.as_millis()).ok();
         let (result, error) = match &payload.result {
-            Ok(value) => (
-                Some(Box::new(McpToolCallResult {
-                    content: value.content.clone(),
-                    structured_content: value.structured_content.clone(),
-                    meta: value.meta.clone(),
-                })),
-                None,
-            ),
+            Ok(value) => (Some(Box::new(McpToolCallResult::from(value.clone()))), None),
             Err(message) => (
                 None,
                 Some(McpToolCallError {

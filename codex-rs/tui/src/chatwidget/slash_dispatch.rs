@@ -34,6 +34,12 @@ const GOAL_USAGE: &str = "Usage: /goal <objective>";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
 
+fn workflow_command_argv(command: &str, args: &str) -> Option<Vec<String>> {
+    let mut argv = vec![command.to_string()];
+    argv.extend(shlex::split(args)?);
+    Some(argv)
+}
+
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
     ///
@@ -61,6 +67,25 @@ impl ChatWidget {
     ) {
         self.dispatch_command_with_args(cmd, args, text_elements);
         self.bottom_pane.record_pending_slash_command_history();
+    }
+
+    /// Dispatch a registered workflow alias and record its staged local-history entry.
+    pub(super) fn handle_workflow_command_dispatch(&mut self, command: Vec<String>) {
+        self.dispatch_workflow_command(command);
+        self.bottom_pane.record_pending_slash_command_history();
+    }
+
+    /// Dispatch a workflow alias with inline args and record its staged local-history entry.
+    pub(super) fn handle_workflow_command_with_args_dispatch(
+        &mut self,
+        command: String,
+        args: String,
+    ) {
+        let Some(command) = workflow_command_argv(&command, &args) else {
+            self.add_error_message("Failed to parse workflow command arguments.".to_string());
+            return;
+        };
+        self.handle_workflow_command_dispatch(command);
     }
 
     fn apply_plan_slash_command(&mut self) -> bool {
@@ -871,9 +896,13 @@ impl ChatWidget {
                         );
                     }
                 } else {
-                    self.app_event_tx.send(AppEvent::RunWorkflow {
-                        command: format!("codex workflow {args}"),
-                    });
+                    let Some(command) = workflow_command_argv("workflow", &args) else {
+                        self.add_error_message(
+                            "Failed to parse workflow command arguments.".to_string(),
+                        );
+                        return;
+                    };
+                    self.dispatch_workflow_command(command);
                 }
             }
             SlashCommand::Review if !trimmed.is_empty() => {
@@ -894,6 +923,10 @@ impl ChatWidget {
         if source == SlashCommandDispatchSource::Live && cmd != SlashCommand::Goal {
             self.bottom_pane.drain_pending_submission_state();
         }
+    }
+
+    fn dispatch_workflow_command(&mut self, command: Vec<String>) {
+        self.app_event_tx.send(AppEvent::RunWorkflow { command });
     }
 
     pub(super) fn submit_queued_slash_prompt(&mut self, user_message: UserMessage) -> QueueDrain {
@@ -926,58 +959,73 @@ impl ChatWidget {
             return QueueDrain::Stop;
         }
 
-        let Some(cmd) = slash_commands::find_builtin_command(name, self.builtin_command_flags())
-        else {
-            self.add_info_message(
-                format!(
-                    r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
-                ),
-                /*hint*/ None,
-            );
-            return QueueDrain::Continue;
-        };
+        if let Some(cmd) = slash_commands::find_builtin_command(name, self.builtin_command_flags())
+        {
+            if rest.is_empty() {
+                self.dispatch_command(cmd);
+                return self.queued_command_drain_result(cmd);
+            }
 
-        if rest.is_empty() {
-            self.dispatch_command(cmd);
+            if !cmd.supports_inline_args() {
+                self.submit_user_message(UserMessage {
+                    text,
+                    local_images,
+                    remote_image_urls,
+                    text_elements,
+                    mention_bindings,
+                });
+                return QueueDrain::Stop;
+            }
+
+            let trimmed_start = rest.trim_start();
+            let leading_trimmed = rest.len().saturating_sub(trimmed_start.len());
+            let trimmed_rest = trimmed_start.trim_end();
+            let args_elements = Self::slash_command_args_elements(
+                trimmed_rest,
+                rest_offset + leading_trimmed,
+                &text_elements,
+            );
+            if cmd == SlashCommand::Goal
+                && !self
+                    .goal_objective_is_allowed(trimmed_rest, GoalObjectiveValidationSource::Queued)
+            {
+                return QueueDrain::Continue;
+            }
+            self.dispatch_prepared_command_with_args(
+                cmd,
+                PreparedSlashCommandArgs {
+                    args: trimmed_rest.to_string(),
+                    text_elements: args_elements,
+                    local_images,
+                    remote_image_urls,
+                    mention_bindings,
+                    source: SlashCommandDispatchSource::Queued,
+                },
+            );
             return self.queued_command_drain_result(cmd);
         }
 
-        if !cmd.supports_inline_args() {
-            self.submit_user_message(UserMessage {
-                text,
-                local_images,
-                remote_image_urls,
-                text_elements,
-                mention_bindings,
-            });
-            return QueueDrain::Stop;
+        if let Some(command) = self
+            .bottom_pane
+            .workflows()
+            .and_then(|workflows| codex_workflows::find_workflow_by_command(workflows, name))
+            .map(|_| name.to_string())
+        {
+            let Some(command) = workflow_command_argv(&command, rest) else {
+                self.add_error_message("Failed to parse workflow command arguments.".to_string());
+                return QueueDrain::Continue;
+            };
+            self.dispatch_workflow_command(command);
+            return self.queued_command_drain_result(SlashCommand::Workflow);
         }
 
-        let trimmed_start = rest.trim_start();
-        let leading_trimmed = rest.len().saturating_sub(trimmed_start.len());
-        let trimmed_rest = trimmed_start.trim_end();
-        let args_elements = Self::slash_command_args_elements(
-            trimmed_rest,
-            rest_offset + leading_trimmed,
-            &text_elements,
+        self.add_info_message(
+            format!(
+                r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
+            ),
+            /*hint*/ None,
         );
-        if cmd == SlashCommand::Goal
-            && !self.goal_objective_is_allowed(trimmed_rest, GoalObjectiveValidationSource::Queued)
-        {
-            return QueueDrain::Continue;
-        }
-        self.dispatch_prepared_command_with_args(
-            cmd,
-            PreparedSlashCommandArgs {
-                args: trimmed_rest.to_string(),
-                text_elements: args_elements,
-                local_images,
-                remote_image_urls,
-                mention_bindings,
-                source: SlashCommandDispatchSource::Queued,
-            },
-        );
-        self.queued_command_drain_result(cmd)
+        QueueDrain::Continue
     }
 
     fn builtin_command_flags(&self) -> slash_commands::BuiltinCommandFlags {

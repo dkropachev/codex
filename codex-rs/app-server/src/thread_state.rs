@@ -48,6 +48,7 @@ pub(crate) enum ThreadListenerCommand {
     // EmitThreadGoalSnapshot is used to read and emit the latest goal state in the listener order.
     EmitThreadGoalSnapshot {
         state_db: StateDbHandle,
+        completion_tx: oneshot::Sender<()>,
     },
     // ResolveServerRequest is used to notify the client that the request has been resolved.
     // It is executed in the thread listener's context to ensure that the resolved notification is ordered with regard to the request itself.

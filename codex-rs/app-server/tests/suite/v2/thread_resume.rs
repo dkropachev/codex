@@ -494,7 +494,7 @@ async fn thread_resume_emits_active_goal_update_before_continuation() -> Result<
     let ServerNotification::ThreadGoalUpdated(notification) = notification else {
         anyhow::bail!("expected thread goal update notification");
     };
-    assert_eq!(notification.goal.status, ThreadGoalStatus::Active);
+    assert_eq!(notification.goal.status, ThreadGoalStatus::Paused);
     assert!(
         !mcp.pending_notification_methods()
             .iter()

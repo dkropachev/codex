@@ -9021,8 +9021,12 @@ async fn handle_thread_listener_command(
                 ))
                 .await;
         }
-        ThreadListenerCommand::EmitThreadGoalSnapshot { state_db } => {
+        ThreadListenerCommand::EmitThreadGoalSnapshot {
+            state_db,
+            completion_tx,
+        } => {
             send_thread_goal_snapshot_notification(outgoing, conversation_id, &state_db).await;
+            let _ = completion_tx.send(());
         }
         ThreadListenerCommand::ResolveServerRequest {
             request_id,

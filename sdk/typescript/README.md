@@ -141,6 +141,10 @@ const result = await ctx.workflows.run("reports/jira-summary", { project: "COD" 
 await ctx.workflows.command.execute(["validate", workflows[0].id]);
 ```
 
+Workflow summaries include `command` when a workflow exposes `workflow.yaml.command`, or a fallback alias for simple ids
+without `/`. That alias is the same name you can type as `/cmd` in the TUI or `codex cmd` on the CLI, and the shared
+workflow command parser accepts it in `ctx.workflows.command.execute([...])` as well.
+
 For lower-level control, use `CodexWorkflow.start()`, `CodexWorkflow.connect()`, `CodexWorkflow.spawnServer()`, or
 `CodexWorkflow.fromTui()` directly.
 

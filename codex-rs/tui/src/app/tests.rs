@@ -37,6 +37,8 @@ use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerStartupState;
@@ -55,7 +57,10 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
+use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
 use codex_app_server_protocol::TokenUsageBreakdown;
@@ -81,6 +86,8 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::user_input::TextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyModifiers;
+use futures::SinkExt;
+use futures::StreamExt;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::Line;
@@ -88,7 +95,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tempfile::tempdir;
+use tokio::net::TcpListener;
 use tokio::time;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::accept_async;
+use tokio_tungstenite::tungstenite::Message;
 
 macro_rules! assert_app_snapshot {
     ($name:expr, $value:expr $(,)?) => {
@@ -100,6 +111,258 @@ macro_rules! assert_app_snapshot {
 
 fn test_absolute_path(path: &str) -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
+}
+
+#[derive(Clone, Copy)]
+enum RemoteCleanupMode {
+    Succeed,
+    FailAfterInitialize,
+}
+
+#[derive(Clone, Copy)]
+enum RemoteThreadReadMode {
+    NotLoadedError,
+    Loaded,
+}
+
+async fn start_remote_app_server_for_discard_test(
+    mode: RemoteCleanupMode,
+) -> Result<AppServerSession> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+
+    tokio::spawn(async move {
+        let Ok((stream, _)) = listener.accept().await else {
+            return;
+        };
+        let Ok(mut websocket) = accept_async(stream).await else {
+            return;
+        };
+
+        let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await else {
+            panic!("expected initialize request");
+        };
+        assert_eq!(request.method, "initialize");
+        write_websocket_message(
+            &mut websocket,
+            JSONRPCMessage::Response(JSONRPCResponse {
+                id: request.id,
+                result: serde_json::json!({}),
+            }),
+        )
+        .await;
+
+        let JSONRPCMessage::Notification(notification) =
+            read_websocket_message(&mut websocket).await
+        else {
+            panic!("expected initialized notification");
+        };
+        assert_eq!(notification.method, "initialized");
+
+        match mode {
+            RemoteCleanupMode::FailAfterInitialize => {
+                let _ = websocket.close(None).await;
+            }
+            RemoteCleanupMode::Succeed => {
+                let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
+                else {
+                    panic!("expected turn/interrupt request");
+                };
+                assert_eq!(request.method, "turn/interrupt");
+                write_websocket_message(
+                    &mut websocket,
+                    JSONRPCMessage::Response(JSONRPCResponse {
+                        id: request.id,
+                        result: serde_json::json!({}),
+                    }),
+                )
+                .await;
+
+                let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
+                else {
+                    panic!("expected thread/unsubscribe request");
+                };
+                assert_eq!(request.method, "thread/unsubscribe");
+                write_websocket_message(
+                    &mut websocket,
+                    JSONRPCMessage::Response(JSONRPCResponse {
+                        id: request.id,
+                        result: serde_json::json!({"status": "unsubscribed"}),
+                    }),
+                )
+                .await;
+
+                let _ = websocket.close(None).await;
+            }
+        }
+    });
+
+    let remote = codex_app_server_client::RemoteAppServerClient::connect(
+        codex_app_server_client::RemoteAppServerConnectArgs {
+            websocket_url: format!("ws://{addr}"),
+            auth_token: None,
+            client_name: "codex-tui".to_string(),
+            client_version: env!("CARGO_PKG_VERSION").to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 4,
+        },
+    )
+    .await?;
+
+    Ok(AppServerSession::new(
+        codex_app_server_client::AppServerClient::Remote(remote),
+    ))
+}
+
+async fn start_remote_app_server_for_thread_read_test(
+    thread_id: ThreadId,
+    mode: RemoteThreadReadMode,
+) -> Result<AppServerSession> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+
+    tokio::spawn(async move {
+        let Ok((stream, _)) = listener.accept().await else {
+            return;
+        };
+        let Ok(mut websocket) = accept_async(stream).await else {
+            return;
+        };
+
+        let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await else {
+            panic!("expected initialize request");
+        };
+        assert_eq!(request.method, "initialize");
+        write_websocket_message(
+            &mut websocket,
+            JSONRPCMessage::Response(JSONRPCResponse {
+                id: request.id,
+                result: serde_json::json!({}),
+            }),
+        )
+        .await;
+
+        let JSONRPCMessage::Notification(notification) =
+            read_websocket_message(&mut websocket).await
+        else {
+            panic!("expected initialized notification");
+        };
+        assert_eq!(notification.method, "initialized");
+
+        let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await else {
+            panic!("expected thread/read request");
+        };
+        assert_eq!(request.method, "thread/read");
+        let params: ThreadReadParams = serde_json::from_value(
+            request
+                .params
+                .expect("expected thread/read params in request"),
+        )
+        .expect("thread/read params should deserialize");
+        assert_eq!(params.thread_id, thread_id.to_string());
+        assert!(!params.include_turns);
+
+        match mode {
+            RemoteThreadReadMode::NotLoadedError => {
+                write_websocket_message(
+                    &mut websocket,
+                    JSONRPCMessage::Error(codex_app_server_protocol::JSONRPCError {
+                        id: request.id,
+                        error: codex_app_server_protocol::JSONRPCErrorError {
+                            code: -32603,
+                            data: None,
+                            message: format!("thread not loaded: {thread_id}"),
+                        },
+                    }),
+                )
+                .await;
+            }
+            RemoteThreadReadMode::Loaded => {
+                let thread = Thread {
+                    id: thread_id.to_string(),
+                    session_id: thread_id.to_string(),
+                    forked_from_id: None,
+                    preview: String::new(),
+                    ephemeral: false,
+                    model_provider: "test-provider".to_string(),
+                    created_at: 0,
+                    updated_at: 0,
+                    status: ThreadStatus::Idle,
+                    path: None,
+                    cwd: test_absolute_path("/tmp/project"),
+                    cli_version: env!("CARGO_PKG_VERSION").to_string(),
+                    source: SessionSource::Cli,
+                    thread_source: None,
+                    agent_nickname: None,
+                    agent_role: None,
+                    git_info: None,
+                    name: None,
+                    turns: Vec::new(),
+                };
+                write_websocket_message(
+                    &mut websocket,
+                    JSONRPCMessage::Response(JSONRPCResponse {
+                        id: request.id,
+                        result: serde_json::json!(ThreadReadResponse { thread }),
+                    }),
+                )
+                .await;
+            }
+        }
+
+        let _ = websocket.close(None).await;
+    });
+
+    let remote = codex_app_server_client::RemoteAppServerClient::connect(
+        codex_app_server_client::RemoteAppServerConnectArgs {
+            websocket_url: format!("ws://{addr}"),
+            auth_token: None,
+            client_name: "codex-tui".to_string(),
+            client_version: env!("CARGO_PKG_VERSION").to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 4,
+        },
+    )
+    .await?;
+
+    Ok(AppServerSession::new(
+        codex_app_server_client::AppServerClient::Remote(remote),
+    ))
+}
+
+async fn read_websocket_message(
+    websocket: &mut WebSocketStream<tokio::net::TcpStream>,
+) -> JSONRPCMessage {
+    loop {
+        let frame = websocket.next().await.expect("frame should be available");
+        let frame = frame.expect("frame should decode");
+        match frame {
+            Message::Text(text) => {
+                return serde_json::from_str::<JSONRPCMessage>(&text)
+                    .expect("text frame should be valid JSON-RPC");
+            }
+            Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {
+                continue;
+            }
+            Message::Close(_) => panic!("unexpected close frame"),
+        }
+    }
+}
+
+async fn write_websocket_message(
+    websocket: &mut WebSocketStream<tokio::net::TcpStream>,
+    message: JSONRPCMessage,
+) {
+    websocket
+        .send(Message::Text(
+            serde_json::to_string(&message)
+                .expect("message should serialize")
+                .into(),
+        ))
+        .await
+        .expect("message should send");
 }
 
 #[tokio::test]
@@ -1271,12 +1534,12 @@ async fn token_usage_update_refreshes_status_line_with_runtime_context_window() 
 #[tokio::test]
 async fn open_agent_picker_keeps_missing_threads_for_replay() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
     let thread_id = ThreadId::new();
+    let mut app_server = start_remote_app_server_for_thread_read_test(
+        thread_id,
+        RemoteThreadReadMode::NotLoadedError,
+    )
+    .await?;
     app.thread_event_channels
         .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
 
@@ -1298,12 +1561,12 @@ async fn open_agent_picker_keeps_missing_threads_for_replay() -> Result<()> {
 #[tokio::test]
 async fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
     let thread_id = ThreadId::new();
+    let mut app_server = start_remote_app_server_for_thread_read_test(
+        thread_id,
+        RemoteThreadReadMode::NotLoadedError,
+    )
+    .await?;
     app.thread_event_channels
         .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
     app.agent_navigation.upsert(
@@ -1330,12 +1593,12 @@ async fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Res
 #[tokio::test]
 async fn open_agent_picker_prunes_terminal_metadata_only_threads() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
     let thread_id = ThreadId::new();
+    let mut app_server = start_remote_app_server_for_thread_read_test(
+        thread_id,
+        RemoteThreadReadMode::NotLoadedError,
+    )
+    .await?;
     app.agent_navigation.upsert(
         thread_id,
         Some("Ghost".to_string()),
@@ -1353,12 +1616,12 @@ async fn open_agent_picker_prunes_terminal_metadata_only_threads() -> Result<()>
 #[tokio::test]
 async fn open_agent_picker_marks_terminal_read_errors_closed() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
     let thread_id = ThreadId::new();
+    let mut app_server = start_remote_app_server_for_thread_read_test(
+        thread_id,
+        RemoteThreadReadMode::NotLoadedError,
+    )
+    .await?;
     app.thread_event_channels
         .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
     app.agent_navigation.upsert(
@@ -1394,15 +1657,10 @@ fn open_agent_picker_marks_loaded_threads_open() -> Result<()> {
 
     runtime.block_on(async {
         let mut app = Box::pin(make_test_app()).await;
-        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-            app.chat_widget.config_ref(),
-        ))
-        .await
-        .expect("embedded app server");
-        let started = app_server
-            .start_thread(app.chat_widget.config_ref())
-            .await?;
-        let thread_id = started.session.thread_id;
+        let thread_id = ThreadId::new();
+        let mut app_server =
+            start_remote_app_server_for_thread_read_test(thread_id, RemoteThreadReadMode::Loaded)
+                .await?;
         app.thread_event_channels
             .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
 
@@ -1539,12 +1797,12 @@ async fn should_attach_live_thread_for_selection_skips_closed_metadata_only_thre
 #[tokio::test]
 async fn refresh_agent_picker_thread_liveness_prunes_closed_metadata_only_threads() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
     let thread_id = ThreadId::new();
+    let mut app_server = start_remote_app_server_for_thread_read_test(
+        thread_id,
+        RemoteThreadReadMode::NotLoadedError,
+    )
+    .await?;
     app.agent_navigation.upsert(
         thread_id,
         Some("Ghost".to_string()),
@@ -2248,12 +2506,10 @@ async fn update_feature_flags_disabling_guardian_in_profile_keeps_inherited_non_
 #[tokio::test]
 async fn open_agent_picker_allows_existing_agent_threads_when_feature_is_disabled() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
     let thread_id = ThreadId::new();
+    let mut app_server =
+        start_remote_app_server_for_thread_read_test(thread_id, RemoteThreadReadMode::Loaded)
+            .await?;
     app.thread_event_channels
         .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
 
@@ -3532,40 +3788,36 @@ async fn side_discard_selection_keeps_current_side_thread() {
 
 #[tokio::test]
 async fn discard_side_thread_removes_agent_navigation_entry() -> Result<()> {
-    Box::pin(async {
-        let mut app = make_test_app().await;
-        let mut app_server =
-            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
-        let mut side_config = app.chat_widget.config_ref().clone();
-        side_config.ephemeral = true;
-        let started = app_server.start_thread(&side_config).await?;
-        let side_thread_id = started.session.thread_id;
-        app.side_threads
-            .insert(side_thread_id, SideThreadState::new(ThreadId::new()));
-        app.agent_navigation.upsert(
-            side_thread_id,
-            Some("Side".to_string()),
-            Some("side".to_string()),
-            /*is_closed*/ false,
-        );
+    let mut app = make_test_app().await;
+    let mut app_server =
+        start_remote_app_server_for_discard_test(RemoteCleanupMode::Succeed).await?;
+    let parent_thread_id = ThreadId::new();
+    let side_thread_id = ThreadId::new();
+    app.active_thread_id = Some(side_thread_id);
+    app.side_threads
+        .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+    app.agent_navigation.upsert(
+        side_thread_id,
+        Some("Side".to_string()),
+        Some("side".to_string()),
+        /*is_closed*/ false,
+    );
 
-        assert!(
-            app.discard_side_thread(&mut app_server, side_thread_id)
-                .await
-        );
+    assert!(
+        app.discard_side_thread(&mut app_server, side_thread_id)
+            .await
+    );
 
-        assert_eq!(app.agent_navigation.get(&side_thread_id), None);
-        assert!(!app.side_threads.contains_key(&side_thread_id));
-        Ok(())
-    })
-    .await
+    assert_eq!(app.agent_navigation.get(&side_thread_id), None);
+    assert!(!app.side_threads.contains_key(&side_thread_id));
+    Ok(())
 }
 
 #[tokio::test]
 async fn discard_side_thread_keeps_local_state_when_server_close_fails() -> Result<()> {
     let mut app = make_test_app().await;
     let mut app_server =
-        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        start_remote_app_server_for_discard_test(RemoteCleanupMode::FailAfterInitialize).await?;
     let parent_thread_id = ThreadId::new();
     let side_thread_id = ThreadId::new();
     app.active_thread_id = Some(side_thread_id);
@@ -5175,35 +5427,25 @@ async fn shutdown_first_exit_uses_app_server_shutdown_without_submitting_op() {
 }
 
 #[tokio::test]
-async fn interrupt_without_active_turn_is_treated_as_handled() {
-    Box::pin(async {
-        let mut app = make_test_app().await;
-        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-            app.chat_widget.config_ref(),
-        ))
-        .await
-        .expect("embedded app server");
-        let started = app_server
-            .start_thread(app.chat_widget.config_ref())
-            .await
-            .expect("thread/start should succeed");
-        let thread_id = started.session.thread_id;
-        app.enqueue_primary_thread_session(started.session, started.turns)
-            .await
-            .expect("primary thread should be registered");
-        let op = AppCommand::interrupt();
+async fn interrupt_without_active_turn_is_treated_as_handled() -> Result<()> {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    let mut app_server =
+        start_remote_app_server_for_discard_test(RemoteCleanupMode::Succeed).await?;
+    app.enqueue_primary_thread_session(
+        test_thread_session(thread_id, test_path_buf("/tmp/project")),
+        Vec::new(),
+    )
+    .await?;
+    let op = AppCommand::interrupt();
 
-        let handled = Box::pin(app.try_submit_active_thread_op_via_app_server(
-            &mut app_server,
-            thread_id,
-            &op,
-        ))
-        .await
-        .expect("interrupt submission should not fail");
+    let handled =
+        Box::pin(app.try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op))
+            .await
+            .expect("interrupt submission should not fail");
 
-        assert_eq!(handled, true);
-    })
-    .await;
+    assert_eq!(handled, true);
+    Ok(())
 }
 
 #[tokio::test]

@@ -9,13 +9,15 @@ const WORKFLOW_APP_SERVER_URL_ENV: &str = "CODEX_WORKFLOW_APP_SERVER_URL";
 const CODEX_APP_SERVER_URL_ENV: &str = "CODEX_APP_SERVER_URL";
 
 impl App {
-    pub(crate) fn run_workflow_command(&mut self, command: String) {
-        let command = command.trim().to_string();
+    pub(crate) fn run_workflow_command(&mut self, command: Vec<String>) {
         if command.is_empty() {
             self.chat_widget
                 .add_error_message("Usage: /workflow <command>".to_string());
             return;
         }
+
+        let display_command = shlex::try_join(command.iter().map(String::as_str))
+            .unwrap_or_else(|_| command.join(" "));
 
         let Some(app_server_url) = self.workflow_app_server_url.clone() else {
             self.chat_widget.add_error_message(
@@ -27,15 +29,13 @@ impl App {
 
         let cwd = self.config.cwd.clone();
         let app_event_tx = self.app_event_tx.clone();
-        let mut child_command = if cfg!(target_os = "windows") {
-            let mut command_builder = Command::new("cmd");
-            command_builder.arg("/C").arg(&command);
-            command_builder
-        } else {
-            let mut command_builder = Command::new("sh");
-            command_builder.arg("-lc").arg(&command);
-            command_builder
-        };
+        let executable = self
+            .config
+            .codex_self_exe
+            .clone()
+            .unwrap_or_else(|| "codex".into());
+        let mut child_command = Command::new(executable);
+        child_command.args(&command);
         child_command
             .current_dir(cwd)
             .env(CODEX_APP_SERVER_URL_ENV, &app_server_url)
@@ -49,7 +49,7 @@ impl App {
         match child_command.spawn() {
             Ok(mut child) => {
                 self.chat_widget.add_info_message(
-                    format!("Workflow started: {command}"),
+                    format!("Workflow started: {display_command}"),
                     Some(format!("Connected to {app_server_url}")),
                 );
                 tokio::spawn(async move {
@@ -70,16 +70,19 @@ impl App {
 
     pub(crate) fn handle_workflow_process_finished(
         &mut self,
-        command: String,
+        command: Vec<String>,
         result: Result<(), String>,
     ) {
+        let display_command = shlex::try_join(command.iter().map(String::as_str))
+            .unwrap_or_else(|_| command.join(" "));
         match result {
-            Ok(()) => self
-                .chat_widget
-                .add_info_message(format!("Workflow finished: {command}"), /*hint*/ None),
+            Ok(()) => self.chat_widget.add_info_message(
+                format!("Workflow finished: {display_command}"),
+                /*hint*/ None,
+            ),
             Err(err) => self
                 .chat_widget
-                .add_error_message(format!("Workflow failed: {command}: {err}")),
+                .add_error_message(format!("Workflow failed: {display_command}: {err}")),
         }
     }
 }
@@ -106,7 +109,7 @@ mod tests {
     async fn workflow_command_reports_disabled_without_managed_app_server() {
         let mut app = make_test_app().await;
 
-        app.run_workflow_command("node workflow.js".to_string());
+        app.run_workflow_command(vec!["node".to_string(), "workflow.js".to_string()]);
 
         let rendered = app
             .chat_widget

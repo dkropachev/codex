@@ -1130,7 +1130,7 @@ async fn commentary_completion_restores_status_indicator_before_exec_begin() {
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
 
     complete_assistant_message(
         &mut chat,
@@ -1322,7 +1322,7 @@ async fn stream_error_restores_hidden_status_indicator() {
     chat.on_agent_message_delta("Preamble line\n".to_string());
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
-    assert!(!chat.bottom_pane.status_indicator_visible());
+    assert!(chat.bottom_pane.status_indicator_visible());
 
     let msg = "Reconnecting... 2/5";
     let details = "Idle timeout waiting for SSE";

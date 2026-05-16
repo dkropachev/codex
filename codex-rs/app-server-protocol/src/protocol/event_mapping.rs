@@ -9,6 +9,7 @@ use crate::protocol::v2::CollabAgentToolCallStatus;
 use crate::protocol::v2::CommandExecutionOutputDeltaNotification;
 use crate::protocol::v2::DynamicToolCallOutputContentItem;
 use crate::protocol::v2::DynamicToolCallStatus;
+use crate::protocol::v2::FileChangeOutputDeltaNotification;
 use crate::protocol::v2::FileChangePatchUpdatedNotification;
 use crate::protocol::v2::ItemCompletedNotification;
 use crate::protocol::v2::ItemStartedNotification;
@@ -409,6 +410,18 @@ pub fn item_event_to_server_notification(
                 turn_id,
                 item_id: event.call_id,
                 changes: convert_patch_changes(&event.changes),
+            })
+        }
+        EventMsg::PatchApplyEnd(event) => {
+            ServerNotification::FileChangeOutputDelta(FileChangeOutputDeltaNotification {
+                thread_id,
+                turn_id: if event.turn_id.is_empty() {
+                    turn_id
+                } else {
+                    event.turn_id
+                },
+                item_id: event.call_id,
+                delta: format!("{}{}", event.stdout, event.stderr),
             })
         }
         EventMsg::ExecCommandBegin(exec_command_begin_event) => {

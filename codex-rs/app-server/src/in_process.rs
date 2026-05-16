@@ -735,11 +735,31 @@ mod tests {
     use codex_app_server_protocol::TurnStatus;
     use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
+    use std::future::Future;
     use std::path::Path;
     use tempfile::TempDir;
 
+    fn run_async_test_on_large_stack<F, Fut>(test: F)
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + 'static,
+    {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime should build")
+                    .block_on(test());
+            })
+            .expect("test thread should start")
+            .join()
+            .expect("test thread should finish");
+    }
+
     async fn build_test_config(codex_home: &Path) -> Config {
-        match ConfigBuilder::default()
+        let mut config = match ConfigBuilder::default()
             .codex_home(codex_home.to_path_buf())
             .build()
             .await
@@ -751,7 +771,9 @@ mod tests {
             )
             .await
             .expect("default config should load"),
-        }
+        };
+        config.analytics_enabled = Some(false);
+        config
     }
 
     async fn start_test_client_with_capacity(
@@ -796,161 +818,175 @@ mod tests {
         start_test_client_with_capacity(session_source, DEFAULT_IN_PROCESS_CHANNEL_CAPACITY).await
     }
 
-    #[tokio::test]
-    async fn in_process_start_initializes_and_handles_typed_v2_request() {
-        let client = start_test_client(SessionSource::Cli).await;
-        let response = client
-            .request(ClientRequest::ConfigRequirementsRead {
-                request_id: RequestId::Integer(1),
-                params: None,
-            })
-            .await
-            .expect("request transport should work")
-            .expect("request should succeed");
-        assert!(response.is_object());
-
-        let _parsed: ConfigRequirementsReadResponse =
-            serde_json::from_value(response).expect("response should match v2 schema");
-        client
-            .shutdown()
-            .await
-            .expect("in-process runtime should shutdown cleanly");
-    }
-
-    #[tokio::test]
-    async fn in_process_allows_device_key_requests_to_reach_device_key_processor() {
-        let client = start_test_client(SessionSource::Cli).await;
-        const MALFORMED_KEY_ID_MESSAGE: &str = concat!(
-            "invalid device key payload: keyId must be dk_hse_, dk_tpm_, or dk_osn_ ",
-            "followed by unpadded base64url-encoded 32 bytes"
-        );
-        let requests = [
-            (
-                ClientRequest::DeviceKeyPublic {
-                    request_id: RequestId::Integer(11),
-                    params: DeviceKeyPublicParams {
-                        key_id: String::new(),
-                    },
-                },
-                MALFORMED_KEY_ID_MESSAGE,
-            ),
-            (
-                ClientRequest::DeviceKeySign {
-                    request_id: RequestId::Integer(12),
-                    params: DeviceKeySignParams {
-                        key_id: String::new(),
-                        payload: DeviceKeySignPayload::RemoteControlClientConnection {
-                            nonce: "nonce-123".to_string(),
-                            audience:
-                                RemoteControlClientConnectionAudience::RemoteControlClientWebsocket,
-                            session_id: "wssess_123".to_string(),
-                            target_origin: "https://chatgpt.com".to_string(),
-                            target_path: "/api/codex/remote/control/client".to_string(),
-                            account_user_id: "acct_123".to_string(),
-                            client_id: "cli_123".to_string(),
-                            token_expires_at: 4_102_444_800,
-                            token_sha256_base64url: "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU"
-                                .to_string(),
-                            scopes: vec!["remote_control_controller_websocket".to_string()],
-                        },
-                    },
-                },
-                MALFORMED_KEY_ID_MESSAGE,
-            ),
-            (
-                ClientRequest::DeviceKeySign {
-                    request_id: RequestId::Integer(13),
-                    params: DeviceKeySignParams {
-                        key_id: String::new(),
-                        payload: DeviceKeySignPayload::RemoteControlClientEnrollment {
-                            nonce: "nonce-123".to_string(),
-                            audience:
-                                RemoteControlClientEnrollmentAudience::RemoteControlClientEnrollment,
-                            challenge_id: "rch_123".to_string(),
-                            target_origin: "https://chatgpt.com".to_string(),
-                            target_path: "/wham/remote/control/client/enroll".to_string(),
-                            account_user_id: "acct_123".to_string(),
-                            client_id: "cli_123".to_string(),
-                            device_identity_sha256_base64url:
-                                "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU".to_string(),
-                            challenge_expires_at: 4_102_444_800,
-                        },
-                    },
-                },
-                MALFORMED_KEY_ID_MESSAGE,
-            ),
-        ];
-
-        for (request, expected_message) in requests {
-            let error = client
-                .request(request)
-                .await
-                .expect("request transport should work")
-                .expect_err("request should be rejected");
-
-            assert_eq!(error.code, INVALID_REQUEST_ERROR_CODE);
-            assert_eq!(error.message, expected_message);
-        }
-
-        client
-            .shutdown()
-            .await
-            .expect("in-process runtime should shutdown cleanly");
-    }
-
-    #[tokio::test]
-    async fn in_process_start_uses_requested_session_source_for_thread_start() {
-        for (requested_source, expected_source) in [
-            (SessionSource::Cli, ApiSessionSource::Cli),
-            (SessionSource::Exec, ApiSessionSource::Exec),
-        ] {
-            let client = start_test_client(requested_source).await;
-            let response = client
-                .request(ClientRequest::ThreadStart {
-                    request_id: RequestId::Integer(2),
-                    params: ThreadStartParams {
-                        ephemeral: Some(true),
-                        ..ThreadStartParams::default()
-                    },
-                })
-                .await
-                .expect("request transport should work")
-                .expect("thread/start should succeed");
-            let parsed: ThreadStartResponse =
-                serde_json::from_value(response).expect("thread/start response should parse");
-            assert_eq!(parsed.thread.source, expected_source);
-            client
-                .shutdown()
-                .await
-                .expect("in-process runtime should shutdown cleanly");
-        }
-    }
-
-    #[tokio::test]
-    async fn in_process_start_clamps_zero_channel_capacity() {
-        let client =
-            start_test_client_with_capacity(SessionSource::Cli, /*channel_capacity*/ 0).await;
-        let response = loop {
-            match client
+    #[test]
+    fn in_process_start_initializes_and_handles_typed_v2_request() {
+        run_async_test_on_large_stack(|| async {
+            let client = start_test_client(SessionSource::Cli).await;
+            let response = match client
                 .request(ClientRequest::ConfigRequirementsRead {
-                    request_id: RequestId::Integer(4),
+                    request_id: RequestId::Integer(1),
                     params: None,
                 })
                 .await
             {
-                Ok(response) => break response.expect("request should succeed"),
-                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    tokio::task::yield_now().await;
-                }
-                Err(err) => panic!("request transport should work: {err}"),
+                Ok(Ok(response)) => response,
+                Ok(Err(_error)) => panic!("request should succeed"),
+                Err(_err) => panic!("request transport should work"),
+            };
+            assert!(response.is_object());
+
+            let _parsed: ConfigRequirementsReadResponse =
+                serde_json::from_value(response).expect("response should match v2 schema");
+            client
+                .shutdown()
+                .await
+                .expect("in-process runtime should shutdown cleanly");
+        });
+    }
+
+    #[test]
+    fn in_process_allows_device_key_requests_to_reach_device_key_processor() {
+        run_async_test_on_large_stack(|| async {
+            let client = start_test_client(SessionSource::Cli).await;
+            const MALFORMED_KEY_ID_MESSAGE: &str = concat!(
+                "invalid device key payload: keyId must be dk_hse_, dk_tpm_, or dk_osn_ ",
+                "followed by unpadded base64url-encoded 32 bytes"
+            );
+            let requests = [
+                (
+                    ClientRequest::DeviceKeyPublic {
+                        request_id: RequestId::Integer(11),
+                        params: DeviceKeyPublicParams {
+                            key_id: String::new(),
+                        },
+                    },
+                    MALFORMED_KEY_ID_MESSAGE,
+                ),
+                (
+                    ClientRequest::DeviceKeySign {
+                        request_id: RequestId::Integer(12),
+                        params: DeviceKeySignParams {
+                            key_id: String::new(),
+                            payload: DeviceKeySignPayload::RemoteControlClientConnection {
+                                nonce: "nonce-123".to_string(),
+                                audience:
+                                    RemoteControlClientConnectionAudience::RemoteControlClientWebsocket,
+                                session_id: "wssess_123".to_string(),
+                                target_origin: "https://chatgpt.com".to_string(),
+                                target_path: "/api/codex/remote/control/client".to_string(),
+                                account_user_id: "acct_123".to_string(),
+                                client_id: "cli_123".to_string(),
+                                token_expires_at: 4_102_444_800,
+                                token_sha256_base64url: "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU"
+                                    .to_string(),
+                                scopes: vec!["remote_control_controller_websocket".to_string()],
+                            },
+                        },
+                    },
+                    MALFORMED_KEY_ID_MESSAGE,
+                ),
+                (
+                    ClientRequest::DeviceKeySign {
+                        request_id: RequestId::Integer(13),
+                        params: DeviceKeySignParams {
+                            key_id: String::new(),
+                            payload: DeviceKeySignPayload::RemoteControlClientEnrollment {
+                                nonce: "nonce-123".to_string(),
+                                audience:
+                                    RemoteControlClientEnrollmentAudience::RemoteControlClientEnrollment,
+                                challenge_id: "rch_123".to_string(),
+                                target_origin: "https://chatgpt.com".to_string(),
+                                target_path: "/wham/remote/control/client/enroll".to_string(),
+                                account_user_id: "acct_123".to_string(),
+                                client_id: "cli_123".to_string(),
+                                device_identity_sha256_base64url:
+                                    "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU".to_string(),
+                                challenge_expires_at: 4_102_444_800,
+                            },
+                        },
+                    },
+                    MALFORMED_KEY_ID_MESSAGE,
+                ),
+            ];
+
+            for (request, expected_message) in requests {
+                let error = client
+                    .request(request)
+                    .await
+                    .expect("request transport should work")
+                    .expect_err("request should be rejected");
+
+                assert_eq!(error.code, INVALID_REQUEST_ERROR_CODE);
+                assert_eq!(error.message, expected_message);
             }
-        };
-        let _parsed: ConfigRequirementsReadResponse =
-            serde_json::from_value(response).expect("response should match v2 schema");
-        client
-            .shutdown()
-            .await
-            .expect("in-process runtime should shutdown cleanly");
+
+            client
+                .shutdown()
+                .await
+                .expect("in-process runtime should shutdown cleanly");
+        });
+    }
+
+    #[test]
+    fn in_process_start_uses_requested_session_source_for_thread_start() {
+        run_async_test_on_large_stack(|| async {
+            for (requested_source, expected_source) in [
+                (SessionSource::Cli, ApiSessionSource::Cli),
+                (SessionSource::Exec, ApiSessionSource::Exec),
+            ] {
+                let client = start_test_client(requested_source).await;
+                let response = match client
+                    .request(ClientRequest::ThreadStart {
+                        request_id: RequestId::Integer(2),
+                        params: ThreadStartParams {
+                            ephemeral: Some(true),
+                            ..ThreadStartParams::default()
+                        },
+                    })
+                    .await
+                {
+                    Ok(Ok(response)) => response,
+                    Ok(Err(_error)) => panic!("thread/start should succeed"),
+                    Err(_err) => panic!("request transport should work"),
+                };
+                let parsed: ThreadStartResponse =
+                    serde_json::from_value(response).expect("thread/start response should parse");
+                assert_eq!(parsed.thread.source, expected_source);
+                client
+                    .shutdown()
+                    .await
+                    .expect("in-process runtime should shutdown cleanly");
+            }
+        });
+    }
+
+    #[test]
+    fn in_process_start_clamps_zero_channel_capacity() {
+        run_async_test_on_large_stack(|| async {
+            let client =
+                start_test_client_with_capacity(SessionSource::Cli, /*channel_capacity*/ 0).await;
+            let response = loop {
+                match client
+                    .request(ClientRequest::ConfigRequirementsRead {
+                        request_id: RequestId::Integer(4),
+                        params: None,
+                    })
+                    .await
+                {
+                    Ok(response) => break response.expect("request should succeed"),
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        tokio::task::yield_now().await;
+                    }
+                    Err(err) => panic!("request transport should work: {err}"),
+                }
+            };
+            let _parsed: ConfigRequirementsReadResponse =
+                serde_json::from_value(response).expect("response should match v2 schema");
+            client
+                .shutdown()
+                .await
+                .expect("in-process runtime should shutdown cleanly");
+        });
     }
 
     #[test]

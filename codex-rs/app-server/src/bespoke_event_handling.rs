@@ -1046,9 +1046,17 @@ pub(crate) async fn apply_bespoke_event_handling(
             )
             .await;
         }
-        EventMsg::PatchApplyBegin(_) | EventMsg::PatchApplyEnd(_) => {
+        EventMsg::PatchApplyBegin(_) => {
             // Core still fans out these deprecated events for legacy clients;
             // v2 clients receive the canonical FileChange item instead.
+        }
+        EventMsg::PatchApplyEnd(end_event) => {
+            let notification = item_event_to_server_notification(
+                EventMsg::PatchApplyEnd(end_event),
+                &conversation_id.to_string(),
+                &event_turn_id,
+            );
+            outgoing.send_server_notification(notification).await;
         }
         EventMsg::ExecCommandBegin(exec_command_begin_event) => {
             if matches!(

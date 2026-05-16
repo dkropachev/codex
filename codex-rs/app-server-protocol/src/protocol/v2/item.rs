@@ -1220,7 +1220,8 @@ pub struct CommandExecutionOutputDeltaNotification {
 }
 /// Deprecated legacy notification for `apply_patch` textual output.
 ///
-/// The server no longer emits this notification.
+/// The server still emits this for approved `apply_patch` completions to
+/// preserve compatibility with older clients.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

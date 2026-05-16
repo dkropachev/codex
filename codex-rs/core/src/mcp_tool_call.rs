@@ -44,8 +44,13 @@ use codex_mcp::SandboxState;
 use codex_mcp::declared_openai_file_input_param_names;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_otel::sanitize_metric_tag_value;
+use codex_protocol::items::McpToolCallError;
+use codex_protocol::items::McpToolCallItem;
+use codex_protocol::items::McpToolCallStatus;
+use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::McpToolCallBeginEvent;
@@ -177,6 +182,17 @@ pub(crate) async fn handle_mcp_tool_call(
         invocation: invocation.clone(),
         mcp_app_resource_uri: mcp_app_resource_uri.clone(),
     });
+    let tool_call_started_item = build_mcp_tool_call_item(
+        &call_id,
+        &invocation,
+        mcp_app_resource_uri.clone(),
+        McpToolCallStatus::InProgress,
+        None,
+        None,
+        None,
+    );
+    sess.emit_turn_item_started(turn_context, &tool_call_started_item)
+        .await;
     notify_mcp_tool_call_event(sess.as_ref(), turn_context.as_ref(), tool_call_begin_event).await;
 
     if let Some(decision) = maybe_request_mcp_tool_approval(
@@ -346,6 +362,8 @@ async fn handle_approved_mcp_tool_call(
         tracing::warn!("MCP tool call error: {error:?}");
     }
     let duration = start.elapsed();
+    let completed_invocation = invocation.clone();
+    let completed_mcp_app_resource_uri = mcp_app_resource_uri.clone();
     let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
         call_id: call_id.to_string(),
         invocation,
@@ -353,6 +371,30 @@ async fn handle_approved_mcp_tool_call(
         duration,
         result: result.clone(),
     });
+    let (status, item_result, error) = match &result {
+        Ok(result) if result.is_error.unwrap_or(false) => {
+            (McpToolCallStatus::Failed, Some(result.clone()), None)
+        }
+        Ok(result) => (McpToolCallStatus::Completed, Some(result.clone()), None),
+        Err(message) => (
+            McpToolCallStatus::Failed,
+            None,
+            Some(McpToolCallError {
+                message: message.clone(),
+            }),
+        ),
+    };
+    let tool_call_completed_item = build_mcp_tool_call_item(
+        call_id,
+        &completed_invocation,
+        completed_mcp_app_resource_uri,
+        status,
+        item_result,
+        error,
+        Some(duration),
+    );
+    sess.emit_turn_item_completed(turn_context, tool_call_completed_item)
+        .await;
     notify_mcp_tool_call_event(sess, turn_context, tool_call_end_event.clone()).await;
     maybe_track_codex_app_used(sess, turn_context, &server, &tool_name).await;
 
@@ -595,7 +637,37 @@ fn sanitize_mcp_tool_result_for_model(
 }
 
 async fn notify_mcp_tool_call_event(sess: &Session, turn_context: &TurnContext, event: EventMsg) {
-    sess.send_event(turn_context, event).await;
+    if let EventMsg::McpToolCallEnd(_) = &event {
+        sess.send_event_raw_deliver_first(Event {
+            id: turn_context.sub_id.clone(),
+            msg: event,
+        })
+        .await;
+    } else {
+        sess.send_event(turn_context, event).await;
+    }
+}
+
+fn build_mcp_tool_call_item(
+    call_id: &str,
+    invocation: &McpInvocation,
+    mcp_app_resource_uri: Option<String>,
+    status: McpToolCallStatus,
+    result: Option<CallToolResult>,
+    error: Option<McpToolCallError>,
+    duration: Option<Duration>,
+) -> TurnItem {
+    TurnItem::McpToolCall(McpToolCallItem {
+        id: call_id.to_string(),
+        server: invocation.server.clone(),
+        tool: invocation.tool.clone(),
+        arguments: invocation.arguments.clone().unwrap_or(JsonValue::Null),
+        mcp_app_resource_uri,
+        status,
+        result,
+        error,
+        duration,
+    })
 }
 
 struct McpAppUsageMetadata {

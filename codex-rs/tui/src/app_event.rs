@@ -140,12 +140,12 @@ pub(crate) enum AppEvent {
 
     /// Start a JavaScript workflow process connected to the managed TUI app-server.
     RunWorkflow {
-        command: String,
+        command: Vec<String>,
     },
 
     /// Result of a workflow process launched from the TUI.
     WorkflowProcessFinished {
-        command: String,
+        command: Vec<String>,
         result: Result<(), String>,
     },
 

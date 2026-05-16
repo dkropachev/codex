@@ -73,7 +73,7 @@ codex app-server generate-ts --out DIR
 codex app-server generate-json-schema --out DIR
 ```
 
-For runtime discovery, use `apiCatalog/read` over app-server or `codex api` from the CLI. The catalog is JSON intended for IDEs, coding agents, and workflow code; it includes app-server methods, configured MCP servers and tool schemas, built-in workflow helpers, the JavaScript workflow runtime surface, and discovered workflow metadata.
+For runtime discovery, use `apiCatalog/read` over app-server or `codex api` from the CLI. The catalog is JSON intended for IDEs, coding agents, and workflow code; it includes app-server methods, configured MCP servers and tool schemas, built-in workflow helpers, the JavaScript workflow runtime surface, and discovered workflow metadata, including each workflow's command alias when one is registered.
 
 ## Core Primitives
 
@@ -226,10 +226,10 @@ Example with notification opt-out:
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
 - `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental).
 - `apiCatalog/read` — return a machine-readable catalog of app-server methods, configured MCP servers/tools, built-in workflow helpers, JavaScript workflow SDK symbols, and discovered workflows. Optional `include` selects sections and `mcpDetail: "toolsAndAuthOnly"` skips MCP resource inventory.
-- `workflow/list`, `workflow/read`, `workflow/impact` — discover git-backed TypeScript workflows from `$CODEX_HOME/workflows`, `.codex/workflows`, and `[workflows].search_paths`; read `workflow.yaml`/`README.md`; and report dependency plus git impact.
+- `workflow/list`, `workflow/read`, `workflow/impact` — discover git-backed TypeScript workflows from `$CODEX_HOME/workflows`, `.codex/workflows`, and `[workflows].search_paths`; read `workflow.yaml`/`README.md`; and report dependency plus git impact. Workflow summaries surface `command` when `workflow.yaml.command` is set, or a fallback alias for simple ids without `/`.
 - `workflow/develop`, `workflow/edit`, `workflow/run`, `workflow/validate`, `workflow/repair` — scaffold, update, execute, validate, or repair a workflow using the same command engine as `codex workflow` and `/workflow`.
 - `workflow/config/read`, `workflow/config/write` — inspect or edit `[workflows]` config values.
-- `workflow/command/execute`, `workflow/authoringContext/prepare` — execute the shared workflow command parser or prepare registry/config context for workflow authoring clients.
+- `workflow/command/execute`, `workflow/authoringContext/prepare` — execute the shared workflow command parser or prepare registry/config context for workflow authoring clients. The parser recognizes the same workflow aliases used by `/<cmd>` and `codex <cmd>`.
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools and auth status, plus resources/resource templates for `full` detail; supports cursor+limit pagination. If `detail` is omitted, the server defaults to `full`.
 - `mcpServer/resource/read` — read a resource from a configured MCP server by optional `threadId`, `server`, and `uri`, returning text/blob resource `contents`. If `threadId` is omitted, the server reads from the latest MCP config directly.
@@ -1277,7 +1277,7 @@ There are additional item-specific events:
 #### fileChange
 
 - `item/fileChange/patchUpdated` - when `features.apply_patch_streaming_events` is enabled, streams structured file-change snapshots parsed from the model-generated patch before it is executed.
-- `item/fileChange/outputDelta` - deprecated legacy protocol entry for `apply_patch` text output; retained for compatibility but no longer emitted by the server.
+- `item/fileChange/outputDelta` - deprecated legacy protocol entry for `apply_patch` text output; retained for compatibility and emitted for approved `apply_patch` completions.
 
 ### Errors
 

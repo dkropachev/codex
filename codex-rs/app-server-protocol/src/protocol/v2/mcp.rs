@@ -6,6 +6,9 @@ use codex_protocol::mcp::Resource as McpResource;
 pub use codex_protocol::mcp::ResourceContent as McpResourceContent;
 use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::formatted_truncate_text;
+use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -151,11 +154,39 @@ impl From<CoreMcpCallToolResult> for McpServerToolCallResponse {
 
 impl From<CoreMcpCallToolResult> for McpToolCallResult {
     fn from(result: CoreMcpCallToolResult) -> Self {
-        Self {
+        project_mcp_tool_call_result(result)
+    }
+}
+
+pub(crate) fn project_mcp_tool_call_result(result: CoreMcpCallToolResult) -> McpToolCallResult {
+    let serialized_result = serde_json::to_string(&result).ok();
+    if serialized_result
+        .as_ref()
+        .is_some_and(|serialized| serialized.len() <= DEFAULT_OUTPUT_BYTES_CAP)
+    {
+        return McpToolCallResult {
             content: result.content,
             structured_content: result.structured_content,
             meta: result.meta,
-        }
+        };
+    }
+
+    let output = result
+        .as_function_call_output_payload()
+        .body
+        .to_text()
+        .or(serialized_result)
+        .unwrap_or_else(|| "<unavailable MCP tool result>".to_string());
+    let truncated =
+        formatted_truncate_text(&output, TruncationPolicy::Bytes(DEFAULT_OUTPUT_BYTES_CAP));
+
+    McpToolCallResult {
+        content: vec![serde_json::json!({
+            "type": "text",
+            "text": truncated,
+        })],
+        structured_content: None,
+        meta: None,
     }
 }
 

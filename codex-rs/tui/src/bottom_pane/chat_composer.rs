@@ -3,7 +3,8 @@
 //! It is responsible for:
 //!
 //! - Editing the input buffer (a [`TextArea`]), including placeholder "elements" for attachments.
-//! - Routing keys to the active popup (slash commands, file search, skill/app/workflow mentions).
+//! - Routing keys to the active popup (slash commands, file search, skill/app/workflow mentions,
+//!   and workflow aliases that the registry exposes to the slash popup).
 //! - Promoting typed slash commands into atomic elements when the command name is completed.
 //! - Handling submit vs newline on Enter.
 //! - Turning raw key streams into explicit paste operations on platforms where terminals
@@ -58,6 +59,8 @@
 //! and attachment pruning, and clears pending paste state on success.
 //! Slash commands with arguments (like `/plan` and `/review`) reuse the same preparation path so
 //! pasted content and text elements are preserved when extracting args.
+//! Workflow aliases use the same shared parser as the CLI and `/workflow` command engine, so the
+//! popup selection path and the CLI path stay aligned when a workflow advertises `command`.
 //!
 //! # Large Paste Placeholders
 //!
@@ -211,6 +214,7 @@ use codex_protocol::models::local_image_label_text;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::TextElement;
+use codex_utils_fuzzy_match::fuzzy_match;
 use codex_workflows::WorkflowSummary;
 
 mod history_search;
@@ -282,6 +286,10 @@ pub enum InputResult {
     /// command-history entry still represents the original command invocation that should be
     /// committed only if dispatch accepts it.
     CommandWithArgs(SlashCommand, String, Vec<TextElement>),
+    /// A registered workflow alias without inline args.
+    WorkflowCommand(String),
+    /// A registered workflow alias with inline args.
+    WorkflowCommandWithArgs(String, String),
     None,
 }
 
@@ -1734,6 +1742,25 @@ impl ChatComposer {
             unreachable!();
         };
 
+        enum SelectedSlashPopupCommand {
+            Builtin(SlashCommand),
+            Workflow(String),
+        }
+
+        let selected_command_for_popup = |popup: &CommandPopup| {
+            popup.selected_item().map(|sel| match sel {
+                CommandItem::Builtin(cmd) => SelectedSlashPopupCommand::Builtin(cmd),
+                CommandItem::Workflow(workflow) => {
+                    let command = workflow
+                        .command
+                        .as_deref()
+                        .unwrap_or(workflow.id.as_str())
+                        .to_string();
+                    SelectedSlashPopupCommand::Workflow(command)
+                }
+            })
+        };
+
         match key_event {
             KeyEvent {
                 code: KeyCode::Up, ..
@@ -1772,28 +1799,43 @@ impl ChatComposer {
                 // before applying completion.
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
                 popup.on_composer_text_change(first_line.to_string());
-                let selected_cmd = popup.selected_item().map(|sel| {
-                    let CommandItem::Builtin(cmd) = sel;
-                    cmd
-                });
-                if let Some(cmd) = selected_cmd {
-                    if cmd == SlashCommand::Skills {
-                        self.stage_selected_slash_command_history(cmd);
-                        self.textarea.set_text_clearing_elements("");
-                        self.is_bash_mode = false;
-                        return (InputResult::Command(cmd), true);
-                    }
+                let selected_command = selected_command_for_popup(&*popup);
+                if let Some(selected_command) = &selected_command {
+                    match selected_command {
+                        SelectedSlashPopupCommand::Builtin(cmd) => {
+                            if *cmd == SlashCommand::Skills {
+                                self.stage_selected_slash_command_history(*cmd);
+                                self.textarea.set_text_clearing_elements("");
+                                self.is_bash_mode = false;
+                                return (InputResult::Command(*cmd), true);
+                            }
 
-                    let selected_command_text = format!("/{}", cmd.command());
-                    let starts_with_cmd =
-                        first_line.trim_start().starts_with(&selected_command_text);
-                    if !starts_with_cmd {
-                        self.textarea
-                            .set_text_clearing_elements(&format!("/{} ", cmd.command()));
-                        if !self.textarea.text().is_empty() {
-                            self.textarea.set_cursor(self.textarea.text().len());
+                            let selected_command_text = format!("/{}", cmd.command());
+                            let starts_with_cmd =
+                                first_line.trim_start().starts_with(&selected_command_text);
+                            if !starts_with_cmd {
+                                self.textarea
+                                    .set_text_clearing_elements(&format!("/{} ", cmd.command()));
+                                if !self.textarea.text().is_empty() {
+                                    self.textarea.set_cursor(self.textarea.text().len());
+                                }
+                                return (InputResult::None, true);
+                            }
                         }
-                        return (InputResult::None, true);
+                        SelectedSlashPopupCommand::Workflow(command) => {
+                            let selected_command_text = format!("/{command}");
+                            let starts_with_cmd =
+                                first_line.trim_start().starts_with(&selected_command_text);
+                            if !starts_with_cmd {
+                                self.textarea
+                                    .set_text_clearing_elements(&format!("/{command} "));
+                                self.is_bash_mode = false;
+                                if !self.textarea.text().is_empty() {
+                                    self.textarea.set_cursor(self.textarea.text().len());
+                                }
+                                return (InputResult::None, true);
+                            }
+                        }
                     }
                 }
                 if self.is_task_running {
@@ -1810,21 +1852,34 @@ impl ChatComposer {
                 // while the slash-command popup is active.
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
                 popup.on_composer_text_change(first_line.to_string());
-                let selected_cmd = popup.selected_item().map(|sel| {
-                    let CommandItem::Builtin(cmd) = sel;
-                    cmd
-                });
-                if let Some(cmd) = selected_cmd {
-                    let starts_with_cmd = first_line
-                        .trim_start()
-                        .starts_with(&format!("/{}", cmd.command()));
-                    if !starts_with_cmd {
-                        self.textarea
-                            .set_text_clearing_elements(&format!("/{} ", cmd.command()));
-                        self.is_bash_mode = false;
-                    }
-                    if !self.textarea.text().is_empty() {
-                        self.textarea.set_cursor(self.textarea.text().len());
+                let selected_command = selected_command_for_popup(&*popup);
+                if let Some(selected_command) = &selected_command {
+                    match selected_command {
+                        SelectedSlashPopupCommand::Builtin(cmd) => {
+                            let starts_with_cmd = first_line
+                                .trim_start()
+                                .starts_with(&format!("/{}", cmd.command()));
+                            if !starts_with_cmd {
+                                self.textarea
+                                    .set_text_clearing_elements(&format!("/{} ", cmd.command()));
+                                self.is_bash_mode = false;
+                            }
+                            if !self.textarea.text().is_empty() {
+                                self.textarea.set_cursor(self.textarea.text().len());
+                            }
+                        }
+                        SelectedSlashPopupCommand::Workflow(command) => {
+                            let starts_with_cmd =
+                                first_line.trim_start().starts_with(&format!("/{command}"));
+                            if !starts_with_cmd {
+                                self.textarea
+                                    .set_text_clearing_elements(&format!("/{command} "));
+                                self.is_bash_mode = false;
+                            }
+                            if !self.textarea.text().is_empty() {
+                                self.textarea.set_cursor(self.textarea.text().len());
+                            }
+                        }
                     }
                 }
                 (InputResult::None, true)
@@ -1834,12 +1889,22 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                if let Some(sel) = popup.selected_item() {
-                    let CommandItem::Builtin(cmd) = sel;
-                    self.stage_selected_slash_command_history(cmd);
-                    self.textarea.set_text_clearing_elements("");
-                    self.is_bash_mode = false;
-                    return (InputResult::Command(cmd), true);
+                let selected_command = selected_command_for_popup(&*popup);
+                if let Some(selected_command) = selected_command {
+                    match selected_command {
+                        SelectedSlashPopupCommand::Builtin(cmd) => {
+                            self.stage_selected_slash_command_history(cmd);
+                            self.textarea.set_text_clearing_elements("");
+                            self.is_bash_mode = false;
+                            return (InputResult::Command(cmd), true);
+                        }
+                        SelectedSlashPopupCommand::Workflow(command) => {
+                            self.stage_slash_command_history_text(format!("/{command}"));
+                            self.textarea.set_text_clearing_elements("");
+                            self.is_bash_mode = false;
+                            return (InputResult::WorkflowCommand(command), true);
+                        }
+                    }
                 }
                 // Fallback to default newline handling if no command selected.
                 self.handle_key_event_without_popup(key_event)
@@ -2725,6 +2790,8 @@ impl ChatComposer {
                 | InputResult::Queued { .. }
                 | InputResult::Command(_)
                 | InputResult::CommandWithArgs(_, _, _)
+                | InputResult::WorkflowCommand(_)
+                | InputResult::WorkflowCommandWithArgs(_, _)
         ) {
             self.textarea.enter_vim_normal_mode();
         }
@@ -2864,7 +2931,19 @@ impl ChatComposer {
         if !rest.is_empty() {
             return None;
         }
-        let cmd = slash_commands::find_builtin_command(name, self.builtin_command_flags())?;
+        let Some(cmd) = slash_commands::find_builtin_command(name, self.builtin_command_flags())
+        else {
+            let Some(workflow_command) = self
+                .workflow_command_by_name(name)
+                .map(|workflow| workflow.command.clone().unwrap_or_else(|| name.to_string()))
+            else {
+                return None;
+            };
+            self.stage_slash_command_history();
+            self.textarea.set_text_clearing_elements("");
+            self.is_bash_mode = false;
+            return Some(InputResult::WorkflowCommand(workflow_command));
+        };
         if cmd.supports_inline_args()
             && parse_slash_name(text).is_some_and(|(_, full_rest, _)| !full_rest.is_empty())
         {
@@ -2897,27 +2976,47 @@ impl ChatComposer {
             return None;
         }
 
-        let cmd = slash_commands::find_builtin_command(name, self.builtin_command_flags())?;
+        let cmd = slash_commands::find_builtin_command(name, self.builtin_command_flags());
 
-        if !cmd.supports_inline_args() {
-            return None;
-        }
-        if self.reject_slash_command_if_unavailable(cmd) {
+        if let Some(cmd) = cmd {
+            if !cmd.supports_inline_args() {
+                return None;
+            }
+            if self.reject_slash_command_if_unavailable(cmd) {
+                self.stage_slash_command_history();
+                self.record_pending_slash_command_history();
+                return Some(InputResult::None);
+            }
+
             self.stage_slash_command_history();
-            self.record_pending_slash_command_history();
-            return Some(InputResult::None);
+
+            let mut args_elements = Self::slash_command_args_elements(
+                rest,
+                rest_offset,
+                &self.textarea.text_elements(),
+            );
+            let trimmed_rest = rest.trim();
+            args_elements = Self::trim_text_elements(rest, trimmed_rest, args_elements);
+            return Some(InputResult::CommandWithArgs(
+                cmd,
+                trimmed_rest.to_string(),
+                args_elements,
+            ));
         }
+
+        let Some(workflow_command) = self
+            .workflow_command_by_name(name)
+            .map(|workflow| workflow.command.clone().unwrap_or_else(|| name.to_string()))
+        else {
+            return None;
+        };
 
         self.stage_slash_command_history();
 
-        let mut args_elements =
-            Self::slash_command_args_elements(rest, rest_offset, &self.textarea.text_elements());
         let trimmed_rest = rest.trim();
-        args_elements = Self::trim_text_elements(rest, trimmed_rest, args_elements);
-        Some(InputResult::CommandWithArgs(
-            cmd,
+        Some(InputResult::WorkflowCommandWithArgs(
+            workflow_command,
             trimmed_rest.to_string(),
-            args_elements,
         ))
     }
 
@@ -3752,6 +3851,7 @@ impl ChatComposer {
 
     fn is_known_slash_name(&self, name: &str) -> bool {
         slash_commands::find_builtin_command(name, self.builtin_command_flags()).is_some()
+            || self.workflow_command_by_name(name).is_some()
     }
 
     /// If the cursor is currently within a slash command on the first line,
@@ -3794,6 +3894,31 @@ impl ChatComposer {
         }
 
         slash_commands::has_builtin_prefix(name, self.builtin_command_flags())
+            || self.workflow_command_has_prefix(name)
+    }
+
+    fn registered_workflows(&self) -> Option<&[WorkflowSummary]> {
+        if self.workflows_enabled {
+            self.workflows.as_deref()
+        } else {
+            None
+        }
+    }
+
+    fn workflow_command_by_name(&self, name: &str) -> Option<&WorkflowSummary> {
+        self.registered_workflows()
+            .and_then(|workflows| codex_workflows::find_workflow_by_command(workflows, name))
+    }
+
+    fn workflow_command_has_prefix(&self, name: &str) -> bool {
+        self.registered_workflows().is_some_and(|workflows| {
+            workflows.iter().any(|workflow| {
+                workflow
+                    .command
+                    .as_deref()
+                    .is_some_and(|command| fuzzy_match(command, name).is_some())
+            })
+        })
     }
 
     /// Synchronize `self.command_popup` with the current text in the
@@ -3816,6 +3941,9 @@ impl ChatComposer {
         let is_editing_slash_command_name = caret_on_first_line
             && Self::slash_command_under_cursor(first_line, cursor)
                 .is_some_and(|(name, rest)| self.looks_like_slash_prefix(name, rest));
+        let workflows = self
+            .registered_workflows()
+            .map(<[codex_workflows::WorkflowSummary]>::to_vec);
 
         // If the cursor is currently positioned within an `@token`, prefer the
         // file-search popup over the slash popup so users can insert a file path
@@ -3828,6 +3956,7 @@ impl ChatComposer {
         }
         match &mut self.active_popup {
             ActivePopup::Command(popup) => {
+                popup.set_workflows(workflows.as_deref());
                 if is_editing_slash_command_name {
                     popup.on_composer_text_change(first_line.to_string());
                 } else {
@@ -3858,6 +3987,7 @@ impl ChatComposer {
                         windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
                         side_conversation_active: self.side_conversation_active,
                     });
+                    command_popup.set_workflows(workflows.as_deref());
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
                 }
@@ -6420,6 +6550,109 @@ mod tests {
     }
 
     #[test]
+    fn registered_workflow_alias_dispatches_without_args() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_workflows_enabled(/*enabled*/ true);
+        let mut workflow = test_workflow_summary("reports/jira-summary", "Jira Summary");
+        workflow.command = Some("jira-summary".to_string());
+        composer.set_workflow_mentions(Some(vec![workflow]));
+        composer.set_text_content("/jira-summary".to_string(), Vec::new(), Vec::new());
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::WorkflowCommand(command) => {
+                assert_eq!(command, "jira-summary");
+            }
+            other => panic!("expected workflow alias dispatch without args, got {other:?}"),
+        }
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn registered_workflow_alias_dispatches_with_inline_args() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_workflows_enabled(/*enabled*/ true);
+        let mut workflow = test_workflow_summary("reports/jira-summary", "Jira Summary");
+        workflow.command = Some("jira-summary".to_string());
+        composer.set_workflow_mentions(Some(vec![workflow]));
+        composer.set_text_content(
+            "/jira-summary --project COD".to_string(),
+            Vec::new(),
+            Vec::new(),
+        );
+        composer.active_popup = ActivePopup::None;
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::WorkflowCommandWithArgs(command, args) => {
+                assert_eq!(command, "jira-summary");
+                assert_eq!(args, "--project COD");
+            }
+            other => panic!("expected workflow alias dispatch with args, got {other:?}"),
+        }
+        assert_eq!(composer.textarea.text(), "/jira-summary --project COD");
+    }
+
+    #[test]
+    fn registered_workflow_alias_does_not_override_builtin_slash_command() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_workflows_enabled(/*enabled*/ true);
+        let mut workflow = test_workflow_summary("reports/diff", "Diff Workflow");
+        workflow.command = Some("diff".to_string());
+        composer.set_workflow_mentions(Some(vec![workflow]));
+        composer.set_text_content("/diff".to_string(), Vec::new(), Vec::new());
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::Command(cmd) => assert_eq!(cmd, SlashCommand::Diff),
+            other => panic!("expected builtin /diff to win over workflow alias, got {other:?}"),
+        }
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
     fn mention_items_show_plugin_owned_skill_and_app_duplicates() {
         let skill_path = test_path_buf("/tmp/repo/google-calendar/SKILL.md").abs();
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -6587,6 +6820,7 @@ mod tests {
             .fold(root.clone(), |path, component| path.join(component));
         codex_workflows::WorkflowSummary {
             id: id.to_string(),
+            command: None,
             title: Some(title.to_string()),
             user_description: Some("Prepare a focused workflow report".to_string()),
             search_terms: vec!["report".to_string()],
@@ -7640,6 +7874,22 @@ mod tests {
     }
 
     #[test]
+    fn workflow_alias_popup_snapshot() {
+        snapshot_composer_state_with_width(
+            "workflow_alias_popup",
+            /*width*/ 72,
+            /*enhanced_keys_supported*/ false,
+            |composer| {
+                composer.set_workflows_enabled(/*enabled*/ true);
+                let mut workflow = test_workflow_summary("reports/jira-summary", "Jira Summary");
+                workflow.command = Some("jira-summary".to_string());
+                composer.set_workflow_mentions(Some(vec![workflow]));
+                composer.set_text_content("/jira-summary".to_string(), Vec::new(), Vec::new());
+            },
+        );
+    }
+
+    #[test]
     fn slash_popup_model_first_for_mo_logic() {
         use super::super::command_popup::CommandItem;
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -7657,6 +7907,9 @@ mod tests {
             ActivePopup::Command(popup) => match popup.selected_item() {
                 Some(CommandItem::Builtin(cmd)) => {
                     assert_eq!(cmd.command(), "model")
+                }
+                Some(CommandItem::Workflow(workflow)) => {
+                    panic!("expected builtin /model to be selected, got workflow {workflow:?}")
                 }
                 None => panic!("no selected command for '/mo'"),
             },
@@ -7710,6 +7963,9 @@ mod tests {
             ActivePopup::Command(popup) => match popup.selected_item() {
                 Some(CommandItem::Builtin(cmd)) => {
                     assert_eq!(cmd.command(), "resume")
+                }
+                Some(CommandItem::Workflow(workflow)) => {
+                    panic!("expected builtin /resume to be selected, got workflow {workflow:?}")
                 }
                 None => panic!("no selected command for '/res'"),
             },
@@ -7773,6 +8029,12 @@ mod tests {
             }
             InputResult::CommandWithArgs(_, _, _) => {
                 panic!("expected command dispatch without args for '/init'")
+            }
+            InputResult::WorkflowCommand(command) => {
+                panic!("expected builtin command dispatch, got workflow alias: {command}")
+            }
+            InputResult::WorkflowCommandWithArgs(command, args) => {
+                panic!("expected builtin command dispatch, got workflow alias: {command} {args}")
             }
             InputResult::Submitted { text, .. } => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
@@ -8220,6 +8482,12 @@ mod tests {
             InputResult::CommandWithArgs(_, _, _) => {
                 panic!("expected command dispatch without args for '/diff'")
             }
+            InputResult::WorkflowCommand(command) => {
+                panic!("expected builtin command dispatch, got workflow alias: {command}")
+            }
+            InputResult::WorkflowCommandWithArgs(command, args) => {
+                panic!("expected builtin command dispatch, got workflow alias: {command} {args}")
+            }
             InputResult::Submitted { text, .. } => {
                 panic!("expected command dispatch after Tab completion, got literal submit: {text}")
             }
@@ -8413,6 +8681,12 @@ mod tests {
             }
             InputResult::CommandWithArgs(_, _, _) => {
                 panic!("expected command dispatch without args for '/mention'")
+            }
+            InputResult::WorkflowCommand(command) => {
+                panic!("expected builtin command dispatch, got workflow alias: {command}")
+            }
+            InputResult::WorkflowCommandWithArgs(command, args) => {
+                panic!("expected builtin command dispatch, got workflow alias: {command} {args}")
             }
             InputResult::Submitted { text, .. } => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")

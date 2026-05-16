@@ -1,5 +1,6 @@
 use super::*;
 use codex_protocol::protocol::validate_thread_goal_objective;
+use tokio::sync::oneshot;
 
 #[derive(Clone)]
 pub(crate) struct ThreadGoalRequestProcessor {
@@ -370,10 +371,17 @@ impl ThreadGoalRequestProcessor {
             thread_state.listener_command_tx()
         };
         if let Some(listener_command_tx) = listener_command_tx {
+            let (completion_tx, completion_rx) = oneshot::channel();
             let command = crate::thread_state::ThreadListenerCommand::EmitThreadGoalSnapshot {
                 state_db: state_db.clone(),
+                completion_tx,
             };
             if listener_command_tx.send(command).is_ok() {
+                if let Err(err) = completion_rx.await {
+                    warn!(
+                        "failed to wait for thread goal snapshot completion for {thread_id}: {err}"
+                    );
+                }
                 return;
             }
             warn!(

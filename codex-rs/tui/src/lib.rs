@@ -1212,7 +1212,7 @@ async fn run_ratatui_app(
     {
         use crate::update_prompt::UpdatePromptOutcome;
 
-        let skip_update_prompt = cli.prompt.as_ref().is_some_and(|prompt| !prompt.is_empty());
+        let skip_update_prompt = !cli.prompt.is_empty();
         if !skip_update_prompt {
             match update_prompt::run_update_prompt_if_needed(&mut tui, &initial_config).await? {
                 UpdatePromptOutcome::Continue => {}
@@ -1575,6 +1575,7 @@ async fn run_ratatui_app(
         ..
     } = cli;
     let images = shared.into_inner().images;
+    let initial_prompt = (!prompt.is_empty()).then(|| prompt.join(" "));
 
     let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
@@ -1633,7 +1634,7 @@ async fn run_ratatui_app(
         cli_kv_overrides.clone(),
         overrides.clone(),
         active_profile,
-        prompt,
+        initial_prompt,
         images,
         session_selection,
         feedback,
@@ -1832,13 +1833,21 @@ mod tests {
     use crate::legacy_core::config::ConfigOverrides;
     use codex_app_server_protocol::AskForApproval;
     use codex_app_server_protocol::ClientRequest;
+    use codex_app_server_protocol::JSONRPCMessage;
+    use codex_app_server_protocol::JSONRPCResponse;
     use codex_app_server_protocol::RequestId;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_config::config_toml::ProjectConfig;
+    use futures::SinkExt;
+    use futures::StreamExt;
     use pretty_assertions::assert_eq;
     use serial_test::serial;
     use tempfile::TempDir;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::WebSocketStream;
+    use tokio_tungstenite::accept_async;
+    use tokio_tungstenite::tungstenite::Message;
 
     async fn build_config(temp_dir: &TempDir) -> std::io::Result<Config> {
         ConfigBuilder::default()
@@ -1863,6 +1872,467 @@ mod tests {
             Arc::new(EnvironmentManager::default_for_tests()),
         )
         .await
+    }
+
+    async fn start_remote_app_server_for_thread_start_rpc(
+        cwd: PathBuf,
+    ) -> color_eyre::Result<AppServerClient> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let abs_cwd = AbsolutePathBuf::try_from(cwd.clone()).expect("test cwd should be absolute");
+
+        tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let Ok(mut websocket) = accept_async(stream).await else {
+                return;
+            };
+
+            let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected initialize request");
+            };
+            assert_eq!(request.method, "initialize");
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::json!({}),
+                }),
+            )
+            .await;
+
+            let JSONRPCMessage::Notification(notification) =
+                read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected initialized notification");
+            };
+            assert_eq!(notification.method, "initialized");
+
+            let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected thread/start request");
+            };
+            assert_eq!(request.method, "thread/start");
+            let params: ThreadStartParams = serde_json::from_value(
+                request
+                    .params
+                    .expect("expected thread/start params in request"),
+            )
+            .expect("thread/start params should deserialize");
+            assert_eq!(params.ephemeral, Some(true));
+
+            let thread_id = Uuid::new_v4().to_string();
+            let response = ThreadStartResponse {
+                thread: AppServerThread {
+                    id: thread_id.clone(),
+                    session_id: Uuid::new_v4().to_string(),
+                    forked_from_id: None,
+                    preview: String::new(),
+                    ephemeral: true,
+                    model_provider: "test-provider".to_string(),
+                    created_at: 0,
+                    updated_at: 0,
+                    status: codex_app_server_protocol::ThreadStatus::Idle,
+                    path: Some(PathBuf::from("/tmp/rollout.jsonl")),
+                    cwd: abs_cwd.clone(),
+                    cli_version: env!("CARGO_PKG_VERSION").to_string(),
+                    source: codex_app_server_protocol::SessionSource::Cli,
+                    thread_source: None,
+                    agent_nickname: None,
+                    agent_role: None,
+                    git_info: None,
+                    name: None,
+                    turns: Vec::new(),
+                },
+                model: "gpt-5.4".to_string(),
+                model_provider: "test-provider".to_string(),
+                service_tier: None,
+                cwd: abs_cwd.clone(),
+                instruction_sources: Vec::new(),
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
+                sandbox: codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+                    writable_roots: Vec::new(),
+                    network_access: false,
+                    exclude_tmpdir_env_var: false,
+                    exclude_slash_tmp: false,
+                },
+                permission_profile: None,
+                active_permission_profile: None,
+                reasoning_effort: None,
+            };
+
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::json!(response),
+                }),
+            )
+            .await;
+
+            let _ = websocket.close(None).await;
+        });
+
+        let remote = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            websocket_url: format!("ws://{addr}"),
+            auth_token: None,
+            client_name: "codex-tui".to_string(),
+            client_version: env!("CARGO_PKG_VERSION").to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await?;
+
+        Ok(AppServerClient::Remote(remote))
+    }
+
+    async fn start_remote_app_server_for_fork_last_test(
+        project_cwd: PathBuf,
+        other_cwd: PathBuf,
+        project_thread_id: String,
+        other_thread_id: String,
+        model_provider: String,
+    ) -> color_eyre::Result<AppServerClient> {
+        fn make_thread(
+            thread_id: String,
+            cwd: AbsolutePathBuf,
+            preview: &str,
+            model_provider: &str,
+        ) -> AppServerThread {
+            AppServerThread {
+                id: thread_id,
+                session_id: Uuid::new_v4().to_string(),
+                forked_from_id: None,
+                preview: preview.to_string(),
+                ephemeral: false,
+                model_provider: model_provider.to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: codex_app_server_protocol::ThreadStatus::Idle,
+                path: None,
+                cwd,
+                cli_version: env!("CARGO_PKG_VERSION").to_string(),
+                source: codex_app_server_protocol::SessionSource::Cli,
+                thread_source: None,
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: None,
+                turns: Vec::new(),
+            }
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let project_abs_cwd =
+            AbsolutePathBuf::try_from(project_cwd.clone()).expect("project cwd should be absolute");
+        let other_abs_cwd =
+            AbsolutePathBuf::try_from(other_cwd.clone()).expect("other cwd should be absolute");
+
+        tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let Ok(mut websocket) = accept_async(stream).await else {
+                return;
+            };
+
+            let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected initialize request");
+            };
+            assert_eq!(request.method, "initialize");
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::json!({}),
+                }),
+            )
+            .await;
+
+            let JSONRPCMessage::Notification(notification) =
+                read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected initialized notification");
+            };
+            assert_eq!(notification.method, "initialized");
+
+            let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected first thread/list request");
+            };
+            assert_eq!(request.method, "thread/list");
+            let params: ThreadListParams = serde_json::from_value(
+                request
+                    .params
+                    .expect("expected thread/list params in first request"),
+            )
+            .expect("thread/list params should deserialize");
+            assert_eq!(params.cursor, None);
+            assert_eq!(params.limit, Some(1));
+            assert_eq!(params.sort_key, Some(AppServerThreadSortKey::UpdatedAt));
+            assert_eq!(params.model_providers, None);
+            assert_eq!(
+                params.source_kinds,
+                Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode])
+            );
+            assert_eq!(params.archived, Some(false));
+            assert_eq!(
+                params.cwd,
+                Some(ThreadListCwdFilter::One(
+                    project_cwd.to_string_lossy().to_string()
+                ))
+            );
+            assert!(!params.use_state_db_only);
+            assert_eq!(params.search_term, None);
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(codex_app_server_protocol::ThreadListResponse {
+                        data: vec![make_thread(
+                            project_thread_id,
+                            project_abs_cwd.clone(),
+                            "older project session",
+                            &model_provider,
+                        )],
+                        next_cursor: None,
+                        backwards_cursor: None,
+                    })
+                    .expect("thread/list response should serialize"),
+                }),
+            )
+            .await;
+
+            let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected second thread/list request");
+            };
+            assert_eq!(request.method, "thread/list");
+            let params: ThreadListParams = serde_json::from_value(
+                request
+                    .params
+                    .expect("expected thread/list params in second request"),
+            )
+            .expect("thread/list params should deserialize");
+            assert_eq!(params.cursor, None);
+            assert_eq!(params.limit, Some(1));
+            assert_eq!(params.sort_key, Some(AppServerThreadSortKey::UpdatedAt));
+            assert_eq!(params.model_providers, None);
+            assert_eq!(
+                params.source_kinds,
+                Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode])
+            );
+            assert_eq!(params.archived, Some(false));
+            assert_eq!(params.cwd, None);
+            assert!(!params.use_state_db_only);
+            assert_eq!(params.search_term, None);
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(codex_app_server_protocol::ThreadListResponse {
+                        data: vec![make_thread(
+                            other_thread_id,
+                            other_abs_cwd.clone(),
+                            "newer other project session",
+                            &model_provider,
+                        )],
+                        next_cursor: None,
+                        backwards_cursor: None,
+                    })
+                    .expect("thread/list response should serialize"),
+                }),
+            )
+            .await;
+
+            let _ = websocket.close(None).await;
+        });
+
+        let remote = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            websocket_url: format!("ws://{addr}"),
+            auth_token: None,
+            client_name: "codex-tui".to_string(),
+            client_version: env!("CARGO_PKG_VERSION").to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await?;
+
+        Ok(AppServerClient::Remote(remote))
+    }
+
+    async fn start_remote_app_server_for_name_lookup_test(
+        thread_id: String,
+        rollout_path: PathBuf,
+        session_cwd: PathBuf,
+        name: String,
+        preview: String,
+        model_provider: String,
+    ) -> color_eyre::Result<AppServerClient> {
+        fn make_thread(
+            thread_id: String,
+            rollout_path: PathBuf,
+            cwd: AbsolutePathBuf,
+            name: String,
+            preview: String,
+            model_provider: &str,
+        ) -> AppServerThread {
+            AppServerThread {
+                id: thread_id,
+                session_id: Uuid::new_v4().to_string(),
+                forked_from_id: None,
+                preview,
+                ephemeral: false,
+                model_provider: model_provider.to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: codex_app_server_protocol::ThreadStatus::Idle,
+                path: Some(rollout_path),
+                cwd,
+                cli_version: env!("CARGO_PKG_VERSION").to_string(),
+                source: codex_app_server_protocol::SessionSource::Cli,
+                thread_source: None,
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some(name),
+                turns: Vec::new(),
+            }
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let abs_cwd =
+            AbsolutePathBuf::try_from(session_cwd.clone()).expect("session cwd should be absolute");
+
+        tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let Ok(mut websocket) = accept_async(stream).await else {
+                return;
+            };
+
+            let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected initialize request");
+            };
+            assert_eq!(request.method, "initialize");
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::json!({}),
+                }),
+            )
+            .await;
+
+            let JSONRPCMessage::Notification(notification) =
+                read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected initialized notification");
+            };
+            assert_eq!(notification.method, "initialized");
+
+            let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected thread/list request");
+            };
+            assert_eq!(request.method, "thread/list");
+            let params: ThreadListParams = serde_json::from_value(
+                request
+                    .params
+                    .expect("expected thread/list params in request"),
+            )
+            .expect("thread/list params should deserialize");
+            assert_eq!(params.cursor, None);
+            assert_eq!(params.limit, Some(100));
+            assert_eq!(params.sort_key, Some(AppServerThreadSortKey::UpdatedAt));
+            assert_eq!(params.model_providers, None);
+            assert_eq!(
+                params.source_kinds,
+                Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode])
+            );
+            assert_eq!(params.archived, Some(false));
+            assert_eq!(params.cwd, None);
+            assert!(!params.use_state_db_only);
+            assert_eq!(params.search_term, Some(name.clone()));
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(codex_app_server_protocol::ThreadListResponse {
+                        data: vec![make_thread(
+                            thread_id,
+                            rollout_path,
+                            abs_cwd,
+                            name,
+                            preview,
+                            &model_provider,
+                        )],
+                        next_cursor: None,
+                        backwards_cursor: None,
+                    })
+                    .expect("thread/list response should serialize"),
+                }),
+            )
+            .await;
+
+            let _ = websocket.close(None).await;
+        });
+
+        let remote = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            websocket_url: format!("ws://{addr}"),
+            auth_token: None,
+            client_name: "codex-tui".to_string(),
+            client_version: env!("CARGO_PKG_VERSION").to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await?;
+
+        Ok(AppServerClient::Remote(remote))
+    }
+
+    async fn read_websocket_message(
+        websocket: &mut WebSocketStream<tokio::net::TcpStream>,
+    ) -> JSONRPCMessage {
+        loop {
+            let frame = websocket.next().await.expect("frame should be available");
+            let frame = frame.expect("frame should decode");
+            match frame {
+                Message::Text(text) => {
+                    return serde_json::from_str::<JSONRPCMessage>(&text)
+                        .expect("text frame should be valid JSON-RPC");
+                }
+                Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {
+                    continue;
+                }
+                Message::Close(_) => panic!("unexpected close frame"),
+            }
+        }
+    }
+
+    async fn write_websocket_message(
+        websocket: &mut WebSocketStream<tokio::net::TcpStream>,
+        message: JSONRPCMessage,
+    ) {
+        websocket
+            .send(Message::Text(
+                serde_json::to_string(&message)
+                    .expect("message should serialize")
+                    .into(),
+            ))
+            .await
+            .expect("message should send");
     }
 
     #[test]
@@ -2154,10 +2624,16 @@ mod tests {
             &other_cwd,
         )?;
 
-        let mut app_server =
-            AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
-                start_test_embedded_app_server(config.clone()).await?,
-            ));
+        let mut app_server = AppServerSession::new(
+            start_remote_app_server_for_fork_last_test(
+                project_cwd.clone(),
+                other_cwd.clone(),
+                project_thread_id.to_string(),
+                other_thread_id.to_string(),
+                model_provider.to_string(),
+            )
+            .await?,
+        );
         let filter_cwd = latest_session_cwd_filter(
             /*remote_mode*/ false, /*remote_cwd_override*/ None, &config,
             /*show_all*/ false,
@@ -2182,8 +2658,6 @@ mod tests {
         )
         .await?
         .expect("expected global fork --last target");
-        app_server.shutdown().await?;
-
         assert_eq!(scoped_target.thread_id, project_thread_id);
         assert_eq!(show_all_target.thread_id, other_thread_id);
         Ok(())
@@ -2286,10 +2760,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embedded_app_server_supports_thread_start_rpc() -> color_eyre::Result<()> {
+    async fn thread_start_rpc_round_trip_is_decoded() -> color_eyre::Result<()> {
         let temp_dir = TempDir::new()?;
-        let config = build_config(&temp_dir).await?;
-        let app_server = start_test_embedded_app_server(config).await?;
+        let app_server =
+            start_remote_app_server_for_thread_start_rpc(temp_dir.path().to_path_buf()).await?;
         let response: ThreadStartResponse = app_server
             .request_typed(ClientRequest::ThreadStart {
                 request_id: RequestId::Integer(1),
@@ -2343,7 +2817,7 @@ mod tests {
                 serde_json::from_value(serde_json::json!("cli"))
                     .expect("cli session source should deserialize"),
             );
-            builder.cwd = session_cwd;
+            builder.cwd = session_cwd.clone();
             let mut metadata = builder.build(config.model_provider_id.as_str());
             metadata.title = "saved-session".to_string();
             metadata.first_user_message = Some("preview text".to_string());
@@ -2352,18 +2826,23 @@ mod tests {
                 .await
                 .map_err(std::io::Error::other)?;
 
-            let mut app_server =
-                AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
-                    start_test_embedded_app_server(config).await?,
-                ));
+            let mut app_server = AppServerSession::new(
+                start_remote_app_server_for_name_lookup_test(
+                    thread_id.to_string(),
+                    rollout_path.clone(),
+                    session_cwd.clone(),
+                    "saved-session".to_string(),
+                    "preview text".to_string(),
+                    config.model_provider_id.clone(),
+                )
+                .await?,
+            );
             let target =
                 lookup_session_target_by_name_with_app_server(&mut app_server, "saved-session")
                     .await?;
             let target = target.expect("name lookup should find the saved thread");
             assert_eq!(target.path, Some(rollout_path));
             assert_eq!(target.thread_id, thread_id);
-
-            app_server.shutdown().await?;
             Ok(())
         })
         .await

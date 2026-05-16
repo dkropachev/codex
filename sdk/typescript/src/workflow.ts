@@ -368,6 +368,7 @@ export type WorkflowRootInfo = {
 
 export type WorkflowSummary = {
   id: string;
+  command: string | null;
   title: string | null;
   userDescription: string | null;
   searchTerms: string[];

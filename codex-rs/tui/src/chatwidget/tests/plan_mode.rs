@@ -1097,7 +1097,7 @@ async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
 }
 
 #[tokio::test]
-async fn plan_completion_restores_status_indicator_after_streaming_plan_output() {
+async fn plan_completion_leaves_status_indicator_visible_after_streaming_plan_output() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
     let plan_mask = collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Plan)
@@ -1111,7 +1111,6 @@ async fn plan_completion_restores_status_indicator_after_streaming_plan_output()
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
     assert_eq!(chat.bottom_pane.is_task_running(), true);
 
     chat.on_plan_item_completed("- Step 1\n".to_string());

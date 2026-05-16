@@ -1597,7 +1597,10 @@ mod tests {
         );
 
         assert_eq!(params.cwd, Some(config.cwd.to_string_lossy().to_string()));
-        assert_eq!(params.sandbox, None);
+        assert_eq!(
+            params.sandbox,
+            Some(codex_app_server_protocol::SandboxMode::WorkspaceWrite)
+        );
         assert_eq!(
             params.permissions,
             config
