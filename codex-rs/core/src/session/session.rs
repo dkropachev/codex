@@ -745,19 +745,10 @@ impl Session {
                     (None, None)
                 };
 
-            let mut hook_shell_argv =
-                default_shell.derive_exec_args("", /*use_login_shell*/ false);
-            let hook_shell_program = hook_shell_argv.remove(0);
-            let _ = hook_shell_argv.pop();
-            let hooks = Hooks::new(HooksConfig {
-                legacy_notify_argv: config.notify.clone(),
-                feature_enabled: config.features.enabled(Feature::CodexHooks),
-                config_layer_stack: Some(config.config_layer_stack.clone()),
-                plugin_hook_sources: Vec::new(),
-                plugin_hook_load_warnings: Vec::new(),
-                shell_program: Some(hook_shell_program),
-                shell_args: hook_shell_argv,
-            });
+            let hooks = Arc::new(super::Session::build_hooks_from_config(
+                &config,
+                &default_shell,
+            ));
             for warning in hooks.startup_warnings() {
                 post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
@@ -794,7 +785,7 @@ impl Session {
                 shell_zsh_path: config.zsh_path.clone(),
                 main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
                 analytics_events_client,
-                hooks,
+                hooks: arc_swap::ArcSwap::from(hooks),
                 rollout_thread_trace,
                 user_shell: Arc::new(default_shell),
                 shell_snapshot_tx,
