@@ -16,6 +16,8 @@ use core_test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 
+use crate::session::tests::make_session_and_context;
+
 #[test]
 fn wants_no_sandbox_approval_granular_respects_sandbox_flag() {
     let runtime = ApplyPatchRuntime::new();
@@ -113,11 +115,12 @@ fn permission_request_payload_uses_apply_patch_hook_name_and_aliases() {
     );
 }
 
-#[test]
-fn file_system_sandbox_context_uses_active_attempt() {
+#[tokio::test]
+async fn file_system_sandbox_context_uses_active_attempt() {
     let path = std::env::temp_dir()
         .join("apply-patch-runtime-attempt.txt")
         .abs();
+    let (session, _turn_context) = make_session_and_context().await;
     let additional_permissions = AdditionalPermissionProfile {
         network: None,
         file_system: Some(FileSystemPermissions::from_read_write_roots(
@@ -156,8 +159,10 @@ fn file_system_sandbox_context_uses_active_attempt() {
         network_denial_cancellation_token: None,
     };
 
-    let sandbox = ApplyPatchRuntime::file_system_sandbox_context_for_attempt(&req, &attempt)
-        .expect("sandbox context");
+    let sandbox =
+        ApplyPatchRuntime::file_system_sandbox_context_for_attempt(&req, &session, &attempt)
+            .await
+            .expect("sandbox context");
 
     let file_system_policy =
         effective_file_system_sandbox_policy(&file_system_policy, Some(&additional_permissions));
@@ -177,11 +182,12 @@ fn file_system_sandbox_context_uses_active_attempt() {
     assert_eq!(sandbox.use_legacy_landlock, true);
 }
 
-#[test]
-fn no_sandbox_attempt_has_no_file_system_context() {
+#[tokio::test]
+async fn no_sandbox_attempt_has_no_file_system_context() {
     let path = std::env::temp_dir()
         .join("apply-patch-runtime-none.txt")
         .abs();
+    let (session, _turn_context) = make_session_and_context().await;
     let req = ApplyPatchRequest {
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
@@ -209,7 +215,7 @@ fn no_sandbox_attempt_has_no_file_system_context() {
     };
 
     assert_eq!(
-        ApplyPatchRuntime::file_system_sandbox_context_for_attempt(&req, &attempt),
+        ApplyPatchRuntime::file_system_sandbox_context_for_attempt(&req, &session, &attempt).await,
         None
     );
 }

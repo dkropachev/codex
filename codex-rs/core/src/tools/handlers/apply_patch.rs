@@ -89,6 +89,12 @@ impl ApplyPatchArgumentDiffConsumer {
             return None;
         }
         let changes = convert_apply_patch_hunks_to_protocol(&hunks);
+        if changes
+            .values()
+            .all(|change| !file_change_is_meaningful(change))
+        {
+            return None;
+        }
         let event = PatchApplyUpdatedEvent { call_id, changes };
         let now = Instant::now();
         match self.last_sent_at {
@@ -143,6 +149,17 @@ fn convert_apply_patch_hunks_to_protocol(hunks: &[Hunk]) -> HashMap<PathBuf, Fil
             (path, change)
         })
         .collect()
+}
+
+fn file_change_is_meaningful(change: &FileChange) -> bool {
+    match change {
+        FileChange::Add { content } => !content.is_empty(),
+        FileChange::Delete { content } => !content.is_empty(),
+        FileChange::Update {
+            unified_diff,
+            move_path,
+        } => !unified_diff.is_empty() || move_path.is_some(),
+    }
 }
 
 fn hunk_source_path(hunk: &Hunk) -> &Path {
@@ -239,6 +256,22 @@ fn write_permissions_for_paths(
     })?;
 
     normalize_additional_permissions(permissions).ok()
+}
+
+pub(crate) fn grant_root_for_paths(file_paths: &[AbsolutePathBuf]) -> Option<PathBuf> {
+    let write_paths = file_paths
+        .iter()
+        .map(|path| {
+            path.parent()
+                .unwrap_or_else(|| path.clone())
+                .into_path_buf()
+        })
+        .collect::<Vec<_>>();
+    let first = write_paths.first()?;
+    first
+        .ancestors()
+        .find(|ancestor| write_paths.iter().all(|path| path.starts_with(ancestor)))
+        .map(Path::to_path_buf)
 }
 
 /// Extracts the raw patch text used as the command-shaped hook input for apply_patch.

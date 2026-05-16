@@ -271,6 +271,13 @@ impl NetworkApprovalService {
     }
 
     async fn record_call_outcome(&self, registration_id: &str, outcome: NetworkApprovalOutcome) {
+        {
+            let active_calls = self.active_calls.lock().await;
+            if !active_calls.contains_key(registration_id) {
+                return;
+            }
+        }
+
         let mut call_outcomes = self.call_outcomes.lock().await;
         if matches!(
             call_outcomes.get(registration_id),

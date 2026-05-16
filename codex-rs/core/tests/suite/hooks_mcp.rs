@@ -172,6 +172,14 @@ fn enable_hooks_and_rmcp_server(
 async fn pre_tool_use_blocks_mcp_tool_before_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let rmcp_test_server_bin = match stdio_server_bin() {
+        Ok(bin) => bin,
+        Err(err) => {
+            eprintln!("test_stdio_server binary not available, skipping test: {err}");
+            return Ok(());
+        }
+    };
+
     let server = start_mock_server().await;
     let call_id = "pretooluse-rmcp-echo";
     let arguments = json!({ "message": RMCP_ECHO_MESSAGE }).to_string();
@@ -193,7 +201,6 @@ async fn pre_tool_use_blocks_mcp_tool_before_execution() -> Result<()> {
     .await;
 
     let block_reason = "blocked mcp pre hook";
-    let rmcp_test_server_bin = stdio_server_bin()?;
     let test = test_codex()
         .with_pre_build_hook(move |home| {
             if let Err(error) = write_pre_tool_use_hook(home, block_reason) {
@@ -254,6 +261,14 @@ async fn pre_tool_use_blocks_mcp_tool_before_execution() -> Result<()> {
 async fn post_tool_use_records_mcp_tool_payload_and_context() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let rmcp_test_server_bin = match stdio_server_bin() {
+        Ok(bin) => bin,
+        Err(err) => {
+            eprintln!("test_stdio_server binary not available, skipping test: {err}");
+            return Ok(());
+        }
+    };
+
     let server = start_mock_server().await;
     let call_id = "posttooluse-rmcp-echo";
     let arguments = json!({ "message": RMCP_ECHO_MESSAGE }).to_string();
@@ -277,7 +292,6 @@ async fn post_tool_use_records_mcp_tool_payload_and_context() -> Result<()> {
     .await;
 
     let post_context = "Remember the MCP post-tool note.";
-    let rmcp_test_server_bin = stdio_server_bin()?;
     let test = test_codex()
         .with_pre_build_hook(move |home| {
             if let Err(error) = write_post_tool_use_hook(home, post_context) {

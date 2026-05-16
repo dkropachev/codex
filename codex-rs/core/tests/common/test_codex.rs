@@ -21,6 +21,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
+use codex_hooks::HooksConfig;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -48,6 +49,7 @@ use wiremock::MockServer;
 use crate::PathBufExt;
 use crate::TempDirExt;
 use crate::get_remote_test_env;
+use crate::hooks::trust_hooks;
 use crate::load_default_config_for_test;
 use crate::responses::WebSocketTestServer;
 use crate::responses::output_value_to_text;
@@ -550,6 +552,17 @@ impl TestCodexBuilder {
             config.features.enable(Feature::ApplyPatchFreeform)?;
         } else {
             config.features.disable(Feature::ApplyPatchFreeform)?;
+        }
+
+        if config.features.enabled(Feature::CodexHooks) {
+            let listed = codex_hooks::list_hooks(HooksConfig {
+                feature_enabled: true,
+                config_layer_stack: Some(config.config_layer_stack.clone()),
+                ..HooksConfig::default()
+            });
+            if !listed.hooks.is_empty() {
+                trust_hooks(&mut config, listed.hooks);
+            }
         }
 
         Ok((config, cwd))

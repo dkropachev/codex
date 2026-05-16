@@ -53,19 +53,21 @@ pub(crate) async fn run_command(
         }
     };
 
-    if let Some(mut stdin) = child.stdin.take()
-        && let Err(err) = stdin.write_all(input_json.as_bytes()).await
-    {
-        let _ = child.kill().await;
-        return CommandRunResult {
-            started_at,
-            completed_at: chrono::Utc::now().timestamp(),
-            duration_ms: started.elapsed().as_millis().try_into().unwrap_or(i64::MAX),
-            exit_code: None,
-            stdout: String::new(),
-            stderr: String::new(),
-            error: Some(format!("failed to write hook stdin: {err}")),
-        };
+    if let Some(mut stdin) = child.stdin.take() {
+        if let Err(err) = stdin.write_all(input_json.as_bytes()).await {
+            let _ = child.kill().await;
+            return CommandRunResult {
+                started_at,
+                completed_at: chrono::Utc::now().timestamp(),
+                duration_ms: started.elapsed().as_millis().try_into().unwrap_or(i64::MAX),
+                exit_code: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                error: Some(format!("failed to write hook stdin: {err}")),
+            };
+        }
+
+        drop(stdin);
     }
 
     let timeout_duration = Duration::from_secs(handler.timeout_sec);
@@ -131,5 +133,46 @@ fn default_shell_command() -> Command {
         let mut command = Command::new(shell);
         command.arg("-lc");
         command
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CommandShell;
+    use super::ConfiguredHandler;
+    use super::run_command;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn run_command_closes_stdin_after_writing_input() {
+        let cwd = TempDir::new().expect("create temp dir");
+        let handler = ConfiguredHandler {
+            event_name: codex_protocol::protocol::HookEventName::PermissionRequest,
+            matcher: None,
+            command: r#"python3 -c "import json, sys; payload = json.load(sys.stdin); print(payload['value'])""#.to_string(),
+            timeout_sec: 5,
+            status_message: None,
+            source_path: codex_utils_absolute_path::test_support::test_path_buf("/tmp/hooks.json")
+                .abs(),
+            source: codex_protocol::protocol::HookSource::User,
+            display_order: 0,
+            env: std::collections::HashMap::new(),
+        };
+
+        let result = run_command(
+            &CommandShell {
+                program: String::new(),
+                args: Vec::new(),
+            },
+            &handler,
+            r#"{"value":"ok"}"#,
+            cwd.path(),
+        )
+        .await;
+
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(result.stdout.trim(), "ok");
+        assert_eq!(result.error, None);
     }
 }

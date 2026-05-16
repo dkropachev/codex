@@ -164,11 +164,13 @@ pub(crate) async fn handle_mcp_tool_call(
                 .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
         };
     }
+    let thread_id = sess.conversation_id.to_string();
     let request_meta = build_mcp_tool_call_request_meta(
         turn_context.as_ref(),
         &server,
         &call_id,
         metadata.as_ref(),
+        thread_id.as_str(),
     );
     let connector_id = metadata
         .as_ref()
@@ -523,8 +525,8 @@ async fn execute_mcp_tool_call(
     rewritten_arguments: Option<JsonValue>,
     request_meta: Option<JsonValue>,
 ) -> Result<CallToolResult, String> {
-    let request_meta =
-        with_mcp_tool_call_thread_id_meta(request_meta, &sess.conversation_id.to_string());
+    let thread_id = sess.conversation_id.to_string();
+    let request_meta = with_mcp_tool_call_thread_id_meta(request_meta, &thread_id);
     let request_meta =
         augment_mcp_tool_request_meta_with_sandbox_state(sess, turn_context, server, request_meta)
             .await
@@ -772,10 +774,60 @@ fn build_mcp_tool_call_request_meta(
     server: &str,
     call_id: &str,
     metadata: Option<&McpToolApprovalMetadata>,
+    thread_id: &str,
 ) -> Option<serde_json::Value> {
     let mut request_meta = serde_json::Map::new();
+    let reasoning_effort = turn_context
+        .model_info
+        .supports_reasoning_summaries
+        .then_some(
+            turn_context
+                .reasoning_effort
+                .or(turn_context.model_info.default_reasoning_level),
+        )
+        .flatten();
 
-    if let Some(turn_metadata) = turn_context.turn_metadata_state.current_meta_value() {
+    let turn_metadata = match turn_context.turn_metadata_state.current_meta_value() {
+        Some(serde_json::Value::Object(mut map)) if server == CODEX_APPS_MCP_SERVER_NAME => {
+            map.insert(
+                "thread_id".to_string(),
+                serde_json::Value::String(thread_id.to_string()),
+            );
+            map.insert(
+                "model".to_string(),
+                serde_json::Value::String(turn_context.model_info.slug.clone()),
+            );
+            if let Some(reasoning_effort) = reasoning_effort {
+                map.insert(
+                    "reasoning_effort".to_string(),
+                    serde_json::Value::String(reasoning_effort.to_string()),
+                );
+            }
+            Some(serde_json::Value::Object(map))
+        }
+        Some(turn_metadata) => Some(turn_metadata),
+        None if server == CODEX_APPS_MCP_SERVER_NAME => {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                "thread_id".to_string(),
+                serde_json::Value::String(thread_id.to_string()),
+            );
+            map.insert(
+                "model".to_string(),
+                serde_json::Value::String(turn_context.model_info.slug.clone()),
+            );
+            if let Some(reasoning_effort) = reasoning_effort {
+                map.insert(
+                    "reasoning_effort".to_string(),
+                    serde_json::Value::String(reasoning_effort.to_string()),
+                );
+            }
+            Some(serde_json::Value::Object(map))
+        }
+        None => None,
+    };
+
+    if let Some(turn_metadata) = turn_metadata {
         request_meta.insert(
             crate::X_CODEX_TURN_METADATA_HEADER.to_string(),
             turn_metadata,

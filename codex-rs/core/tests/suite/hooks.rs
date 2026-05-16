@@ -1248,6 +1248,8 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
             .await?;
     }
 
+    let _ = gate_completed_tx.send(());
+
     let hook_inputs = wait_for_hook_inputs(
         test.codex_home_path(),
         3,
@@ -1255,7 +1257,6 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
         "queued user prompt hook inputs",
     )
     .await?;
-    let _ = gate_completed_tx.send(());
 
     let requests = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
@@ -1655,16 +1656,10 @@ allow_local_binding = true
         test.config.permissions.network.is_some(),
         "expected managed network proxy config to be present"
     );
-    let network_proxy = test
-        .session_configured
-        .network_proxy
-        .as_ref()
-        .expect("expected runtime managed network proxy addresses");
-    let proxy_url_json = serde_json::to_string(&format!("http://{}", network_proxy.http_addr))?;
-    let python = format!(
-        "import urllib.request; proxy = urllib.request.ProxyHandler({{'http': {proxy_url_json}}}); opener = urllib.request.build_opener(proxy); print('OK:' + opener.open('http://codex-network-test.invalid', timeout=10).read().decode(errors='replace'))"
-    );
-    let command = shlex::try_join(["python3", "-c", python.as_str()])?;
+    // Use urllib without overriding proxy settings so managed-network sessions
+    // continue to exercise the env-based proxy routing path under bubblewrap.
+    let command = r#"python3 -c "import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://codex-network-test.invalid', timeout=30).read().decode(errors='replace'))""#
+        .to_string();
     let args = serde_json::json!({ "command": command });
     let _responses = mount_sse_sequence(
         &server,

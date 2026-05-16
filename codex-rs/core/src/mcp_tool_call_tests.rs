@@ -664,7 +664,8 @@ fn sanitize_mcp_tool_result_for_model_preserves_image_when_supported() {
 
 #[tokio::test]
 async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
-    let (_, turn_context) = make_session_and_context().await;
+    let (session, turn_context) = make_session_and_context().await;
+    let thread_id = session.conversation_id.to_string();
     let expected_turn_metadata = serde_json::from_str::<serde_json::Value>(
         &turn_context
             .turn_metadata_state
@@ -678,6 +679,7 @@ async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
         "custom_server",
         "call-custom",
         /*metadata*/ None,
+        thread_id.as_str(),
     )
     .expect("custom servers should receive turn metadata");
 
@@ -691,14 +693,38 @@ async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
 
 #[tokio::test]
 async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps_meta() {
-    let (_, turn_context) = make_session_and_context().await;
-    let expected_turn_metadata = serde_json::from_str::<serde_json::Value>(
+    let (session, turn_context) = make_session_and_context().await;
+    let thread_id = session.conversation_id.to_string();
+    let mut expected_turn_metadata = serde_json::from_str::<serde_json::Value>(
         &turn_context
             .turn_metadata_state
             .current_header_value()
             .expect("turn metadata header"),
     )
     .expect("turn metadata json");
+    expected_turn_metadata
+        .as_object_mut()
+        .expect("turn metadata json object")
+        .insert("thread_id".to_string(), serde_json::json!(thread_id));
+    expected_turn_metadata
+        .as_object_mut()
+        .expect("turn metadata json object")
+        .insert(
+            "model".to_string(),
+            serde_json::json!(turn_context.model_info.slug),
+        );
+    if let Some(reasoning_effort) = turn_context
+        .reasoning_effort
+        .or(turn_context.model_info.default_reasoning_level)
+    {
+        expected_turn_metadata
+            .as_object_mut()
+            .expect("turn metadata json object")
+            .insert(
+                "reasoning_effort".to_string(),
+                serde_json::json!(reasoning_effort.to_string()),
+            );
+    }
     let metadata = McpToolApprovalMetadata {
         annotations: None,
         connector_id: Some("calendar".to_string()),
@@ -726,6 +752,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
             CODEX_APPS_MCP_SERVER_NAME,
             "call_abc123xyz789",
             Some(&metadata),
+            thread_id.as_str(),
         ),
         Some(serde_json::json!({
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
@@ -741,14 +768,38 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
 
 #[tokio::test]
 async fn codex_apps_tool_call_request_meta_includes_call_id_without_existing_codex_apps_meta() {
-    let (_, turn_context) = make_session_and_context().await;
-    let expected_turn_metadata = serde_json::from_str::<serde_json::Value>(
+    let (session, turn_context) = make_session_and_context().await;
+    let thread_id = session.conversation_id.to_string();
+    let mut expected_turn_metadata = serde_json::from_str::<serde_json::Value>(
         &turn_context
             .turn_metadata_state
             .current_header_value()
             .expect("turn metadata header"),
     )
     .expect("turn metadata json");
+    expected_turn_metadata
+        .as_object_mut()
+        .expect("turn metadata json object")
+        .insert("thread_id".to_string(), serde_json::json!(thread_id));
+    expected_turn_metadata
+        .as_object_mut()
+        .expect("turn metadata json object")
+        .insert(
+            "model".to_string(),
+            serde_json::json!(turn_context.model_info.slug),
+        );
+    if let Some(reasoning_effort) = turn_context
+        .reasoning_effort
+        .or(turn_context.model_info.default_reasoning_level)
+    {
+        expected_turn_metadata
+            .as_object_mut()
+            .expect("turn metadata json object")
+            .insert(
+                "reasoning_effort".to_string(),
+                serde_json::json!(reasoning_effort.to_string()),
+            );
+    }
 
     assert_eq!(
         build_mcp_tool_call_request_meta(
@@ -756,6 +807,7 @@ async fn codex_apps_tool_call_request_meta_includes_call_id_without_existing_cod
             CODEX_APPS_MCP_SERVER_NAME,
             "call_abc123xyz789",
             /*metadata*/ None,
+            thread_id.as_str(),
         ),
         Some(serde_json::json!({
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,

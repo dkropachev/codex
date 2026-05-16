@@ -30,6 +30,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_sandboxing::policy_transforms::effective_permission_profile;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
@@ -65,16 +66,24 @@ impl ApplyPatchRuntime {
         }
     }
 
-    fn file_system_sandbox_context_for_attempt(
+    async fn file_system_sandbox_context_for_attempt(
         req: &ApplyPatchRequest,
+        session: &crate::session::session::Session,
         attempt: &SandboxAttempt<'_>,
     ) -> Option<FileSystemSandboxContext> {
         if attempt.sandbox == SandboxType::None {
             return None;
         }
 
-        let permissions =
-            effective_permission_profile(attempt.permissions, req.additional_permissions.as_ref());
+        let granted_permissions = merge_permission_profiles(
+            session.granted_session_permissions().await.as_ref(),
+            session.granted_turn_permissions().await.as_ref(),
+        );
+        let permissions = merge_permission_profiles(
+            req.additional_permissions.as_ref(),
+            granted_permissions.as_ref(),
+        );
+        let permissions = effective_permission_profile(attempt.permissions, permissions.as_ref());
         Some(FileSystemSandboxContext {
             permissions,
             cwd: Some(attempt.sandbox_cwd.clone()),
@@ -119,8 +128,16 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                 return review_approval_request(session, turn, review_id, action, retry_reason)
                     .await;
             }
+            let grant_root =
+                crate::tools::handlers::apply_patch::grant_root_for_paths(approval_keys.as_slice());
             if req.permissions_preapproved && retry_reason.is_none() {
-                return ReviewDecision::Approved;
+                let decision = ReviewDecision::Approved;
+                if let Some(permissions) = req.additional_permissions.clone()
+                    && !permissions.is_empty()
+                {
+                    session.record_granted_turn_permissions(permissions).await;
+                }
+                return decision;
             }
             if let Some(reason) = retry_reason {
                 let rx_approve = session
@@ -129,26 +146,70 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                         call_id,
                         changes.clone(),
                         Some(reason),
-                        /*grant_root*/ None,
+                        grant_root.clone(),
                     )
                     .await;
-                return rx_approve.await.unwrap_or_default();
+                let decision = rx_approve.await.unwrap_or_default();
+                if let Some(permissions) = req.additional_permissions.clone()
+                    && !permissions.is_empty()
+                {
+                    match decision {
+                        ReviewDecision::Approved
+                        | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
+                            session.record_granted_turn_permissions(permissions).await;
+                        }
+                        ReviewDecision::ApprovedForSession => {
+                            session
+                                .record_granted_session_permissions(permissions)
+                                .await;
+                        }
+                        ReviewDecision::NetworkPolicyAmendment { .. }
+                        | ReviewDecision::Abort
+                        | ReviewDecision::Denied
+                        | ReviewDecision::TimedOut => {}
+                    }
+                }
+                return decision;
             }
 
-            with_cached_approval(
+            let decision = with_cached_approval(
                 &session.services,
                 "apply_patch",
                 approval_keys,
                 || async move {
                     let rx_approve = session
                         .request_patch_approval(
-                            turn, call_id, changes, /*reason*/ None, /*grant_root*/ None,
+                            turn,
+                            call_id,
+                            changes,
+                            /*reason*/ None,
+                            grant_root.clone(),
                         )
                         .await;
                     rx_approve.await.unwrap_or_default()
                 },
             )
-            .await
+            .await;
+            if let Some(permissions) = req.additional_permissions.clone()
+                && !permissions.is_empty()
+            {
+                match decision {
+                    ReviewDecision::Approved
+                    | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
+                        session.record_granted_turn_permissions(permissions).await;
+                    }
+                    ReviewDecision::ApprovedForSession => {
+                        session
+                            .record_granted_session_permissions(permissions)
+                            .await;
+                    }
+                    ReviewDecision::NetworkPolicyAmendment { .. }
+                    | ReviewDecision::Abort
+                    | ReviewDecision::Denied
+                    | ReviewDecision::TimedOut => {}
+                }
+            }
+            decision
         })
     }
 
@@ -196,7 +257,8 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         })?;
         let started_at = Instant::now();
         let fs = turn_environment.environment.get_filesystem();
-        let sandbox = Self::file_system_sandbox_context_for_attempt(req, attempt);
+        let sandbox =
+            Self::file_system_sandbox_context_for_attempt(req, ctx.session.as_ref(), attempt).await;
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let result = codex_apply_patch::apply_patch(
