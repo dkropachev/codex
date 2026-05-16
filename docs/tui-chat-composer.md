@@ -30,4 +30,3 @@ and `codex-rs/tui/src/bottom_pane/paste_burst.rs`.
 - Start with `codex-rs/tui/src/bottom_pane/chat_composer.rs` for state transitions and `codex-rs/tui/src/bottom_pane/command_popup.rs` for popup rendering.
 - For slash dispatch, inspect `codex-rs/tui/src/chatwidget/slash_dispatch.rs`.
 - For shared workflow alias parsing, inspect `codex-rs/workflows/src/command.rs` and `codex-rs/workflows/src/registry.rs`.
-
