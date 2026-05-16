@@ -63,6 +63,7 @@ use crate::api_catalog_cmd::run_api_catalog_command;
 use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
 use crate::workflow_cmd::WorkflowCli;
+use crate::workflow_cmd::load_workflow_command_context;
 use crate::workflow_cmd::run_workflow_command;
 
 use codex_config::CONFIG_TOML_FILE;
@@ -85,6 +86,17 @@ use codex_protocol::config_types::TrustLevel;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::user_input::UserInput;
 use codex_terminal_detection::TerminalName;
+
+fn promote_workflow_alias_from_prompt(
+    prompt: &mut Vec<String>,
+    workflows: &[codex_workflows::WorkflowSummary],
+) -> Option<Subcommand> {
+    let first_token = prompt.first()?;
+    codex_workflows::find_workflow_by_command(workflows, first_token).map(|_| {
+        let args = std::mem::take(prompt);
+        Subcommand::Workflow(WorkflowCli { args })
+    })
+}
 
 /// Codex CLI
 ///
@@ -124,7 +136,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         feature_toggles,
         remote,
         mut interactive,
-        subcommand,
+        mut subcommand,
     } = MultitoolCli::parse();
 
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
@@ -132,6 +144,20 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     root_config_overrides.raw_overrides.extend(toggle_overrides);
     let root_remote = remote.remote;
     let root_remote_auth_token_env = remote.remote_auth_token_env;
+
+    if subcommand.is_none() && !interactive.prompt.is_empty() {
+        let (_config, workflows) = load_workflow_command_context(
+            root_config_overrides.clone(),
+            interactive.config_profile.clone(),
+            arg0_paths.clone(),
+        )
+        .await?;
+        if let Some(workflow_subcommand) =
+            promote_workflow_alias_from_prompt(&mut interactive.prompt, &workflows)
+        {
+            subcommand = Some(workflow_subcommand);
+        }
+    }
 
     match subcommand {
         None => {
@@ -1949,7 +1975,8 @@ async fn run_debug_prompt_input_command(
         .chain(cmd.images)
         .map(|path| UserInput::LocalImage { path })
         .collect::<Vec<_>>();
-    if let Some(prompt) = cmd.prompt.or(interactive.prompt) {
+    let interactive_prompt = (!interactive.prompt.is_empty()).then(|| interactive.prompt.join(" "));
+    if let Some(prompt) = cmd.prompt.or(interactive_prompt) {
         input.push(UserInput::Text {
             text: prompt.replace("\r\n", "\n").replace('\r', "\n"),
             text_elements: Vec::new(),
@@ -3255,11 +3282,6 @@ async fn run_interactive_tui(
     remote_auth_token_env: Option<String>,
     arg0_paths: Arg0DispatchPaths,
 ) -> std::io::Result<AppExitInfo> {
-    if let Some(prompt) = interactive.prompt.take() {
-        // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
-        interactive.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
-    }
-
     let terminal_info = codex_terminal_detection::terminal_info();
     if terminal_info.name == TerminalName::Dumb {
         if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
@@ -3387,9 +3409,8 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     if web_search {
         interactive.web_search = true;
     }
-    if let Some(prompt) = prompt {
-        // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
-        interactive.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
+    if !prompt.is_empty() {
+        interactive.prompt = prompt;
     }
 
     interactive
@@ -4338,17 +4359,42 @@ mod tests {
 
     #[test]
     fn marketplace_no_longer_parses_at_top_level() {
-        let add_result =
-            MultitoolCli::try_parse_from(["codex", "marketplace", "add", "owner/repo"]);
-        assert!(add_result.is_err());
+        let add_cli = MultitoolCli::try_parse_from(["codex", "marketplace", "add", "owner/repo"])
+            .expect("parse");
+        assert_eq!(
+            add_cli.interactive.prompt,
+            vec![
+                "marketplace".to_string(),
+                "add".to_string(),
+                "owner/repo".to_string(),
+            ]
+        );
+        assert!(add_cli.subcommand.is_none());
 
-        let upgrade_result =
-            MultitoolCli::try_parse_from(["codex", "marketplace", "upgrade", "debug"]);
-        assert!(upgrade_result.is_err());
+        let upgrade_cli =
+            MultitoolCli::try_parse_from(["codex", "marketplace", "upgrade", "debug"])
+                .expect("parse");
+        assert_eq!(
+            upgrade_cli.interactive.prompt,
+            vec![
+                "marketplace".to_string(),
+                "upgrade".to_string(),
+                "debug".to_string(),
+            ]
+        );
+        assert!(upgrade_cli.subcommand.is_none());
 
-        let remove_result =
-            MultitoolCli::try_parse_from(["codex", "marketplace", "remove", "debug"]);
-        assert!(remove_result.is_err());
+        let remove_cli = MultitoolCli::try_parse_from(["codex", "marketplace", "remove", "debug"])
+            .expect("parse");
+        assert_eq!(
+            remove_cli.interactive.prompt,
+            vec![
+                "marketplace".to_string(),
+                "remove".to_string(),
+                "debug".to_string(),
+            ]
+        );
+        assert!(remove_cli.subcommand.is_none());
     }
 
     fn sample_exit_info(conversation_id: Option<&str>, thread_name: Option<&str>) -> AppExitInfo {
@@ -4958,8 +5004,56 @@ mod tests {
     #[test]
     fn unknown_command_is_treated_as_prompt() {
         let cli = MultitoolCli::try_parse_from(["codex", "no-such-command"]).expect("parse");
-        assert_eq!(cli.interactive.prompt.as_deref(), Some("no-such-command"));
+        assert_eq!(cli.interactive.prompt, vec!["no-such-command".to_string()]);
         assert!(cli.subcommand.is_none());
+    }
+
+    #[test]
+    fn workflow_alias_prompt_is_promoted_to_workflow_subcommand() {
+        let root = PathBuf::from("/tmp/workflows");
+        let workflow_id = "reports/jira-summary";
+        let path = workflow_id
+            .split('/')
+            .fold(root.clone(), |path, component| path.join(component));
+        let workflow = codex_workflows::WorkflowSummary {
+            id: workflow_id.to_string(),
+            command: Some("jira-summary".to_string()),
+            title: Some("Jira Summary".to_string()),
+            user_description: Some("Prepare a focused workflow report".to_string()),
+            search_terms: vec!["report".to_string()],
+            root_label: "global".to_string(),
+            root_kind: codex_workflows::WorkflowRootKind::Global,
+            root_path: root.clone(),
+            path: path.clone(),
+            workflow_yaml_path: path.join("workflow.yaml"),
+            mention_target: codex_workflows::mention_target(&root, workflow_id).unwrap(),
+            validation: codex_workflows::WorkflowValidation {
+                status: codex_workflows::WorkflowValidationStatus::Valid,
+                messages: Vec::new(),
+            },
+            repair_mode: "threshold:3".to_string(),
+        };
+        let mut prompt = vec![
+            "jira-summary".to_string(),
+            "--project".to_string(),
+            "COD".to_string(),
+        ];
+
+        let subcommand = promote_workflow_alias_from_prompt(&mut prompt, &[workflow])
+            .expect("expected workflow promotion");
+        let Subcommand::Workflow(workflow_cli) = subcommand else {
+            panic!("expected workflow subcommand");
+        };
+
+        assert_eq!(
+            workflow_cli.args,
+            vec![
+                "jira-summary".to_string(),
+                "--project".to_string(),
+                "COD".to_string(),
+            ]
+        );
+        assert!(prompt.is_empty());
     }
 
     #[test]

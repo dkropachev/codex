@@ -194,6 +194,7 @@ pub(super) async fn make_chatwidget_manual(
         effective_service_tier,
         current_collaboration_mode,
         active_collaboration_mask,
+        codex_config_backup: None,
         has_chatgpt_account: false,
         model_catalog,
         session_telemetry,
