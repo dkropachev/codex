@@ -45,6 +45,31 @@ fn codex_config_backup_paths(chat: &ChatWidget) -> Vec<std::path::PathBuf> {
     codex_config_backup_paths_in(chat.config.codex_home.as_path())
 }
 
+fn workflow_summary(id: &str, command: &str) -> codex_workflows::WorkflowSummary {
+    let root = std::path::PathBuf::from("/tmp/workflows");
+    let path = id
+        .split('/')
+        .fold(root.clone(), |path, component| path.join(component));
+    codex_workflows::WorkflowSummary {
+        id: id.to_string(),
+        command: Some(command.to_string()),
+        title: Some("Jira Summary".to_string()),
+        user_description: Some("Prepare a focused workflow report".to_string()),
+        search_terms: vec!["report".to_string()],
+        root_label: "global".to_string(),
+        root_kind: codex_workflows::WorkflowRootKind::Global,
+        root_path: root.clone(),
+        path: path.clone(),
+        workflow_yaml_path: path.join("workflow.yaml"),
+        mention_target: codex_workflows::mention_target(&root, id).unwrap(),
+        validation: codex_workflows::WorkflowValidation {
+            status: codex_workflows::WorkflowValidationStatus::Valid,
+            messages: Vec::new(),
+        },
+        repair_mode: "threshold:3".to_string(),
+    }
+}
+
 #[tokio::test]
 async fn workflow_slash_with_args_emits_run_workflow_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -53,7 +78,54 @@ async fn workflow_slash_with_args_emits_run_workflow_event() {
     chat.dispatch_command_with_args(SlashCommand::Workflow, "list".to_string(), Vec::new());
 
     match rx.try_recv() {
-        Ok(AppEvent::RunWorkflow { command }) => assert_eq!(command, "codex workflow list"),
+        Ok(AppEvent::RunWorkflow { command }) => {
+            assert_eq!(command, vec!["workflow".to_string(), "list".to_string()])
+        }
+        other => panic!("expected RunWorkflow event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn workflow_alias_with_args_emits_run_workflow_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    chat.bottom_pane
+        .set_workflow_mentions(Some(vec![workflow_summary(
+            "reports/jira-summary",
+            "jira-summary",
+        )]));
+
+    submit_composer_text(&mut chat, "/jira-summary --project COD");
+
+    match rx.try_recv() {
+        Ok(AppEvent::RunWorkflow { command }) => assert_eq!(
+            command,
+            vec![
+                "jira-summary".to_string(),
+                "--project".to_string(),
+                "COD".to_string(),
+            ]
+        ),
+        other => panic!("expected RunWorkflow event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn workflow_alias_without_args_emits_run_workflow_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    chat.bottom_pane
+        .set_workflow_mentions(Some(vec![workflow_summary(
+            "reports/jira-summary",
+            "jira-summary",
+        )]));
+
+    submit_composer_text(&mut chat, "/jira-summary");
+
+    match rx.try_recv() {
+        Ok(AppEvent::RunWorkflow { command }) => {
+            assert_eq!(command, vec!["jira-summary".to_string()])
+        }
         other => panic!("expected RunWorkflow event, got {other:?}"),
     }
 }
@@ -61,11 +133,30 @@ async fn workflow_slash_with_args_emits_run_workflow_event() {
 #[tokio::test]
 async fn bare_workflow_slash_enters_workflow_mode() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let initial = chat.current_collaboration_mode().clone();
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    assert!(chat.config.features.enabled(Feature::CollaborationModes));
+    assert!(chat.config.features.enabled(Feature::Workflows));
+    chat.bottom_pane.set_task_running(/*running*/ false);
 
     chat.dispatch_command(SlashCommand::Workflow);
 
-    assert_eq!(chat.current_collaboration_mode().mode, ModeKind::Workflow);
+    let mut saw_message = false;
+    while let Ok(event) = rx.try_recv() {
+        saw_message = true;
+        assert!(
+            matches!(event, AppEvent::InsertHistoryCell(_)),
+            "workflow should not emit a non-history app event: {event:?}"
+        );
+    }
+    assert!(saw_message, "expected workflow mode change message");
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Workflow);
+    assert_eq!(
+        chat.collaboration_mode_indicator(),
+        Some(CollaborationModeIndicator::Workflow)
+    );
+    assert_eq!(chat.current_collaboration_mode(), &initial);
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 
@@ -85,7 +176,7 @@ async fn bare_workflow_slash_reports_disabled_when_feature_off() {
             lines_to_single_string(&cell.display_lines(/*width*/ 80))
         }
         AppEvent::RunWorkflow { command } => {
-            panic!("did not expect workflow command: {command}")
+            panic!("did not expect workflow command: {command:?}")
         }
         other => panic!("expected disabled workflow info message, got {other:?}"),
     };
@@ -246,6 +337,7 @@ async fn codex_config_backup_is_reused_when_switching_to_config_edit_mode() {
 #[tokio::test]
 async fn codex_slash_with_args_submits_config_plan_turn() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
     chat.thread_id = Some(ThreadId::new());
     let expected_cwd =
         crate::codex_config_context::codex_config_workspace_for_cwd(&chat.config.cwd);
@@ -281,9 +373,10 @@ async fn codex_slash_with_args_submits_config_plan_turn() {
             );
             let file_system = permission_profile.file_system_sandbox_policy();
             assert!(file_system.can_read_path_with_cwd(chat.config.cwd.as_path(), &cwd));
-            assert!(!file_system.can_write_path_with_cwd(chat.config.cwd.as_path(), &cwd));
             assert!(file_system.can_write_path_with_cwd(chat.config.codex_home.as_path(), &cwd));
             assert!(file_system.can_write_path_with_cwd(&cwd, &cwd));
+            let outside_writable = test_path_buf("/home/user/project").abs();
+            assert!(!file_system.can_write_path_with_cwd(outside_writable.as_path(), &cwd));
             assert_eq!(mode, ModeKind::Codex);
             let instructions = settings
                 .developer_instructions
@@ -406,12 +499,43 @@ async fn codex_off_slash_returns_to_default_mode() {
 #[tokio::test]
 async fn workflow_done_slash_exits_to_default_mode() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let initial = chat.current_collaboration_mode().clone();
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    chat.bottom_pane.set_task_running(/*running*/ false);
 
     chat.dispatch_command(SlashCommand::Workflow);
+    let mut saw_workflow_message = false;
+    while let Ok(event) = rx.try_recv() {
+        saw_workflow_message = true;
+        assert!(
+            matches!(event, AppEvent::InsertHistoryCell(_)),
+            "workflow should not emit a non-history app event: {event:?}"
+        );
+    }
+    assert!(
+        saw_workflow_message,
+        "expected workflow mode change message"
+    );
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Workflow);
+    assert_eq!(
+        chat.collaboration_mode_indicator(),
+        Some(CollaborationModeIndicator::Workflow)
+    );
     chat.dispatch_command_with_args(SlashCommand::Workflow, "done".to_string(), Vec::new());
 
-    assert_eq!(chat.current_collaboration_mode().mode, ModeKind::Default);
+    let mut saw_reset_message = false;
+    while let Ok(event) = rx.try_recv() {
+        saw_reset_message = true;
+        assert!(
+            matches!(event, AppEvent::InsertHistoryCell(_)),
+            "workflow reset should not emit a non-history app event: {event:?}"
+        );
+    }
+    assert!(saw_reset_message, "expected workflow mode reset message");
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.collaboration_mode_indicator(), None);
+    assert_eq!(chat.current_collaboration_mode(), &initial);
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 

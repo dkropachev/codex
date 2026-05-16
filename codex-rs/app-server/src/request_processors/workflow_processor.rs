@@ -303,6 +303,7 @@ impl WorkflowRequestProcessor {
 fn summary_to_api(summary: codex_workflows::WorkflowSummary) -> WorkflowSummary {
     WorkflowSummary {
         id: summary.id,
+        command: summary.command,
         title: summary.title,
         user_description: summary.user_description,
         search_terms: summary.search_terms,
@@ -320,6 +321,7 @@ fn summary_to_api(summary: codex_workflows::WorkflowSummary) -> WorkflowSummary 
 fn workflow_to_core(summary: &WorkflowSummary) -> codex_workflows::WorkflowSummary {
     codex_workflows::WorkflowSummary {
         id: summary.id.clone(),
+        command: summary.command.clone(),
         title: summary.title.clone(),
         user_description: summary.user_description.clone(),
         search_terms: summary.search_terms.clone(),

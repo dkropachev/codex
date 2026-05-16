@@ -13,6 +13,7 @@ use super::slash_commands;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
+use codex_workflows::WorkflowSummary;
 
 // Hide alias commands in the default popup list so each unique action appears once.
 // `quit` is an alias of `exit`, so we skip `quit` here.
@@ -23,14 +24,16 @@ const COMMAND_COLUMN_WIDTH: ColumnWidthConfig = ColumnWidthConfig::new(
 );
 
 /// A selectable item in the popup.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CommandItem {
     Builtin(SlashCommand),
+    Workflow(WorkflowSummary),
 }
 
 pub(crate) struct CommandPopup {
     command_filter: String,
     builtins: Vec<(&'static str, SlashCommand)>,
+    workflows: Vec<WorkflowSummary>,
     state: ScrollState,
 }
 
@@ -79,8 +82,15 @@ impl CommandPopup {
         Self {
             command_filter: String::new(),
             builtins,
+            workflows: Vec::new(),
             state: ScrollState::new(),
         }
+    }
+
+    pub(crate) fn set_workflows(&mut self, workflows: Option<&[WorkflowSummary]>) {
+        self.workflows =
+            workflows.map_or_else(Vec::new, <[codex_workflows::WorkflowSummary]>::to_vec);
+        self.sync_selection();
     }
 
     /// Update the filter string based on the current composer text. The text
@@ -107,6 +117,10 @@ impl CommandPopup {
             self.command_filter.clear();
         }
 
+        self.sync_selection();
+    }
+
+    fn sync_selection(&mut self) {
         // Reset or clamp selected index based on new filtered list.
         let matches_len = self.filtered_items().len();
         self.state.clamp_selection(matches_len);
@@ -140,6 +154,11 @@ impl CommandPopup {
                     continue;
                 }
                 out.push((CommandItem::Builtin(*cmd), None));
+            }
+            for workflow in self.workflows.iter() {
+                if workflow.command.is_some() {
+                    out.push((CommandItem::Workflow(workflow.clone()), None));
+                }
             }
             return out;
         }
@@ -175,6 +194,13 @@ impl CommandPopup {
             push_match(CommandItem::Builtin(*cmd), cmd.command(), None, 0);
         }
 
+        for workflow in self.workflows.iter() {
+            let Some(command) = workflow.command.as_deref() else {
+                continue;
+            };
+            push_match(CommandItem::Workflow(workflow.clone()), command, None, 0);
+        }
+
         out.extend(exact);
         out.extend(prefix);
         out
@@ -191,9 +217,21 @@ impl CommandPopup {
         matches
             .into_iter()
             .map(|(item, indices)| {
-                let CommandItem::Builtin(cmd) = item;
-                let name = format!("/{}", cmd.command());
-                let description = cmd.description().to_string();
+                let (name, description) = match item {
+                    CommandItem::Builtin(cmd) => {
+                        (format!("/{}", cmd.command()), cmd.description().to_string())
+                    }
+                    CommandItem::Workflow(workflow) => {
+                        let command = workflow.command.as_deref().unwrap_or(workflow.id.as_str());
+                        let description = workflow
+                            .title
+                            .as_deref()
+                            .or(workflow.user_description.as_deref())
+                            .unwrap_or(workflow.id.as_str())
+                            .to_string();
+                        (format!("/{command}"), description)
+                    }
+                };
                 GenericDisplayRow {
                     name,
                     name_prefix_spans: Vec::new(),
@@ -229,7 +267,7 @@ impl CommandPopup {
         let matches = self.filtered_items();
         self.state
             .selected_idx
-            .and_then(|idx| matches.get(idx).copied())
+            .and_then(|idx| matches.get(idx).cloned())
     }
 }
 
@@ -254,6 +292,17 @@ impl WidgetRef for CommandPopup {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    fn command_name(item: &CommandItem) -> String {
+        match item {
+            CommandItem::Builtin(cmd) => cmd.command().to_string(),
+            CommandItem::Workflow(workflow) => workflow
+                .command
+                .clone()
+                .unwrap_or_else(|| workflow.id.clone()),
+        }
+    }
 
     #[test]
     fn filter_includes_init_when_typing_prefix() {
@@ -265,9 +314,7 @@ mod tests {
         // Access the filtered list via the selected command and ensure that
         // one of the matches is the new "init" command.
         let matches = popup.filtered_items();
-        let has_init = matches.iter().any(|item| match item {
-            CommandItem::Builtin(cmd) => cmd.command() == "init",
-        });
+        let has_init = matches.iter().any(|item| command_name(item) == "init");
         assert!(
             has_init,
             "expected '/init' to appear among filtered commands"
@@ -284,7 +331,44 @@ mod tests {
         let selected = popup.selected_item();
         match selected {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "init"),
+            Some(CommandItem::Workflow(workflow)) => {
+                panic!("expected builtin /init to be selected, got workflow {workflow:?}")
+            }
             None => panic!("expected a selected command for exact match"),
+        }
+    }
+
+    #[test]
+    fn selecting_workflow_alias_by_exact_match() {
+        let mut popup = CommandPopup::new(CommandPopupFlags::default());
+        let root = PathBuf::from("/tmp/workflows");
+        let path = root.join("reports").join("jira-summary");
+        let workflow = WorkflowSummary {
+            id: "reports/jira-summary".to_string(),
+            command: Some("jira-summary".to_string()),
+            title: Some("Jira Summary".to_string()),
+            user_description: Some("Prepare a focused workflow report".to_string()),
+            search_terms: vec!["report".to_string()],
+            root_label: "global".to_string(),
+            root_kind: codex_workflows::WorkflowRootKind::Global,
+            root_path: root.clone(),
+            path: path.clone(),
+            workflow_yaml_path: path.join("workflow.yaml"),
+            mention_target: codex_workflows::mention_target(&root, "reports/jira-summary").unwrap(),
+            validation: codex_workflows::WorkflowValidation {
+                status: codex_workflows::WorkflowValidationStatus::Valid,
+                messages: Vec::new(),
+            },
+            repair_mode: "threshold:3".to_string(),
+        };
+        popup.set_workflows(Some(std::slice::from_ref(&workflow)));
+        popup.on_composer_text_change("/jira-summary".to_string());
+
+        match popup.selected_item() {
+            Some(CommandItem::Workflow(selected)) => assert_eq!(selected, workflow),
+            other => {
+                panic!("expected workflow alias to be selected for exact match, got {other:?}")
+            }
         }
     }
 
@@ -295,6 +379,9 @@ mod tests {
         let matches = popup.filtered_items();
         match matches.first() {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "model"),
+            Some(CommandItem::Workflow(workflow)) => {
+                panic!("expected builtin /model to be first, got workflow {workflow:?}")
+            }
             None => panic!("expected at least one match for '/mo'"),
         }
     }
@@ -304,14 +391,20 @@ mod tests {
         let mut popup = CommandPopup::new(CommandPopupFlags::default());
         popup.on_composer_text_change("/m".to_string());
 
-        let cmds: Vec<&str> = popup
+        let cmds: Vec<String> = popup
             .filtered_items()
             .into_iter()
-            .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
-            })
+            .map(|item| command_name(&item))
             .collect();
-        assert_eq!(cmds, vec!["model", "memories", "mention", "mcp"]);
+        assert_eq!(
+            cmds,
+            vec![
+                "model".to_string(),
+                "memories".to_string(),
+                "mention".to_string(),
+                "mcp".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -319,15 +412,13 @@ mod tests {
         let mut popup = CommandPopup::new(CommandPopupFlags::default());
         popup.on_composer_text_change("/ac".to_string());
 
-        let cmds: Vec<&str> = popup
+        let cmds: Vec<String> = popup
             .filtered_items()
             .into_iter()
-            .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
-            })
+            .map(|item| command_name(&item))
             .collect();
         assert!(
-            !cmds.contains(&"compact"),
+            !cmds.contains(&"compact".to_string()),
             "expected prefix search for '/ac' to exclude 'compact', got {cmds:?}"
         );
     }
@@ -349,19 +440,17 @@ mod tests {
         let mut popup = CommandPopup::new(CommandPopupFlags::default());
         popup.on_composer_text_change("/".to_string());
 
-        let cmds: Vec<&str> = popup
+        let cmds: Vec<String> = popup
             .filtered_items()
             .into_iter()
-            .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
-            })
+            .map(|item| command_name(&item))
             .collect();
         assert!(
-            !cmds.contains(&"collab"),
+            !cmds.contains(&"collab".to_string()),
             "expected '/collab' to be hidden when collaboration modes are disabled, got {cmds:?}"
         );
         assert!(
-            !cmds.contains(&"plan"),
+            !cmds.contains(&"plan".to_string()),
             "expected '/plan' to be hidden when collaboration modes are disabled, got {cmds:?}"
         );
     }
@@ -429,15 +518,13 @@ mod tests {
         });
         popup.on_composer_text_change("/pers".to_string());
 
-        let cmds: Vec<&str> = popup
+        let cmds: Vec<String> = popup
             .filtered_items()
             .into_iter()
-            .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
-            })
+            .map(|item| command_name(&item))
             .collect();
         assert!(
-            !cmds.contains(&"personality"),
+            !cmds.contains(&"personality".to_string()),
             "expected '/personality' to be hidden when disabled, got {cmds:?}"
         );
     }
@@ -482,16 +569,14 @@ mod tests {
         });
         popup.on_composer_text_change("/aud".to_string());
 
-        let cmds: Vec<&str> = popup
+        let cmds: Vec<String> = popup
             .filtered_items()
             .into_iter()
-            .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
-            })
+            .map(|item| command_name(&item))
             .collect();
 
         assert!(
-            !cmds.contains(&"settings"),
+            !cmds.contains(&"settings".to_string()),
             "expected '/settings' to be hidden when audio device selection is disabled, got {cmds:?}"
         );
     }
@@ -499,12 +584,10 @@ mod tests {
     #[test]
     fn debug_commands_are_hidden_from_popup() {
         let popup = CommandPopup::new(CommandPopupFlags::default());
-        let cmds: Vec<&str> = popup
+        let cmds: Vec<String> = popup
             .filtered_items()
             .into_iter()
-            .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
-            })
+            .map(|item| command_name(&item))
             .collect();
 
         assert!(
