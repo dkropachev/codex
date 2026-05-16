@@ -55,7 +55,6 @@ use crate::config::ModelRouterAccounting;
 
 pub(crate) use failover::ModelRouterAppliedRoute;
 pub(crate) use failover::ModelRouterRouteExclusion;
-pub(crate) use failover::model_router_failure_scope;
 use failover::selectable_routes;
 
 const LIFECYCLE_PHASE_PROMOTION: &str = "promotion";

@@ -9,8 +9,13 @@ use codex_utils_cli::SharedCliOptions;
 #[command(version)]
 pub struct Cli {
     /// Optional user prompt to start the session.
-    #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
-    pub prompt: Option<String>,
+    #[arg(
+        value_name = "PROMPT",
+        value_hint = clap::ValueHint::Other,
+        allow_hyphen_values = true,
+        trailing_var_arg = true
+    )]
+    pub prompt: Vec<String>,
 
     // Internal controls set by the top-level `codex resume` subcommand.
     // These are not exposed as user flags on the base `codex` command.

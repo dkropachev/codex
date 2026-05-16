@@ -11,6 +11,7 @@ use crate::skills::SkillRenderSideEffects;
 use crate::skills::render::SkillMetadataBudget;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
+use arc_swap::ArcSwap;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::NetworkConstraints;
@@ -2857,7 +2858,7 @@ async fn session_settings_model_router_override_updates_per_turn_config() {
         })
         .expect("model router override should apply");
 
-    let per_turn_config = Session::build_per_turn_config(&updated, updated.cwd.clone(), None);
+    let per_turn_config = Session::build_per_turn_config(&updated, updated.cwd.clone());
     let model_router = per_turn_config
         .model_router
         .expect("model router should remain configured");
@@ -2870,7 +2871,7 @@ async fn session_settings_model_router_override_updates_per_turn_config() {
         })
         .expect("inherit override should apply");
     let inherited_per_turn_config =
-        Session::build_per_turn_config(&inherited, inherited.cwd.clone(), None);
+        Session::build_per_turn_config(&inherited, inherited.cwd.clone());
     let inherited_model_router = inherited_per_turn_config
         .model_router
         .expect("model router should remain configured");
@@ -3715,11 +3716,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         implement_mode: None,
         implement_max_cycles: None,
     };
-    let per_turn_config = Session::build_per_turn_config(
-        &session_configuration,
-        session_configuration.cwd.clone(),
-        None,
-    );
+    let per_turn_config =
+        Session::build_per_turn_config(&session_configuration, session_configuration.cwd.clone());
     let model_info = construct_model_info_offline_for_tests(
         session_configuration.collaboration_mode.model(),
         &per_turn_config.to_models_manager_config(),
@@ -3761,10 +3759,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.chatgpt_base_url.trim_end_matches('/').to_string(),
             config.analytics_enabled,
         ),
-        hooks: Hooks::new(HooksConfig {
+        hooks: ArcSwap::from(Arc::new(Hooks::new(HooksConfig {
             legacy_notify_argv: config.notify.clone(),
             ..HooksConfig::default()
-        }),
+        }))),
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
         shell_snapshot_tx: watch::channel(None).0,
@@ -4996,11 +4994,8 @@ where
         implement_mode: None,
         implement_max_cycles: None,
     };
-    let per_turn_config = Session::build_per_turn_config(
-        &session_configuration,
-        session_configuration.cwd.clone(),
-        None,
-    );
+    let per_turn_config =
+        Session::build_per_turn_config(&session_configuration, session_configuration.cwd.clone());
     let model_info = construct_model_info_offline_for_tests(
         session_configuration.collaboration_mode.model(),
         &per_turn_config.to_models_manager_config(),
@@ -5042,10 +5037,10 @@ where
             config.chatgpt_base_url.trim_end_matches('/').to_string(),
             config.analytics_enabled,
         ),
-        hooks: Hooks::new(HooksConfig {
+        hooks: ArcSwap::from(Arc::new(Hooks::new(HooksConfig {
             legacy_notify_argv: config.notify.clone(),
             ..HooksConfig::default()
-        }),
+        }))),
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
         shell_snapshot_tx: watch::channel(None).0,

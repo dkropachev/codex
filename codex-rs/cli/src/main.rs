@@ -40,8 +40,6 @@ use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
 use serde::Serialize;
 use std::io::IsTerminal;
-use std::io::Write;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use supports_color::Stream;
@@ -66,7 +64,6 @@ use crate::workflow_cmd::WorkflowCli;
 use crate::workflow_cmd::load_workflow_command_context;
 use crate::workflow_cmd::run_workflow_command;
 
-use codex_config::CONFIG_TOML_FILE;
 use codex_config::LoaderOverrides;
 use codex_core::build_models_manager;
 use codex_core::clear_memory_roots_contents;
@@ -82,7 +79,6 @@ use codex_login::AuthManager;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::RefreshStrategy;
-use codex_protocol::config_types::TrustLevel;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::user_input::UserInput;
 use codex_terminal_detection::TerminalName;
@@ -3277,7 +3273,7 @@ fn read_remote_auth_token_from_env_var(env_var_name: &str) -> anyhow::Result<Str
 }
 
 async fn run_interactive_tui(
-    mut interactive: TuiCli,
+    interactive: TuiCli,
     remote: Option<String>,
     remote_auth_token_env: Option<String>,
     arg0_paths: Arg0DispatchPaths,

@@ -174,6 +174,7 @@ fn api_catalog_workflow_to_info(
 ) -> codex_app_server_protocol::WorkflowSummary {
     codex_app_server_protocol::WorkflowSummary {
         id: workflow.id,
+        command: workflow.command,
         title: workflow.title,
         user_description: workflow.user_description,
         search_terms: workflow.search_terms,

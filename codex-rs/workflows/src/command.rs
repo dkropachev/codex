@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
+use serde::Serialize;
 use thiserror::Error;
+
+use crate::registry::WorkflowSummary;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkflowCommand {
@@ -53,6 +56,15 @@ pub enum WorkflowInputSource {
     File(PathBuf),
 }
 
+/// JSON input payload passed to a workflow when it is launched through a
+/// registered slash or CLI command alias.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowCommandInput {
+    pub argv: Vec<String>,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkflowConfigCommand {
     Show,
@@ -77,6 +89,14 @@ pub fn parse_workflow_command_line(
 ) -> Result<WorkflowCommand, WorkflowCommandParseError> {
     let args = shlex::split(command).ok_or(WorkflowCommandParseError::InvalidCommandLine)?;
     parse_workflow_command(&args)
+}
+
+pub fn parse_workflow_command_line_with_workflows(
+    command: &str,
+    workflows: &[WorkflowSummary],
+) -> Result<WorkflowCommand, WorkflowCommandParseError> {
+    let args = shlex::split(command).ok_or(WorkflowCommandParseError::InvalidCommandLine)?;
+    parse_workflow_command_with_workflows(&args, workflows)
 }
 
 pub fn parse_workflow_command(
@@ -132,6 +152,44 @@ pub fn parse_workflow_command(
         "done" => expect_no_extra(args, WorkflowCommand::Done),
         other => Err(WorkflowCommandParseError::UnknownCommand(other.to_string())),
     }
+}
+
+pub fn parse_workflow_command_with_workflows(
+    args: &[String],
+    workflows: &[WorkflowSummary],
+) -> Result<WorkflowCommand, WorkflowCommandParseError> {
+    match parse_workflow_command(args) {
+        Ok(command) => Ok(command),
+        Err(WorkflowCommandParseError::UnknownCommand(name)) => {
+            parse_registered_workflow_command(args, &name, workflows)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+pub fn workflow_command_input(argv: &[String]) -> WorkflowCommandInput {
+    WorkflowCommandInput {
+        argv: argv.to_vec(),
+        text: argv.join(" "),
+    }
+}
+
+fn parse_registered_workflow_command(
+    args: &[String],
+    command_name: &str,
+    workflows: &[WorkflowSummary],
+) -> Result<WorkflowCommand, WorkflowCommandParseError> {
+    let Some(workflow) = crate::registry::find_workflow_by_command(workflows, command_name) else {
+        return Err(WorkflowCommandParseError::UnknownCommand(
+            command_name.to_string(),
+        ));
+    };
+    let input = serde_json::to_string(&workflow_command_input(args.get(1..).unwrap_or(&[])))
+        .map_err(|_| WorkflowCommandParseError::InvalidCommandLine)?;
+    Ok(WorkflowCommand::Run {
+        id: workflow.id.clone(),
+        input: Some(WorkflowInputSource::Inline(input)),
+    })
 }
 
 fn parse_run(args: &[String]) -> Result<WorkflowCommand, WorkflowCommandParseError> {
@@ -240,6 +298,28 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    fn workflow_summary(command: Option<&str>) -> WorkflowSummary {
+        WorkflowSummary {
+            id: "reports/jira-summary".to_string(),
+            command: command.map(ToString::to_string),
+            title: Some("Jira Summary".to_string()),
+            user_description: Some("Prepare a concise Jira summary".to_string()),
+            search_terms: vec!["jira".to_string()],
+            root_label: "global".to_string(),
+            root_kind: crate::registry::WorkflowRootKind::Global,
+            root_path: PathBuf::from("/tmp/workflows"),
+            path: PathBuf::from("/tmp/workflows/reports/jira-summary"),
+            workflow_yaml_path: PathBuf::from("/tmp/workflows/reports/jira-summary/workflow.yaml"),
+            mention_target: "workflow:///tmp/workflows/reports/jira-summary#reports/jira-summary"
+                .to_string(),
+            validation: crate::registry::WorkflowValidation {
+                status: crate::registry::WorkflowValidationStatus::Valid,
+                messages: Vec::new(),
+            },
+            repair_mode: "threshold:3".to_string(),
+        }
+    }
+
     #[test]
     fn parses_shared_workflow_commands() {
         assert_eq!(parse_workflow_command(&[]).unwrap(), WorkflowCommand::Mode);
@@ -259,6 +339,30 @@ mod tests {
                 key: "repair_mode".to_string(),
                 value: "threshold:2".to_string(),
             })
+        );
+    }
+
+    #[test]
+    fn parses_registered_workflow_alias_into_run_command() {
+        let workflows = vec![workflow_summary(Some("jira-summary"))];
+        let command = parse_workflow_command_with_workflows(
+            &[
+                "jira-summary".to_string(),
+                "--project".to_string(),
+                "COD".to_string(),
+            ],
+            &workflows,
+        )
+        .unwrap();
+
+        assert_eq!(
+            command,
+            WorkflowCommand::Run {
+                id: "reports/jira-summary".to_string(),
+                input: Some(WorkflowInputSource::Inline(
+                    r#"{"argv":["--project","COD"],"text":"--project COD"}"#.to_string(),
+                )),
+            }
         );
     }
 }

@@ -62,6 +62,16 @@ use wiremock::matchers::path_regex;
 const MODEL_ROUTER_TUNE_RESPONSE_TEXT: &str = r#"{"pass":true,"score":1.0,"confidence":1.0}"#;
 const MODEL_ROUTER_TUNE_RESPONSE_TOKENS: i64 = 10;
 
+#[derive(Debug, Copy, Clone)]
+struct CompletedRolloutSpec<'a> {
+    rollout_rel_path: &'a str,
+    user_message: &'a str,
+    assistant_message: &'a str,
+    turn_id: &'a str,
+    duration_ms: i64,
+    provider: &'a str,
+}
+
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct ShadowReportView {
@@ -130,13 +140,15 @@ async fn model_router_tune_persists_shadow_rows_and_cli_report() -> Result<()> {
         .with_config(move |config| {
             let openai_provider_id = config.model_provider_id.clone();
             let openai_base_url = config.model_provider.base_url.clone();
-            config
-                .features
-                .enable(Feature::Sqlite)
-                .expect("test config should allow sqlite");
+            if let Err(err) = config.features.enable(Feature::Sqlite) {
+                panic!("test config should allow sqlite: {err}");
+            }
             config.model_provider.env_key = None;
             config.model_provider.requires_openai_auth = false;
             config.model_provider.supports_websockets = false;
+            let timeout_ms = NonZeroU64::new(5_000).unwrap_or_else(|| {
+                panic!("timeout should be non-zero");
+            });
             config.model_provider.auth = Some(ModelProviderAuthInfo {
                 command: if cfg!(windows) {
                     "cmd".to_string()
@@ -148,18 +160,21 @@ async fn model_router_tune_persists_shadow_rows_and_cli_report() -> Result<()> {
                 } else {
                     vec!["-lc".to_string(), "printf %s openai-test-token".to_string()]
                 },
-                timeout_ms: NonZeroU64::new(5_000).expect("timeout should be non-zero"),
+                timeout_ms,
                 refresh_interval_ms: 300_000,
                 cwd: config.cwd.clone(),
             });
-            let openai_provider = config
-                .model_providers
-                .get_mut(&openai_provider_id)
-                .expect("OpenAI provider should be configured");
+            let openai_provider = match config.model_providers.get_mut(&openai_provider_id) {
+                Some(provider) => provider,
+                None => panic!("OpenAI provider should be configured"),
+            };
             openai_provider.base_url = openai_base_url;
             openai_provider.env_key = None;
             openai_provider.requires_openai_auth = false;
             openai_provider.supports_websockets = false;
+            let timeout_ms = NonZeroU64::new(5_000).unwrap_or_else(|| {
+                panic!("timeout should be non-zero");
+            });
             openai_provider.auth = Some(ModelProviderAuthInfo {
                 command: if cfg!(windows) {
                     "cmd".to_string()
@@ -171,7 +186,7 @@ async fn model_router_tune_persists_shadow_rows_and_cli_report() -> Result<()> {
                 } else {
                     vec!["-lc".to_string(), "printf %s openai-test-token".to_string()]
                 },
-                timeout_ms: NonZeroU64::new(5_000).expect("timeout should be non-zero"),
+                timeout_ms,
                 refresh_interval_ms: 300_000,
                 cwd: config.cwd.clone(),
             });
@@ -181,12 +196,15 @@ async fn model_router_tune_persists_shadow_rows_and_cli_report() -> Result<()> {
                 ..Default::default()
             });
 
-            let deepseek = config
-                .model_providers
-                .get_mut(DEEPSEEK_PROVIDER_ID)
-                .expect("DeepSeek provider should be built in");
+            let deepseek = match config.model_providers.get_mut(DEEPSEEK_PROVIDER_ID) {
+                Some(provider) => provider,
+                None => panic!("DeepSeek provider should be built in"),
+            };
             deepseek.base_url = Some(deepseek_base_url);
             deepseek.env_key = None;
+            let timeout_ms = NonZeroU64::new(5_000).unwrap_or_else(|| {
+                panic!("timeout should be non-zero");
+            });
             deepseek.auth = Some(ModelProviderAuthInfo {
                 command: if cfg!(windows) {
                     "cmd".to_string()
@@ -201,7 +219,7 @@ async fn model_router_tune_persists_shadow_rows_and_cli_report() -> Result<()> {
                         "printf %s deepseek-test-token".to_string(),
                     ]
                 },
-                timeout_ms: NonZeroU64::new(5_000).expect("timeout should be non-zero"),
+                timeout_ms,
                 refresh_interval_ms: 300_000,
                 cwd: config.cwd.clone(),
             });
@@ -210,16 +228,16 @@ async fn model_router_tune_persists_shadow_rows_and_cli_report() -> Result<()> {
             });
         });
     let test = builder.build(&openai_server).await?;
-    let state_db = test.codex.state_db().expect("state db enabled");
+    let Some(state_db) = test.codex.state_db() else {
+        panic!("state db enabled");
+    };
     let models_manager = test.thread_manager.get_models_manager();
     let auth_manager = test.thread_manager.auth_manager();
     let default_provider_id = test.config.model_provider_id.clone();
-    let incumbent_model = test
-        .config
-        .model
-        .as_deref()
-        .expect("test config should set a model")
-        .to_string();
+    let Some(incumbent_model) = test.config.model.as_deref() else {
+        panic!("test config should set a model");
+    };
+    let incumbent_model = incumbent_model.to_string();
 
     let _ = models_manager
         .list_models(RefreshStrategy::OnlineIfUncached)
@@ -231,12 +249,14 @@ async fn model_router_tune_persists_shadow_rows_and_cli_report() -> Result<()> {
     let spark_rollout_path = write_completed_rollout(
         test.codex_home_path(),
         spark_thread_id,
-        &spark_rollout_rel_path,
-        "spark replay case",
-        "historical spark answer",
-        "spark-turn-1",
-        100,
-        &default_provider_id,
+        CompletedRolloutSpec {
+            rollout_rel_path: &spark_rollout_rel_path,
+            user_message: "spark replay case",
+            assistant_message: "historical spark answer",
+            turn_id: "spark-turn-1",
+            duration_ms: 100,
+            provider: &default_provider_id,
+        },
     )?;
 
     let deepseek_thread_id = ThreadId::new();
@@ -245,12 +265,14 @@ async fn model_router_tune_persists_shadow_rows_and_cli_report() -> Result<()> {
     let deepseek_rollout_path = write_completed_rollout(
         test.codex_home_path(),
         deepseek_thread_id,
-        &deepseek_rollout_rel_path,
-        "deepseek replay case",
-        "historical deepseek answer",
-        "deepseek-turn-1",
-        200,
-        &default_provider_id,
+        CompletedRolloutSpec {
+            rollout_rel_path: &deepseek_rollout_rel_path,
+            user_message: "deepseek replay case",
+            assistant_message: "historical deepseek answer",
+            turn_id: "deepseek-turn-1",
+            duration_ms: 200,
+            provider: &default_provider_id,
+        },
     )?;
 
     seed_thread_metadata(
@@ -275,17 +297,17 @@ async fn model_router_tune_persists_shadow_rows_and_cli_report() -> Result<()> {
     .await?;
 
     let discovered_candidates =
-        model_router_candidate_pool_for_config(&test.config, &models_manager)
-            .await
-            .expect("candidate pool should build");
+        match model_router_candidate_pool_for_config(&test.config, &models_manager).await {
+            Ok(candidates) => candidates,
+            Err(err) => panic!("candidate pool should build: {err}"),
+        };
 
-    let spark_candidate = discovered_candidates
-        .iter()
-        .find(|candidate| {
-            candidate.model.as_deref() == Some("gpt-5.3-codex-spark")
-                && candidate.model_provider.as_deref() == Some(&default_provider_id)
-        })
-        .expect("spark candidate should be discovered");
+    let Some(spark_candidate) = discovered_candidates.iter().find(|candidate| {
+        candidate.model.as_deref() == Some("gpt-5.3-codex-spark")
+            && candidate.model_provider.as_deref() == Some(&default_provider_id)
+    }) else {
+        panic!("spark candidate should be discovered");
+    };
     assert!(
         discovered_candidates
             .iter()
@@ -537,8 +559,10 @@ fn request_model_counts(requests: &[responses::ResponsesRequest]) -> BTreeMap<St
             .body_json()
             .get("model")
             .and_then(Value::as_str)
-            .expect("responses request should include a model")
-            .to_string();
+            .map_or_else(
+                || panic!("responses request should include a model"),
+                ToString::to_string,
+            );
         *counts.entry(model).or_insert(0) += 1;
     }
     counts
@@ -583,17 +607,19 @@ fn sort_record_views(values: &mut [ShadowRecordView]) {
 }
 
 fn openai_models_response() -> codex_protocol::openai_models::ModelsResponse {
-    let bundled_models = bundled_models_response().expect("bundled model catalog should parse");
+    let bundled_models = bundled_models_response().unwrap_or_else(|err| {
+        panic!("bundled model catalog should parse: {err}");
+    });
+    let Some(gpt_54) = bundled_models
+        .models
+        .iter()
+        .find(|model| model.slug == "gpt-5.4")
+        .cloned()
+    else {
+        panic!("bundled gpt-5.4 model should exist");
+    };
     codex_protocol::openai_models::ModelsResponse {
-        models: vec![
-            bundled_models
-                .models
-                .iter()
-                .find(|model| model.slug == "gpt-5.4")
-                .cloned()
-                .expect("bundled gpt-5.4 model should exist"),
-            model_info_from_slug("gpt-5.3-codex-spark"),
-        ],
+        models: vec![gpt_54, model_info_from_slug("gpt-5.3-codex-spark")],
     }
 }
 
@@ -644,8 +670,9 @@ async fn mount_deepseek_chat_response_n_times(server: &MockServer, times: u64) {
 }
 
 fn deepseek_chat_sse_response() -> String {
-    let content = serde_json::to_string(MODEL_ROUTER_TUNE_RESPONSE_TEXT)
-        .expect("assistant output text should serialize");
+    let content = serde_json::to_string(MODEL_ROUTER_TUNE_RESPONSE_TEXT).unwrap_or_else(|err| {
+        panic!("assistant output text should serialize: {err}");
+    });
     format!(
         "data: {{\"id\":\"chatcmpl-1\",\"model\":\"deepseek-chat\",\"choices\":[{{\"delta\":{{\"content\":{content}}}}}]}}\n\n\
          data: {{\"id\":\"chatcmpl-1\",\"choices\":[],\"usage\":{{\"prompt_tokens\":{MODEL_ROUTER_TUNE_RESPONSE_TOKENS},\"completion_tokens\":0,\"total_tokens\":{MODEL_ROUTER_TUNE_RESPONSE_TOKENS}}}}}\n\n\
@@ -656,14 +683,9 @@ fn deepseek_chat_sse_response() -> String {
 fn write_completed_rollout(
     codex_home: &Path,
     thread_id: ThreadId,
-    rollout_rel_path: &str,
-    user_message: &str,
-    assistant_message: &str,
-    turn_id: &str,
-    duration_ms: i64,
-    provider: &str,
+    spec: CompletedRolloutSpec<'_>,
 ) -> Result<PathBuf> {
-    let rollout_path = codex_home.join(rollout_rel_path);
+    let rollout_path = codex_home.join(spec.rollout_rel_path);
     if let Some(parent) = rollout_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -685,7 +707,7 @@ fn write_completed_rollout(
                     agent_nickname: None,
                     agent_role: None,
                     agent_path: None,
-                    model_provider: Some(provider.to_string()),
+                    model_provider: Some(spec.provider.to_string()),
                     base_instructions: None,
                     dynamic_tools: None,
                     memory_mode: None,
@@ -696,7 +718,7 @@ fn write_completed_rollout(
         RolloutLine {
             timestamp: "2026-01-27T12:00:01Z".to_string(),
             item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
-                message: user_message.to_string(),
+                message: spec.user_message.to_string(),
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
@@ -705,7 +727,7 @@ fn write_completed_rollout(
         RolloutLine {
             timestamp: "2026-01-27T12:00:02Z".to_string(),
             item: RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
-                turn_id: turn_id.to_string(),
+                turn_id: spec.turn_id.to_string(),
                 started_at: None,
                 model_context_window: Some(272_000),
                 collaboration_mode_kind: ModeKind::Default,
@@ -717,7 +739,7 @@ fn write_completed_rollout(
                 id: None,
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
-                    text: assistant_message.to_string(),
+                    text: spec.assistant_message.to_string(),
                 }],
                 phase: None,
             }),
@@ -725,10 +747,10 @@ fn write_completed_rollout(
         RolloutLine {
             timestamp: "2026-01-27T12:00:04Z".to_string(),
             item: RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
-                turn_id: turn_id.to_string(),
+                turn_id: spec.turn_id.to_string(),
                 last_agent_message: None,
                 completed_at: None,
-                duration_ms: Some(duration_ms),
+                duration_ms: Some(spec.duration_ms),
                 time_to_first_token_ms: None,
             })),
         },
@@ -736,7 +758,11 @@ fn write_completed_rollout(
 
     let jsonl = rollout_lines
         .into_iter()
-        .map(|line| serde_json::to_string(&line).expect("rollout line should serialize"))
+        .map(|line| {
+            serde_json::to_string(&line).unwrap_or_else(|err| {
+                panic!("rollout line should serialize: {err}");
+            })
+        })
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(&rollout_path, format!("{jsonl}\n"))?;

@@ -137,6 +137,7 @@ use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadEventPersistenceMode;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
+use codex_thread_store::ThreadStoreError;
 use codex_utils_output_truncation::TruncationPolicy;
 use futures::future::BoxFuture;
 use futures::future::Shared;
@@ -544,7 +545,7 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let mut base_instructions = config
+        let base_instructions = config
             .base_instructions
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
@@ -1374,6 +1375,24 @@ impl Session {
         state.session_configuration.provider.clone()
     }
 
+    pub(crate) fn build_hooks_from_config(
+        config: &Config,
+        user_shell: &crate::shell::Shell,
+    ) -> Hooks {
+        let mut hook_shell_argv = user_shell.derive_exec_args("", /*use_login_shell*/ false);
+        let hook_shell_program = hook_shell_argv.remove(0);
+        let _ = hook_shell_argv.pop();
+        Hooks::new(HooksConfig {
+            legacy_notify_argv: config.notify.clone(),
+            feature_enabled: config.features.enabled(Feature::CodexHooks),
+            config_layer_stack: Some(config.config_layer_stack.clone()),
+            plugin_hook_sources: Vec::new(),
+            plugin_hook_load_warnings: Vec::new(),
+            shell_program: Some(hook_shell_program),
+            shell_args: hook_shell_argv,
+        })
+    }
+
     pub(crate) async fn reload_user_config_layer(&self) {
         let config_toml_path = {
             let state = self.state.lock().await;
@@ -1406,6 +1425,14 @@ impl Session {
             .config_layer_stack
             .with_user_config(&config_toml_path, user_config);
         state.session_configuration.original_config_do_not_use = Arc::new(config);
+        let hooks = Self::build_hooks_from_config(
+            state
+                .session_configuration
+                .original_config_do_not_use
+                .as_ref(),
+            self.services.user_shell.as_ref(),
+        );
+        self.services.hooks.store(Arc::new(hooks));
         self.services.skills_manager.clear_cache();
         self.services.plugins_manager.clear_cache();
     }
@@ -1592,6 +1619,31 @@ impl Session {
             .rollout_thread_trace
             .record_protocol_event(&event.msg);
         self.deliver_event_raw(event).await;
+    }
+
+    /// Delivers a raw event before attempting rollout persistence.
+    ///
+    /// Reserved for completion events that must be visible to clients even if the
+    /// active thread is torn down immediately afterward.
+    pub(crate) async fn send_event_raw_deliver_first(&self, event: Event) {
+        let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
+        let is_mcp_tool_call_end = matches!(&event.msg, EventMsg::McpToolCallEnd(_));
+        let is_shutdown_complete = matches!(&event.msg, EventMsg::ShutdownComplete);
+        self.services
+            .rollout_thread_trace
+            .record_protocol_event(&event.msg);
+        self.deliver_event_raw(event).await;
+        if let Err(err) = self.try_persist_rollout_items(&rollout_items).await {
+            if (is_mcp_tool_call_end || is_shutdown_complete)
+                && matches!(err, ThreadStoreError::ThreadNotFound { .. })
+            {
+                debug!(
+                    "skipping rollout persistence for delivered raw event because thread was shut down"
+                );
+                return;
+            }
+            error!("failed to record rollout items: {err:#}");
+        }
     }
 
     async fn deliver_event_raw(&self, event: Event) {
@@ -2265,6 +2317,36 @@ impl Session {
 
     #[expect(
         clippy::await_holding_invalid_type,
+        reason = "active turn permissions must be recorded on the matching turn state"
+    )]
+    pub(crate) async fn record_granted_turn_permissions(
+        &self,
+        permissions: AdditionalPermissionProfile,
+    ) {
+        if permissions.is_empty() {
+            return;
+        }
+        let active = self.active_turn.lock().await;
+        let Some(active) = active.as_ref() else {
+            return;
+        };
+        let mut ts = active.turn_state.lock().await;
+        ts.record_granted_permissions(permissions);
+    }
+
+    pub(crate) async fn record_granted_session_permissions(
+        &self,
+        permissions: AdditionalPermissionProfile,
+    ) {
+        if permissions.is_empty() {
+            return;
+        }
+        let mut state = self.state.lock().await;
+        state.record_granted_permissions(permissions);
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
         reason = "active turn reads must stay consistent with the matching turn state"
     )]
     pub(crate) async fn granted_turn_permissions(&self) -> Option<AdditionalPermissionProfile> {
@@ -2696,10 +2778,19 @@ impl Session {
         items
     }
 
+    async fn try_persist_rollout_items(
+        &self,
+        items: &[RolloutItem],
+    ) -> codex_thread_store::ThreadStoreResult<()> {
+        if let Some(live_thread) = self.live_thread() {
+            live_thread.append_items(items).await
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
-        if let Some(live_thread) = self.live_thread()
-            && let Err(e) = live_thread.append_items(items).await
-        {
+        if let Err(e) = self.try_persist_rollout_items(items).await {
             error!("failed to record rollout items: {e:#}");
         }
     }
@@ -3209,8 +3300,8 @@ impl Session {
         }
     }
 
-    pub(crate) fn hooks(&self) -> &Hooks {
-        &self.services.hooks
+    pub(crate) fn hooks(&self) -> Arc<Hooks> {
+        self.services.hooks.load_full()
     }
 
     pub(crate) fn user_shell(&self) -> Arc<shell::Shell> {
