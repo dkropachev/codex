@@ -45,6 +45,7 @@ pub struct WorkflowRootInfo {
 #[ts(export_to = "v2/")]
 pub struct WorkflowSummary {
     pub id: String,
+    pub command: Option<String>,
     pub title: Option<String>,
     pub user_description: Option<String>,
     pub search_terms: Vec<String>,

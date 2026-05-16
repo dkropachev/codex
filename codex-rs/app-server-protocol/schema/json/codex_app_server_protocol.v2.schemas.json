@@ -18920,6 +18920,12 @@
     },
     "WorkflowSummary": {
       "properties": {
+        "command": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "id": {
           "type": "string"
         },

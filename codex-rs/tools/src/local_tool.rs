@@ -258,11 +258,10 @@ Examples of valid command strings:
             windows_shell_guidance()
         )
     } else {
-        format!(
-            r#"Runs a shell command and returns its output.
+        r#"Runs a shell command and returns its output.
 - Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary.
 "#
-        )
+        .to_string()
     };
 
     ToolSpec::Function(ResponsesApiTool {

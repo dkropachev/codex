@@ -4,4 +4,4 @@
 import type { WorkflowRootKind } from "./WorkflowRootKind";
 import type { WorkflowValidationInfo } from "./WorkflowValidationInfo";
 
-export type WorkflowSummary = { id: string, title: string | null, userDescription: string | null, searchTerms: Array<string>, rootLabel: string, rootKind: WorkflowRootKind, rootPath: string, path: string, workflowYamlPath: string, mentionTarget: string, validation: WorkflowValidationInfo, repairMode: string, };
+export type WorkflowSummary = { id: string, command: string | null, title: string | null, userDescription: string | null, searchTerms: Array<string>, rootLabel: string, rootKind: WorkflowRootKind, rootPath: string, path: string, workflowYamlPath: string, mentionTarget: string, validation: WorkflowValidationInfo, repairMode: string, };
