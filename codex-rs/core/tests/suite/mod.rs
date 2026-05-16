@@ -60,6 +60,7 @@ mod json_result;
 mod live_cli;
 mod live_reload;
 mod model_overrides;
+mod model_router_tune;
 mod model_switching;
 mod model_visible_layout;
 mod models_cache_ttl;

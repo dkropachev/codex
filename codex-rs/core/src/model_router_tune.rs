@@ -772,6 +772,9 @@ mod tests {
             candidates: Vec::new(),
             ..Default::default()
         });
+        config
+            .model_providers
+            .retain(|provider_id, _| provider_id == &config.model_provider_id);
         let models_manager = Arc::new(StaticModelsManager::new(
             /*auth_manager*/ None,
             ModelsResponse {
