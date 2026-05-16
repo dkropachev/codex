@@ -2933,12 +2933,9 @@ impl ChatComposer {
         }
         let Some(cmd) = slash_commands::find_builtin_command(name, self.builtin_command_flags())
         else {
-            let Some(workflow_command) = self
+            let workflow_command = self
                 .workflow_command_by_name(name)
-                .map(|workflow| workflow.command.clone().unwrap_or_else(|| name.to_string()))
-            else {
-                return None;
-            };
+                .map(|workflow| workflow.command.clone().unwrap_or_else(|| name.to_string()))?;
             self.stage_slash_command_history();
             self.textarea.set_text_clearing_elements("");
             self.is_bash_mode = false;
@@ -3004,12 +3001,9 @@ impl ChatComposer {
             ));
         }
 
-        let Some(workflow_command) = self
+        let workflow_command = self
             .workflow_command_by_name(name)
-            .map(|workflow| workflow.command.clone().unwrap_or_else(|| name.to_string()))
-        else {
-            return None;
-        };
+            .map(|workflow| workflow.command.clone().unwrap_or_else(|| name.to_string()))?;
 
         self.stage_slash_command_history();
 

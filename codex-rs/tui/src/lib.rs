@@ -1856,24 +1856,6 @@ mod tests {
             .await
     }
 
-    async fn start_test_embedded_app_server(
-        config: Config,
-    ) -> color_eyre::Result<InProcessAppServerClient> {
-        let state_db = state_db::init(&config).await;
-        start_embedded_app_server(
-            Arg0DispatchPaths::default(),
-            config,
-            Vec::new(),
-            LoaderOverrides::default(),
-            CloudRequirementsLoader::default(),
-            codex_feedback::CodexFeedback::new(),
-            /*log_db*/ None,
-            state_db,
-            Arc::new(EnvironmentManager::default_for_tests()),
-        )
-        .await
-    }
-
     async fn start_remote_app_server_for_thread_start_rpc(
         cwd: PathBuf,
     ) -> color_eyre::Result<AppServerClient> {

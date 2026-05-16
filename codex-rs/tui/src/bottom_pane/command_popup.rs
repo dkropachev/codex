@@ -27,7 +27,7 @@ const COMMAND_COLUMN_WIDTH: ColumnWidthConfig = ColumnWidthConfig::new(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CommandItem {
     Builtin(SlashCommand),
-    Workflow(WorkflowSummary),
+    Workflow(Box<WorkflowSummary>),
 }
 
 pub(crate) struct CommandPopup {
@@ -157,7 +157,7 @@ impl CommandPopup {
             }
             for workflow in self.workflows.iter() {
                 if workflow.command.is_some() {
-                    out.push((CommandItem::Workflow(workflow.clone()), None));
+                    out.push((CommandItem::Workflow(Box::new(workflow.clone())), None));
                 }
             }
             return out;
@@ -198,7 +198,12 @@ impl CommandPopup {
             let Some(command) = workflow.command.as_deref() else {
                 continue;
             };
-            push_match(CommandItem::Workflow(workflow.clone()), command, None, 0);
+            push_match(
+                CommandItem::Workflow(Box::new(workflow.clone())),
+                command,
+                None,
+                0,
+            );
         }
 
         out.extend(exact);
@@ -365,7 +370,7 @@ mod tests {
         popup.on_composer_text_change("/jira-summary".to_string());
 
         match popup.selected_item() {
-            Some(CommandItem::Workflow(selected)) => assert_eq!(selected, workflow),
+            Some(CommandItem::Workflow(selected)) => assert_eq!(selected.as_ref(), &workflow),
             other => {
                 panic!("expected workflow alias to be selected for exact match, got {other:?}")
             }
