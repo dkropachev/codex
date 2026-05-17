@@ -16,6 +16,7 @@ use codex_app_server_protocol::ArtifactStateListResponse;
 use codex_app_server_protocol::ArtifactStatePruneResponse;
 use codex_app_server_protocol::ArtifactStateReadResponse;
 use codex_app_server_protocol::ArtifactStateRegisterResponse;
+use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -116,7 +117,7 @@ async fn artifact_rpc_round_trip_uses_the_shared_store() -> Result<()> {
         }),
     )
     .await?;
-    assert_eq!(hit, json!({}));
+    assert_eq!(hit.result, json!({}));
 
     let prune = to_response::<ArtifactStatePruneResponse>(
         timeout(
@@ -261,7 +262,7 @@ async fn response_for(
     mcp: &mut McpProcess,
     method: &str,
     params: serde_json::Value,
-) -> Result<serde_json::Value> {
+) -> Result<JSONRPCResponse> {
     let request_id = mcp.send_raw_request(method, Some(params)).await?;
     let response = mcp
         .read_stream_until_response_message(RequestId::Integer(request_id))
