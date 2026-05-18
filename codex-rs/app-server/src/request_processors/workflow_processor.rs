@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::sync::Arc;
 
@@ -152,6 +153,7 @@ impl WorkflowRequestProcessor {
         self.execute(WorkflowCommand::Run {
             id: params.id,
             input,
+            input_fields: BTreeMap::new(),
         })
         .map(|response: WorkflowRunResponse| Some(response.into()))
     }

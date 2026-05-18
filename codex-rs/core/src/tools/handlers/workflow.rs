@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::function_tool::FunctionCallError;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
@@ -92,6 +94,7 @@ async fn run_workflow(
             WorkflowCommand::Run {
                 id: workflow_id,
                 input: Some(WorkflowInputSource::Inline(arguments)),
+                input_fields: BTreeMap::new(),
             },
         )
     })

@@ -45,6 +45,24 @@ pub struct WorkflowCommandOutput {
     pub data: JsonValue,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkflowValidationCommandResult {
+    command: String,
+    succeeded: bool,
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkflowValidationReport {
+    status: crate::registry::WorkflowValidationStatus,
+    messages: Vec<String>,
+    command_results: Vec<WorkflowValidationCommandResult>,
+}
+
 pub fn execute_workflow_command(
     ctx: WorkflowCommandContext<'_>,
     command: WorkflowCommand,
@@ -128,9 +146,10 @@ fn where_workflow(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowC
 
 fn validate(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommandOutput> {
     let workflow = find_workflow(ctx.codex_home, ctx.cwd, ctx.config, id)?;
+    let report = validate_workflow(&workflow, run_validation_command)?;
     Ok(WorkflowCommandOutput {
-        message: validation_message(&workflow.validation),
-        data: json!({ "workflow": workflow }),
+        message: validation_report_message(&report),
+        data: json!({ "workflow": workflow, "validation": report }),
     })
 }
 
@@ -173,7 +192,8 @@ fn develop(ctx: WorkflowCommandContext<'_>, description: &str) -> Result<Workflo
     let id = normalize_workflow_id(&slug)?;
     let path = root.path.join(&id);
     fs::create_dir_all(path.join("src"))?;
-    fs::create_dir_all(path.join("tests"))?;
+    fs::create_dir_all(path.join("src/tests"))?;
+    fs::create_dir_all(path.join("state"))?;
 
     let title = title_from_description(description);
     let spec = scaffold_workflow_spec(
@@ -337,6 +357,14 @@ fn validation_message(validation: &crate::registry::WorkflowValidation) -> Strin
     }
 }
 
+fn validation_report_message(report: &WorkflowValidationReport) -> String {
+    if report.messages.is_empty() {
+        "valid".to_string()
+    } else {
+        report.messages.join("\n")
+    }
+}
+
 fn slugify(description: &str) -> String {
     let mut slug = String::new();
     let mut previous_dash = false;
@@ -396,7 +424,7 @@ fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -
   "type": "module",
   "scripts": {{
     "build": "tsc --noEmit",
-    "test": "node --test",
+    "test": "node --import tsx --test src/tests/**/*.test.ts",
     "run": "tsx src/workflow.ts"
   }},
   "dependencies": {{
@@ -422,7 +450,7 @@ fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -
     "strict": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"]
+  "include": ["src/**/*.ts"]
 }
 "#,
     )?;
@@ -456,16 +484,17 @@ if (import.meta.url === `file://${{process.argv[1]}}`) {{
         ),
     )?;
     fs::write(
-        path.join("tests/workflow.test.ts"),
+        path.join("src/tests/workflow.test.ts"),
         r#"import assert from "node:assert/strict";
 import test from "node:test";
-import workflow from "../src/workflow.js";
+import workflow from "../workflow.js";
 
 test("workflow is defined", () => {
   assert.equal(typeof workflow, "object");
 });
 "#,
     )?;
+    fs::write(path.join("state/.gitkeep"), "")?;
     Ok(())
 }
 
@@ -517,6 +546,97 @@ fn read_input(
 
 fn parse_input_field_value(raw_value: &str) -> JsonValue {
     serde_json::from_str(raw_value).unwrap_or_else(|_| JsonValue::String(raw_value.to_string()))
+}
+
+fn validate_workflow<F>(
+    workflow: &crate::registry::WorkflowSummary,
+    mut command_runner: F,
+) -> Result<WorkflowValidationReport>
+where
+    F: FnMut(&str, &Path) -> Result<WorkflowValidationCommandResult>,
+{
+    let mut messages = workflow.validation.messages.clone();
+    let mut command_results = Vec::new();
+
+    if let Ok(spec) = read_workflow_spec(&workflow.workflow_yaml_path) {
+        for command in validation_commands(&spec) {
+            let result = command_runner(&command, &workflow.path)?;
+            let command_failed = !result.succeeded;
+            if command_failed {
+                messages.push(format!(
+                    "validation command `{command}` failed with {}",
+                    exit_status_label(result.exit_code)
+                ));
+            }
+            command_results.push(result);
+            if command_failed {
+                break;
+            }
+        }
+    }
+
+    let status = if messages.is_empty() {
+        crate::registry::WorkflowValidationStatus::Valid
+    } else {
+        crate::registry::WorkflowValidationStatus::Invalid
+    };
+    Ok(WorkflowValidationReport {
+        status,
+        messages,
+        command_results,
+    })
+}
+
+fn validation_commands(spec: &crate::spec::WorkflowSpec) -> Vec<String> {
+    let commands = spec
+        .validation
+        .get("commands")
+        .and_then(JsonValue::as_array)
+        .map(|commands| {
+            commands
+                .iter()
+                .filter_map(JsonValue::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if commands.is_empty() {
+        vec!["npm test".to_string()]
+    } else {
+        commands
+    }
+}
+
+fn run_validation_command(command: &str, cwd: &Path) -> Result<WorkflowValidationCommandResult> {
+    let output = validation_shell_command(command)
+        .current_dir(cwd)
+        .output()
+        .with_context(|| format!("failed to run validation command `{command}`"))?;
+    Ok(WorkflowValidationCommandResult {
+        command: command.to_string(),
+        succeeded: output.status.success(),
+        exit_code: output.status.code(),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    })
+}
+
+fn validation_shell_command(command: &str) -> Command {
+    if cfg!(windows) {
+        let mut process = Command::new("cmd");
+        process.args(["/C", command]);
+        process
+    } else {
+        let mut process = Command::new("sh");
+        process.args(["-lc", command]);
+        process
+    }
+}
+
+fn exit_status_label(exit_code: Option<i32>) -> String {
+    exit_code
+        .map(|code| format!("exit code {code}"))
+        .unwrap_or_else(|| "a non-zero status".to_string())
 }
 
 fn commit_workflow_changes(config: &WorkflowsConfigToml, path: &Path, message: &str) -> Result<()> {
@@ -638,6 +758,123 @@ mod tests {
             cwd.path()
                 .join(".codex/workflows/jira-summary/workflow.yaml")
                 .is_file()
+        );
+        assert!(
+            cwd.path()
+                .join(".codex/workflows/jira-summary/src/tests")
+                .is_dir()
+        );
+        assert!(
+            cwd.path()
+                .join(".codex/workflows/jira-summary/src/tests/workflow.test.ts")
+                .is_file()
+        );
+        assert!(
+            cwd.path()
+                .join(".codex/workflows/jira-summary/state")
+                .is_dir()
+        );
+        assert!(
+            cwd.path()
+                .join(".codex/workflows/jira-summary/state/.gitkeep")
+                .is_file()
+        );
+    }
+
+    #[test]
+    fn validate_workflow_runs_validation_commands() {
+        let temp_dir = TempDir::new().unwrap();
+        let workflow_dir = temp_dir.path().join("review/fix");
+        fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
+        fs::create_dir_all(workflow_dir.join("state")).unwrap();
+        fs::create_dir_all(workflow_dir.join(".git")).unwrap();
+        fs::write(workflow_dir.join("README.md"), "# Test\n").unwrap();
+        fs::write(workflow_dir.join("src/workflow.ts"), "export {};\n").unwrap();
+        fs::write(workflow_dir.join("state/.gitkeep"), "").unwrap();
+        write_workflow_spec(
+            &workflow_dir.join(WORKFLOW_YAML),
+            &crate::spec::WorkflowSpec {
+                id: "review/fix".to_string(),
+                validation: json!({ "commands": ["echo ok", "exit 0"] }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let workflow = crate::registry::WorkflowSummary {
+            id: "review/fix".to_string(),
+            command: Some("fix".to_string()),
+            title: Some("Fix".to_string()),
+            user_description: Some("Fix workflow".to_string()),
+            search_terms: Vec::new(),
+            root_label: "global".to_string(),
+            root_kind: crate::registry::WorkflowRootKind::Global,
+            root_path: temp_dir.path().to_path_buf(),
+            path: workflow_dir.clone(),
+            workflow_yaml_path: workflow_dir.join(WORKFLOW_YAML),
+            mention_target: "workflow:///tmp#review/fix".to_string(),
+            validation: validate_workflow_dir(temp_dir.path(), &workflow_dir, "review/fix"),
+            repair_mode: "threshold:3".to_string(),
+        };
+
+        let report = validate_workflow(&workflow, run_validation_command).unwrap();
+
+        assert_eq!(
+            report.status,
+            crate::registry::WorkflowValidationStatus::Valid
+        );
+        assert_eq!(report.messages, Vec::<String>::new());
+        assert_eq!(report.command_results.len(), 2);
+        assert_eq!(report.command_results[0].command, "echo ok");
+        assert!(report.command_results[0].succeeded);
+        assert_eq!(report.command_results[1].command, "exit 0");
+        assert!(report.command_results[1].succeeded);
+    }
+
+    #[test]
+    fn validate_workflow_reports_failing_validation_command() {
+        let temp_dir = TempDir::new().unwrap();
+        let workflow_dir = temp_dir.path().join("review/fix");
+        fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
+        fs::create_dir_all(workflow_dir.join("state")).unwrap();
+        fs::create_dir_all(workflow_dir.join(".git")).unwrap();
+        fs::write(workflow_dir.join("README.md"), "# Test\n").unwrap();
+        fs::write(workflow_dir.join("src/workflow.ts"), "export {};\n").unwrap();
+        fs::write(workflow_dir.join("state/.gitkeep"), "").unwrap();
+        write_workflow_spec(
+            &workflow_dir.join(WORKFLOW_YAML),
+            &crate::spec::WorkflowSpec {
+                id: "review/fix".to_string(),
+                validation: json!({ "commands": ["exit 1", "echo skipped"] }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let workflow = crate::registry::WorkflowSummary {
+            id: "review/fix".to_string(),
+            command: Some("fix".to_string()),
+            title: Some("Fix".to_string()),
+            user_description: Some("Fix workflow".to_string()),
+            search_terms: Vec::new(),
+            root_label: "global".to_string(),
+            root_kind: crate::registry::WorkflowRootKind::Global,
+            root_path: temp_dir.path().to_path_buf(),
+            path: workflow_dir.clone(),
+            workflow_yaml_path: workflow_dir.join(WORKFLOW_YAML),
+            mention_target: "workflow:///tmp#review/fix".to_string(),
+            validation: validate_workflow_dir(temp_dir.path(), &workflow_dir, "review/fix"),
+            repair_mode: "threshold:3".to_string(),
+        };
+
+        let report = validate_workflow(&workflow, run_validation_command).unwrap();
+
+        assert_eq!(
+            report.status,
+            crate::registry::WorkflowValidationStatus::Invalid
+        );
+        assert_eq!(report.command_results.len(), 1);
+        assert_eq!(
+            report.messages,
+            vec!["validation command `exit 1` failed with exit code 1".to_string()]
         );
     }
 

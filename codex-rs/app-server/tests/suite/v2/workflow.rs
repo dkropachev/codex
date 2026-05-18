@@ -31,7 +31,8 @@ async fn workflow_list_returns_discovered_workflows() -> Result<()> {
         "compact",
     )?;
     let workflow_dir = codex_home.path().join("workflows/reports/jira-summary");
-    fs::create_dir_all(workflow_dir.join("src"))?;
+    fs::create_dir_all(workflow_dir.join("src/tests"))?;
+    fs::create_dir_all(workflow_dir.join("state"))?;
     fs::create_dir_all(workflow_dir.join(".git"))?;
     fs::write(
         workflow_dir.join("workflow.yaml"),
@@ -39,6 +40,11 @@ async fn workflow_list_returns_discovered_workflows() -> Result<()> {
     )?;
     fs::write(workflow_dir.join("README.md"), "# Jira Summary\n")?;
     fs::write(workflow_dir.join("src/workflow.ts"), "export {};\n")?;
+    fs::write(
+        workflow_dir.join("src/tests/workflow.test.ts"),
+        "export {};\n",
+    )?;
+    fs::write(workflow_dir.join("state/.gitkeep"), "")?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;

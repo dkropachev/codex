@@ -421,7 +421,8 @@ mod tests {
     }
 
     fn create_workflow_fixture(dir: &Path) {
-        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("src/tests")).unwrap();
+        std::fs::create_dir_all(dir.join("state")).unwrap();
         std::fs::create_dir_all(dir.join(".git")).unwrap();
         std::fs::write(
             dir.join("workflow.yaml"),
@@ -430,6 +431,8 @@ mod tests {
         .unwrap();
         std::fs::write(dir.join("README.md"), "# Jira Summary\n").unwrap();
         std::fs::write(dir.join("src/workflow.ts"), "export {};\n").unwrap();
+        std::fs::write(dir.join("src/tests/workflow.test.ts"), "export {};\n").unwrap();
+        std::fs::write(dir.join("state/.gitkeep"), "").unwrap();
         std::fs::write(
             dir.join("package.json"),
             "{\n  \"name\": \"codex-workflow-reports-jira-summary\",\n  \"private\": true\n}\n",

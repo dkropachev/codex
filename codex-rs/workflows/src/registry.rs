@@ -234,6 +234,11 @@ pub fn validate_workflow_dir(
             messages.push(format!("missing {relative}"));
         }
     }
+    for relative in ["src", "src/tests", "state"] {
+        if !workflow_dir.join(relative).is_dir() {
+            messages.push(format!("missing {relative}/"));
+        }
+    }
     if !workflow_dir.join(".git").is_dir() {
         messages.push("workflow directory is not a git repository".to_string());
     }
@@ -245,12 +250,148 @@ pub fn validate_workflow_dir(
         ));
     }
 
+    let mut code_outside_src = Vec::new();
+    let mut tests_outside_src_tests = Vec::new();
+    let mut databases_outside_state = Vec::new();
+    collect_layout_issues(
+        workflow_dir,
+        workflow_dir,
+        &mut code_outside_src,
+        &mut tests_outside_src_tests,
+        &mut databases_outside_state,
+    );
+    if !code_outside_src.is_empty() {
+        messages.push(format!(
+            "code files must live under src/: {}",
+            code_outside_src.join(", ")
+        ));
+    }
+    if !tests_outside_src_tests.is_empty() {
+        messages.push(format!(
+            "test files must live under src/tests/: {}",
+            tests_outside_src_tests.join(", ")
+        ));
+    }
+    if !databases_outside_state.is_empty() {
+        messages.push(format!(
+            "database files must live under state/: {}",
+            databases_outside_state.join(", ")
+        ));
+    }
+
     let status = if messages.is_empty() {
         WorkflowValidationStatus::Valid
     } else {
         WorkflowValidationStatus::Invalid
     };
     WorkflowValidation { status, messages }
+}
+
+fn collect_layout_issues(
+    workflow_dir: &Path,
+    dir: &Path,
+    code_outside_src: &mut Vec<String>,
+    tests_outside_src_tests: &mut Vec<String>,
+    databases_outside_state: &mut Vec<String>,
+) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if should_skip_layout_dir(&path) {
+                continue;
+            }
+            collect_layout_issues(
+                workflow_dir,
+                &path,
+                code_outside_src,
+                tests_outside_src_tests,
+                databases_outside_state,
+            );
+            continue;
+        }
+
+        let Ok(relative) = path.strip_prefix(workflow_dir) else {
+            continue;
+        };
+        let relative_display = relative.display().to_string();
+
+        if is_database_file(relative) && !relative.starts_with(Path::new("state")) {
+            databases_outside_state.push(relative_display);
+            continue;
+        }
+        if is_test_file(relative) {
+            if !relative.starts_with(Path::new("src/tests")) {
+                tests_outside_src_tests.push(relative_display);
+            }
+            continue;
+        }
+        if is_code_file(relative)
+            && !relative.starts_with(Path::new("src"))
+            && !is_allowed_non_src_code_file(relative)
+        {
+            code_outside_src.push(relative_display);
+        }
+    }
+}
+
+fn should_skip_layout_dir(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some(".git" | "node_modules" | "target" | "dist" | "build" | "coverage")
+    )
+}
+
+fn is_code_file(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some("ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts")
+    )
+}
+
+fn is_test_file(path: &Path) -> bool {
+    if path.starts_with(Path::new("tests")) {
+        return true;
+    }
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.contains(".test.") || name.contains(".spec."))
+}
+
+fn is_database_file(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    file_name.ends_with(".db")
+        || file_name.ends_with(".sqlite")
+        || file_name.ends_with(".sqlite3")
+        || file_name.ends_with(".db-wal")
+        || file_name.ends_with(".db-shm")
+        || file_name.ends_with(".sqlite-wal")
+        || file_name.ends_with(".sqlite-shm")
+        || file_name.ends_with(".sqlite3-wal")
+        || file_name.ends_with(".sqlite3-shm")
+}
+
+fn is_allowed_non_src_code_file(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    path.parent().is_some_and(|parent| parent == Path::new(""))
+        && matches!(
+            file_name,
+            name if name.ends_with(".config.ts")
+                || name.ends_with(".config.tsx")
+                || name.ends_with(".config.js")
+                || name.ends_with(".config.jsx")
+                || name.ends_with(".config.mjs")
+                || name.ends_with(".config.cjs")
+                || name.ends_with(".config.mts")
+                || name.ends_with(".config.cts")
+        )
 }
 
 pub fn workflow_impact(summary: &WorkflowSummary) -> Result<WorkflowImpact> {
@@ -550,10 +691,47 @@ mod tests {
         assert_eq!(tools[0].tool.description, "Run the Jira summary workflow");
     }
 
+    #[test]
+    fn validate_workflow_dir_reports_layout_violations() {
+        let root = TempDir::new().unwrap();
+        let workflow = root.path().join("reports/jira-summary");
+        fs::create_dir_all(workflow.join("src")).unwrap();
+        fs::create_dir_all(workflow.join("tests")).unwrap();
+        fs::create_dir_all(workflow.join(".git")).unwrap();
+        fs::write(workflow.join("README.md"), "# Test\n").unwrap();
+        fs::write(workflow.join("src/workflow.ts"), "export {};\n").unwrap();
+        fs::write(workflow.join("tests/workflow.test.ts"), "export {};\n").unwrap();
+        fs::write(workflow.join("cache.db"), "db").unwrap();
+        write_workflow_spec(
+            &workflow.join(WORKFLOW_YAML),
+            &crate::spec::WorkflowSpec {
+                id: "reports/jira-summary".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let validation = validate_workflow_dir(root.path(), &workflow, "reports/jira-summary");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
+        assert_eq!(
+            validation.messages,
+            vec![
+                "missing src/tests/".to_string(),
+                "missing state/".to_string(),
+                "test files must live under src/tests/: tests/workflow.test.ts".to_string(),
+                "database files must live under state/: cache.db".to_string(),
+            ]
+        );
+    }
+
     fn create_minimal_workflow(dir: &Path, id: &str, tool: Option<WorkflowToolSpec>) {
-        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::create_dir_all(dir.join("src/tests")).unwrap();
+        fs::create_dir_all(dir.join("state")).unwrap();
         fs::write(dir.join("README.md"), "# Test\n").unwrap();
         fs::write(dir.join("src/workflow.ts"), "export {};\n").unwrap();
+        fs::write(dir.join("src/tests/workflow.test.ts"), "export {};\n").unwrap();
+        fs::write(dir.join("state/.gitkeep"), "").unwrap();
         fs::create_dir_all(dir.join(".git")).unwrap();
         write_workflow_spec(
             &dir.join(WORKFLOW_YAML),
