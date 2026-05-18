@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -55,7 +56,11 @@ pub fn execute_workflow_command(
         WorkflowCommand::Docs { id, instruction } => docs(ctx, &id, &instruction),
         WorkflowCommand::Edit { id, instruction } => edit(ctx, &id, &instruction),
         WorkflowCommand::Fix { id } => fix(ctx, &id),
-        WorkflowCommand::Run { id, input } => run(ctx, &id, input),
+        WorkflowCommand::Run {
+            id,
+            input,
+            input_fields,
+        } => run(ctx, &id, input, input_fields),
         WorkflowCommand::Validate { id } => validate(ctx, &id),
         WorkflowCommand::Impact { id } => impact(ctx, &id),
         WorkflowCommand::Status { id } => status(ctx, id.as_deref()),
@@ -255,9 +260,10 @@ fn run(
     ctx: WorkflowCommandContext<'_>,
     id: &str,
     input: Option<WorkflowInputSource>,
+    input_fields: BTreeMap<String, String>,
 ) -> Result<WorkflowCommandOutput> {
     let workflow = find_workflow(ctx.codex_home, ctx.cwd, ctx.config, id)?;
-    let input = read_input(input)?;
+    let input = read_input(input, input_fields)?;
     let output = Command::new("npm")
         .args(["run", "run", "--", "--input", &input])
         .current_dir(&workflow.path)
@@ -378,7 +384,7 @@ fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -
     fs::write(
         path.join("README.md"),
         format!(
-            "# {title}\n\n{description}\n\n## Usage\n\n```sh\ncodex workflow run {id} --input '{{}}'\n```\n"
+            "# {title}\n\n{description}\n\n## Usage\n\n```sh\ncodex workflow run {id} --key value\n# or\ncodex workflow run {id} --input '{{}}'\n```\n"
         ),
     )?;
     fs::write(
@@ -482,13 +488,35 @@ fn append_readme_note(path: &Path, heading: &str, instruction: &str) -> Result<(
         .with_context(|| format!("failed to write {}", readme_path.display()))
 }
 
-fn read_input(input: Option<WorkflowInputSource>) -> Result<String> {
-    match input {
-        Some(WorkflowInputSource::Inline(input)) => Ok(input),
+fn read_input(
+    input: Option<WorkflowInputSource>,
+    input_fields: BTreeMap<String, String>,
+) -> Result<String> {
+    let input = match input {
+        Some(WorkflowInputSource::Inline(input)) => input,
         Some(WorkflowInputSource::File(path)) => fs::read_to_string(&path)
-            .with_context(|| format!("failed to read workflow input {}", path.display())),
-        None => Ok("{}".to_string()),
+            .with_context(|| format!("failed to read workflow input {}", path.display()))?,
+        None => "{}".to_string(),
+    };
+    if input_fields.is_empty() {
+        return Ok(input);
     }
+
+    let mut value: JsonValue = serde_json::from_str(&input)
+        .with_context(|| "workflow input must be valid JSON when merging CLI input flags")?;
+    let Some(object) = value.as_object_mut() else {
+        return Err(anyhow!(
+            "workflow input must be a JSON object when merging CLI input flags"
+        ));
+    };
+    for (key, raw_value) in input_fields {
+        object.insert(key, parse_input_field_value(&raw_value));
+    }
+    serde_json::to_string(&value).map_err(Into::into)
+}
+
+fn parse_input_field_value(raw_value: &str) -> JsonValue {
+    serde_json::from_str(raw_value).unwrap_or_else(|_| JsonValue::String(raw_value.to_string()))
 }
 
 fn commit_workflow_changes(config: &WorkflowsConfigToml, path: &Path, message: &str) -> Result<()> {
@@ -610,6 +638,85 @@ mod tests {
             cwd.path()
                 .join(".codex/workflows/jira-summary/workflow.yaml")
                 .is_file()
+        );
+    }
+
+    #[test]
+    fn read_input_merges_cli_input_fields_into_empty_object() {
+        let input = read_input(
+            None,
+            BTreeMap::from([
+                ("reviewMode".to_string(), "initial".to_string()),
+                ("scope".to_string(), "repo".to_string()),
+                ("workingDirectory".to_string(), "/tmp/repo".to_string()),
+            ]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            serde_json::from_str::<JsonValue>(&input).unwrap(),
+            json!({
+                "reviewMode": "initial",
+                "scope": "repo",
+                "workingDirectory": "/tmp/repo",
+            })
+        );
+    }
+
+    #[test]
+    fn read_input_cli_fields_override_existing_json_keys() {
+        let input = read_input(
+            Some(WorkflowInputSource::Inline(
+                r#"{"scope":"pr","count":1}"#.to_string(),
+            )),
+            BTreeMap::from([
+                ("count".to_string(), "2".to_string()),
+                ("scope".to_string(), "review".to_string()),
+            ]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            serde_json::from_str::<JsonValue>(&input).unwrap(),
+            json!({
+                "count": 2,
+                "scope": "review",
+            })
+        );
+    }
+
+    #[test]
+    fn read_input_rejects_non_object_json_when_cli_fields_are_present() {
+        let err = read_input(
+            Some(WorkflowInputSource::Inline("[]".to_string())),
+            BTreeMap::from([("scope".to_string(), "repo".to_string())]),
+        )
+        .expect_err("non-object workflow input should be rejected when merging flags");
+
+        assert_eq!(
+            err.to_string(),
+            "workflow input must be a JSON object when merging CLI input flags"
+        );
+    }
+
+    #[test]
+    fn read_input_reads_file_before_merging_cli_fields() {
+        let temp_dir = TempDir::new().unwrap();
+        let input_path = temp_dir.path().join("input.json");
+        fs::write(&input_path, r#"{"scope":"repo"}"#).unwrap();
+
+        let input = read_input(
+            Some(WorkflowInputSource::File(input_path)),
+            BTreeMap::from([("reviewMode".to_string(), "initial".to_string())]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            serde_json::from_str::<JsonValue>(&input).unwrap(),
+            json!({
+                "reviewMode": "initial",
+                "scope": "repo",
+            })
         );
     }
 }

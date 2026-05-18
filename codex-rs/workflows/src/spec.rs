@@ -127,7 +127,7 @@ pub fn scaffold_workflow_spec(
         }),
         usage: json!({
             "summary": format!(
-                "Run this workflow with `/{command_label}` or `codex {command_label}`. Use `codex workflow run {id_for_usage} --input '{{...}}'` for raw JSON input."
+                "Run this workflow with `/{command_label}` or `codex {command_label}`. Use `codex workflow run {id_for_usage} --key value` for object fields or `--input '{{...}}'` for raw JSON input."
             )
         }),
         dependencies: json!({

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -29,6 +30,7 @@ pub enum WorkflowCommand {
     Run {
         id: String,
         input: Option<WorkflowInputSource>,
+        input_fields: BTreeMap<String, String>,
     },
     Validate {
         id: String,
@@ -189,32 +191,85 @@ fn parse_registered_workflow_command(
     Ok(WorkflowCommand::Run {
         id: workflow.id.clone(),
         input: Some(WorkflowInputSource::Inline(input)),
+        input_fields: BTreeMap::new(),
     })
 }
 
 fn parse_run(args: &[String]) -> Result<WorkflowCommand, WorkflowCommandParseError> {
     let id = required(args, 1, "run", "a workflow id")?.to_string();
     let mut input = None;
+    let mut input_fields = BTreeMap::new();
     let mut index = 2;
     while index < args.len() {
-        match args[index].as_str() {
-            "--input" => {
+        match parse_long_flag_argument(&args[index]) {
+            Some(("input", Some(value))) => {
+                input = Some(parse_workflow_input_source(value));
+                index += 1;
+            }
+            Some(("input", None)) => {
                 let value = required(args, index + 1, "run --input", "JSON or @file")?;
-                input = Some(if let Some(path) = value.strip_prefix('@') {
-                    WorkflowInputSource::File(PathBuf::from(path))
-                } else {
-                    WorkflowInputSource::Inline(value.to_string())
-                });
+                input = Some(parse_workflow_input_source(value));
                 index += 2;
             }
-            value => {
+            Some((field, inline_value)) => {
+                let value = match inline_value {
+                    Some(value) => value.to_string(),
+                    None => {
+                        required(args, index + 1, "run", "a value after an input flag")?.to_string()
+                    }
+                };
+                input_fields.insert(normalize_input_field_name(field), value);
+                index += if inline_value.is_some() { 1 } else { 2 };
+            }
+            None => {
                 return Err(WorkflowCommandParseError::UnexpectedArgument(
-                    value.to_string(),
+                    args[index].clone(),
                 ));
             }
         }
     }
-    Ok(WorkflowCommand::Run { id, input })
+    Ok(WorkflowCommand::Run {
+        id,
+        input,
+        input_fields,
+    })
+}
+
+fn parse_long_flag_argument(arg: &str) -> Option<(&str, Option<&str>)> {
+    let flag = arg.strip_prefix("--")?;
+    if flag.is_empty() {
+        return None;
+    }
+    Some(match flag.split_once('=') {
+        Some((name, value)) => (name, Some(value)),
+        None => (flag, None),
+    })
+}
+
+fn parse_workflow_input_source(value: &str) -> WorkflowInputSource {
+    if let Some(path) = value.strip_prefix('@') {
+        WorkflowInputSource::File(PathBuf::from(path))
+    } else {
+        WorkflowInputSource::Inline(value.to_string())
+    }
+}
+
+fn normalize_input_field_name(flag: &str) -> String {
+    let mut name = String::with_capacity(flag.len());
+    let mut uppercase_next = false;
+    for ch in flag.chars() {
+        if ch == '-' {
+            uppercase_next = true;
+            continue;
+        }
+        if uppercase_next {
+            name.extend(ch.to_uppercase());
+            uppercase_next = false;
+        } else {
+            name.push(ch);
+        }
+    }
+    name
 }
 
 fn parse_config(args: &[String]) -> Result<WorkflowCommand, WorkflowCommandParseError> {
@@ -331,6 +386,7 @@ mod tests {
                 input: Some(WorkflowInputSource::Inline(
                     "{\"project\":\"COD\"}".to_string()
                 )),
+                input_fields: BTreeMap::new(),
             }
         );
         assert_eq!(
@@ -362,6 +418,70 @@ mod tests {
                 input: Some(WorkflowInputSource::Inline(
                     r#"{"argv":["--project","COD"],"text":"--project COD"}"#.to_string(),
                 )),
+                input_fields: BTreeMap::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_run_command_input_flags_into_json_fields() {
+        let command = parse_workflow_command_line(
+            "run review/fix --workingDirectory /tmp/repo --scope repo --reviewMode initial",
+        )
+        .unwrap();
+
+        assert_eq!(
+            command,
+            WorkflowCommand::Run {
+                id: "review/fix".to_string(),
+                input: None,
+                input_fields: BTreeMap::from([
+                    ("reviewMode".to_string(), "initial".to_string()),
+                    ("scope".to_string(), "repo".to_string()),
+                    ("workingDirectory".to_string(), "/tmp/repo".to_string()),
+                ]),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_run_command_input_flags_with_inline_json_input() {
+        let command = parse_workflow_command_line(
+            "run review/fix --input '{\"scope\":\"repo\"}' --working-directory /tmp/repo",
+        )
+        .unwrap();
+
+        assert_eq!(
+            command,
+            WorkflowCommand::Run {
+                id: "review/fix".to_string(),
+                input: Some(WorkflowInputSource::Inline(
+                    "{\"scope\":\"repo\"}".to_string()
+                )),
+                input_fields: BTreeMap::from([(
+                    "workingDirectory".to_string(),
+                    "/tmp/repo".to_string(),
+                )]),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_run_command_input_flags_with_equals_syntax() {
+        let command = parse_workflow_command_line(
+            "run review/fix --workingDirectory=/tmp/repo --reviewMode=initial",
+        )
+        .unwrap();
+
+        assert_eq!(
+            command,
+            WorkflowCommand::Run {
+                id: "review/fix".to_string(),
+                input: None,
+                input_fields: BTreeMap::from([
+                    ("reviewMode".to_string(), "initial".to_string()),
+                    ("workingDirectory".to_string(), "/tmp/repo".to_string()),
+                ]),
             }
         );
     }
