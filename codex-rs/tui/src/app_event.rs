@@ -145,6 +145,7 @@ pub(crate) enum AppEvent {
 
     /// Result of a workflow process launched from the TUI.
     WorkflowProcessFinished {
+        run_id: String,
         command: Vec<String>,
         result: Result<(), String>,
     },

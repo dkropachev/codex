@@ -1346,10 +1346,18 @@ macro_rules! client_notification_definitions {
             )*
         }
 
+        impl TryFrom<JSONRPCNotification> for ClientNotification {
+            type Error = serde_json::Error;
+
+            fn try_from(value: JSONRPCNotification) -> Result<Self, serde_json::Error> {
+                serde_json::from_value(serde_json::to_value(value)?)
+            }
+        }
+
         pub fn export_client_notification_schemas(
             _out_dir: &::std::path::Path,
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
-            let schemas = Vec::new();
+            let mut schemas = Vec::new();
             $( $(schemas.push(crate::export::write_json_schema::<$payload>(_out_dir, stringify!($payload))?);)? )*
             Ok(schemas)
         }
@@ -1592,11 +1600,21 @@ server_notification_definitions! {
     #[ts(rename = "account/login/completed")]
     #[strum(serialize = "account/login/completed")]
     AccountLoginCompleted(v2::AccountLoginCompletedNotification),
+    WorkflowProgress => "workflow/progress" (v2::WorkflowProgressNotification),
+    WorkflowMarkdownResult => "workflow/reportToUserMarkdown" (v2::WorkflowMarkdownResultNotification),
 
 }
 
 client_notification_definitions! {
     Initialized,
+    #[serde(rename = "workflow/progress")]
+    #[ts(rename = "workflow/progress")]
+    #[strum(serialize = "workflow/progress")]
+    WorkflowProgress(v2::WorkflowProgressNotification),
+    #[serde(rename = "workflow/reportToUserMarkdown")]
+    #[ts(rename = "workflow/reportToUserMarkdown")]
+    #[strum(serialize = "workflow/reportToUserMarkdown")]
+    WorkflowMarkdownResult(v2::WorkflowMarkdownResultNotification),
 }
 
 #[cfg(test)]
@@ -1767,6 +1785,69 @@ mod tests {
             }),
             serde_json::to_value(&notification)?,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_workflow_client_notifications() -> Result<()> {
+        let progress = ClientNotification::WorkflowProgress(v2::WorkflowProgressNotification {
+            run_id: "run-1".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            message: "starting".to_string(),
+            data: Some(json!({"step": 1})),
+        });
+        assert_eq!(
+            json!({
+                "method": "workflow/progress",
+                "params": {
+                    "runId": "run-1",
+                    "threadId": "thread-1",
+                    "message": "starting",
+                    "data": {"step": 1},
+                }
+            }),
+            serde_json::to_value(&progress)?,
+        );
+        let decoded: ClientNotification = serde_json::from_value(serde_json::to_value(&progress)?)?;
+        match decoded {
+            ClientNotification::WorkflowProgress(decoded) => assert_eq!(
+                decoded,
+                match progress {
+                    ClientNotification::WorkflowProgress(notification) => notification,
+                    _ => unreachable!(),
+                }
+            ),
+            other => panic!("expected workflow progress notification, got {other:?}"),
+        }
+
+        let markdown =
+            ClientNotification::WorkflowMarkdownResult(v2::WorkflowMarkdownResultNotification {
+                run_id: "run-1".to_string(),
+                thread_id: None,
+                markdown: "# Result\n\nDone".to_string(),
+            });
+        assert_eq!(
+            json!({
+                "method": "workflow/reportToUserMarkdown",
+                "params": {
+                    "runId": "run-1",
+                    "threadId": null,
+                    "markdown": "# Result\n\nDone",
+                }
+            }),
+            serde_json::to_value(&markdown)?,
+        );
+        let decoded: ClientNotification = serde_json::from_value(serde_json::to_value(&markdown)?)?;
+        match decoded {
+            ClientNotification::WorkflowMarkdownResult(decoded) => assert_eq!(
+                decoded,
+                match markdown {
+                    ClientNotification::WorkflowMarkdownResult(notification) => notification,
+                    _ => unreachable!(),
+                }
+            ),
+            other => panic!("expected workflow markdown notification, got {other:?}"),
+        }
         Ok(())
     }
 
@@ -2570,6 +2651,69 @@ mod tests {
             }),
             serde_json::to_value(&notification)?,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_workflow_server_notifications() -> Result<()> {
+        let progress = ServerNotification::WorkflowProgress(v2::WorkflowProgressNotification {
+            run_id: "run-1".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            message: "starting".to_string(),
+            data: Some(json!({"step": 1})),
+        });
+        assert_eq!(
+            json!({
+                "method": "workflow/progress",
+                "params": {
+                    "runId": "run-1",
+                    "threadId": "thread-1",
+                    "message": "starting",
+                    "data": {"step": 1},
+                }
+            }),
+            serde_json::to_value(&progress)?,
+        );
+        let decoded: ServerNotification = serde_json::from_value(serde_json::to_value(&progress)?)?;
+        match decoded {
+            ServerNotification::WorkflowProgress(decoded) => assert_eq!(
+                decoded,
+                match progress {
+                    ServerNotification::WorkflowProgress(notification) => notification,
+                    _ => unreachable!(),
+                }
+            ),
+            other => panic!("expected workflow progress notification, got {other:?}"),
+        }
+
+        let markdown =
+            ServerNotification::WorkflowMarkdownResult(v2::WorkflowMarkdownResultNotification {
+                run_id: "run-1".to_string(),
+                thread_id: None,
+                markdown: "# Result\n\nDone".to_string(),
+            });
+        assert_eq!(
+            json!({
+                "method": "workflow/reportToUserMarkdown",
+                "params": {
+                    "runId": "run-1",
+                    "threadId": null,
+                    "markdown": "# Result\n\nDone",
+                }
+            }),
+            serde_json::to_value(&markdown)?,
+        );
+        let decoded: ServerNotification = serde_json::from_value(serde_json::to_value(&markdown)?)?;
+        match decoded {
+            ServerNotification::WorkflowMarkdownResult(decoded) => assert_eq!(
+                decoded,
+                match markdown {
+                    ServerNotification::WorkflowMarkdownResult(notification) => notification,
+                    _ => unreachable!(),
+                }
+            ),
+            other => panic!("expected workflow markdown notification, got {other:?}"),
+        }
         Ok(())
     }
 

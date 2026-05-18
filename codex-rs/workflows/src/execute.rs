@@ -412,7 +412,7 @@ fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -
     fs::write(
         path.join("README.md"),
         format!(
-            "# {title}\n\n{description}\n\n## Usage\n\n```sh\ncodex workflow run {id} --key value\n# or\ncodex workflow run {id} --input '{{}}'\n```\n"
+            "# {title}\n\n{description}\n\n## Usage\n\n```sh\ncodex workflow run {id} --key value\n# or\ncodex workflow run {id} --input '{{}}'\n```\n\n## Workflow Runtime\n\nUse `ctx.progress(message, data?)` while the workflow is running so the TUI can keep the live workflow status row up to date. Use `ctx.reportToUserMarkdown(markdown)` only when the workflow should hand markdown back to the next plain user turn in the TUI.\n"
         ),
     )?;
     fs::write(
@@ -463,7 +463,10 @@ const workflow = defineWorkflow({{
   id: "{id}",
   title: "{title}",
   description: "{description}",
-  async run(_ctx, input) {{
+  async run(ctx, input) {{
+    ctx.progress("Running workflow", {{ input }});
+    // Call ctx.reportToUserMarkdown(markdown) when the workflow should leave
+    // markdown for the next plain user turn in the TUI.
     return {{ ok: true, input }};
   }},
 }});

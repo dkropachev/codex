@@ -58,6 +58,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
@@ -605,16 +606,33 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn process_notification(&self, notification: JSONRPCNotification) {
-        // Currently, we do not expect to receive any notifications from the
-        // client, so we just log them.
-        tracing::info!("<- notification: {:?}", notification);
+        match ClientNotification::try_from(notification) {
+            Ok(notification) => self.process_client_notification(notification).await,
+            Err(err) => {
+                tracing::info!(error = %err, "<- unsupported client notification");
+            }
+        }
     }
 
     /// Handles typed notifications from in-process clients.
     pub(crate) async fn process_client_notification(&self, notification: ClientNotification) {
-        // Currently, we do not expect to receive any typed notifications from
-        // in-process clients, so we just log them.
-        tracing::info!("<- typed notification: {:?}", notification);
+        match notification {
+            ClientNotification::Initialized => {
+                tracing::info!("<- typed notification: Initialized");
+            }
+            ClientNotification::WorkflowProgress(notification) => {
+                self.outgoing
+                    .send_server_notification(ServerNotification::WorkflowProgress(notification))
+                    .await;
+            }
+            ClientNotification::WorkflowMarkdownResult(notification) => {
+                self.outgoing
+                    .send_server_notification(ServerNotification::WorkflowMarkdownResult(
+                        notification,
+                    ))
+                    .await;
+            }
+        }
     }
 
     async fn run_request_with_context<F>(

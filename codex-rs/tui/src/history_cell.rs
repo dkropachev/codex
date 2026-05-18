@@ -628,6 +628,58 @@ impl HistoryCell for AgentMarkdownCell {
     }
 }
 
+/// A consolidated workflow result cell that stores raw markdown source and re-renders from it.
+///
+/// Workflow results are source-backed for the same reason as agent messages and proposed plans:
+/// local file links should reflow against the session cwd that produced the workflow output, not
+/// the cwd of a later session or resize.
+#[derive(Debug)]
+pub(crate) struct WorkflowMarkdownCell {
+    markdown_source: String,
+    cwd: PathBuf,
+}
+
+impl WorkflowMarkdownCell {
+    /// Create a finalized source-backed workflow result cell.
+    pub(crate) fn new(markdown_source: String, cwd: &Path) -> Self {
+        Self {
+            markdown_source,
+            cwd: cwd.to_path_buf(),
+        }
+    }
+}
+
+impl HistoryCell for WorkflowMarkdownCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let Some(wrap_width) =
+            crate::width::usable_content_width_u16(width, /*reserved_cols*/ 2)
+        else {
+            return prefix_lines(vec![Line::default()], "• ".dim(), "  ".into());
+        };
+
+        let mut lines: Vec<Line<'static>> = vec![vec!["• ".dim(), "Workflow Result".bold()].into()];
+        lines.push(Line::from(" "));
+
+        let mut body: Vec<Line<'static>> = Vec::new();
+        append_markdown(
+            &self.markdown_source,
+            Some(wrap_width),
+            Some(self.cwd.as_path()),
+            &mut body,
+        );
+        if body.is_empty() {
+            body.push(Line::from("(empty)".dim().italic()));
+        }
+
+        lines.extend(prefix_lines(body, "  ".into(), "  ".into()));
+        lines
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        raw_lines_from_source(&self.markdown_source)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct PlainHistoryCell {
     lines: Vec<Line<'static>>,
@@ -5689,6 +5741,30 @@ mod tests {
             lines_32.len() > lines_80.len(),
             "narrower width should produce more wrapped lines: {lines_32:?}",
         );
+    }
+
+    #[test]
+    fn workflow_markdown_cell_renders_source_at_different_widths() {
+        let source = "# Workflow Result\n\nA long workflow result that should wrap differently when the terminal width changes.\n";
+        let cell = WorkflowMarkdownCell::new(source.to_string(), &test_cwd());
+
+        let lines_80 = render_lines(&cell.display_lines(/*width*/ 80));
+        assert!(
+            lines_80
+                .first()
+                .is_some_and(|line| line.starts_with("• Workflow Result")),
+            "first line should start with a workflow heading: {lines_80:?}"
+        );
+
+        let lines_32 = render_lines(&cell.display_lines(/*width*/ 32));
+        assert!(
+            lines_32.len() > lines_80.len(),
+            "narrower width should produce more wrapped lines: {lines_32:?}",
+        );
+
+        insta::with_settings!({snapshot_path => "../snapshots"}, {
+            insta::assert_snapshot!("workflow_markdown_cell", lines_80.join("\n"));
+        });
     }
 
     #[test]

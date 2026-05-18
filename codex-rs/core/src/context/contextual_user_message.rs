@@ -10,6 +10,7 @@ use super::SubagentNotification;
 use super::TurnAborted;
 use super::UserInstructions;
 use super::UserShellCommand;
+use super::WorkflowMarkdownHandoff;
 
 static USER_INSTRUCTIONS_REGISTRATION: FragmentRegistrationProxy<UserInstructions> =
     FragmentRegistrationProxy::new();
@@ -23,6 +24,8 @@ static TURN_ABORTED_REGISTRATION: FragmentRegistrationProxy<TurnAborted> =
     FragmentRegistrationProxy::new();
 static SUBAGENT_NOTIFICATION_REGISTRATION: FragmentRegistrationProxy<SubagentNotification> =
     FragmentRegistrationProxy::new();
+static WORKFLOW_MARKDOWN_HANDOFF_REGISTRATION: FragmentRegistrationProxy<WorkflowMarkdownHandoff> =
+    FragmentRegistrationProxy::new();
 static CONTEXTUAL_USER_FRAGMENTS: &[&dyn FragmentRegistration] = &[
     &USER_INSTRUCTIONS_REGISTRATION,
     &ENVIRONMENT_CONTEXT_REGISTRATION,
@@ -30,6 +33,7 @@ static CONTEXTUAL_USER_FRAGMENTS: &[&dyn FragmentRegistration] = &[
     &USER_SHELL_COMMAND_REGISTRATION,
     &TURN_ABORTED_REGISTRATION,
     &SUBAGENT_NOTIFICATION_REGISTRATION,
+    &WORKFLOW_MARKDOWN_HANDOFF_REGISTRATION,
 ];
 
 fn is_standard_contextual_user_text(text: &str) -> bool {

@@ -1489,6 +1489,64 @@ fn command_execution_output_delta_round_trips() {
 }
 
 #[test]
+fn workflow_notification_payloads_round_trip() {
+    let progress = WorkflowProgressNotification {
+        run_id: "run-1".to_string(),
+        thread_id: Some("thread-1".to_string()),
+        message: "starting".to_string(),
+        data: Some(json!({"step": 1})),
+    };
+    let value = serde_json::to_value(&progress).expect("serialize workflow progress");
+    assert_eq!(
+        value,
+        json!({
+            "runId": "run-1",
+            "threadId": "thread-1",
+            "message": "starting",
+            "data": {"step": 1},
+        })
+    );
+    let decoded = serde_json::from_value::<WorkflowProgressNotification>(value)
+        .expect("deserialize workflow progress");
+    assert_eq!(decoded, progress);
+
+    let markdown = WorkflowMarkdownResultNotification {
+        run_id: "run-1".to_string(),
+        thread_id: None,
+        markdown: "# Result\n\nDone".to_string(),
+    };
+    let value = serde_json::to_value(&markdown).expect("serialize workflow markdown result");
+    assert_eq!(
+        value,
+        json!({
+            "runId": "run-1",
+            "threadId": null,
+            "markdown": "# Result\n\nDone",
+        })
+    );
+    let decoded = serde_json::from_value::<WorkflowMarkdownResultNotification>(value)
+        .expect("deserialize workflow markdown result");
+    assert_eq!(decoded, markdown);
+}
+
+#[test]
+fn workflow_runtime_api_catalog_includes_reporting_methods() {
+    let catalog = workflow_runtime_api_catalog();
+    assert!(
+        catalog
+            .symbols
+            .iter()
+            .any(|symbol| symbol.name == "WorkflowContext.progress")
+    );
+    assert!(
+        catalog
+            .symbols
+            .iter()
+            .any(|symbol| symbol.name == "WorkflowContext.reportToUserMarkdown")
+    );
+}
+
+#[test]
 fn sandbox_policy_round_trips_external_sandbox_network_access() {
     let v2_policy = SandboxPolicy::ExternalSandbox {
         network_access: NetworkAccess::Enabled,

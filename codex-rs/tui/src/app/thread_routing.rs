@@ -5,6 +5,8 @@
 //! when the visible thread changes.
 
 use super::*;
+use crate::legacy_core::ContextualUserFragment;
+use crate::legacy_core::WorkflowMarkdownHandoff;
 use crate::session_resume::read_session_model;
 
 impl App {
@@ -536,6 +538,28 @@ impl App {
                 collaboration_mode,
                 personality,
             } => {
+                let pending_workflow_markdown_handoffs =
+                    self.take_pending_workflow_markdown_handoffs_for_thread(thread_id);
+                if !pending_workflow_markdown_handoffs.is_empty() {
+                    let workflow_markdown_items = pending_workflow_markdown_handoffs
+                        .iter()
+                        .map(|handoff| {
+                            ContextualUserFragment::into(WorkflowMarkdownHandoff::new(
+                                handoff.markdown.clone(),
+                            ))
+                        })
+                        .collect::<Vec<_>>();
+                    if let Err(err) = app_server
+                        .thread_inject_items(thread_id, workflow_markdown_items)
+                        .await
+                    {
+                        for handoff in pending_workflow_markdown_handoffs.into_iter().rev() {
+                            self.pending_workflow_markdown_handoffs.push_front(handoff);
+                        }
+                        return Err(err);
+                    }
+                }
+
                 let mut should_start_turn = true;
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
                     let mut steer_turn_id = turn_id;

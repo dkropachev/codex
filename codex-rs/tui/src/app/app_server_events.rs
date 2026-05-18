@@ -109,7 +109,28 @@ impl App {
             _ => {}
         }
 
-        match server_notification_thread_target(&notification) {
+        let notification_thread_target = server_notification_thread_target(&notification);
+        if let ServerNotification::WorkflowMarkdownResult(notification) = &notification {
+            match &notification_thread_target {
+                ServerNotificationThreadTarget::Thread(thread_id) => self
+                    .queue_workflow_markdown_handoff(
+                        Some(*thread_id),
+                        notification.markdown.clone(),
+                    ),
+                ServerNotificationThreadTarget::Global => {
+                    self.queue_workflow_markdown_handoff(None, notification.markdown.clone())
+                }
+                ServerNotificationThreadTarget::InvalidThreadId(thread_id) => {
+                    tracing::warn!(
+                        thread_id,
+                        "ignoring workflow markdown result with invalid thread_id"
+                    );
+                    return;
+                }
+            }
+        }
+
+        match notification_thread_target {
             ServerNotificationThreadTarget::Thread(thread_id) => {
                 let is_external_thread_started =
                     matches!(&notification, ServerNotification::ThreadStarted(_))

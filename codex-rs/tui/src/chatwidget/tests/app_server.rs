@@ -213,6 +213,57 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
 }
 
 #[tokio::test]
+async fn workflow_progress_notification_updates_workflow_status_row() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::WorkflowProgress(
+            codex_app_server_protocol::WorkflowProgressNotification {
+                run_id: "run-1".to_string(),
+                thread_id: None,
+                message: "Preparing workflow handoff".to_string(),
+                data: Some(serde_json::json!({"step": 2, "total": 4})),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    assert!(!chat.bottom_pane.is_task_running());
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Workflow");
+    let details = status
+        .details()
+        .expect("workflow progress details should be visible");
+    assert!(details.contains("Preparing workflow handoff"));
+    assert!(details.contains("\"step\": 2"));
+}
+
+#[tokio::test]
+async fn workflow_markdown_result_adds_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::WorkflowMarkdownResult(
+            codex_app_server_protocol::WorkflowMarkdownResultNotification {
+                run_id: "run-2".to_string(),
+                thread_id: Some(ThreadId::new().to_string()),
+                markdown: "# Workflow Result\n\nUseful output from the workflow.\n".to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("Workflow Result"));
+    assert!(rendered.contains("Useful output from the workflow."));
+}
+
+#[tokio::test]
 async fn live_app_server_turn_started_sets_feedback_turn_id() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

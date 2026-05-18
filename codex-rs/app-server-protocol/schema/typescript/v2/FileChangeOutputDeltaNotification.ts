@@ -5,6 +5,7 @@
 /**
  * Deprecated legacy notification for `apply_patch` textual output.
  *
- * The server no longer emits this notification.
+ * The server still emits this for approved `apply_patch` completions to
+ * preserve compatibility with older clients.
  */
 export type FileChangeOutputDeltaNotification = { threadId: string, turnId: string, itemId: string, delta: string, };

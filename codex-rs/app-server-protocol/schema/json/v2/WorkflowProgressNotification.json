@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "data": true,
+    "message": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "message",
+    "runId"
+  ],
+  "title": "WorkflowProgressNotification",
+  "type": "object"
+}

@@ -212,6 +212,18 @@ pub fn workflow_runtime_api_catalog() -> ApiCatalogWorkflowRuntime {
                 "Call another workflow using the current app-server connection and approval handling.",
             ),
             symbol(
+                "WorkflowContext.progress",
+                ApiCatalogSymbolKind::Method,
+                "ctx.progress(message: string, data?: unknown): void",
+                "Report live workflow progress to the host and connected clients.",
+            ),
+            symbol(
+                "WorkflowContext.reportToUserMarkdown",
+                ApiCatalogSymbolKind::Method,
+                "ctx.reportToUserMarkdown(markdown: string): void",
+                "Report user-facing markdown that should be rendered for the user and handed to the next turn.",
+            ),
+            symbol(
                 "WorkflowContext.mcp.listServers",
                 ApiCatalogSymbolKind::Method,
                 "ctx.mcp.listServers({ detail?, cursor?, limit? }): Promise<unknown>",

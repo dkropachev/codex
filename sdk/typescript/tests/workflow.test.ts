@@ -37,6 +37,7 @@ class FakeAppServerProcess extends EventEmitter {
   apiCatalogReadParams: JsonMessage | null = null;
   workflowRunParams: JsonMessage | null = null;
   workflowCommandExecuteParams: JsonMessage | null = null;
+  workflowNotifications: JsonMessage[] = [];
   artifactRequests: Array<{ method: string; params: JsonMessage }> = [];
   sendApprovalRequestOnThreadStart = false;
 
@@ -313,6 +314,10 @@ class FakeAppServerProcess extends EventEmitter {
     if (message.method === "workflow/command/execute") {
       this.workflowCommandExecuteParams = message.params as JsonMessage;
       this.write({ id: message.id, result: { message: "listed", data: { ok: true } } });
+      return;
+    }
+    if (typeof message.method === "string" && message.method.startsWith("workflow/")) {
+      this.workflowNotifications.push(message);
       return;
     }
     if (message.method === "thread/unsubscribe") {
@@ -795,11 +800,13 @@ describe("CodexWorkflow", () => {
     const fake = new FakeAppServerProcess();
     spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
     const progress: unknown[] = [];
+    const markdownReports: string[] = [];
     const results: unknown[] = [];
     const workflow = defineWorkflow<{ prompt: string }, string>({
       name: "standalone-test",
       async run(context, input) {
         context.progress("starting", { prompt: input.prompt });
+        context.reportToUserMarkdown(`# Result\n\n${input.prompt}`);
         const agent = await context.createAgent();
         const turn = await agent.run(input.prompt);
         context.result(turn.finalResponse);
@@ -811,11 +818,32 @@ describe("CodexWorkflow", () => {
       codexPathOverride: "codex",
       input: { prompt: "Use the weather tool" },
       onProgress: (event) => progress.push(event),
+      onReportToUserMarkdown: (markdown) => markdownReports.push(markdown),
       onResult: (value) => results.push(value),
     });
 
     expect(result).toBe("Weather: mild");
     expect(progress).toEqual([{ message: "starting", data: { prompt: "Use the weather tool" } }]);
+    expect(markdownReports).toEqual(["# Result\n\nUse the weather tool"]);
+    expect(fake.workflowNotifications).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          method: "workflow/progress",
+          params: expect.objectContaining({
+            message: "starting",
+            data: { prompt: "Use the weather tool" },
+            runId: expect.any(String),
+          }),
+        }),
+        expect.objectContaining({
+          method: "workflow/reportToUserMarkdown",
+          params: expect.objectContaining({
+            markdown: "# Result\n\nUse the weather tool",
+            runId: expect.any(String),
+          }),
+        }),
+      ])
+    );
     expect(results).toEqual(["Weather: mild"]);
     expect(fake.killed).toBe(true);
   });
@@ -847,6 +875,18 @@ describe("CodexWorkflow", () => {
 
     expect(result).toBe("done");
     expect(progress).toEqual([{ message: "child", data: { value: "done" } }]);
+    expect(fake.workflowNotifications).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          method: "workflow/progress",
+          params: expect.objectContaining({
+            message: "child",
+            data: { value: "done" },
+            runId: expect.any(String),
+          }),
+        }),
+      ])
+    );
     expect(fake.killed).toBe(false);
 
     await workflow.close();

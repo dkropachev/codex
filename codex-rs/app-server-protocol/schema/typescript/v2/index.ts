@@ -521,6 +521,8 @@ export type { WorkflowImpactParams } from "./WorkflowImpactParams";
 export type { WorkflowImpactResponse } from "./WorkflowImpactResponse";
 export type { WorkflowListParams } from "./WorkflowListParams";
 export type { WorkflowListResponse } from "./WorkflowListResponse";
+export type { WorkflowMarkdownResultNotification } from "./WorkflowMarkdownResultNotification";
+export type { WorkflowProgressNotification } from "./WorkflowProgressNotification";
 export type { WorkflowReadParams } from "./WorkflowReadParams";
 export type { WorkflowReadResponse } from "./WorkflowReadResponse";
 export type { WorkflowRepairParams } from "./WorkflowRepairParams";

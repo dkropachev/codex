@@ -109,6 +109,10 @@ pub(super) fn server_notification_thread_target(
         ServerNotification::ReasoningTextDelta(notification) => {
             Some(notification.thread_id.as_str())
         }
+        ServerNotification::WorkflowProgress(notification) => notification.thread_id.as_deref(),
+        ServerNotification::WorkflowMarkdownResult(notification) => {
+            notification.thread_id.as_deref()
+        }
         ServerNotification::ContextCompacted(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::ModelRerouted(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::ModelVerification(notification) => {
@@ -216,5 +220,37 @@ mod tests {
         let target = server_notification_thread_target(&notification);
 
         assert_eq!(target, ServerNotificationThreadTarget::Thread(thread_id));
+    }
+
+    #[test]
+    fn workflow_progress_notifications_route_to_threads_when_thread_id_is_present() {
+        let thread_id = ThreadId::new();
+        let notification = ServerNotification::WorkflowProgress(
+            codex_app_server_protocol::WorkflowProgressNotification {
+                run_id: "run-1".to_string(),
+                thread_id: Some(thread_id.to_string()),
+                message: "starting".to_string(),
+                data: None,
+            },
+        );
+
+        let target = server_notification_thread_target(&notification);
+
+        assert_eq!(target, ServerNotificationThreadTarget::Thread(thread_id));
+    }
+
+    #[test]
+    fn workflow_markdown_result_notifications_route_to_global_when_threadless() {
+        let notification = ServerNotification::WorkflowMarkdownResult(
+            codex_app_server_protocol::WorkflowMarkdownResultNotification {
+                run_id: "run-1".to_string(),
+                thread_id: None,
+                markdown: "# Result\n\nDone".to_string(),
+            },
+        );
+
+        let target = server_notification_thread_target(&notification);
+
+        assert_eq!(target, ServerNotificationThreadTarget::Global);
     }
 }

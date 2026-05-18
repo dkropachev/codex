@@ -61,10 +61,12 @@ const lookupIssue = defineTool(
 const workflow = defineWorkflow<{ issueId: string }, string>({
   name: "fix-issue",
   async run(ctx, input) {
+    ctx.progress("Looking up issue", { issueId: input.issueId });
     const agent = await ctx.createAgent({ tools: [lookupIssue] });
     const turn = await agent.run(
       `Use lookup_issue, then propose the smallest fix for issue ${input.issueId}`,
     );
+    ctx.reportToUserMarkdown(`# Workflow Result\n\n${turn.finalResponse}`);
     return turn.finalResponse;
   },
 });
@@ -126,6 +128,11 @@ const mcpResult = await ctx.mcp.callTool(agent, {
 const commandResult = await ctx.tools.exec(["git", "status", "--short"]);
 ```
 
+Use `ctx.progress(message, data?)` for live updates while the workflow is still running. Use
+`ctx.reportToUserMarkdown(markdown)` only when the workflow should hand markdown back to the next
+plain user turn; the TUI renders that markdown in the transcript and preserves it as hidden
+context for the next submission in the same thread.
+
 Workflows can ask Codex for the same machine-readable API catalog exposed by `codex api` and app-server
 `apiCatalog/read`. This is useful when handing available MCP/tool/workflow APIs and discovered workflow metadata to an IDE or another coding agent.
 
@@ -171,9 +178,11 @@ In that mode reusable workflows can use the same `runWorkflow()` entrypoint:
 await runWorkflow(workflow);
 ```
 
-Threads started by the workflow appear in `/agent` and replay progress/results through the same transcript UI as other agents.
-The TUI also sets `CODEX_WORKFLOW_APPROVALS=delegate`, so command/file approval and MCP elicitation prompts are left for the
-TUI while JavaScript dynamic tools are still answered by the workflow process.
+Threads started by the workflow appear in `/agent`. Progress updates render in the live workflow
+status row, and markdown reported with `ctx.reportToUserMarkdown(...)` appears as a workflow
+result cell and is carried into the next plain user turn in the same thread. The TUI also sets
+`CODEX_WORKFLOW_APPROVALS=delegate`, so command/file approval and MCP elicitation prompts are left
+for the TUI while JavaScript dynamic tools are still answered by the workflow process.
 
 If your Node runtime does not provide a global `WebSocket`, pass one explicitly:
 

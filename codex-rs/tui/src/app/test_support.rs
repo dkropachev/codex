@@ -47,6 +47,8 @@ pub(super) async fn make_test_app() -> App {
         remote_app_server_url: None,
         remote_app_server_auth_token: None,
         workflow_app_server_url: None,
+        workflow_runs: HashMap::new(),
+        pending_workflow_markdown_handoffs: VecDeque::new(),
         pending_update_action: None,
         pending_shutdown_exit_thread_id: None,
         windows_sandbox: WindowsSandboxState::default(),

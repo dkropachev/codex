@@ -75,6 +75,12 @@ codex app-server generate-json-schema --out DIR
 
 For runtime discovery, use `apiCatalog/read` over app-server or `codex api` from the CLI. The catalog is JSON intended for IDEs, coding agents, and workflow code; it includes app-server methods, configured MCP servers and tool schemas, built-in workflow helpers, the JavaScript workflow runtime surface, and discovered workflow metadata, including each workflow's command alias when one is registered.
 
+The JavaScript workflow runtime exposes `WorkflowContext.progress(message, data?)` for live
+progress updates and `WorkflowContext.reportToUserMarkdown(markdown)` for an explicit markdown
+handoff when the workflow should leave a user-facing result for the next turn. The TUI renders
+that markdown handoff and carries it forward as hidden context for the next plain user
+submission.
+
 ## Core Primitives
 
 The API exposes three top level primitives representing an interaction between a user and Codex:

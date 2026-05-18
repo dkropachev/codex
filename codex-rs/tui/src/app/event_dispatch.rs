@@ -76,8 +76,12 @@ impl App {
             AppEvent::RunWorkflow { command } => {
                 self.run_workflow_command(command);
             }
-            AppEvent::WorkflowProcessFinished { command, result } => {
-                self.handle_workflow_process_finished(command, result);
+            AppEvent::WorkflowProcessFinished {
+                run_id,
+                command,
+                result,
+            } => {
+                self.handle_workflow_process_finished(run_id, command, result);
             }
             AppEvent::OpenResumePicker => {
                 let picker_app_server = match crate::start_app_server_for_picker(

@@ -481,6 +481,8 @@ pub(crate) struct App {
     remote_app_server_url: Option<String>,
     remote_app_server_auth_token: Option<String>,
     workflow_app_server_url: Option<String>,
+    workflow_runs: HashMap<String, workflows::WorkflowRunState>,
+    pending_workflow_markdown_handoffs: VecDeque<workflows::QueuedWorkflowMarkdownHandoff>,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
@@ -905,6 +907,8 @@ See the Codex keymap documentation for supported actions and examples."
             remote_app_server_url,
             remote_app_server_auth_token,
             workflow_app_server_url,
+            workflow_runs: HashMap::new(),
+            pending_workflow_markdown_handoffs: VecDeque::new(),
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),

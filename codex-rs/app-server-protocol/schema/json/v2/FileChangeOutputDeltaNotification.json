@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "description": "Deprecated legacy notification for `apply_patch` textual output.\n\nThe server no longer emits this notification.",
+  "description": "Deprecated legacy notification for `apply_patch` textual output.\n\nThe server still emits this for approved `apply_patch` completions to preserve compatibility with older clients.",
   "properties": {
     "delta": {
       "type": "string"

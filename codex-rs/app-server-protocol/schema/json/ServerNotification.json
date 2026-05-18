@@ -1032,7 +1032,7 @@
       "type": "object"
     },
     "FileChangeOutputDeltaNotification": {
-      "description": "Deprecated legacy notification for `apply_patch` textual output.\n\nThe server no longer emits this notification.",
+      "description": "Deprecated legacy notification for `apply_patch` textual output.\n\nThe server still emits this for approved `apply_patch` completions to preserve compatibility with older clients.",
       "properties": {
         "delta": {
           "type": "string"
@@ -4826,6 +4826,49 @@
         "samplePaths"
       ],
       "type": "object"
+    },
+    "WorkflowMarkdownResultNotification": {
+      "properties": {
+        "markdown": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "markdown",
+        "runId"
+      ],
+      "type": "object"
+    },
+    "WorkflowProgressNotification": {
+      "properties": {
+        "data": true,
+        "message": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "message",
+        "runId"
+      ],
+      "type": "object"
     }
   },
   "description": "Notification sent from the server to the client.",
@@ -6093,6 +6136,46 @@
         "params"
       ],
       "title": "Account/login/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "workflow/progress"
+          ],
+          "title": "Workflow/progressNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowProgressNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Workflow/progressNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "workflow/reportToUserMarkdown"
+          ],
+          "title": "Workflow/reportToUserMarkdownNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowMarkdownResultNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Workflow/reportToUserMarkdownNotification",
       "type": "object"
     }
   ],

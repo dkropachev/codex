@@ -1,0 +1,7 @@
+---
+source: tui/src/status_indicator_widget.rs
+expression: terminal.backend()
+---
+"Workflow (0s)                                                                   "
+"  └ Preparing the workflow result and handing it off to the next turn.          "
+"                                                                                "

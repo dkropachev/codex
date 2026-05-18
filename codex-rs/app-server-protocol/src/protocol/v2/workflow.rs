@@ -174,6 +174,25 @@ pub struct WorkflowCommandResponse {
     pub data: JsonValue,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowProgressNotification {
+    pub run_id: String,
+    pub thread_id: Option<String>,
+    pub message: String,
+    pub data: Option<JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowMarkdownResultNotification {
+    pub run_id: String,
+    pub thread_id: Option<String>,
+    pub markdown: String,
+}
+
 macro_rules! workflow_command_response_type {
     ($name:ident) => {
         #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

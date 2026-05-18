@@ -1,0 +1,10 @@
+---
+source: tui/src/history_cell.rs
+expression: "lines_80.join(\"\\n\")"
+---
+• Workflow Result
+ 
+  # Workflow Result
+  
+  A long workflow result that should wrap differently when the terminal width
+  changes.

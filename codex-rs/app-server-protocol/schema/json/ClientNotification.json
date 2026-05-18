@@ -1,5 +1,50 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "WorkflowMarkdownResultNotification": {
+      "properties": {
+        "markdown": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "markdown",
+        "runId"
+      ],
+      "type": "object"
+    },
+    "WorkflowProgressNotification": {
+      "properties": {
+        "data": true,
+        "message": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "message",
+        "runId"
+      ],
+      "type": "object"
+    }
+  },
   "oneOf": [
     {
       "properties": {
@@ -15,6 +60,46 @@
         "method"
       ],
       "title": "InitializedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "workflow/progress"
+          ],
+          "title": "Workflow/progressNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowProgressNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Workflow/progressNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "workflow/reportToUserMarkdown"
+          ],
+          "title": "Workflow/reportToUserMarkdownNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowMarkdownResultNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Workflow/reportToUserMarkdownNotification",
       "type": "object"
     }
   ],

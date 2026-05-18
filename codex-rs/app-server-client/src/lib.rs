@@ -78,6 +78,8 @@ pub mod legacy_core {
     pub use codex_core::McpManager;
     pub use codex_core::append_message_history_entry;
     pub use codex_core::check_execpolicy_for_warnings;
+    pub use codex_core::context::ContextualUserFragment;
+    pub use codex_core::context::WorkflowMarkdownHandoff;
     pub use codex_core::format_exec_policy_error_with_source;
     pub use codex_core::grant_read_root_non_elevated;
     pub use codex_core::lookup_message_history_entry;
@@ -169,11 +171,12 @@ fn event_requires_delivery(event: &InProcessServerEvent) -> bool {
 
 /// Returns `true` for notifications that must survive backpressure.
 ///
-/// Transcript events (`AgentMessageDelta`, `PlanDelta`, reasoning deltas) and
-/// the authoritative `ItemCompleted` / `TurnCompleted` form the lossless tier
-/// of the event stream. Dropping any of these corrupts the visible assistant
-/// output or leaves surfaces waiting for a completion signal that already
-/// fired. Everything else (`CommandExecutionOutputDelta`, progress, etc.) is
+/// Transcript events (`AgentMessageDelta`, `PlanDelta`, reasoning deltas),
+/// the authoritative `ItemCompleted` / `TurnCompleted`, and workflow
+/// progress/result notifications form the lossless tier of the event stream.
+/// Dropping any of these corrupts the visible assistant output, hides workflow
+/// status/results, or leaves surfaces waiting for a completion signal that
+/// already fired. Everything else (`CommandExecutionOutputDelta`, etc.) is
 /// best-effort and may be dropped with only cosmetic impact.
 ///
 /// Both the in-process and remote transports delegate to this function so the
@@ -187,6 +190,8 @@ pub(crate) fn server_notification_requires_delivery(notification: &ServerNotific
             | ServerNotification::PlanDelta(_)
             | ServerNotification::ReasoningSummaryTextDelta(_)
             | ServerNotification::ReasoningTextDelta(_)
+            | ServerNotification::WorkflowProgress(_)
+            | ServerNotification::WorkflowMarkdownResult(_)
     )
 }
 

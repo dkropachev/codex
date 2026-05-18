@@ -1,4 +1,5 @@
 import type { CodexOptions } from "./codexOptions";
+import { randomUUID } from "node:crypto";
 import {
   AppServerClient,
   appServerUrlFromOptions,
@@ -220,6 +221,8 @@ export type WorkflowApprovals =
 export type WorkflowInteractiveRequestBehavior = "decline" | "defer";
 const WORKFLOW_APPROVALS_ENV = "CODEX_WORKFLOW_APPROVALS";
 const WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR_ENV = "CODEX_WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR";
+const WORKFLOW_RUN_ID_ENV = "CODEX_WORKFLOW_RUN_ID";
+const WORKFLOW_ORIGIN_THREAD_ID_ENV = "CODEX_WORKFLOW_ORIGIN_THREAD_ID";
 
 export type WorkflowOptions = CodexOptions &
   Pick<
@@ -437,6 +440,7 @@ export type WorkflowRunOptions<Input = unknown> = WorkflowOptions & {
   context?: WorkflowContext;
   workflow?: CodexWorkflow;
   onProgress?: (event: WorkflowProgressEvent) => void;
+  onReportToUserMarkdown?: (markdown: string) => void;
   onResult?: (result: unknown) => void;
 };
 
@@ -463,6 +467,7 @@ export type WorkflowContext = {
     input?: Input,
   ): Promise<Output>;
   progress(message: string, data?: unknown): void;
+  reportToUserMarkdown(markdown: string): void;
   result(result: unknown): void;
 };
 
@@ -511,6 +516,11 @@ type ThreadResumeResponse = {
 
 type TurnStartResponse = {
   turn: AppServerTurn;
+};
+
+type WorkflowNotificationContext = {
+  runId: string;
+  originThreadId: string | null;
 };
 
 type TurnCompletedParams = {
@@ -563,6 +573,7 @@ export async function runWorkflow<Input = undefined, Output = unknown>(
   ownsWorkflow = options.workflow === undefined;
   const context = new DefaultWorkflowContext(workflow, {
     onProgress: options.onProgress,
+    onReportToUserMarkdown: options.onReportToUserMarkdown,
     onResult: options.onResult,
   });
 
@@ -583,13 +594,19 @@ export class CodexWorkflow {
   readonly tools: WorkflowTools;
 
   private client: AppServerClient;
+  private readonly notificationContext: WorkflowNotificationContext;
   private agents = new Map<string, AgentHandle>();
   private dynamicTools = new Map<string, WorkflowTool>();
   private approvals: ResolvedWorkflowApprovals;
 
-  private constructor(client: AppServerClient, approvals: ResolvedWorkflowApprovals) {
+  private constructor(
+    client: AppServerClient,
+    approvals: ResolvedWorkflowApprovals,
+    notificationContext: WorkflowNotificationContext,
+  ) {
     this.client = client;
     this.approvals = approvals;
+    this.notificationContext = notificationContext;
     this.api = new WorkflowApiCatalog(client);
     this.artifacts = new WorkflowArtifacts(client);
     this.workflows = new WorkflowApis(client);
@@ -601,11 +618,12 @@ export class CodexWorkflow {
   static async start(options: WorkflowOptions = {}): Promise<CodexWorkflow> {
     const connection = resolveWorkflowConnection(options);
     const approvals = resolveWorkflowApprovals(options);
+    const notificationContext = workflowNotificationContextFromEnv();
     const client =
       connection.kind === "existing"
         ? await AppServerClient.connect({ ...options, appServerUrl: connection.appServerUrl })
         : await AppServerClient.spawn(options);
-    return new CodexWorkflow(client, approvals);
+    return new CodexWorkflow(client, approvals, notificationContext);
   }
 
   static async connect(options: WorkflowOptions = {}): Promise<CodexWorkflow> {
@@ -627,6 +645,25 @@ export class CodexWorkflow {
   async close(): Promise<void> {
     await this.client.close();
     this.agents.clear();
+  }
+
+  /** @internal */
+  notifyWorkflowProgress(message: string, data?: unknown): void {
+    this.client.notify("workflow/progress", {
+      runId: this.notificationContext.runId,
+      threadId: this.notificationContext.originThreadId ?? undefined,
+      message,
+      data,
+    });
+  }
+
+  /** @internal */
+  notifyWorkflowMarkdown(markdown: string): void {
+    this.client.notify("workflow/reportToUserMarkdown", {
+      runId: this.notificationContext.runId,
+      threadId: this.notificationContext.originThreadId ?? undefined,
+      markdown,
+    });
   }
 
   async startAgent(options: AgentStartOptions = {}): Promise<AgentHandle> {
@@ -1041,6 +1078,7 @@ class DefaultWorkflowContext implements WorkflowContext {
     readonly workflow: CodexWorkflow,
     private hooks: {
       onProgress?: (event: WorkflowProgressEvent) => void;
+      onReportToUserMarkdown?: (markdown: string) => void;
       onResult?: (result: unknown) => void;
     } = {},
   ) {
@@ -1075,6 +1113,12 @@ class DefaultWorkflowContext implements WorkflowContext {
 
   progress(message: string, data?: unknown): void {
     this.hooks.onProgress?.({ message, data });
+    this.workflow.notifyWorkflowProgress(message, data);
+  }
+
+  reportToUserMarkdown(markdown: string): void {
+    this.hooks.onReportToUserMarkdown?.(markdown);
+    this.workflow.notifyWorkflowMarkdown(markdown);
   }
 
   result(result: unknown): void {
@@ -1299,6 +1343,14 @@ function resolveWorkflowApprovals(options: WorkflowOptions): ResolvedWorkflowApp
   }
 
   return "decline";
+}
+
+function workflowNotificationContextFromEnv(env = process.env): WorkflowNotificationContext {
+  const runId = env[WORKFLOW_RUN_ID_ENV];
+  return {
+    runId: runId && runId.length > 0 ? runId : randomUUID(),
+    originThreadId: env[WORKFLOW_ORIGIN_THREAD_ID_ENV] || null,
+  };
 }
 
 function workflowApprovalsFromEnv(options: WorkflowOptions): "delegate" | "decline" | undefined {

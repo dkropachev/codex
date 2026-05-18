@@ -335,6 +335,7 @@ use self::session_header::SessionHeader;
 mod hooks;
 mod skills;
 mod slash_dispatch;
+mod workflows;
 use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
@@ -6372,6 +6373,12 @@ impl ChatWidget {
                 if self.config.show_raw_agent_reasoning {
                     self.on_agent_reasoning_delta(notification.delta);
                 }
+            }
+            ServerNotification::WorkflowProgress(notification) => {
+                self.handle_workflow_progress_notification(notification, replay_kind)
+            }
+            ServerNotification::WorkflowMarkdownResult(notification) => {
+                self.handle_workflow_markdown_result_notification(notification, replay_kind)
             }
             ServerNotification::ReasoningSummaryPartAdded(_) => self.on_reasoning_section_break(),
             ServerNotification::TerminalInteraction(notification) => {
