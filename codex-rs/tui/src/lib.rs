@@ -20,15 +20,11 @@ pub use app::AppExitInfo;
 pub use app::ExitReason;
 use app_server_session::AppServerSession;
 use codex_app_server_client::AppServerClient;
-use codex_app_server_client::AppServerRuntimeOptions;
-use codex_app_server_client::AppServerTransport;
-use codex_app_server_client::AppServerWebsocketAuthSettings;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::RemoteAppServerClient;
 use codex_app_server_client::RemoteAppServerConnectArgs;
-use codex_app_server_client::run_main_with_transport_options;
 use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
@@ -54,7 +50,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::protocol::SessionSource;
 use codex_rollout::StateDbHandle;
 use codex_rollout::state_db;
 use codex_state::log_db;
@@ -66,9 +61,9 @@ use codex_utils_oss::get_default_model_for_oss_provider;
 use color_eyre::eyre::WrapErr;
 use cwd_prompt::CwdPromptAction;
 use std::fs::OpenOptions;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 pub use token_usage::TokenUsage;
@@ -85,7 +80,6 @@ use uuid::Uuid;
 pub(crate) use codex_app_server_client::legacy_core;
 
 const WORKFLOW_APP_SERVER_CONNECT_URL: &str = "ws://127.0.0.1:8765/";
-const WORKFLOW_APP_SERVER_PORT: u16 = 8765;
 
 mod additional_dirs;
 mod app;
@@ -433,27 +427,71 @@ async fn start_managed_workflow_app_server(
     websocket_url: String,
     arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: codex_utils_cli::CliConfigOverrides,
-    loader_overrides: LoaderOverrides,
+    _loader_overrides: LoaderOverrides,
 ) -> color_eyre::Result<AppServerClient> {
-    let bind_address = SocketAddr::from(([127, 0, 0, 1], WORKFLOW_APP_SERVER_PORT));
-    tokio::spawn(async move {
-        let result = run_main_with_transport_options(
-            arg0_paths,
-            cli_config_overrides,
-            loader_overrides,
-            /*default_analytics_enabled*/ false,
-            AppServerTransport::WebSocket { bind_address },
-            SessionSource::VSCode,
-            AppServerWebsocketAuthSettings::default(),
-            AppServerRuntimeOptions::default(),
+    let codex_self_exe = arg0_paths.codex_self_exe.ok_or_else(|| {
+        color_eyre::eyre::eyre!(
+            "managed workflow app-server requires a resolved Codex executable path"
         )
-        .await;
-        if let Err(err) = result {
-            error!("managed workflow app-server exited: {err}");
-        }
+    })?;
+    let command = managed_workflow_app_server_command(
+        codex_self_exe.as_path(),
+        &websocket_url,
+        &cli_config_overrides,
+    )?;
+    let child = tokio::process::Command::from(command)
+        .spawn()
+        .wrap_err("failed to start managed workflow app-server")?;
+
+    // Reap the child in the background so a successfully started app-server does not linger as a
+    // zombie if it exits before the TUI process shuts down.
+    tokio::spawn(async move {
+        let mut child = child;
+        let _ = child.wait().await;
     });
 
     connect_remote_app_server_with_retries(websocket_url, /*auth_token*/ None).await
+}
+
+fn managed_workflow_app_server_command(
+    codex_self_exe: &Path,
+    websocket_url: &str,
+    cli_config_overrides: &codex_utils_cli::CliConfigOverrides,
+) -> std::io::Result<std::process::Command> {
+    let mut command = std::process::Command::new(codex_self_exe);
+    for raw_override in &cli_config_overrides.raw_overrides {
+        command.arg("-c").arg(raw_override);
+    }
+
+    command
+        .arg("app-server")
+        .arg("--listen")
+        .arg(websocket_url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+
+        command.pre_exec(|| match libc::setsid() {
+            -1 => {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::EPERM) {
+                    if libc::setpgid(0, 0) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                } else {
+                    return Err(err);
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        });
+    }
+
+    Ok(command)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2859,6 +2897,35 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn managed_workflow_app_server_command_prefixes_root_config_overrides() {
+        let command = managed_workflow_app_server_command(
+            Path::new("/usr/bin/codex"),
+            WORKFLOW_APP_SERVER_CONNECT_URL,
+            &codex_utils_cli::CliConfigOverrides {
+                raw_overrides: vec!["features.workflows=true".to_string()],
+            },
+        )
+        .expect("command should build");
+
+        assert_eq!(command.get_program(), Path::new("/usr/bin/codex"));
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            vec![
+                "-c".to_string(),
+                "features.workflows=true".to_string(),
+                "app-server".to_string(),
+                "--listen".to_string(),
+                WORKFLOW_APP_SERVER_CONNECT_URL.to_string(),
+            ]
+        );
+    }
+
     #[tokio::test]
     #[serial]
     async fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
