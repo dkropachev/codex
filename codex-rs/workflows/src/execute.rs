@@ -31,6 +31,7 @@ use crate::spec::WORKFLOW_YAML;
 use crate::spec::read_workflow_spec;
 use crate::spec::scaffold_workflow_spec;
 use crate::spec::write_workflow_spec;
+use crate::workflow_runtime;
 
 pub struct WorkflowCommandContext<'a> {
     pub codex_home: &'a Path,
@@ -67,6 +68,29 @@ pub fn execute_workflow_command(
     ctx: WorkflowCommandContext<'_>,
     command: WorkflowCommand,
 ) -> Result<WorkflowCommandOutput> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(_) => std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?
+                    .block_on(execute_workflow_command_async(ctx, command))
+            });
+            handle
+                .join()
+                .map_err(|panic| anyhow!("workflow command helper thread panicked: {panic:?}"))?
+        }),
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(execute_workflow_command_async(ctx, command)),
+    }
+}
+
+async fn execute_workflow_command_async(
+    ctx: WorkflowCommandContext<'_>,
+    command: WorkflowCommand,
+) -> Result<WorkflowCommandOutput> {
     match command {
         WorkflowCommand::Mode => show_mode(ctx),
         WorkflowCommand::Develop { description } => develop(ctx, &description),
@@ -78,7 +102,7 @@ pub fn execute_workflow_command(
             id,
             input,
             input_fields,
-        } => run(ctx, &id, input, input_fields),
+        } => run(ctx, &id, input, input_fields).await,
         WorkflowCommand::Validate { id } => validate(ctx, &id),
         WorkflowCommand::Impact { id } => impact(ctx, &id),
         WorkflowCommand::Status { id } => status(ctx, id.as_deref()),
@@ -276,7 +300,7 @@ fn fix(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommandOutpu
     })
 }
 
-fn run(
+async fn run(
     ctx: WorkflowCommandContext<'_>,
     id: &str,
     input: Option<WorkflowInputSource>,
@@ -284,18 +308,20 @@ fn run(
 ) -> Result<WorkflowCommandOutput> {
     let workflow = find_workflow(ctx.codex_home, ctx.cwd, ctx.config, id)?;
     let input = read_input(input, input_fields)?;
-    let output = Command::new("npm")
-        .args(["run", "run", "--", "--input", &input])
-        .current_dir(&workflow.path)
-        .output()
-        .with_context(|| format!("failed to run workflow {}", workflow.id))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    if !output.status.success() {
+    let output = workflow_runtime::run_workflow(
+        &workflow.path,
+        &workflow.path.join("src/workflow.ts"),
+        &input,
+    )
+    .await
+    .with_context(|| format!("failed to run workflow {}", workflow.id))?;
+    let stdout = output.stdout;
+    let stderr = output.stderr;
+    if !output.success {
         return Err(anyhow!(
             "workflow {} exited with {}\n{}",
             workflow.id,
-            output.status,
+            output.exit_status,
             stderr
         ));
     }
@@ -728,8 +754,15 @@ fn workflow_config_value(key: &str, raw: &str) -> Result<Item> {
 mod tests {
     use super::*;
     use codex_config::types::WorkflowDefaultLocation;
+    use futures::SinkExt;
+    use futures::StreamExt;
     use pretty_assertions::assert_eq;
+    use serial_test::serial;
+    use std::fs::Permissions;
     use tempfile::TempDir;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::accept_async;
+    use tokio_tungstenite::tungstenite::Message;
 
     #[test]
     fn develop_creates_git_backed_workflow() {
@@ -958,5 +991,188 @@ mod tests {
                 "scope": "repo",
             })
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial(workflow_runtime_notifications)]
+    async fn run_forwards_workflow_runtime_notifications_to_app_server() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let workflow_dir = home.path().join("workflows/reports/runtime-progress");
+        fs::create_dir_all(workflow_dir.join("src")).unwrap();
+        fs::create_dir_all(workflow_dir.join("state")).unwrap();
+        fs::create_dir_all(workflow_dir.join("node_modules/.bin")).unwrap();
+        fs::create_dir_all(workflow_dir.join(".git")).unwrap();
+        fs::write(workflow_dir.join("README.md"), "# Runtime Progress\n").unwrap();
+        fs::write(workflow_dir.join("state/.gitkeep"), "").unwrap();
+        fs::write(
+            workflow_dir.join("src/workflow.ts"),
+            r#"const workflow = {
+  async run(ctx, input) {
+    ctx.progress("Preparing review", { prompt: input.prompt, stage: "testing" });
+    ctx.reportToUserMarkdown(`# Workflow Result\n\n${input.prompt}`);
+    return { workflowStatus: "done", prompt: input.prompt };
+  },
+};
+
+export default workflow;
+"#,
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("node_modules/.bin/tsx"),
+            "#!/bin/sh\nrunner=\"$1\"\nworkflow_flag=\"$2\"\nworkflow_path=\"$3\"\ninput_flag=\"$4\"\ninput_value=\"$5\"\ntmp=$(mktemp \"${TMPDIR:-/tmp}/workflow-runtime-XXXXXX.mjs\")\ncp \"$workflow_path\" \"$tmp\"\nexec node \"$runner\" \"$workflow_flag\" \"$tmp\" \"$input_flag\" \"$input_value\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(
+            workflow_dir.join("node_modules/.bin/tsx"),
+            Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        write_workflow_spec(
+            &workflow_dir.join(WORKFLOW_YAML),
+            &crate::spec::WorkflowSpec {
+                id: "reports/runtime-progress".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let (websocket_url, server_task) = start_workflow_notification_server().await;
+        let _app_server_url = ScopedEnvVar::set("CODEX_WORKFLOW_APP_SERVER_URL", &websocket_url);
+        let _run_id = ScopedEnvVar::set("CODEX_WORKFLOW_RUN_ID", "run-123");
+        let _thread_id = ScopedEnvVar::set("CODEX_WORKFLOW_ORIGIN_THREAD_ID", "thread-456");
+
+        let output = execute_workflow_command(
+            WorkflowCommandContext {
+                codex_home: home.path(),
+                cwd: cwd.path(),
+                config: &WorkflowsConfigToml::default(),
+            },
+            WorkflowCommand::Run {
+                id: "reports/runtime-progress".to_string(),
+                input: Some(WorkflowInputSource::Inline(
+                    r#"{"prompt":"check status"}"#.to_string(),
+                )),
+                input_fields: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+
+        assert!(output.message.contains("workflowStatus"));
+        assert!(output.message.contains("check status"));
+
+        let notifications = server_task.await.unwrap();
+        assert_eq!(notifications.len(), 2);
+        assert_eq!(notifications[0]["method"], "workflow/progress");
+        assert_eq!(notifications[0]["params"]["runId"], "run-123");
+        assert_eq!(notifications[0]["params"]["threadId"], "thread-456");
+        assert_eq!(notifications[0]["params"]["message"], "Preparing review");
+        assert_eq!(notifications[0]["params"]["data"]["stage"], "testing");
+        assert_eq!(notifications[1]["method"], "workflow/reportToUserMarkdown");
+        assert_eq!(notifications[1]["params"]["runId"], "run-123");
+        assert_eq!(notifications[1]["params"]["threadId"], "thread-456");
+        assert!(
+            notifications[1]["params"]["markdown"]
+                .as_str()
+                .unwrap()
+                .contains("Workflow Result")
+        );
+    }
+
+    #[cfg(unix)]
+    async fn start_workflow_notification_server()
+    -> (String, tokio::task::JoinHandle<Vec<JsonValue>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            let initialize = read_text_message(&mut websocket).await;
+            assert_eq!(initialize["method"], "initialize");
+            websocket
+                .send(Message::Text(
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": initialize["id"].clone(),
+                        "result": {},
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+
+            let initialized = read_text_message(&mut websocket).await;
+            assert_eq!(initialized["method"], "initialized");
+
+            let mut notifications = Vec::new();
+            while notifications.len() < 2 {
+                let message = read_text_message(&mut websocket).await;
+                let method = message["method"].as_str().unwrap_or_default();
+                if method == "workflow/progress" || method == "workflow/reportToUserMarkdown" {
+                    notifications.push(message);
+                }
+            }
+            notifications
+        });
+        (format!("ws://{address}"), task)
+    }
+
+    #[cfg(unix)]
+    async fn read_text_message(
+        websocket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    ) -> JsonValue {
+        loop {
+            let frame = websocket.next().await.unwrap().unwrap();
+            match frame {
+                Message::Text(text) => return serde_json::from_str(&text).unwrap(),
+                Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {
+                    continue;
+                }
+                Message::Close(_) => panic!("unexpected close frame"),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    struct ScopedEnvVar {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    #[cfg(unix)]
+    impl ScopedEnvVar {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var(key).ok();
+            // SAFETY: this test is serialized because environment mutation is process-global.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, original }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for ScopedEnvVar {
+        fn drop(&mut self) {
+            match self.original.as_deref() {
+                Some(value) => {
+                    // SAFETY: this test is serialized because environment mutation is process-global.
+                    unsafe {
+                        std::env::set_var(self.key, value);
+                    }
+                }
+                None => {
+                    // SAFETY: this test is serialized because environment mutation is process-global.
+                    unsafe {
+                        std::env::remove_var(self.key);
+                    }
+                }
+            }
+        }
     }
 }
