@@ -1,5 +1,6 @@
 use super::*;
 use std::process::Stdio;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 const WORKFLOW_APPROVALS_ENV: &str = "CODEX_WORKFLOW_APPROVALS";
@@ -60,7 +61,7 @@ impl App {
             .env(WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR_ENV, "defer")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         if let Some(thread_id) = origin_thread_id.as_ref() {
             child_command.env(WORKFLOW_ORIGIN_THREAD_ID_ENV, thread_id.to_string());
         }
@@ -76,9 +77,36 @@ impl App {
                     Some(format!("Connected to {app_server_url}")),
                 );
                 tokio::spawn(async move {
+                    let stderr_task = child.stderr.take().map(|mut stderr| {
+                        tokio::spawn(async move {
+                            let mut output = String::new();
+                            let read_result = stderr.read_to_string(&mut output).await;
+                            (output, read_result)
+                        })
+                    });
+
                     let result = match child.wait().await {
                         Ok(status) if status.success() => Ok(()),
-                        Ok(status) => Err(format!("workflow exited with {status}")),
+                        Ok(status) => {
+                            let stderr_output = match stderr_task {
+                                Some(task) => match task.await {
+                                    Ok((output, Ok(_))) => output,
+                                    Ok((output, Err(err))) => {
+                                        format!("failed to read workflow stderr: {err}\n{output}")
+                                    }
+                                    Err(err) => {
+                                        format!("failed to join workflow stderr task: {err}")
+                                    }
+                                },
+                                None => String::new(),
+                            };
+                            let stderr_output = stderr_output.trim();
+                            if stderr_output.is_empty() {
+                                Err(format!("workflow exited with {status}"))
+                            } else {
+                                Err(format!("workflow exited with {status}\n{stderr_output}"))
+                            }
+                        }
                         Err(err) => Err(format!("failed to wait for workflow process: {err}")),
                     };
                     app_event_tx.send(AppEvent::WorkflowProcessFinished {

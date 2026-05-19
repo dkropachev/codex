@@ -473,6 +473,38 @@ fn workflow_markdown_jsonrpc_message(
     })
 }
 
+#[cfg(unix)]
+fn write_fake_workflow_executable(
+    executable_path: &std::path::Path,
+    env_capture_path: &std::path::Path,
+    tail_script: &str,
+) -> Result<()> {
+    fs::write(
+        executable_path,
+        format!(
+            "#!/bin/sh\nset -eu\nprintf 'app_server_url=%s\\nrun_id=%s\\nthread_id=%s\\n' \\\n+  \"${{CODEX_WORKFLOW_APP_SERVER_URL-}}\" \\\n+  \"${{CODEX_WORKFLOW_RUN_ID-}}\" \\\n+  \"${{CODEX_WORKFLOW_ORIGIN_THREAD_ID-}}\" \\\n  > '{}'\n{}",
+            env_capture_path.display(),
+            tail_script,
+        ),
+    )?;
+    fs::set_permissions(executable_path, fs::Permissions::from_mode(0o755))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn wait_for_workflow_env_capture(env_capture_path: &std::path::Path) -> String {
+    time::timeout(Duration::from_secs(1), async {
+        loop {
+            if let Ok(contents) = fs::read_to_string(env_capture_path) {
+                return contents;
+            }
+            time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for fake workflow process env capture")
+}
+
 #[tokio::test]
 async fn handle_mcp_inventory_result_clears_committed_loading_cell() {
     let mut app = make_test_app().await;
@@ -603,23 +635,109 @@ async fn workflow_command_end_to_end_updates_status_and_queues_markdown_handoff_
     assert!(pending[0].markdown.contains("Captured from test."));
 
     while app_event_rx.try_recv().is_ok() {}
-    let finished = time::timeout(Duration::from_secs(1), app_event_rx.recv())
-        .await
-        .expect("timed out waiting for workflow finish event")
-        .expect("workflow finish event channel closed unexpectedly");
-    let AppEvent::WorkflowProcessFinished {
-        run_id: finished_run_id,
-        command,
-        result,
-    } = finished
-    else {
-        panic!("expected workflow process finished event");
-    };
+    let (finished_run_id, command, result) = time::timeout(Duration::from_secs(1), async {
+        loop {
+            let event = app_event_rx
+                .recv()
+                .await
+                .expect("workflow event channel closed unexpectedly");
+            if let AppEvent::WorkflowProcessFinished {
+                run_id,
+                command,
+                result,
+            } = event
+            {
+                return (run_id, command, result);
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for workflow finish event");
     app.handle_workflow_process_finished(finished_run_id, command, result);
     assert!(app.workflow_runs.is_empty());
     assert!(app.chat_widget.status_widget_for_test().is_none());
 
     app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn workflow_command_end_to_end_failure_surfaces_stderr_and_clears_status() -> Result<()> {
+    let temp = tempdir()?;
+    let env_capture_path = temp.path().join("workflow-env-failure.txt");
+    let fake_codex_path = temp.path().join("fake-codex-failure.sh");
+    write_fake_workflow_executable(
+        &fake_codex_path,
+        &env_capture_path,
+        "printf 'fatal workflow error\\n' 1>&2\nexit 1\n",
+    )?;
+
+    let (workflow_url, _app_server, _notification_tx) =
+        start_remote_app_server_for_workflow_e2e_test().await?;
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.cwd = AbsolutePathBuf::try_from(temp.path().to_path_buf())
+        .expect("temp workflow cwd should be absolute");
+    while app_event_rx.try_recv().is_ok() {}
+
+    let thread_id = ThreadId::new();
+    let session = test_thread_session(thread_id, test_path_buf("/tmp/project"));
+    app.chat_widget.handle_thread_session(session);
+    app.workflow_app_server_url = Some(workflow_url.clone());
+    app.config.codex_self_exe = Some(fake_codex_path);
+
+    app.run_workflow_command(vec!["code-review".to_string()]);
+    assert_eq!(
+        app.workflow_runs.len(),
+        1,
+        "workflow child should have started"
+    );
+
+    let placeholder_status = app
+        .chat_widget
+        .status_widget_for_test()
+        .expect("workflow placeholder status should be visible");
+    assert_eq!(placeholder_status.header(), "Workflow");
+    assert_eq!(placeholder_status.details(), Some("code-review"));
+
+    let env_capture = wait_for_workflow_env_capture(&env_capture_path).await;
+    assert!(
+        env_capture.contains(&workflow_url),
+        "expected workflow URL in child env capture, got: {env_capture:?}"
+    );
+    assert!(env_capture.contains(&format!("thread_id={thread_id}")));
+    let (finished_run_id, command, result) = time::timeout(Duration::from_secs(1), async {
+        loop {
+            let event = app_event_rx
+                .recv()
+                .await
+                .expect("workflow event channel closed unexpectedly");
+            if let AppEvent::WorkflowProcessFinished {
+                run_id,
+                command,
+                result,
+            } = event
+            {
+                return (run_id, command, result);
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for workflow finish event");
+    app.handle_workflow_process_finished(finished_run_id, command, result);
+
+    assert!(app.workflow_runs.is_empty());
+    assert!(app.chat_widget.status_widget_for_test().is_none());
+
+    let cell = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => Some(cell),
+            _ => None,
+        })
+        .expect("expected workflow failure history cell");
+    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 120));
+    assert!(rendered.contains("Workflow failed: code-review: workflow exited with exit status: 1"));
+    assert!(rendered.contains("fatal workflow error"));
+
     Ok(())
 }
 
