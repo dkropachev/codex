@@ -38,6 +38,7 @@ use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
@@ -73,6 +74,8 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_app_server_protocol::UserInput as AppServerUserInput;
 use codex_app_server_protocol::WarningNotification;
+use codex_app_server_protocol::WorkflowMarkdownResultNotification;
+use codex_app_server_protocol::WorkflowProgressNotification;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -91,6 +94,9 @@ use futures::StreamExt;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::Line;
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -365,6 +371,108 @@ async fn write_websocket_message(
         .expect("message should send");
 }
 
+async fn start_remote_app_server_for_workflow_e2e_test() -> Result<(
+    String,
+    AppServerSession,
+    tokio::sync::mpsc::UnboundedSender<JSONRPCMessage>,
+)> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let websocket_url = format!("ws://{addr}");
+    let (notification_tx, mut notification_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    tokio::spawn(async move {
+        let Ok((stream, _)) = listener.accept().await else {
+            return;
+        };
+        let Ok(mut websocket) = accept_async(stream).await else {
+            return;
+        };
+
+        let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await else {
+            panic!("expected initialize request");
+        };
+        assert_eq!(request.method, "initialize");
+        write_websocket_message(
+            &mut websocket,
+            JSONRPCMessage::Response(JSONRPCResponse {
+                id: request.id,
+                result: serde_json::json!({}),
+            }),
+        )
+        .await;
+
+        let JSONRPCMessage::Notification(notification) =
+            read_websocket_message(&mut websocket).await
+        else {
+            panic!("expected initialized notification");
+        };
+        assert_eq!(notification.method, "initialized");
+
+        while let Some(message) = notification_rx.recv().await {
+            write_websocket_message(&mut websocket, message).await;
+        }
+
+        let _ = websocket.close(None).await;
+    });
+
+    let remote = codex_app_server_client::RemoteAppServerClient::connect(
+        codex_app_server_client::RemoteAppServerConnectArgs {
+            websocket_url: websocket_url.clone(),
+            auth_token: None,
+            client_name: "codex-tui".to_string(),
+            client_version: env!("CARGO_PKG_VERSION").to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 4,
+        },
+    )
+    .await?;
+
+    Ok((
+        websocket_url,
+        AppServerSession::new(codex_app_server_client::AppServerClient::Remote(remote)),
+        notification_tx,
+    ))
+}
+
+fn workflow_progress_jsonrpc_message(
+    run_id: &str,
+    thread_id: Option<ThreadId>,
+    message: &str,
+) -> JSONRPCMessage {
+    JSONRPCMessage::Notification(JSONRPCNotification {
+        method: "workflow/progress".to_string(),
+        params: Some(
+            serde_json::to_value(WorkflowProgressNotification {
+                run_id: run_id.to_string(),
+                thread_id: thread_id.map(|thread_id| thread_id.to_string()),
+                message: message.to_string(),
+                data: Some(serde_json::json!({"stage": "testing", "step": 1})),
+            })
+            .expect("workflow progress notification should serialize"),
+        ),
+    })
+}
+
+fn workflow_markdown_jsonrpc_message(
+    run_id: &str,
+    thread_id: Option<ThreadId>,
+    markdown: &str,
+) -> JSONRPCMessage {
+    JSONRPCMessage::Notification(JSONRPCNotification {
+        method: "workflow/reportToUserMarkdown".to_string(),
+        params: Some(
+            serde_json::to_value(WorkflowMarkdownResultNotification {
+                run_id: run_id.to_string(),
+                thread_id: thread_id.map(|thread_id| thread_id.to_string()),
+                markdown: markdown.to_string(),
+            })
+            .expect("workflow markdown notification should serialize"),
+        ),
+    })
+}
+
 #[tokio::test]
 async fn handle_mcp_inventory_result_clears_committed_loading_cell() {
     let mut app = make_test_app().await;
@@ -385,6 +493,134 @@ async fn handle_mcp_inventory_result_clears_committed_loading_cell() {
     );
 
     assert_eq!(app.transcript_cells.len(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn workflow_command_end_to_end_updates_status_and_queues_markdown_handoff_e2e() -> Result<()>
+{
+    let temp = tempdir()?;
+    let env_capture_path = temp.path().join("workflow-env.txt");
+    let fake_codex_path = temp.path().join("fake-codex.sh");
+    fs::write(
+        &fake_codex_path,
+        format!(
+            "#!/bin/sh\nset -eu\nprintf 'app_server_url=%s\\nrun_id=%s\\nthread_id=%s\\n' \\\n+  \"${{CODEX_WORKFLOW_APP_SERVER_URL-}}\" \\\n+  \"${{CODEX_WORKFLOW_RUN_ID-}}\" \\\n+  \"${{CODEX_WORKFLOW_ORIGIN_THREAD_ID-}}\" \\\n+  > '{}'\nsleep 0.2\n",
+            env_capture_path.display()
+        ),
+    )?;
+    fs::set_permissions(&fake_codex_path, fs::Permissions::from_mode(0o755))?;
+
+    let (workflow_url, mut app_server, notification_tx) =
+        start_remote_app_server_for_workflow_e2e_test().await?;
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.cwd = AbsolutePathBuf::try_from(temp.path().to_path_buf())
+        .expect("temp workflow cwd should be absolute");
+    while app_event_rx.try_recv().is_ok() {}
+
+    let thread_id = ThreadId::new();
+    let session = test_thread_session(thread_id, test_path_buf("/tmp/project"));
+    app.chat_widget.handle_thread_session(session);
+    app.workflow_app_server_url = Some(workflow_url.clone());
+    app.config.codex_self_exe = Some(fake_codex_path);
+
+    app.run_workflow_command(vec!["code-review".to_string()]);
+    assert_eq!(
+        app.workflow_runs.len(),
+        1,
+        "workflow child should have started"
+    );
+
+    let placeholder_status = app
+        .chat_widget
+        .status_widget_for_test()
+        .expect("workflow placeholder status should be visible");
+    assert_eq!(placeholder_status.header(), "Workflow");
+    assert_eq!(placeholder_status.details(), Some("code-review"));
+
+    let env_capture = time::timeout(Duration::from_secs(1), async {
+        loop {
+            if let Ok(contents) = fs::read_to_string(&env_capture_path) {
+                return contents;
+            }
+            time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for fake workflow process env capture");
+    assert!(
+        env_capture.contains(&workflow_url),
+        "expected workflow URL in child env capture, got: {env_capture:?}"
+    );
+    assert!(env_capture.contains(&format!("thread_id={thread_id}")));
+    let run_id_line = env_capture
+        .lines()
+        .find(|line| line.starts_with("run_id="))
+        .expect("run_id should be captured");
+    let run_id = run_id_line.trim_start_matches("run_id=").trim().to_string();
+    assert!(!run_id.is_empty());
+
+    notification_tx
+        .send(workflow_progress_jsonrpc_message(
+            &run_id,
+            None,
+            "Preparing workflow handoff",
+        ))
+        .expect("workflow progress notification should send");
+    let progress_event = time::timeout(Duration::from_secs(1), app_server.next_event())
+        .await
+        .expect("timed out waiting for workflow progress event")
+        .expect("app-server event stream closed unexpectedly");
+    app.handle_app_server_event(&mut app_server, progress_event)
+        .await;
+
+    let live_status = app
+        .chat_widget
+        .status_widget_for_test()
+        .expect("live workflow status should be visible");
+    let live_details = live_status
+        .details()
+        .expect("workflow progress details should exist");
+    assert!(live_details.contains("Preparing workflow handoff"));
+    assert!(live_details.contains("\"stage\": \"testing\""));
+
+    notification_tx
+        .send(workflow_markdown_jsonrpc_message(
+            &run_id,
+            None,
+            "# Workflow Result\n\nCaptured from test.\n",
+        ))
+        .expect("workflow markdown notification should send");
+    let markdown_event = time::timeout(Duration::from_secs(1), app_server.next_event())
+        .await
+        .expect("timed out waiting for workflow markdown event")
+        .expect("app-server event stream closed unexpectedly");
+    app.handle_app_server_event(&mut app_server, markdown_event)
+        .await;
+
+    let pending = app.take_pending_workflow_markdown_handoffs_for_thread(thread_id);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].destination_thread_id, None);
+    assert!(pending[0].markdown.contains("Captured from test."));
+
+    while app_event_rx.try_recv().is_ok() {}
+    let finished = time::timeout(Duration::from_secs(1), app_event_rx.recv())
+        .await
+        .expect("timed out waiting for workflow finish event")
+        .expect("workflow finish event channel closed unexpectedly");
+    let AppEvent::WorkflowProcessFinished {
+        run_id: finished_run_id,
+        command,
+        result,
+    } = finished
+    else {
+        panic!("expected workflow process finished event");
+    };
+    app.handle_workflow_process_finished(finished_run_id, command, result);
+    assert!(app.workflow_runs.is_empty());
+    assert!(app.chat_widget.status_widget_for_test().is_none());
+
+    app_server.shutdown().await?;
+    Ok(())
 }
 
 #[test]

@@ -9410,6 +9410,13 @@ impl ChatWidget {
         self.status_account_display.as_ref()
     }
 
+    #[cfg(test)]
+    pub(crate) fn status_widget_for_test(
+        &self,
+    ) -> Option<&crate::status_indicator_widget::StatusIndicatorWidget> {
+        self.bottom_pane.status_widget()
+    }
+
     pub(crate) fn runtime_model_provider_base_url(&self) -> Option<&str> {
         self.runtime_model_provider_base_url.as_deref()
     }
