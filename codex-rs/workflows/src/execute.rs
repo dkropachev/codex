@@ -438,7 +438,13 @@ fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -
     fs::write(
         path.join("README.md"),
         format!(
-            "# {title}\n\n{description}\n\n## Usage\n\n```sh\ncodex workflow run {id} --key value\n# or\ncodex workflow run {id} --input '{{}}'\n```\n\n## Workflow Runtime\n\nUse `ctx.progress(message, data?)` while the workflow is running so the TUI can keep the live workflow status row up to date. Use `ctx.reportToUserMarkdown(markdown)` only when the workflow should hand markdown back to the next plain user turn in the TUI.\n"
+            "# {title}\n\n{description}\n\n## Usage\n\n```sh\ncodex workflow run {id} --key value\n# or\ncodex workflow run {id} --input '{{}}'\n```\n\n## Workflow Runtime\n\nUse `ctx.progress(message, data?)` while the workflow is running so the TUI can keep the live workflow status row up to date. Use `ctx.reportToUserMarkdown(markdown)` only when the workflow should hand markdown back to the next plain user turn in the TUI.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json` and resolved from this directory's `node_modules`.\n"
+        ),
+    )?;
+    fs::write(
+        path.join("DESIGN.md"),
+        format!(
+            "# {title} Design\n\n## Overview\n\nThis workflow is a local TypeScript package driven by `tsx` and validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `src/workflow.ts` owns the runtime behavior.\n- `src/tests/` carries the coverage contract for positive, negative, and recovery paths.\n- `workflow.yaml` records validation commands and coverage expectations.\n- `state/` holds any persistent data.\n\n## Data Flow\n\n1. `codex workflow run {id}` loads the workflow from the local package.\n2. The workflow validates input, emits progress, and reports markdown when it has a user-facing result.\n3. `codex workflow validate {id}` runs the local validation commands and checks the required docs, layout, and coverage markers.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.ts`: positive path, progress, and final markdown handoff.\n- `src/tests/workflow.negative.test.ts`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.ts`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep dependency usage local. Keep `// workflow-covers:` markers aligned with `validation.coverage`. Update this file when the workflow behavior or review expectations change.\n"
         ),
     )?;
     fs::write(
@@ -485,15 +491,22 @@ fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -
         format!(
             r#"import {{ defineWorkflow, runWorkflow }} from "@openai/codex-sdk/workflow";
 
+function validateInput(input: unknown) {{
+  if (!input || typeof input !== "object" || Array.isArray(input)) {{
+    throw new Error("workflow input must be a JSON object");
+  }}
+  return input;
+}}
+
 const workflow = defineWorkflow({{
   id: "{id}",
   title: "{title}",
   description: "{description}",
   async run(ctx, input) {{
-    ctx.progress("Running workflow", {{ input }});
-    // Call ctx.reportToUserMarkdown(markdown) when the workflow should leave
-    // markdown for the next plain user turn in the TUI.
-    return {{ ok: true, input }};
+    const normalizedInput = validateInput(input);
+    ctx.progress("Running workflow", {{ input: normalizedInput }});
+    ctx.reportToUserMarkdown("{markdown}");
+    return {{ ok: true, input: normalizedInput }};
   }},
 }});
 
@@ -509,17 +522,54 @@ if (import.meta.url === `file://${{process.argv[1]}}`) {{
 "#,
             id = escape_ts_string(id),
             title = escape_ts_string(title),
-            description = escape_ts_string(description)
+            description = escape_ts_string(description),
+            markdown = escape_ts_string(&format!("# {title}\n\nWorkflow complete.")),
         ),
     )?;
     fs::write(
-        path.join("src/tests/workflow.test.ts"),
-        r#"import assert from "node:assert/strict";
+        path.join("src/tests/workflow.positive.test.ts"),
+        format!(
+            r#"// workflow-covers: positive progress finalResult
+import assert from "node:assert/strict";
 import test from "node:test";
 import workflow from "../workflow.js";
 
-test("workflow is defined", () => {
-  assert.equal(typeof workflow, "object");
+test("workflow reports progress and markdown", async () => {{
+  const events: unknown[] = [];
+  const output = await workflow.run({{
+    progress(message: string, data: unknown) {{
+      events.push(["progress", message, data]);
+    }},
+    reportToUserMarkdown(markdown: string) {{
+      events.push(["report", markdown]);
+    }},
+  }}, {{ input: "example" }});
+
+  assert.deepEqual(output, {{ ok: true, input: {{ input: "example" }} }});
+  assert.deepEqual(events, [
+    ["progress", "Running workflow", {{ input: {{ input: "example" }} }}],
+    ["report", "{markdown}"],
+  ]);
+}});
+"#,
+            markdown = escape_ts_string(&format!("# {title}\n\nWorkflow complete.")),
+        ),
+    )?;
+    fs::write(
+        path.join("src/tests/workflow.negative.test.ts"),
+        r#"// workflow-covers: negative failureUx
+import assert from "node:assert/strict";
+import test from "node:test";
+import workflow from "../workflow.js";
+
+test("workflow rejects invalid input", async () => {
+  await assert.rejects(
+    workflow.run({
+      progress() {},
+      reportToUserMarkdown() {},
+    }, null),
+    /workflow input must be a JSON object/
+  );
 });
 "#,
     )?;
@@ -764,6 +814,63 @@ mod tests {
     use tokio_tungstenite::accept_async;
     use tokio_tungstenite::tungstenite::Message;
 
+    fn write_validation_fixture(workflow_dir: &Path, validation_commands: JsonValue) {
+        fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
+        fs::create_dir_all(workflow_dir.join("state")).unwrap();
+        fs::create_dir_all(workflow_dir.join(".git")).unwrap();
+        fs::write(
+            workflow_dir.join("README.md"),
+            "# Test\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("DESIGN.md"),
+            "# Test Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("package.json"),
+            r#"{
+  "name": "codex-workflow-review-fix",
+  "private": true,
+  "type": "module"
+}
+"#,
+        )
+        .unwrap();
+        fs::write(workflow_dir.join("src/workflow.ts"), "export {};\n").unwrap();
+        fs::write(
+            workflow_dir.join("src/tests/workflow.positive.test.ts"),
+            "// workflow-covers: positive progress finalResult\nexport {};\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("src/tests/workflow.negative.test.ts"),
+            "// workflow-covers: negative failureUx\nexport {};\n",
+        )
+        .unwrap();
+        fs::write(workflow_dir.join("state/.gitkeep"), "").unwrap();
+        write_workflow_spec(
+            &workflow_dir.join(WORKFLOW_YAML),
+            &crate::spec::WorkflowSpec {
+                id: "review/fix".to_string(),
+                validation: json!({
+                    "commands": validation_commands,
+                    "coverage": {
+                        "positive": true,
+                        "negative": true,
+                        "progress": true,
+                        "finalResult": true,
+                        "failureUx": true,
+                        "recovery": false,
+                    }
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+
     #[test]
     fn develop_creates_git_backed_workflow() {
         let home = TempDir::new().unwrap();
@@ -797,12 +904,32 @@ mod tests {
         );
         assert!(
             cwd.path()
+                .join(".codex/workflows/jira-summary/README.md")
+                .is_file()
+        );
+        assert!(
+            cwd.path()
+                .join(".codex/workflows/jira-summary/DESIGN.md")
+                .is_file()
+        );
+        assert!(
+            cwd.path()
+                .join(".codex/workflows/jira-summary/package.json")
+                .is_file()
+        );
+        assert!(
+            cwd.path()
                 .join(".codex/workflows/jira-summary/src/tests")
                 .is_dir()
         );
         assert!(
             cwd.path()
-                .join(".codex/workflows/jira-summary/src/tests/workflow.test.ts")
+                .join(".codex/workflows/jira-summary/src/tests/workflow.positive.test.ts")
+                .is_file()
+        );
+        assert!(
+            cwd.path()
+                .join(".codex/workflows/jira-summary/src/tests/workflow.negative.test.ts")
                 .is_file()
         );
         assert!(
@@ -815,27 +942,42 @@ mod tests {
                 .join(".codex/workflows/jira-summary/state/.gitkeep")
                 .is_file()
         );
+        let spec = read_workflow_spec(
+            &cwd.path()
+                .join(".codex/workflows/jira-summary/workflow.yaml"),
+        )
+        .unwrap();
+        assert_eq!(
+            spec.validation["coverage"]["positive"],
+            JsonValue::Bool(true)
+        );
+        assert_eq!(
+            spec.validation["coverage"]["negative"],
+            JsonValue::Bool(true)
+        );
+        assert_eq!(
+            spec.validation["coverage"]["progress"],
+            JsonValue::Bool(true)
+        );
+        assert_eq!(
+            spec.validation["coverage"]["finalResult"],
+            JsonValue::Bool(true)
+        );
+        assert_eq!(
+            spec.validation["coverage"]["failureUx"],
+            JsonValue::Bool(true)
+        );
+        assert_eq!(
+            spec.validation["coverage"]["recovery"],
+            JsonValue::Bool(false)
+        );
     }
 
     #[test]
     fn validate_workflow_runs_validation_commands() {
         let temp_dir = TempDir::new().unwrap();
         let workflow_dir = temp_dir.path().join("review/fix");
-        fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
-        fs::create_dir_all(workflow_dir.join("state")).unwrap();
-        fs::create_dir_all(workflow_dir.join(".git")).unwrap();
-        fs::write(workflow_dir.join("README.md"), "# Test\n").unwrap();
-        fs::write(workflow_dir.join("src/workflow.ts"), "export {};\n").unwrap();
-        fs::write(workflow_dir.join("state/.gitkeep"), "").unwrap();
-        write_workflow_spec(
-            &workflow_dir.join(WORKFLOW_YAML),
-            &crate::spec::WorkflowSpec {
-                id: "review/fix".to_string(),
-                validation: json!({ "commands": ["echo ok", "exit 0"] }),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        write_validation_fixture(&workflow_dir, json!(["echo ok", "exit 0"]));
         let workflow = crate::registry::WorkflowSummary {
             id: "review/fix".to_string(),
             command: Some("fix".to_string()),
@@ -870,21 +1012,7 @@ mod tests {
     fn validate_workflow_reports_failing_validation_command() {
         let temp_dir = TempDir::new().unwrap();
         let workflow_dir = temp_dir.path().join("review/fix");
-        fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
-        fs::create_dir_all(workflow_dir.join("state")).unwrap();
-        fs::create_dir_all(workflow_dir.join(".git")).unwrap();
-        fs::write(workflow_dir.join("README.md"), "# Test\n").unwrap();
-        fs::write(workflow_dir.join("src/workflow.ts"), "export {};\n").unwrap();
-        fs::write(workflow_dir.join("state/.gitkeep"), "").unwrap();
-        write_workflow_spec(
-            &workflow_dir.join(WORKFLOW_YAML),
-            &crate::spec::WorkflowSpec {
-                id: "review/fix".to_string(),
-                validation: json!({ "commands": ["exit 1", "echo skipped"] }),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        write_validation_fixture(&workflow_dir, json!(["exit 1", "echo skipped"]));
         let workflow = crate::registry::WorkflowSummary {
             id: "review/fix".to_string(),
             command: Some("fix".to_string()),
@@ -1014,7 +1142,7 @@ mod tests {
   async run(ctx, input) {
     ctx.progress("Preparing review", { prompt: input.prompt, stage: "testing" });
     ctx.reportToUserMarkdown(`# Workflow Result\n\n${input.prompt}`);
-    return { workflowStatus: "done", prompt: input.prompt };
+    return { workflowStatus: "done", prompt: input.prompt, nodePath: process.env.NODE_PATH ?? null };
   },
 };
 
@@ -1045,6 +1173,7 @@ export default workflow;
         let _app_server_url = ScopedEnvVar::set("CODEX_WORKFLOW_APP_SERVER_URL", &websocket_url);
         let _run_id = ScopedEnvVar::set("CODEX_WORKFLOW_RUN_ID", "run-123");
         let _thread_id = ScopedEnvVar::set("CODEX_WORKFLOW_ORIGIN_THREAD_ID", "thread-456");
+        let _node_path = ScopedEnvVar::set("NODE_PATH", "/tmp/global-modules");
 
         let output = execute_workflow_command(
             WorkflowCommandContext {
@@ -1064,6 +1193,7 @@ export default workflow;
 
         assert!(output.message.contains("workflowStatus"));
         assert!(output.message.contains("check status"));
+        assert!(output.message.contains("\"nodePath\": null"));
 
         let notifications = server_task.await.unwrap();
         assert_eq!(notifications.len(), 2);

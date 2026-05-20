@@ -12,6 +12,8 @@ use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_tool_environment;
+use crate::tools::handlers::workflow_design_guard::rollback_design_md_if_modified;
+use crate::tools::handlers::workflow_design_guard::snapshot_design_md;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
@@ -154,6 +156,7 @@ impl ToolHandler for ExecCommandHandler {
         )
         .map_err(FunctionCallError::RespondToModel)?;
         let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
+        let design_md_snapshot = snapshot_design_md(turn.as_ref());
 
         let ExecCommandArgs {
             tty,
@@ -238,6 +241,7 @@ impl ToolHandler for ExecCommandHandler {
         .await?
         {
             manager.release_process_id(process_id).await;
+            rollback_design_md_if_modified(turn.as_ref(), design_md_snapshot.as_ref())?;
             return Ok(ExecCommandToolOutput {
                 event_call_id: String::new(),
                 chunk_id: String::new(),
@@ -266,6 +270,7 @@ impl ToolHandler for ExecCommandHandler {
                     tty,
                     sandbox_permissions: effective_additional_permissions.sandbox_permissions,
                     additional_permissions: normalized_additional_permissions,
+                    protected_read_only_paths: turn.tool_policy.protected_read_only_paths(),
                     additional_permissions_preapproved: effective_additional_permissions
                         .permissions_preapproved,
                     justification,
@@ -275,8 +280,12 @@ impl ToolHandler for ExecCommandHandler {
             )
             .await
         {
-            Ok(response) => Ok(response),
+            Ok(response) => {
+                rollback_design_md_if_modified(turn.as_ref(), design_md_snapshot.as_ref())?;
+                Ok(response)
+            }
             Err(UnifiedExecError::SandboxDenied { output, .. }) => {
+                rollback_design_md_if_modified(turn.as_ref(), design_md_snapshot.as_ref())?;
                 let output_text = output.aggregated_output.text;
                 let original_token_count = approx_token_count(&output_text);
                 Ok(ExecCommandToolOutput {

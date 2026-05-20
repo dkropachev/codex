@@ -16,6 +16,8 @@ use codex_network_proxy::PROXY_ENV_KEYS;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::permissions::FileSystemAccessMode;
 use codex_sandboxing::SandboxCommand;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
@@ -31,10 +33,13 @@ pub(crate) fn build_sandbox_command(
     cwd: &AbsolutePathBuf,
     env: &HashMap<String, String>,
     additional_permissions: Option<AdditionalPermissionProfile>,
+    protected_read_only_paths: &[AbsolutePathBuf],
 ) -> Result<SandboxCommand, ToolError> {
     let (program, args) = command
         .split_first()
         .ok_or_else(|| ToolError::Rejected("command args are empty".to_string()))?;
+    let additional_permissions =
+        merge_protected_read_only_paths(additional_permissions, protected_read_only_paths);
     Ok(SandboxCommand {
         program: program.clone().into(),
         args: args.to_vec(),
@@ -42,6 +47,37 @@ pub(crate) fn build_sandbox_command(
         env: env.clone(),
         additional_permissions,
     })
+}
+
+fn merge_protected_read_only_paths(
+    additional_permissions: Option<AdditionalPermissionProfile>,
+    protected_read_only_paths: &[AbsolutePathBuf],
+) -> Option<AdditionalPermissionProfile> {
+    if protected_read_only_paths.is_empty() {
+        return additional_permissions;
+    }
+
+    let mut additional_permissions = additional_permissions.unwrap_or_default();
+    let mut file_system = additional_permissions.file_system.unwrap_or_default();
+    file_system.entries.retain(|entry| {
+        !(entry.access == FileSystemAccessMode::Write
+            && matches!(
+                &entry.path,
+                codex_protocol::permissions::FileSystemPath::Path { path }
+                    if protected_read_only_paths.contains(path)
+            ))
+    });
+    let protected_file_system = FileSystemPermissions::from_read_write_roots(
+        Some(protected_read_only_paths.to_vec()),
+        /*write*/ None,
+    );
+    for entry in protected_file_system.entries {
+        if !file_system.entries.contains(&entry) {
+            file_system.entries.push(entry);
+        }
+    }
+    additional_permissions.file_system = Some(file_system);
+    Some(additional_permissions)
 }
 
 pub(crate) fn exec_env_for_sandbox_permissions(

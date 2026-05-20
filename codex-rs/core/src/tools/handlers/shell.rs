@@ -26,6 +26,8 @@ use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
+use crate::tools::handlers::workflow_design_guard::rollback_design_md_if_modified;
+use crate::tools::handlers::workflow_design_guard::snapshot_design_md;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::PostToolUsePayload;
@@ -554,6 +556,7 @@ impl ShellHandler {
             network: exec_params.network.clone(),
             sandbox_permissions: effective_additional_permissions.sandbox_permissions,
             additional_permissions: normalized_additional_permissions,
+            protected_read_only_paths: turn.tool_policy.protected_read_only_paths(),
             #[cfg(unix)]
             additional_permissions_preapproved: effective_additional_permissions
                 .permissions_preapproved,
@@ -576,6 +579,7 @@ impl ShellHandler {
             call_id: call_id.clone(),
             tool_name,
         };
+        let design_md_snapshot = snapshot_design_md(turn.as_ref());
         let out = orchestrator
             .run(
                 &mut runtime,
@@ -586,6 +590,9 @@ impl ShellHandler {
             )
             .await
             .map(|result| result.output);
+        if out.is_ok() {
+            rollback_design_md_if_modified(turn.as_ref(), design_md_snapshot.as_ref())?;
+        }
         let event_ctx = ToolEventCtx::new(
             session.as_ref(),
             turn.as_ref(),

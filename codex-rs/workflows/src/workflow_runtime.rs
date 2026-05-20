@@ -216,7 +216,7 @@ pub(crate) async fn run_workflow(
     let tsx_path = workflow_tsx_path(workflow_dir);
     if !tsx_path.is_file() {
         return Err(anyhow::anyhow!(
-            "workflow runtime requires `{}`; run the workflow install step before `codex workflow run`",
+            "workflow runtime requires local `{}`; global package installs are ignored, so run the workflow install step in this workflow directory before `codex workflow run`",
             tsx_path.display()
         ));
     }
@@ -229,6 +229,7 @@ pub(crate) async fn run_workflow(
         .arg("--input")
         .arg(input)
         .current_dir(workflow_dir)
+        .env_remove("NODE_PATH")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

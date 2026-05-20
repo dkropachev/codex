@@ -12,6 +12,7 @@ use std::time::Duration;
 use crate::model_router::ModelRouterSource;
 use crate::model_router::apply_model_router_with_state;
 use crate::model_router::available_router_models;
+use crate::tools::tool_policy::TurnToolPolicy;
 
 fn review_provider_connection_error(provider_id: &str) -> &'static str {
     match provider_id {
@@ -204,8 +205,15 @@ pub(super) async fn spawn_review_thread(
         parent_turn_context.windows_sandbox_level,
         parent_turn_context.network.is_some(),
     ));
+    let tool_policy = TurnToolPolicy::for_turn(&session_source, &parent_turn_context.cwd);
+    let file_system_sandbox_policy = tool_policy.apply_file_system_overlay(
+        parent_turn_context.file_system_sandbox_policy.clone(),
+        &parent_turn_context.cwd,
+    );
 
     let review_turn_context = TurnContext {
+        file_system_sandbox_policy,
+        tool_policy,
         sub_id: review_turn_id,
         trace_id: current_span_trace_id(),
         realtime_active: parent_turn_context.realtime_active,
@@ -235,7 +243,6 @@ pub(super) async fn spawn_review_thread(
         approval_policy: parent_turn_context.approval_policy.clone(),
         permission_profile: parent_turn_context.permission_profile(),
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
-        file_system_sandbox_policy: parent_turn_context.file_system_sandbox_policy.clone(),
         network_sandbox_policy: parent_turn_context.network_sandbox_policy,
         network: parent_turn_context.network.clone(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,

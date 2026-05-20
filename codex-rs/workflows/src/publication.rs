@@ -426,16 +426,34 @@ mod tests {
         std::fs::create_dir_all(dir.join(".git")).unwrap();
         std::fs::write(
             dir.join("workflow.yaml"),
-            "id: reports/jira-summary\ntitle: Jira Summary\nuserDescription: Summarize Jira work\ntool:\n  description: Run the Jira summary workflow\n  inputSchema:\n    type: object\n  outputSchema: null\n  registerOn:\n    - afterAgent\n",
+            "id: reports/jira-summary\ntitle: Jira Summary\nuserDescription: Summarize Jira work\nvalidation:\n  commands:\n    - npm run build\n    - npm test\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    recovery: false\ntool:\n  description: Run the Jira summary workflow\n  inputSchema:\n    type: object\n  outputSchema: null\n  registerOn:\n    - afterAgent\n",
         )
         .unwrap();
-        std::fs::write(dir.join("README.md"), "# Jira Summary\n").unwrap();
+        std::fs::write(
+            dir.join("README.md"),
+            "# Jira Summary\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("DESIGN.md"),
+            "# Jira Summary Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
+        )
+        .unwrap();
         std::fs::write(dir.join("src/workflow.ts"), "export {};\n").unwrap();
-        std::fs::write(dir.join("src/tests/workflow.test.ts"), "export {};\n").unwrap();
+        std::fs::write(
+            dir.join("src/tests/workflow.positive.test.ts"),
+            "// workflow-covers: positive progress finalResult\nexport {};\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/tests/workflow.negative.test.ts"),
+            "// workflow-covers: negative failureUx\nexport {};\n",
+        )
+        .unwrap();
         std::fs::write(dir.join("state/.gitkeep"), "").unwrap();
         std::fs::write(
             dir.join("package.json"),
-            "{\n  \"name\": \"codex-workflow-reports-jira-summary\",\n  \"private\": true\n}\n",
+            "{\n  \"name\": \"codex-workflow-reports-jira-summary\",\n  \"private\": true,\n  \"type\": \"module\"\n}\n",
         )
         .unwrap();
     }

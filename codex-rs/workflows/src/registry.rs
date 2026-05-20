@@ -215,183 +215,7 @@ pub fn validate_workflow_dir(
     workflow_dir: &Path,
     expected_id: &str,
 ) -> WorkflowValidation {
-    let mut messages = Vec::new();
-    let spec_path = workflow_dir.join(WORKFLOW_YAML);
-    match read_workflow_spec(&spec_path) {
-        Ok(spec) => {
-            if spec.id != expected_id {
-                messages.push(format!(
-                    "workflow.yaml id '{}' does not match directory id '{expected_id}'",
-                    spec.id
-                ));
-            }
-        }
-        Err(err) => messages.push(err.to_string()),
-    }
-
-    for relative in ["README.md", "src/workflow.ts"] {
-        if !workflow_dir.join(relative).is_file() {
-            messages.push(format!("missing {relative}"));
-        }
-    }
-    for relative in ["src", "src/tests", "state"] {
-        if !workflow_dir.join(relative).is_dir() {
-            messages.push(format!("missing {relative}/"));
-        }
-    }
-    if !workflow_dir.join(".git").is_dir() {
-        messages.push("workflow directory is not a git repository".to_string());
-    }
-    if !workflow_dir.starts_with(root) {
-        messages.push(format!(
-            "workflow path {} escapes root {}",
-            workflow_dir.display(),
-            root.display()
-        ));
-    }
-
-    let mut code_outside_src = Vec::new();
-    let mut tests_outside_src_tests = Vec::new();
-    let mut databases_outside_state = Vec::new();
-    collect_layout_issues(
-        workflow_dir,
-        workflow_dir,
-        &mut code_outside_src,
-        &mut tests_outside_src_tests,
-        &mut databases_outside_state,
-    );
-    if !code_outside_src.is_empty() {
-        messages.push(format!(
-            "code files must live under src/: {}",
-            code_outside_src.join(", ")
-        ));
-    }
-    if !tests_outside_src_tests.is_empty() {
-        messages.push(format!(
-            "test files must live under src/tests/: {}",
-            tests_outside_src_tests.join(", ")
-        ));
-    }
-    if !databases_outside_state.is_empty() {
-        messages.push(format!(
-            "database files must live under state/: {}",
-            databases_outside_state.join(", ")
-        ));
-    }
-
-    let status = if messages.is_empty() {
-        WorkflowValidationStatus::Valid
-    } else {
-        WorkflowValidationStatus::Invalid
-    };
-    WorkflowValidation { status, messages }
-}
-
-fn collect_layout_issues(
-    workflow_dir: &Path,
-    dir: &Path,
-    code_outside_src: &mut Vec<String>,
-    tests_outside_src_tests: &mut Vec<String>,
-    databases_outside_state: &mut Vec<String>,
-) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if should_skip_layout_dir(&path) {
-                continue;
-            }
-            collect_layout_issues(
-                workflow_dir,
-                &path,
-                code_outside_src,
-                tests_outside_src_tests,
-                databases_outside_state,
-            );
-            continue;
-        }
-
-        let Ok(relative) = path.strip_prefix(workflow_dir) else {
-            continue;
-        };
-        let relative_display = relative.display().to_string();
-
-        if is_database_file(relative) && !relative.starts_with(Path::new("state")) {
-            databases_outside_state.push(relative_display);
-            continue;
-        }
-        if is_test_file(relative) {
-            if !relative.starts_with(Path::new("src/tests")) {
-                tests_outside_src_tests.push(relative_display);
-            }
-            continue;
-        }
-        if is_code_file(relative)
-            && !relative.starts_with(Path::new("src"))
-            && !is_allowed_non_src_code_file(relative)
-        {
-            code_outside_src.push(relative_display);
-        }
-    }
-}
-
-fn should_skip_layout_dir(path: &Path) -> bool {
-    matches!(
-        path.file_name().and_then(|name| name.to_str()),
-        Some(".git" | "node_modules" | "target" | "dist" | "build" | "coverage")
-    )
-}
-
-fn is_code_file(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|extension| extension.to_str()),
-        Some("ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts")
-    )
-}
-
-fn is_test_file(path: &Path) -> bool {
-    if path.starts_with(Path::new("tests")) {
-        return true;
-    }
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.contains(".test.") || name.contains(".spec."))
-}
-
-fn is_database_file(path: &Path) -> bool {
-    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    file_name.ends_with(".db")
-        || file_name.ends_with(".sqlite")
-        || file_name.ends_with(".sqlite3")
-        || file_name.ends_with(".db-wal")
-        || file_name.ends_with(".db-shm")
-        || file_name.ends_with(".sqlite-wal")
-        || file_name.ends_with(".sqlite-shm")
-        || file_name.ends_with(".sqlite3-wal")
-        || file_name.ends_with(".sqlite3-shm")
-}
-
-fn is_allowed_non_src_code_file(path: &Path) -> bool {
-    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    path.parent().is_some_and(|parent| parent == Path::new(""))
-        && matches!(
-            file_name,
-            name if name.ends_with(".config.ts")
-                || name.ends_with(".config.tsx")
-                || name.ends_with(".config.js")
-                || name.ends_with(".config.jsx")
-                || name.ends_with(".config.mjs")
-                || name.ends_with(".config.cjs")
-                || name.ends_with(".config.mts")
-                || name.ends_with(".config.cts")
-        )
+    crate::validation::validate_workflow_dir(root, workflow_dir, expected_id)
 }
 
 pub fn workflow_impact(summary: &WorkflowSummary) -> Result<WorkflowImpact> {
@@ -695,17 +519,66 @@ mod tests {
     fn validate_workflow_dir_reports_layout_violations() {
         let root = TempDir::new().unwrap();
         let workflow = root.path().join("reports/jira-summary");
+        fs::create_dir_all(workflow.join("src/tests")).unwrap();
+        fs::create_dir_all(workflow.join("state")).unwrap();
         fs::create_dir_all(workflow.join("src")).unwrap();
         fs::create_dir_all(workflow.join("tests")).unwrap();
         fs::create_dir_all(workflow.join(".git")).unwrap();
-        fs::write(workflow.join("README.md"), "# Test\n").unwrap();
-        fs::write(workflow.join("src/workflow.ts"), "export {};\n").unwrap();
+        fs::write(
+            workflow.join("README.md"),
+            "# Test\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow.join("DESIGN.md"),
+            "# Test Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow.join("package.json"),
+            r#"{
+  "name": "codex-workflow-test",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@openai/codex-sdk": "latest"
+  }
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            workflow.join("src/workflow.ts"),
+            "import { defineWorkflow } from \"@openai/codex-sdk/workflow\";\n\nexport default defineWorkflow({ id: \"reports/jira-summary\", title: \"Test\", description: \"Test\", async run() { return { ok: true }; } });\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow.join("src/tests/workflow.positive.test.ts"),
+            "// workflow-covers: positive progress finalResult\nexport {};\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow.join("src/tests/workflow.negative.test.ts"),
+            "// workflow-covers: negative failureUx\nexport {};\n",
+        )
+        .unwrap();
         fs::write(workflow.join("tests/workflow.test.ts"), "export {};\n").unwrap();
         fs::write(workflow.join("cache.db"), "db").unwrap();
         write_workflow_spec(
             &workflow.join(WORKFLOW_YAML),
             &crate::spec::WorkflowSpec {
                 id: "reports/jira-summary".to_string(),
+                validation: json!({
+                    "commands": ["npm run build", "npm test"],
+                    "coverage": {
+                        "positive": true,
+                        "negative": true,
+                        "progress": true,
+                        "finalResult": true,
+                        "failureUx": true,
+                        "recovery": false,
+                    }
+                }),
                 ..Default::default()
             },
         )
@@ -717,8 +590,6 @@ mod tests {
         assert_eq!(
             validation.messages,
             vec![
-                "missing src/tests/".to_string(),
-                "missing state/".to_string(),
                 "test files must live under src/tests/: tests/workflow.test.ts".to_string(),
                 "database files must live under state/: cache.db".to_string(),
             ]
@@ -726,17 +597,64 @@ mod tests {
     }
 
     fn create_minimal_workflow(dir: &Path, id: &str, tool: Option<WorkflowToolSpec>) {
+        fs::create_dir_all(dir.join("src")).unwrap();
         fs::create_dir_all(dir.join("src/tests")).unwrap();
         fs::create_dir_all(dir.join("state")).unwrap();
-        fs::write(dir.join("README.md"), "# Test\n").unwrap();
-        fs::write(dir.join("src/workflow.ts"), "export {};\n").unwrap();
-        fs::write(dir.join("src/tests/workflow.test.ts"), "export {};\n").unwrap();
+        fs::write(
+            dir.join("README.md"),
+            "# Test\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("DESIGN.md"),
+            "# Test Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("package.json"),
+            r#"{
+  "name": "codex-workflow-test",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@openai/codex-sdk": "latest"
+  }
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("src/workflow.ts"),
+            "import { defineWorkflow } from \"@openai/codex-sdk/workflow\";\n\nexport default defineWorkflow({ id: \"reports/jira-summary\", title: \"Test\", description: \"Test\", async run() { return { ok: true }; } });\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("src/tests/workflow.positive.test.ts"),
+            "// workflow-covers: positive progress finalResult\nexport {};\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("src/tests/workflow.negative.test.ts"),
+            "// workflow-covers: negative failureUx\nexport {};\n",
+        )
+        .unwrap();
         fs::write(dir.join("state/.gitkeep"), "").unwrap();
         fs::create_dir_all(dir.join(".git")).unwrap();
         write_workflow_spec(
             &dir.join(WORKFLOW_YAML),
             &crate::spec::WorkflowSpec {
                 id: id.to_string(),
+                validation: json!({
+                    "commands": ["npm run build", "npm test"],
+                    "coverage": {
+                        "positive": true,
+                        "negative": true,
+                        "progress": true,
+                        "finalResult": true,
+                        "failureUx": true,
+                        "recovery": false,
+                    }
+                }),
                 tool,
                 ..Default::default()
             },

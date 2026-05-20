@@ -36,13 +36,28 @@ async fn workflow_list_returns_discovered_workflows() -> Result<()> {
     fs::create_dir_all(workflow_dir.join(".git"))?;
     fs::write(
         workflow_dir.join("workflow.yaml"),
-        "id: reports/jira-summary\ntitle: Jira Summary\nuserDescription: Summarize Jira work\n",
+        "id: reports/jira-summary\ntitle: Jira Summary\nuserDescription: Summarize Jira work\nvalidation:\n  commands:\n    - npm run build\n    - npm test\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    recovery: false\n",
     )?;
-    fs::write(workflow_dir.join("README.md"), "# Jira Summary\n")?;
+    fs::write(
+        workflow_dir.join("README.md"),
+        "# Jira Summary\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
+    )?;
+    fs::write(
+        workflow_dir.join("DESIGN.md"),
+        "# Jira Summary Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
+    )?;
+    fs::write(
+        workflow_dir.join("package.json"),
+        "{\n  \"name\": \"codex-workflow-reports-jira-summary\",\n  \"private\": true,\n  \"type\": \"module\"\n}\n",
+    )?;
     fs::write(workflow_dir.join("src/workflow.ts"), "export {};\n")?;
     fs::write(
-        workflow_dir.join("src/tests/workflow.test.ts"),
-        "export {};\n",
+        workflow_dir.join("src/tests/workflow.positive.test.ts"),
+        "// workflow-covers: positive progress finalResult\nexport {};\n",
+    )?;
+    fs::write(
+        workflow_dir.join("src/tests/workflow.negative.test.ts"),
+        "// workflow-covers: negative failureUx\nexport {};\n",
     )?;
     fs::write(workflow_dir.join("state/.gitkeep"), "")?;
 

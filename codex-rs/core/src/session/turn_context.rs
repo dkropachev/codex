@@ -10,6 +10,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
+use crate::tools::tool_policy::TurnToolPolicy;
+
 pub(super) fn image_generation_tool_auth_allowed(auth_manager: Option<&AuthManager>) -> bool {
     auth_manager.is_some_and(AuthManager::current_auth_uses_codex_backend)
 }
@@ -78,6 +80,7 @@ pub(crate) struct TurnContext {
     pub(crate) permission_profile: PermissionProfile,
     pub(crate) sandbox_policy: Constrained<SandboxPolicy>,
     pub(crate) file_system_sandbox_policy: FileSystemSandboxPolicy,
+    pub(crate) tool_policy: TurnToolPolicy,
     pub(crate) network_sandbox_policy: NetworkSandboxPolicy,
     pub(crate) network: Option<NetworkProxy>,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
@@ -237,6 +240,7 @@ impl TurnContext {
             permission_profile: self.permission_profile.clone(),
             sandbox_policy: self.sandbox_policy.clone(),
             file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
+            tool_policy: self.tool_policy.clone(),
             network_sandbox_policy: self.network_sandbox_policy,
             network: self.network.clone(),
             windows_sandbox_level: self.windows_sandbox_level,
@@ -508,6 +512,11 @@ impl Session {
         ));
 
         let per_turn_config = Arc::new(per_turn_config);
+        let tool_policy = TurnToolPolicy::for_turn(&session_source, &cwd);
+        let file_system_sandbox_policy = tool_policy.apply_file_system_overlay(
+            session_configuration.file_system_sandbox_policy.clone(),
+            &cwd,
+        );
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             conversation_id.to_string(),
             &session_source,
@@ -545,7 +554,8 @@ impl Session {
             approval_policy: session_configuration.approval_policy.clone(),
             permission_profile: session_configuration.permission_profile(),
             sandbox_policy: session_configuration.sandbox_policy.clone(),
-            file_system_sandbox_policy: session_configuration.file_system_sandbox_policy.clone(),
+            file_system_sandbox_policy,
+            tool_policy,
             network_sandbox_policy: session_configuration.network_sandbox_policy,
             network,
             windows_sandbox_level: session_configuration.windows_sandbox_level,

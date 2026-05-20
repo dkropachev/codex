@@ -102,6 +102,7 @@ pub(crate) struct ExecCommandRequest {
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
+    pub protected_read_only_paths: Vec<AbsolutePathBuf>,
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
     pub prefix_rule: Option<Vec<String>>,

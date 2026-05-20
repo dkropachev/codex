@@ -359,6 +359,7 @@ impl ToolHandler for UnifiedExecHandler {
                             sandbox_permissions: effective_additional_permissions
                                 .sandbox_permissions,
                             additional_permissions: normalized_additional_permissions,
+                            protected_read_only_paths: turn.tool_policy.protected_read_only_paths(),
                             additional_permissions_preapproved: effective_additional_permissions
                                 .permissions_preapproved,
                             justification,

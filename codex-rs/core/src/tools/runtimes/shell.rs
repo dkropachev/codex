@@ -56,6 +56,7 @@ pub struct ShellRequest {
     pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
+    pub protected_read_only_paths: Vec<AbsolutePathBuf>,
     #[cfg(unix)]
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
@@ -273,8 +274,13 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             }
         }
 
-        let command =
-            build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())?;
+        let command = build_sandbox_command(
+            &command,
+            &req.cwd,
+            &env,
+            req.additional_permissions.clone(),
+            &req.protected_read_only_paths,
+        )?;
         let mut expiration: crate::exec::ExecExpiration = req.timeout_ms.into();
         if let Some(cancellation) = attempt.network_denial_cancellation_token.clone() {
             expiration = expiration.with_cancellation(cancellation);

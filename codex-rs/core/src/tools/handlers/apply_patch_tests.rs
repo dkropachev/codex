@@ -1,9 +1,13 @@
 use super::*;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_exec_server::LOCAL_FS;
+use codex_protocol::ThreadId;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
@@ -19,6 +23,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
+use crate::tools::tool_policy::TurnToolPolicy;
 use crate::turn_diff_tracker::TurnDiffTracker;
 
 fn sample_patch() -> &'static str {
@@ -30,6 +35,36 @@ fn sample_patch() -> &'static str {
 
 async fn invocation_for_payload(payload: ToolPayload) -> ToolInvocation {
     let (session, turn) = make_session_and_context().await;
+    ToolInvocation {
+        session: session.into(),
+        turn: turn.into(),
+        cancellation_token: tokio_util::sync::CancellationToken::new(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: "call-apply-patch".to_string(),
+        tool_name: codex_tools::ToolName::plain("apply_patch"),
+        source: crate::tools::context::ToolCallSource::Direct,
+        payload,
+    }
+}
+
+async fn workflow_invocation_for_payload(
+    payload: ToolPayload,
+    role: &str,
+    cwd: &std::path::Path,
+) -> ToolInvocation {
+    let (session, mut turn) = make_session_and_context().await;
+    turn.cwd = AbsolutePathBuf::try_from(cwd.to_path_buf()).unwrap();
+    turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: ThreadId::default(),
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: Some(role.to_string()),
+    });
+    turn.tool_policy = TurnToolPolicy::for_turn(&turn.session_source, &turn.cwd);
+    turn.file_system_sandbox_policy = turn
+        .tool_policy
+        .apply_file_system_overlay(turn.file_system_sandbox_policy.clone(), &turn.cwd);
     ToolInvocation {
         session: session.into(),
         turn: turn.into(),
@@ -96,6 +131,69 @@ async fn post_tool_use_payload_uses_patch_input_and_tool_output() {
             tool_input: json!({ "command": patch }),
             tool_response: json!("Success. Updated files."),
         })
+    );
+}
+
+#[tokio::test]
+async fn apply_patch_rejects_workflow_coder_design_md_changes() {
+    let tmp = TempDir::new().expect("tmp");
+    std::fs::write(tmp.path().join("workflow.yaml"), "id: example\n").expect("workflow yaml");
+    std::fs::write(tmp.path().join("DESIGN.md"), "before\n").expect("design");
+    let payload = ToolPayload::Custom {
+        input: r#"*** Begin Patch
+*** Update File: DESIGN.md
+@@
+-before
++after
+*** End Patch"#
+            .to_string(),
+    };
+    let invocation = workflow_invocation_for_payload(payload, "workflow-coder", tmp.path()).await;
+
+    let err = match ApplyPatchHandler.handle(invocation).await {
+        Ok(_) => panic!("expected apply_patch coder rejection"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err.to_string(),
+        "You are not allowed to modify DESIGN.md. Restore the settled design and create a proper `DESIGN.md request` for the workflow architect that explains what should change and why."
+    );
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("DESIGN.md")).expect("design content"),
+        "before\n"
+    );
+}
+
+#[tokio::test]
+async fn apply_patch_rejects_workflow_code_reviewer_design_md_changes() {
+    let tmp = TempDir::new().expect("tmp");
+    std::fs::write(tmp.path().join("workflow.yaml"), "id: example\n").expect("workflow yaml");
+    std::fs::write(tmp.path().join("DESIGN.md"), "before\n").expect("design");
+    let payload = ToolPayload::Custom {
+        input: r#"*** Begin Patch
+*** Update File: DESIGN.md
+@@
+-before
++after
+*** End Patch"#
+            .to_string(),
+    };
+    let invocation =
+        workflow_invocation_for_payload(payload, "workflow-code-reviewer", tmp.path()).await;
+
+    let err = match ApplyPatchHandler.handle(invocation).await {
+        Ok(_) => panic!("expected apply_patch reviewer rejection"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err.to_string(),
+        "You do not have rights to modify DESIGN.md. Reviewers must not change design files; return findings or request an architect update instead."
+    );
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("DESIGN.md")).expect("design content"),
+        "before\n"
     );
 }
 

@@ -613,6 +613,29 @@ impl FileSystemSandboxPolicy {
         self
     }
 
+    pub fn with_additional_read_only_paths(
+        mut self,
+        cwd: &Path,
+        additional_read_only_paths: &[AbsolutePathBuf],
+    ) -> Self {
+        if !matches!(self.kind, FileSystemSandboxKind::Restricted) {
+            return self;
+        }
+
+        for path in additional_read_only_paths {
+            if !self.can_write_path_with_cwd(path.as_path(), cwd) {
+                continue;
+            }
+
+            self.entries.push(FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: path.clone() },
+                access: FileSystemAccessMode::Read,
+            });
+        }
+
+        self
+    }
+
     pub fn needs_direct_runtime_enforcement(
         &self,
         network_policy: NetworkSandboxPolicy,

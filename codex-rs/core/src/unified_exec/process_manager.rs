@@ -859,6 +859,7 @@ impl UnifiedExecProcessManager {
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,
             additional_permissions: request.additional_permissions.clone(),
+            protected_read_only_paths: request.protected_read_only_paths.clone(),
             #[cfg(unix)]
             additional_permissions_preapproved: request.additional_permissions_preapproved,
             justification: request.justification.clone(),

@@ -3,6 +3,8 @@ use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::workflow_design_guard::rollback_design_md_if_modified;
+use crate::tools::handlers::workflow_design_guard::snapshot_design_md;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -76,6 +78,7 @@ impl ToolHandler for WriteStdinHandler {
         let args: WriteStdinArgs = parse_arguments(&arguments)?;
         let max_output_tokens =
             effective_max_output_tokens(args.max_output_tokens, turn.truncation_policy);
+        let design_md_snapshot = snapshot_design_md(turn.as_ref());
         let response = session
             .services
             .unified_exec_manager
@@ -89,6 +92,7 @@ impl ToolHandler for WriteStdinHandler {
             .map_err(|err| {
                 FunctionCallError::RespondToModel(format!("write_stdin failed: {err}"))
             })?;
+        rollback_design_md_if_modified(turn.as_ref(), design_md_snapshot.as_ref())?;
 
         let interaction = TerminalInteractionEvent {
             call_id: response.event_call_id.clone(),

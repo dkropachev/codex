@@ -1064,6 +1064,21 @@ mod tests {
         start_test_client_with_capacity(session_source, DEFAULT_IN_PROCESS_CHANNEL_CAPACITY).await
     }
 
+    fn run_in_large_stack(fut: impl std::future::Future<Output = ()> + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime should build")
+                    .block_on(fut);
+            })
+            .expect("thread should spawn")
+            .join()
+            .expect("thread should finish");
+    }
+
     async fn start_test_remote_server<F, Fut>(handler: F) -> String
     where
         F: FnOnce(tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) -> Fut
@@ -1235,49 +1250,75 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn typed_request_roundtrip_works() {
-        let client = start_test_client(SessionSource::Exec).await;
-        let _response: ConfigRequirementsReadResponse = client
-            .request_typed(ClientRequest::ConfigRequirementsRead {
-                request_id: RequestId::Integer(1),
-                params: None,
-            })
-            .await
-            .expect("typed request should succeed");
-        client.shutdown().await.expect("shutdown should complete");
+    #[test]
+    fn typed_request_roundtrip_works() {
+        run_in_large_stack(async {
+            let client = start_test_client(SessionSource::Exec).await;
+            let _response: ConfigRequirementsReadResponse = client
+                .request_typed(ClientRequest::ConfigRequirementsRead {
+                    request_id: RequestId::Integer(1),
+                    params: None,
+                })
+                .await
+                .expect("typed request should succeed");
+            client.shutdown().await.expect("shutdown should complete");
+        });
     }
 
-    #[tokio::test]
-    async fn typed_request_reports_json_rpc_errors() {
-        let client = start_test_client(SessionSource::Exec).await;
-        let err = client
-            .request_typed::<ConfigRequirementsReadResponse>(ClientRequest::ThreadRead {
-                request_id: RequestId::Integer(99),
-                params: codex_app_server_protocol::ThreadReadParams {
-                    thread_id: "missing-thread".to_string(),
-                    include_turns: false,
-                },
-            })
-            .await
-            .expect_err("missing thread should return a JSON-RPC error");
-        assert!(
-            err.to_string().starts_with("thread/read failed:"),
-            "expected method-qualified JSON-RPC failure message"
-        );
-        client.shutdown().await.expect("shutdown should complete");
+    #[test]
+    fn typed_request_reports_json_rpc_errors() {
+        run_in_large_stack(async {
+            let client = start_test_client(SessionSource::Exec).await;
+            let err = client
+                .request_typed::<ConfigRequirementsReadResponse>(ClientRequest::ThreadRead {
+                    request_id: RequestId::Integer(99),
+                    params: codex_app_server_protocol::ThreadReadParams {
+                        thread_id: "missing-thread".to_string(),
+                        include_turns: false,
+                    },
+                })
+                .await
+                .expect_err("missing thread should return a JSON-RPC error");
+            assert!(
+                err.to_string().starts_with("thread/read failed:"),
+                "expected method-qualified JSON-RPC failure message"
+            );
+            client.shutdown().await.expect("shutdown should complete");
+        });
     }
 
-    #[tokio::test]
-    async fn caller_provided_session_source_is_applied() {
-        for (session_source, expected_source) in [
-            (SessionSource::Exec, ApiSessionSource::Exec),
-            (SessionSource::Cli, ApiSessionSource::Cli),
-        ] {
-            let client = start_test_client(session_source).await;
-            let parsed: ThreadStartResponse = client
+    #[test]
+    fn caller_provided_session_source_is_applied() {
+        run_in_large_stack(async {
+            for (session_source, expected_source) in [
+                (SessionSource::Exec, ApiSessionSource::Exec),
+                (SessionSource::Cli, ApiSessionSource::Cli),
+            ] {
+                let client = start_test_client(session_source).await;
+                let parsed: ThreadStartResponse = client
+                    .request_typed(ClientRequest::ThreadStart {
+                        request_id: RequestId::Integer(2),
+                        params: ThreadStartParams {
+                            ephemeral: Some(true),
+                            ..ThreadStartParams::default()
+                        },
+                    })
+                    .await
+                    .expect("thread/start should succeed");
+                assert_eq!(parsed.thread.source, expected_source);
+                client.shutdown().await.expect("shutdown should complete");
+            }
+        });
+    }
+
+    #[test]
+    fn threads_started_via_app_server_are_visible_through_typed_requests() {
+        run_in_large_stack(async {
+            let client = start_test_client(SessionSource::Cli).await;
+
+            let response: ThreadStartResponse = client
                 .request_typed(ClientRequest::ThreadStart {
-                    request_id: RequestId::Integer(2),
+                    request_id: RequestId::Integer(3),
                     params: ThreadStartParams {
                         ephemeral: Some(true),
                         ..ThreadStartParams::default()
@@ -1285,54 +1326,38 @@ mod tests {
                 })
                 .await
                 .expect("thread/start should succeed");
-            assert_eq!(parsed.thread.source, expected_source);
-            client.shutdown().await.expect("shutdown should complete");
-        }
-    }
-
-    #[tokio::test]
-    async fn threads_started_via_app_server_are_visible_through_typed_requests() {
-        let client = start_test_client(SessionSource::Cli).await;
-
-        let response: ThreadStartResponse = client
-            .request_typed(ClientRequest::ThreadStart {
-                request_id: RequestId::Integer(3),
-                params: ThreadStartParams {
-                    ephemeral: Some(true),
-                    ..ThreadStartParams::default()
-                },
-            })
-            .await
-            .expect("thread/start should succeed");
-        let read = client
-            .request_typed::<codex_app_server_protocol::ThreadReadResponse>(
-                ClientRequest::ThreadRead {
-                    request_id: RequestId::Integer(4),
-                    params: codex_app_server_protocol::ThreadReadParams {
-                        thread_id: response.thread.id.clone(),
-                        include_turns: false,
+            let read = client
+                .request_typed::<codex_app_server_protocol::ThreadReadResponse>(
+                    ClientRequest::ThreadRead {
+                        request_id: RequestId::Integer(4),
+                        params: codex_app_server_protocol::ThreadReadParams {
+                            thread_id: response.thread.id.clone(),
+                            include_turns: false,
+                        },
                     },
-                },
-            )
-            .await
-            .expect("thread/read should return the newly started thread");
-        assert_eq!(read.thread.id, response.thread.id);
+                )
+                .await
+                .expect("thread/read should return the newly started thread");
+            assert_eq!(read.thread.id, response.thread.id);
 
-        client.shutdown().await.expect("shutdown should complete");
+            client.shutdown().await.expect("shutdown should complete");
+        });
     }
 
-    #[tokio::test]
-    async fn tiny_channel_capacity_still_supports_request_roundtrip() {
-        let client =
-            start_test_client_with_capacity(SessionSource::Exec, /*channel_capacity*/ 1).await;
-        let _response: ConfigRequirementsReadResponse = client
-            .request_typed(ClientRequest::ConfigRequirementsRead {
-                request_id: RequestId::Integer(1),
-                params: None,
-            })
-            .await
-            .expect("typed request should succeed");
-        client.shutdown().await.expect("shutdown should complete");
+    #[test]
+    fn tiny_channel_capacity_still_supports_request_roundtrip() {
+        run_in_large_stack(async {
+            let client =
+                start_test_client_with_capacity(SessionSource::Exec, /*channel_capacity*/ 1).await;
+            let _response: ConfigRequirementsReadResponse = client
+                .request_typed(ClientRequest::ConfigRequirementsRead {
+                    request_id: RequestId::Integer(1),
+                    params: None,
+                })
+                .await
+                .expect("typed request should succeed");
+            client.shutdown().await.expect("shutdown should complete");
+        });
     }
 
     #[tokio::test]

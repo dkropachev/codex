@@ -136,7 +136,15 @@ pub fn scaffold_workflow_spec(
         }),
         validation: json!({
             "profile": config.validation_profile.clone().unwrap_or_else(|| "default".to_string()),
-            "commands": ["npm run build", "npm test"]
+            "commands": ["npm run build", "npm test"],
+            "coverage": {
+                "positive": true,
+                "negative": true,
+                "progress": true,
+                "finalResult": true,
+                "failureUx": true,
+                "recovery": false
+            }
         }),
         tool: None,
         command,

@@ -5,6 +5,7 @@ mod id;
 mod publication;
 mod registry;
 mod spec;
+mod validation;
 mod workflow_runtime;
 
 pub use command::WorkflowCommand;

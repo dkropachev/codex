@@ -23,6 +23,7 @@ use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch_spec::ApplyPatchToolArgs;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::workflow_design_guard::reject_if_design_md_write_forbidden;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::PostToolUsePayload;
@@ -220,6 +221,17 @@ fn file_paths_for_action(action: &ApplyPatchAction) -> Vec<AbsolutePathBuf> {
     }
 
     keys
+}
+
+fn reject_if_design_md_is_target(
+    turn: &TurnContext,
+    action: &ApplyPatchAction,
+) -> Result<(), FunctionCallError> {
+    let paths = file_paths_for_action(action)
+        .into_iter()
+        .map(AbsolutePathBuf::into_path_buf)
+        .collect::<Vec<_>>();
+    reject_if_design_md_write_forbidden(turn, paths)
 }
 
 fn to_abs_path(cwd: &AbsolutePathBuf, path: &Path) -> Option<AbsolutePathBuf> {
@@ -420,6 +432,7 @@ impl ToolHandler for ApplyPatchHandler {
         .await
         {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+                reject_if_design_md_is_target(turn.as_ref(), &changes)?;
                 let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
                     effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes).await;
                 match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
@@ -521,6 +534,7 @@ pub(crate) async fn intercept_apply_patch(
         .await
     {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+            reject_if_design_md_is_target(turn.as_ref(), &changes)?;
             session
                 .record_model_warning(
                     format!(
