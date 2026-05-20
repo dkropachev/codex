@@ -76,6 +76,22 @@ impl App {
             AppEvent::RunWorkflow { command } => {
                 self.run_workflow_command(command);
             }
+            AppEvent::WorkflowProgress { notification } => {
+                self.chat_widget
+                    .handle_workflow_progress_notification(notification, None);
+            }
+            AppEvent::WorkflowMarkdownResult { notification } => {
+                let destination_thread_id = notification
+                    .thread_id
+                    .as_deref()
+                    .and_then(|thread_id| ThreadId::from_string(thread_id).ok());
+                self.queue_workflow_markdown_handoff(
+                    destination_thread_id,
+                    notification.markdown.clone(),
+                );
+                self.chat_widget
+                    .handle_workflow_markdown_result_notification(notification, None);
+            }
             AppEvent::WorkflowProcessFinished {
                 run_id,
                 command,
@@ -105,13 +121,6 @@ impl App {
                         ));
                         return Ok(AppRunControl::Continue);
                     }
-                };
-                let picker_app_server = if self.workflow_app_server_url.is_some() {
-                    picker_app_server
-                        .with_remote_cwd_override(Some(self.config.cwd.to_path_buf()))
-                        .with_embedded_thread_params()
-                } else {
-                    picker_app_server
                 };
                 match crate::resume_picker::run_resume_picker_from_existing_session_with_app_server(
                     tui,

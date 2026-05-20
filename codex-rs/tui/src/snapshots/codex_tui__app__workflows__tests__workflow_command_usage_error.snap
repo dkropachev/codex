@@ -1,0 +1,6 @@
+---
+source: tui/src/app/workflows.rs
+assertion_line: 284
+expression: rendered
+---
+■ Usage: /workflow <command>

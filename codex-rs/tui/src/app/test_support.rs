@@ -46,7 +46,6 @@ pub(super) async fn make_test_app() -> App {
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         remote_app_server_url: None,
         remote_app_server_auth_token: None,
-        workflow_app_server_url: None,
         workflow_runs: HashMap::new(),
         pending_workflow_markdown_handoffs: VecDeque::new(),
         pending_update_action: None,

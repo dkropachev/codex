@@ -61,3 +61,5 @@ pub use spec::read_workflow_spec;
 pub use spec::scaffold_workflow_spec;
 pub use spec::workflow_tool_name;
 pub use spec::write_workflow_spec;
+pub use workflow_runtime::WORKFLOW_RUNTIME_EVENT_PREFIX;
+pub use workflow_runtime::WorkflowRuntimeEvent;

@@ -150,7 +150,6 @@ pub(crate) struct AppServerSession {
     client: AppServerClient,
     next_request_id: i64,
     remote_cwd_override: Option<PathBuf>,
-    thread_params_mode_override: Option<ThreadParamsMode>,
 }
 
 #[derive(Clone, Copy)]
@@ -179,17 +178,11 @@ impl AppServerSession {
             client,
             next_request_id: 1,
             remote_cwd_override: None,
-            thread_params_mode_override: None,
         }
     }
 
     pub(crate) fn with_remote_cwd_override(mut self, remote_cwd_override: Option<PathBuf>) -> Self {
         self.remote_cwd_override = remote_cwd_override;
-        self
-    }
-
-    pub(crate) fn with_embedded_thread_params(mut self) -> Self {
-        self.thread_params_mode_override = Some(ThreadParamsMode::Embedded);
         self
     }
 
@@ -448,9 +441,6 @@ impl AppServerSession {
     }
 
     fn thread_params_mode(&self) -> ThreadParamsMode {
-        if let Some(mode) = self.thread_params_mode_override {
-            return mode;
-        }
         match &self.client {
             AppServerClient::InProcess(_) => ThreadParamsMode::Embedded,
             AppServerClient::Remote(_) => ThreadParamsMode::Remote,

@@ -480,7 +480,6 @@ pub(crate) struct App {
     environment_manager: Arc<EnvironmentManager>,
     remote_app_server_url: Option<String>,
     remote_app_server_auth_token: Option<String>,
-    workflow_app_server_url: Option<String>,
     workflow_runs: HashMap<String, workflows::WorkflowRunState>,
     pending_workflow_markdown_handoffs: VecDeque<workflows::QueuedWorkflowMarkdownHandoff>,
     /// Set when the user confirms an update; propagated on exit.
@@ -624,7 +623,6 @@ impl App {
         should_prompt_windows_sandbox_nux_at_startup: bool,
         remote_app_server_url: Option<String>,
         remote_app_server_auth_token: Option<String>,
-        workflow_app_server_url: Option<String>,
         state_db: Option<StateDbHandle>,
         environment_manager: Arc<EnvironmentManager>,
     ) -> Result<AppExitInfo> {
@@ -906,7 +904,6 @@ See the Codex keymap documentation for supported actions and examples."
             environment_manager,
             remote_app_server_url,
             remote_app_server_auth_token,
-            workflow_app_server_url,
             workflow_runs: HashMap::new(),
             pending_workflow_markdown_handoffs: VecDeque::new(),
             pending_update_action: None,

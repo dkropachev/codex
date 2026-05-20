@@ -804,15 +804,10 @@ fn workflow_config_value(key: &str, raw: &str) -> Result<Item> {
 mod tests {
     use super::*;
     use codex_config::types::WorkflowDefaultLocation;
-    use futures::SinkExt;
-    use futures::StreamExt;
+
     use pretty_assertions::assert_eq;
-    use serial_test::serial;
-    use std::fs::Permissions;
+
     use tempfile::TempDir;
-    use tokio::net::TcpListener;
-    use tokio_tungstenite::accept_async;
-    use tokio_tungstenite::tungstenite::Message;
 
     fn write_validation_fixture(workflow_dir: &Path, validation_commands: JsonValue) {
         fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
@@ -1122,9 +1117,8 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[tokio::test(flavor = "multi_thread")]
-    #[serial(workflow_runtime_notifications)]
-    async fn run_forwards_workflow_runtime_notifications_to_app_server() {
+    #[test]
+    fn run_handles_workflow_runtime_markers_without_app_server_bridge() {
         use std::os::unix::fs::PermissionsExt;
 
         let home = TempDir::new().unwrap();
@@ -1157,7 +1151,7 @@ export default workflow;
         .unwrap();
         fs::set_permissions(
             workflow_dir.join("node_modules/.bin/tsx"),
-            Permissions::from_mode(0o755),
+            fs::Permissions::from_mode(0o755),
         )
         .unwrap();
         write_workflow_spec(
@@ -1168,12 +1162,6 @@ export default workflow;
             },
         )
         .unwrap();
-
-        let (websocket_url, server_task) = start_workflow_notification_server().await;
-        let _app_server_url = ScopedEnvVar::set("CODEX_WORKFLOW_APP_SERVER_URL", &websocket_url);
-        let _run_id = ScopedEnvVar::set("CODEX_WORKFLOW_RUN_ID", "run-123");
-        let _thread_id = ScopedEnvVar::set("CODEX_WORKFLOW_ORIGIN_THREAD_ID", "thread-456");
-        let _node_path = ScopedEnvVar::set("NODE_PATH", "/tmp/global-modules");
 
         let output = execute_workflow_command(
             WorkflowCommandContext {
@@ -1194,115 +1182,6 @@ export default workflow;
         assert!(output.message.contains("workflowStatus"));
         assert!(output.message.contains("check status"));
         assert!(output.message.contains("\"nodePath\": null"));
-
-        let notifications = server_task.await.unwrap();
-        assert_eq!(notifications.len(), 2);
-        assert_eq!(notifications[0]["method"], "workflow/progress");
-        assert_eq!(notifications[0]["params"]["runId"], "run-123");
-        assert_eq!(notifications[0]["params"]["threadId"], "thread-456");
-        assert_eq!(notifications[0]["params"]["message"], "Preparing review");
-        assert_eq!(notifications[0]["params"]["data"]["stage"], "testing");
-        assert_eq!(notifications[1]["method"], "workflow/reportToUserMarkdown");
-        assert_eq!(notifications[1]["params"]["runId"], "run-123");
-        assert_eq!(notifications[1]["params"]["threadId"], "thread-456");
-        assert!(
-            notifications[1]["params"]["markdown"]
-                .as_str()
-                .unwrap()
-                .contains("Workflow Result")
-        );
-    }
-
-    #[cfg(unix)]
-    async fn start_workflow_notification_server()
-    -> (String, tokio::task::JoinHandle<Vec<JsonValue>>) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let task = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut websocket = accept_async(stream).await.unwrap();
-            let initialize = read_text_message(&mut websocket).await;
-            assert_eq!(initialize["method"], "initialize");
-            websocket
-                .send(Message::Text(
-                    serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "id": initialize["id"].clone(),
-                        "result": {},
-                    })
-                    .to_string()
-                    .into(),
-                ))
-                .await
-                .unwrap();
-
-            let initialized = read_text_message(&mut websocket).await;
-            assert_eq!(initialized["method"], "initialized");
-
-            let mut notifications = Vec::new();
-            while notifications.len() < 2 {
-                let message = read_text_message(&mut websocket).await;
-                let method = message["method"].as_str().unwrap_or_default();
-                if method == "workflow/progress" || method == "workflow/reportToUserMarkdown" {
-                    notifications.push(message);
-                }
-            }
-            notifications
-        });
-        (format!("ws://{address}"), task)
-    }
-
-    #[cfg(unix)]
-    async fn read_text_message(
-        websocket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-    ) -> JsonValue {
-        loop {
-            let frame = websocket.next().await.unwrap().unwrap();
-            match frame {
-                Message::Text(text) => return serde_json::from_str(&text).unwrap(),
-                Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {
-                    continue;
-                }
-                Message::Close(_) => panic!("unexpected close frame"),
-            }
-        }
-    }
-
-    #[cfg(unix)]
-    struct ScopedEnvVar {
-        key: &'static str,
-        original: Option<String>,
-    }
-
-    #[cfg(unix)]
-    impl ScopedEnvVar {
-        fn set(key: &'static str, value: &str) -> Self {
-            let original = std::env::var(key).ok();
-            // SAFETY: this test is serialized because environment mutation is process-global.
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key, original }
-        }
-    }
-
-    #[cfg(unix)]
-    impl Drop for ScopedEnvVar {
-        fn drop(&mut self) {
-            match self.original.as_deref() {
-                Some(value) => {
-                    // SAFETY: this test is serialized because environment mutation is process-global.
-                    unsafe {
-                        std::env::set_var(self.key, value);
-                    }
-                }
-                None => {
-                    // SAFETY: this test is serialized because environment mutation is process-global.
-                    unsafe {
-                        std::env::remove_var(self.key);
-                    }
-                }
-            }
-        }
+        assert_eq!(output.data["stderr"], json!(""));
     }
 }

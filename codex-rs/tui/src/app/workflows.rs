@@ -1,13 +1,17 @@
 use super::*;
 use std::process::Stdio;
-use tokio::io::AsyncReadExt;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::BufReader;
 use tokio::process::Command;
+
+use codex_app_server_protocol::WorkflowMarkdownResultNotification;
+use codex_app_server_protocol::WorkflowProgressNotification;
+use codex_workflows::WORKFLOW_RUNTIME_EVENT_PREFIX;
+use codex_workflows::WorkflowRuntimeEvent;
 
 const WORKFLOW_APPROVALS_ENV: &str = "CODEX_WORKFLOW_APPROVALS";
 const WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR_ENV: &str =
     "CODEX_WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR";
-const WORKFLOW_APP_SERVER_URL_ENV: &str = "CODEX_WORKFLOW_APP_SERVER_URL";
-const CODEX_APP_SERVER_URL_ENV: &str = "CODEX_APP_SERVER_URL";
 const WORKFLOW_RUN_ID_ENV: &str = "CODEX_WORKFLOW_RUN_ID";
 const WORKFLOW_ORIGIN_THREAD_ID_ENV: &str = "CODEX_WORKFLOW_ORIGIN_THREAD_ID";
 
@@ -33,15 +37,10 @@ impl App {
         let display_command = shlex::try_join(command.iter().map(String::as_str))
             .unwrap_or_else(|_| command.join(" "));
         let origin_thread_id = self.current_displayed_thread_id();
+        let origin_thread_id_for_events = origin_thread_id
+            .as_ref()
+            .map(std::string::ToString::to_string);
         let run_id = Uuid::new_v4().to_string();
-
-        let Some(app_server_url) = self.workflow_app_server_url.clone() else {
-            self.chat_widget.add_error_message(
-                "No workflow app-server is available. Enable `[features].workflows = true` and restart regular Codex."
-                    .to_string(),
-            );
-            return;
-        };
 
         let cwd = self.config.cwd.clone();
         let app_event_tx = self.app_event_tx.clone();
@@ -54,8 +53,6 @@ impl App {
         child_command.args(&command);
         child_command
             .current_dir(cwd)
-            .env(CODEX_APP_SERVER_URL_ENV, &app_server_url)
-            .env(WORKFLOW_APP_SERVER_URL_ENV, &app_server_url)
             .env(WORKFLOW_RUN_ID_ENV, &run_id)
             .env(WORKFLOW_APPROVALS_ENV, "delegate")
             .env(WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR_ENV, "defer")
@@ -72,16 +69,21 @@ impl App {
                     .insert(run_id.clone(), WorkflowRunState { origin_thread_id });
                 self.chat_widget
                     .show_workflow_process_status(Some(display_command.clone()));
-                self.chat_widget.add_info_message(
-                    format!("Workflow started: {display_command}"),
-                    Some(format!("Connected to {app_server_url}")),
-                );
+                self.chat_widget
+                    .add_info_message(format!("Workflow started: {display_command}"), None);
                 tokio::spawn(async move {
-                    let stderr_task = child.stderr.take().map(|mut stderr| {
+                    let stderr_task = child.stderr.take().map(|stderr| {
+                        let app_event_tx = app_event_tx.clone();
+                        let run_id = run_id.clone();
+                        let origin_thread_id_for_events = origin_thread_id_for_events.clone();
                         tokio::spawn(async move {
-                            let mut output = String::new();
-                            let read_result = stderr.read_to_string(&mut output).await;
-                            (output, read_result)
+                            read_workflow_child_stderr(
+                                stderr,
+                                app_event_tx,
+                                run_id,
+                                origin_thread_id_for_events,
+                            )
+                            .await
                         })
                     });
 
@@ -90,10 +92,7 @@ impl App {
                         Ok(status) => {
                             let stderr_output = match stderr_task {
                                 Some(task) => match task.await {
-                                    Ok((output, Ok(_))) => output,
-                                    Ok((output, Err(err))) => {
-                                        format!("failed to read workflow stderr: {err}\n{output}")
-                                    }
+                                    Ok(output) => output,
                                     Err(err) => {
                                         format!("failed to join workflow stderr task: {err}")
                                     }
@@ -184,9 +183,73 @@ impl App {
     }
 }
 
+async fn read_workflow_child_stderr(
+    stderr: impl tokio::io::AsyncRead + Unpin,
+    app_event_tx: AppEventSender,
+    run_id: String,
+    origin_thread_id: Option<String>,
+) -> String {
+    let mut reader = BufReader::new(stderr).lines();
+    let mut raw_stderr = String::new();
+
+    loop {
+        let line = match reader.next_line().await {
+            Ok(Some(line)) => line,
+            Ok(None) => break,
+            Err(err) => {
+                push_stderr_line(
+                    &mut raw_stderr,
+                    format!("failed to read workflow stderr: {err}"),
+                );
+                break;
+            }
+        };
+
+        if let Some(payload) = line.strip_prefix(WORKFLOW_RUNTIME_EVENT_PREFIX) {
+            match serde_json::from_str::<WorkflowRuntimeEvent>(payload) {
+                Ok(WorkflowRuntimeEvent::Progress { message, data }) => {
+                    app_event_tx.send(AppEvent::WorkflowProgress {
+                        notification: WorkflowProgressNotification {
+                            run_id: run_id.clone(),
+                            thread_id: origin_thread_id.clone(),
+                            message,
+                            data,
+                        },
+                    });
+                }
+                Ok(WorkflowRuntimeEvent::ReportToUserMarkdown { markdown }) => {
+                    app_event_tx.send(AppEvent::WorkflowMarkdownResult {
+                        notification: WorkflowMarkdownResultNotification {
+                            run_id: run_id.clone(),
+                            thread_id: origin_thread_id.clone(),
+                            markdown,
+                        },
+                    });
+                }
+                Err(err) => push_stderr_line(
+                    &mut raw_stderr,
+                    format!("failed to decode workflow runtime event `{payload}`: {err}"),
+                ),
+            }
+            continue;
+        }
+
+        push_stderr_line(&mut raw_stderr, line);
+    }
+
+    raw_stderr
+}
+
+fn push_stderr_line(stderr: &mut String, line: impl AsRef<str>) {
+    stderr.push_str(line.as_ref());
+    stderr.push('\n');
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_support::make_test_app;
+    use super::super::tests::make_test_app_with_channels;
+    use crate::app_event::AppEvent;
     use codex_protocol::ThreadId;
     use ratatui::text::Line;
 
@@ -204,18 +267,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn workflow_command_reports_disabled_without_managed_app_server() {
-        let mut app = make_test_app().await;
+    async fn workflow_command_reports_usage_without_arguments() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        while app_event_rx.try_recv().is_ok() {}
 
-        app.run_workflow_command(vec!["node".to_string(), "workflow.js".to_string()]);
+        app.run_workflow_command(Vec::new());
 
-        let rendered = app
-            .chat_widget
-            .active_cell_transcript_lines(/*width*/ 80)
-            .map(|lines| lines_to_single_string(&lines))
-            .unwrap_or_default();
+        let cell = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+            .find_map(|event| match event {
+                AppEvent::InsertHistoryCell(cell) => Some(cell),
+                _ => None,
+            })
+            .expect("workflow usage error should add a history cell");
+        let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
         insta::with_settings!({snapshot_path => "../snapshots"}, {
-            insta::assert_snapshot!("workflow_command_disabled", rendered);
+            insta::assert_snapshot!("workflow_command_usage_error", rendered);
         });
     }
 
