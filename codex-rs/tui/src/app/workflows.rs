@@ -149,6 +149,27 @@ impl App {
         }
     }
 
+    pub(crate) fn handle_workflow_progress_notification(
+        &mut self,
+        notification: WorkflowProgressNotification,
+    ) {
+        self.chat_widget
+            .handle_workflow_progress_notification(notification, None);
+    }
+
+    pub(crate) fn handle_workflow_markdown_result_notification(
+        &mut self,
+        notification: WorkflowMarkdownResultNotification,
+    ) {
+        let destination_thread_id = notification
+            .thread_id
+            .as_deref()
+            .and_then(|thread_id| ThreadId::from_string(thread_id).ok());
+        self.queue_workflow_markdown_handoff(destination_thread_id, notification.markdown.clone());
+        self.chat_widget
+            .handle_workflow_markdown_result_notification(notification, None);
+    }
+
     pub(crate) fn queue_workflow_markdown_handoff(
         &mut self,
         destination_thread_id: Option<ThreadId>,

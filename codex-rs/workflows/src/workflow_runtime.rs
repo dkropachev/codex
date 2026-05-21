@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -173,6 +174,7 @@ pub(crate) async fn run_workflow(
 async fn read_stderr(stderr: impl tokio::io::AsyncRead + Unpin) -> Result<String> {
     let mut reader = BufReader::new(stderr).lines();
     let mut raw_stderr = String::new();
+    let forward_runtime_events = !std::io::stderr().is_terminal();
 
     while let Some(line) = reader
         .next_line()
@@ -180,11 +182,18 @@ async fn read_stderr(stderr: impl tokio::io::AsyncRead + Unpin) -> Result<String
         .context("failed to read workflow runtime stderr")?
     {
         if let Some(payload) = line.strip_prefix(WORKFLOW_RUNTIME_EVENT_PREFIX) {
-            if let Err(err) = serde_json::from_str::<WorkflowRuntimeEvent>(payload) {
-                push_stderr_line(
-                    &mut raw_stderr,
-                    format!("failed to decode workflow runtime event `{payload}`: {err}"),
-                );
+            match serde_json::from_str::<WorkflowRuntimeEvent>(payload) {
+                Ok(_) => {
+                    if forward_runtime_events {
+                        eprintln!("{line}");
+                    }
+                }
+                Err(err) => {
+                    push_stderr_line(
+                        &mut raw_stderr,
+                        format!("failed to decode workflow runtime event `{payload}`: {err}"),
+                    );
+                }
             }
             continue;
         }

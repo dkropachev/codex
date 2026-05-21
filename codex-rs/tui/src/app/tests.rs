@@ -504,8 +504,7 @@ sleep 0.2
         progress_notification.data,
         Some(serde_json::json!({"stage": "testing", "step": 1}))
     );
-    app.chat_widget
-        .handle_workflow_progress_notification(progress_notification, None);
+    app.handle_workflow_progress_notification(progress_notification);
 
     let live_status = app
         .chat_widget
@@ -537,16 +536,35 @@ sleep 0.2
             .markdown
             .contains("Captured from test.")
     );
-    app.queue_workflow_markdown_handoff(Some(thread_id), markdown_notification.markdown.clone());
-    app.chat_widget
-        .handle_workflow_markdown_result_notification(markdown_notification, None);
+    app.handle_workflow_markdown_result_notification(markdown_notification);
 
     let pending = app.take_pending_workflow_markdown_handoffs_for_thread(thread_id);
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].destination_thread_id, Some(thread_id));
     assert!(pending[0].markdown.contains("Captured from test."));
 
-    while app_event_rx.try_recv().is_ok() {}
+    let status_before_finish = app
+        .chat_widget
+        .status_widget_for_test()
+        .expect("workflow status should remain visible until the process exits");
+    let status_before_finish_details = status_before_finish
+        .details()
+        .expect("workflow status details should remain visible until finish");
+    assert!(status_before_finish_details.contains("Preparing workflow handoff"));
+
+    let result_cell = time::timeout(Duration::from_secs(1), app_event_rx.recv())
+        .await
+        .expect("timed out waiting for workflow result cell")
+        .expect("workflow event channel closed unexpectedly");
+
+    let AppEvent::InsertHistoryCell(result_cell) = result_cell else {
+        panic!("unexpected workflow event while waiting for result cell: {result_cell:?}");
+    };
+
+    let rendered = lines_to_single_string(&result_cell.display_lines(/*width*/ 120));
+    assert!(rendered.contains("Workflow Result"));
+    assert!(rendered.contains("Captured from test."));
+
     let (finished_run_id, command, result) = time::timeout(Duration::from_secs(1), async {
         loop {
             let event = app_event_rx
@@ -566,6 +584,23 @@ sleep 0.2
     .await
     .expect("timed out waiting for workflow finish event");
     app.handle_workflow_process_finished(finished_run_id, command, result);
+
+    let finished_cell = time::timeout(Duration::from_secs(1), async {
+        loop {
+            let event = app_event_rx
+                .recv()
+                .await
+                .expect("workflow event channel closed unexpectedly");
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                return cell;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for workflow completion info cell");
+    let finished_rendered = lines_to_single_string(&finished_cell.display_lines(/*width*/ 120));
+    assert!(finished_rendered.contains("Workflow finished: code-review"));
+
     assert!(app.workflow_runs.is_empty());
     assert!(app.chat_widget.status_widget_for_test().is_none());
 
@@ -629,8 +664,17 @@ exit 1
     .expect("timed out waiting for workflow progress event");
     assert_eq!(progress_notification.thread_id, Some(thread_id.to_string()));
     assert_eq!(progress_notification.message, "Running workflow");
-    app.chat_widget
-        .handle_workflow_progress_notification(progress_notification, None);
+    app.handle_workflow_progress_notification(progress_notification);
+
+    let live_status = app
+        .chat_widget
+        .status_widget_for_test()
+        .expect("workflow progress should be visible before failure completion");
+    assert_eq!(live_status.header(), "Workflow");
+    let live_details = live_status
+        .details()
+        .expect("workflow progress details should exist before failure completion");
+    assert!(live_details.contains("Running workflow"));
 
     let (finished_run_id, command, result) = time::timeout(Duration::from_secs(1), async {
         loop {
@@ -664,6 +708,116 @@ exit 1
     let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 120));
     assert!(rendered.contains("Workflow failed: code-review: workflow exited with exit status: 1"));
     assert!(rendered.contains("fatal workflow error"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn app_server_thread_scoped_workflow_notifications_are_visible_and_queue_handoff()
+-> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    app.enqueue_primary_thread_session(
+        test_thread_session(thread_id, test_path_buf("/tmp/project")),
+        Vec::new(),
+    )
+    .await?;
+    while app_event_rx.try_recv().is_ok() {}
+
+    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+
+    app.handle_app_server_event(
+        &mut app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(
+            ServerNotification::WorkflowProgress(
+                codex_app_server_protocol::WorkflowProgressNotification {
+                    run_id: "run-1".to_string(),
+                    thread_id: Some(thread_id.to_string()),
+                    message: "Preparing workflow handoff".to_string(),
+                    data: Some(serde_json::json!({"step": 2, "total": 4})),
+                },
+            ),
+        ),
+    )
+    .await;
+
+    let progress_event = time::timeout(Duration::from_secs(1), async {
+        let rx = app
+            .active_thread_rx
+            .as_mut()
+            .expect("primary thread receiver should be active");
+        rx.recv()
+            .await
+            .expect("thread event channel closed unexpectedly")
+    })
+    .await
+    .expect("timed out waiting for app-server workflow progress event");
+    app.handle_thread_event_now(progress_event);
+
+    let progress_status = app
+        .chat_widget
+        .status_widget_for_test()
+        .expect("workflow progress from app-server should be visible");
+    let progress_details = progress_status
+        .details()
+        .expect("workflow progress details should be visible");
+    assert!(progress_details.contains("Preparing workflow handoff"));
+    assert!(progress_details.contains("\"step\": 2"));
+
+    app.handle_app_server_event(
+        &mut app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(
+            ServerNotification::WorkflowMarkdownResult(
+                codex_app_server_protocol::WorkflowMarkdownResultNotification {
+                    run_id: "run-1".to_string(),
+                    thread_id: Some(thread_id.to_string()),
+                    markdown: "# Workflow Result\n\nUseful output from the workflow.\n".to_string(),
+                },
+            ),
+        ),
+    )
+    .await;
+
+    let markdown_event = time::timeout(Duration::from_secs(1), async {
+        let rx = app
+            .active_thread_rx
+            .as_mut()
+            .expect("primary thread receiver should be active");
+        rx.recv()
+            .await
+            .expect("thread event channel closed unexpectedly")
+    })
+    .await
+    .expect("timed out waiting for app-server workflow markdown event");
+    app.handle_thread_event_now(markdown_event);
+
+    let pending = app.take_pending_workflow_markdown_handoffs_for_thread(thread_id);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].destination_thread_id, Some(thread_id));
+    assert!(
+        pending[0]
+            .markdown
+            .contains("Useful output from the workflow.")
+    );
+
+    let result_cell = time::timeout(Duration::from_secs(1), async {
+        loop {
+            let event = app_event_rx
+                .recv()
+                .await
+                .expect("workflow event channel closed unexpectedly");
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                return cell;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for app-server workflow result cell");
+    let rendered = lines_to_single_string(&result_cell.display_lines(/*width*/ 120));
+    assert!(rendered.contains("Workflow Result"));
+    assert!(rendered.contains("Useful output from the workflow."));
 
     Ok(())
 }

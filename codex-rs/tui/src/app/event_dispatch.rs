@@ -77,20 +77,10 @@ impl App {
                 self.run_workflow_command(command);
             }
             AppEvent::WorkflowProgress { notification } => {
-                self.chat_widget
-                    .handle_workflow_progress_notification(notification, None);
+                self.handle_workflow_progress_notification(notification);
             }
             AppEvent::WorkflowMarkdownResult { notification } => {
-                let destination_thread_id = notification
-                    .thread_id
-                    .as_deref()
-                    .and_then(|thread_id| ThreadId::from_string(thread_id).ok());
-                self.queue_workflow_markdown_handoff(
-                    destination_thread_id,
-                    notification.markdown.clone(),
-                );
-                self.chat_widget
-                    .handle_workflow_markdown_result_notification(notification, None);
+                self.handle_workflow_markdown_result_notification(notification);
             }
             AppEvent::WorkflowProcessFinished {
                 run_id,
