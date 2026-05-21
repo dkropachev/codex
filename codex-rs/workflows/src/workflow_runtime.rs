@@ -16,6 +16,9 @@ use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
 
+#[cfg(unix)]
+use crate::workflow_host;
+
 pub const WORKFLOW_RUNTIME_EVENT_PREFIX: &str = "__CODEX_WORKFLOW_EVENT__";
 const WORKFLOW_SELF_EXE_ENV: &str = "CODEX_WORKFLOW_SELF_EXE";
 const WORKFLOW_NAME_ENV: &str = "CODEX_WORKFLOW_NAME";
@@ -352,7 +355,40 @@ pub struct WorkflowStatusUpdate {
     pub child_statuses: Vec<WorkflowChildStatus>,
 }
 
+#[cfg(unix)]
 pub(crate) async fn run_workflow(
+    codex_home: &Path,
+    workflow_dir: &Path,
+    workflow_path: &Path,
+    input: &str,
+    workflows: &[crate::registry::WorkflowSummary],
+) -> Result<WorkflowRuntimeOutput> {
+    if workflow_host::should_use_host() {
+        return workflow_host::run_workflow_via_host(
+            codex_home,
+            workflow_dir,
+            workflow_path,
+            input,
+            workflows,
+        )
+        .await;
+    }
+
+    run_workflow_legacy(workflow_dir, workflow_path, input).await
+}
+
+#[cfg(not(unix))]
+pub(crate) async fn run_workflow(
+    _codex_home: &Path,
+    workflow_dir: &Path,
+    workflow_path: &Path,
+    input: &str,
+    _workflows: &[crate::registry::WorkflowSummary],
+) -> Result<WorkflowRuntimeOutput> {
+    run_workflow_legacy(workflow_dir, workflow_path, input).await
+}
+
+async fn run_workflow_legacy(
     workflow_dir: &Path,
     workflow_path: &Path,
     input: &str,
@@ -496,7 +532,7 @@ fn write_runner_script() -> Result<PathBuf> {
     Ok(path)
 }
 
-fn workflow_tsx_path(workflow_dir: &Path) -> PathBuf {
+pub(crate) fn workflow_tsx_path(workflow_dir: &Path) -> PathBuf {
     if cfg!(windows) {
         workflow_dir.join("node_modules/.bin/tsx.cmd")
     } else {

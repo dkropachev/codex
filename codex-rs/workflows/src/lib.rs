@@ -6,6 +6,8 @@ mod publication;
 mod registry;
 mod spec;
 mod validation;
+#[cfg(unix)]
+mod workflow_host;
 mod workflow_runtime;
 
 pub use command::WorkflowCommand;

@@ -306,12 +306,34 @@ async fn run(
     input: Option<WorkflowInputSource>,
     input_fields: BTreeMap<String, String>,
 ) -> Result<WorkflowCommandOutput> {
-    let workflow = find_workflow(ctx.codex_home, ctx.cwd, ctx.config, id)?;
+    let workflows = discover_workflows(ctx.codex_home, ctx.cwd, ctx.config)?;
+    let normalized_id = normalize_workflow_id(id)?;
+    let matching_workflows: Vec<_> = workflows
+        .iter()
+        .filter(|workflow| workflow.id == normalized_id)
+        .cloned()
+        .collect();
+    let workflow = match matching_workflows.as_slice() {
+        [] => return Err(anyhow!("workflow id '{normalized_id}' was not found")),
+        [workflow] => workflow.clone(),
+        workflows => {
+            return Err(anyhow!(
+                "workflow id '{}' exists in multiple roots: {:?}",
+                normalized_id,
+                workflows
+                    .iter()
+                    .map(|workflow| workflow.path.clone())
+                    .collect::<Vec<_>>()
+            ));
+        }
+    };
     let input = read_input(input, input_fields)?;
     let output = workflow_runtime::run_workflow(
+        ctx.codex_home,
         &workflow.path,
         &workflow.path.join("src/workflow.ts"),
         &input,
+        &workflows,
     )
     .await
     .with_context(|| format!("failed to run workflow {}", workflow.id))?;
@@ -1119,8 +1141,15 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial]
     fn run_handles_workflow_runtime_markers_without_app_server_bridge() {
         use std::os::unix::fs::PermissionsExt;
+
+        let env_key = "CODEX_WORKFLOW_RUNTIME_MODE";
+        let previous = std::env::var_os(env_key);
+        unsafe {
+            std::env::set_var(env_key, "process");
+        }
 
         let home = TempDir::new().unwrap();
         let cwd = TempDir::new().unwrap();
@@ -1147,7 +1176,7 @@ export default workflow;
         .unwrap();
         fs::write(
             workflow_dir.join("node_modules/.bin/tsx"),
-            "#!/bin/sh\nrunner=\"$1\"\nworkflow_flag=\"$2\"\nworkflow_path=\"$3\"\ninput_flag=\"$4\"\ninput_value=\"$5\"\ntmp=$(mktemp \"${TMPDIR:-/tmp}/workflow-runtime-XXXXXX.mjs\")\ncp \"$workflow_path\" \"$tmp\"\nexec node \"$runner\" \"$workflow_flag\" \"$tmp\" \"$input_flag\" \"$input_value\"\n",
+            "#!/bin/sh\nrunner=\"$1\"\nmode=\"$2\"\nif [ \"$mode\" = \"--serve\" ]; then\n  socket_path=\"$3\"\n  exec node \"$runner\" \"$mode\" \"$socket_path\"\nfi\nworkflow_path=\"$3\"\ninput_flag=\"$4\"\ninput_value=\"$5\"\ntmp=$(mktemp \"${TMPDIR:-/tmp}/workflow-runtime-XXXXXX.mjs\")\ncp \"$workflow_path\" \"$tmp\"\nexec node \"$runner\" \"$mode\" \"$tmp\" \"$input_flag\" \"$input_value\"\n",
         )
         .unwrap();
         fs::set_permissions(
@@ -1180,10 +1209,114 @@ export default workflow;
         )
         .unwrap();
 
+        match previous {
+            Some(previous) => unsafe { std::env::set_var(env_key, previous) },
+            None => unsafe { std::env::remove_var(env_key) },
+        }
+
         assert!(output.message.contains("workflowStatus"));
         assert!(output.message.contains("check status"));
         assert!(output.message.contains("\"nodePath\": null"));
         assert_eq!(output.data["stderr"], json!(""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[serial]
+    fn run_workflow_host_reuses_same_node_process_and_resets_module_state() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let workflow_dir = home.path().join("workflows/reports/resident-host");
+        fs::create_dir_all(workflow_dir.join("src")).unwrap();
+        fs::create_dir_all(workflow_dir.join("state")).unwrap();
+        fs::create_dir_all(workflow_dir.join("node_modules/.bin")).unwrap();
+        fs::create_dir_all(workflow_dir.join(".git")).unwrap();
+        fs::write(workflow_dir.join("README.md"), "# Resident Host\n").unwrap();
+        fs::write(workflow_dir.join("state/.gitkeep"), "").unwrap();
+        fs::write(
+            workflow_dir.join("src/workflow.ts"),
+            r#"let runs = 0;
+
+const workflow = {
+  async run() {
+    runs += 1;
+    return { pid: process.pid, runs };
+  },
+};
+
+export default workflow;
+"#,
+        )
+        .unwrap();
+        let host_log = workflow_dir.join("host-stderr.log");
+        write_workflow_spec(
+            &workflow_dir.join(WORKFLOW_YAML),
+            &crate::spec::WorkflowSpec {
+                id: "reports/resident-host".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        fs::write(
+            workflow_dir.join("node_modules/.bin/tsx"),
+            format!(
+                "#!/bin/sh\nrunner=\"$1\"\nmode=\"$2\"\nif [ \"$mode\" = \"--serve\" ]; then\n  socket_path=\"$3\"\n  exec node \"$runner\" \"$mode\" \"$socket_path\" >>\"{}\" 2>&1\nfi\nworkflow_path=\"$3\"\ninput_flag=\"$4\"\ninput_value=\"$5\"\ntmp=$(mktemp \"${{TMPDIR:-/tmp}}/workflow-runtime-XXXXXX.mjs\")\ncp \"$workflow_path\" \"$tmp\"\nexec node \"$runner\" \"$mode\" \"$tmp\" \"$input_flag\" \"$input_value\"\n",
+                host_log.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(
+            workflow_dir.join("node_modules/.bin/tsx"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+
+        let first = match execute_workflow_command(
+            WorkflowCommandContext {
+                codex_home: home.path(),
+                cwd: cwd.path(),
+                config: &WorkflowsConfigToml::default(),
+            },
+            WorkflowCommand::Run {
+                id: "reports/resident-host".to_string(),
+                input: Some(WorkflowInputSource::Inline("{}".to_string())),
+                input_fields: BTreeMap::new(),
+            },
+        ) {
+            Ok(output) => output,
+            Err(error) => panic!(
+                "resident workflow host did not start: {error}\nhost stderr:\n{}",
+                fs::read_to_string(&host_log).unwrap_or_default()
+            ),
+        };
+
+        let second = match execute_workflow_command(
+            WorkflowCommandContext {
+                codex_home: home.path(),
+                cwd: cwd.path(),
+                config: &WorkflowsConfigToml::default(),
+            },
+            WorkflowCommand::Run {
+                id: "reports/resident-host".to_string(),
+                input: Some(WorkflowInputSource::Inline("{}".to_string())),
+                input_fields: BTreeMap::new(),
+            },
+        ) {
+            Ok(output) => output,
+            Err(error) => panic!(
+                "resident workflow host did not restart cleanly: {error}\nhost stderr:\n{}",
+                fs::read_to_string(&host_log).unwrap_or_default()
+            ),
+        };
+
+        let first_result: JsonValue = serde_json::from_str(&first.message).unwrap();
+        let second_result: JsonValue = serde_json::from_str(&second.message).unwrap();
+        assert_eq!(first_result["pid"], second_result["pid"]);
+        assert_eq!(first_result["runs"], json!(1));
+        assert_eq!(second_result["runs"], json!(1));
     }
 
     #[cfg(unix)]
@@ -1265,6 +1398,12 @@ export default workflow;
             std::env::set_var(env_key, &fake_codex);
         }
 
+        let runtime_mode_key = "CODEX_WORKFLOW_RUNTIME_MODE";
+        let previous_runtime_mode = std::env::var_os(runtime_mode_key);
+        unsafe {
+            std::env::set_var(runtime_mode_key, "process");
+        }
+
         let output = execute_workflow_command(
             WorkflowCommandContext {
                 codex_home: home.path(),
@@ -1278,6 +1417,13 @@ export default workflow;
             },
         )
         .unwrap();
+
+        match previous_runtime_mode {
+            Some(previous_runtime_mode) => unsafe {
+                std::env::set_var(runtime_mode_key, previous_runtime_mode)
+            },
+            None => unsafe { std::env::remove_var(runtime_mode_key) },
+        }
 
         match previous {
             Some(previous) => unsafe { std::env::set_var(env_key, previous) },
