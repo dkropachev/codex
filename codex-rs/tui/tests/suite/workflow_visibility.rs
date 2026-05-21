@@ -11,49 +11,100 @@ use tokio::time::sleep;
 use tokio::time::timeout;
 
 #[tokio::test]
-async fn slash_workflow_shows_progress_and_final_result_in_terminal_output() -> Result<()> {
+async fn slash_workflow_shows_single_line_status_and_final_result_in_terminal_output() -> Result<()>
+{
     if cfg!(windows) {
         return Ok(());
     }
 
     let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex = ensure_codex_binary(&repo_root)?;
     let codex_home = tempdir()?;
     let workspace = tempdir()?;
-    std::fs::create_dir_all(workspace.path().join(".git"))?;
+    write_trusted_workspace_config(codex_home.path(), workspace.path())?;
+    write_single_status_workflow(&codex_home.path().join("workflows/code-review"))?;
 
-    let workflow_dir = codex_home.path().join("workflows/code-review");
-    write_test_workflow(&workflow_dir)?;
+    run_workflow_visibility_session(
+        &repo_root,
+        &codex,
+        codex_home.path(),
+        workspace.path(),
+        "code-review",
+        vec![
+            "Workflow code-review: starting".to_string(),
+            "Workflow code-review: preparing".to_string(),
+            "Workflow Result".to_string(),
+        ],
+        vec![
+            "Workflow started:".to_string(),
+            "Workflow finished:".to_string(),
+            "__CODEX_WORKFLOW_EVENT__".to_string(),
+            "\"workflowName\"".to_string(),
+            "-> reviewer-a: scanning".to_string(),
+        ],
+    )
+    .await?;
 
-    let config_contents = format!(
-        r#"model = "gpt-oss:20b"
-model_provider = "ollama"
-check_for_update_on_startup = false
-suppress_unstable_features_warning = true
+    Ok(())
+}
 
-[analytics]
-enabled = false
+#[tokio::test]
+async fn slash_workflow_shows_hooked_multi_thread_status_in_terminal_output() -> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
 
-[projects."{workspace}"]
-trust_level = "trusted"
-"#,
-        workspace = workspace.path().display(),
-    );
-    std::fs::write(codex_home.path().join("config.toml"), config_contents)?;
-
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
     let codex = ensure_codex_binary(&repo_root)?;
+    let codex_home = tempdir()?;
+    let workspace = tempdir()?;
+    write_trusted_workspace_config(codex_home.path(), workspace.path())?;
+    write_nested_multi_thread_workflows(codex_home.path())?;
 
+    run_workflow_visibility_session(
+        &repo_root,
+        &codex,
+        codex_home.path(),
+        workspace.path(),
+        "parent-review",
+        vec![
+            "Workflow parent-review: starting".to_string(),
+            "Workflow parent-review: coordinating".to_string(),
+            "-> reviewer-a: scanning".to_string(),
+            "-> reviewer-b: waiting".to_string(),
+            "Workflow Result".to_string(),
+        ],
+        vec![
+            "Workflow started:".to_string(),
+            "Workflow finished:".to_string(),
+            "__CODEX_WORKFLOW_EVENT__".to_string(),
+            "\"workflowName\"".to_string(),
+            "Workflow child-review: scanning".to_string(),
+        ],
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn run_workflow_visibility_session(
+    repo_root: &Path,
+    codex: &Path,
+    codex_home: &Path,
+    workspace: &Path,
+    command: &str,
+    required_snippets: Vec<String>,
+    forbidden_snippets: Vec<String>,
+) -> Result<()> {
     let mut env = HashMap::new();
-    env.insert(
-        "CODEX_HOME".to_string(),
-        codex_home.path().display().to_string(),
-    );
+    env.insert("CODEX_HOME".to_string(), codex_home.display().to_string());
 
     let args = vec![
         "--no-alt-screen".to_string(),
         "--enable".to_string(),
         "workflows".to_string(),
         "-C".to_string(),
-        workspace.path().display().to_string(),
+        workspace.display().to_string(),
         "-a".to_string(),
         "never".to_string(),
         "-s".to_string(),
@@ -65,7 +116,7 @@ trust_level = "trusted"
     let spawned = codex_utils_pty::spawn_pty_process(
         codex.to_string_lossy().as_ref(),
         &args,
-        &repo_root,
+        repo_root,
         &env,
         &None,
         codex_utils_pty::TerminalSize::default(),
@@ -88,14 +139,13 @@ trust_level = "trusted"
     let interrupt_writer = writer_tx.clone();
     let workflow_writer = writer_tx.clone();
 
+    let workflow_status_prefix = format!("Workflow {command}:");
+    let workflow_command = format!("/{command}");
+    let mut saw_required = vec![false; required_snippets.len()];
     let mut answered_cursor_query = false;
     let mut sent_workflow_command = false;
     let mut sent_interrupts = false;
     let mut scheduled_workflow_command = false;
-    let mut saw_started_message = false;
-    let mut saw_progress_status = false;
-    let mut saw_result_markdown = false;
-    let mut saw_finished_message = false;
 
     let exit_code_result = timeout(Duration::from_secs(30), async {
         loop {
@@ -111,9 +161,10 @@ trust_level = "trusted"
                         if answered_cursor_query && !scheduled_workflow_command {
                             scheduled_workflow_command = true;
                             let workflow_writer = workflow_writer.clone();
+                            let workflow_command = workflow_command.clone();
                             tokio::spawn(async move {
                                 sleep(Duration::from_secs(1)).await;
-                                let _ = workflow_writer.send(b"/code-review".to_vec()).await;
+                                let _ = workflow_writer.send(workflow_command.into_bytes()).await;
                                 sleep(Duration::from_millis(100)).await;
                                 let _ = workflow_writer.send(b"\r".to_vec()).await;
                             });
@@ -124,23 +175,17 @@ trust_level = "trusted"
 
                         let output_text = String::from_utf8_lossy(&output);
                         let screen = parser.screen().contents();
-                        sent_workflow_command |= output_text.contains("/code-review")
-                            || screen.contains("/code-review")
-                            || output_text.contains("Workflow started: code-review")
-                            || screen.contains("Workflow started: code-review");
-                        saw_started_message |= output_text.contains("Workflow started: code-review")
-                            || screen.contains("Workflow started: code-review");
-                        saw_progress_status |= screen.contains("Preparing workflow handoff");
-                        saw_result_markdown |= screen.contains("Workflow Result")
-                            || output_text.contains("Workflow Result");
-                        saw_finished_message |= output_text.contains("Workflow finished: code-review")
-                            || screen.contains("Workflow finished: code-review");
+                        sent_workflow_command |= output_text.contains(&workflow_command)
+                            || screen.contains(&workflow_command)
+                            || screen.contains(&workflow_status_prefix);
+
+                        for (seen, snippet) in saw_required.iter_mut().zip(required_snippets.iter()) {
+                            *seen |= output_text.contains(snippet) || screen.contains(snippet);
+                        }
 
                         if sent_workflow_command
-                            && saw_started_message
-                            && saw_progress_status
-                            && saw_result_markdown
-                            && saw_finished_message
+                            && saw_required.iter().all(|seen| *seen)
+                            && !screen.contains(&workflow_status_prefix)
                             && !sent_interrupts
                         {
                             sent_interrupts = true;
@@ -189,66 +234,58 @@ trust_level = "trusted"
         sent_workflow_command,
         "workflow command was never sent; output: {output_text}"
     );
+    let missing = required_snippets
+        .iter()
+        .zip(saw_required.iter())
+        .filter_map(|(snippet, seen)| (!seen).then_some(snippet.clone()))
+        .collect::<Vec<_>>();
     anyhow::ensure!(
-        saw_started_message,
-        "workflow start message was not visible; screen: {}\noutput: {}",
+        missing.is_empty(),
+        "workflow visibility test missed snippets {:?}; screen: {}\noutput: {}",
+        missing,
         parser.screen().contents(),
         output_text,
     );
-    anyhow::ensure!(
-        saw_progress_status,
-        "workflow progress status was not visible; screen: {}\noutput: {}",
-        parser.screen().contents(),
-        output_text,
-    );
-    anyhow::ensure!(
-        saw_result_markdown,
-        "workflow markdown result was not visible; screen: {}\noutput: {}",
-        parser.screen().contents(),
-        output_text,
-    );
-    anyhow::ensure!(
-        saw_finished_message,
-        "workflow finished message was not visible; screen: {}\noutput: {}",
-        parser.screen().contents(),
-        output_text,
-    );
+    let final_screen = parser.screen().contents();
+    for snippet in forbidden_snippets {
+        anyhow::ensure!(
+            !output_text.contains(&snippet) && !final_screen.contains(&snippet),
+            "workflow visibility test saw forbidden snippet `{snippet}`; screen: {final_screen}\noutput: {output_text}",
+        );
+    }
 
     Ok(())
 }
 
-fn write_test_workflow(workflow_dir: &Path) -> Result<()> {
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
+fn write_trusted_workspace_config(codex_home: &Path, workspace: &Path) -> Result<()> {
+    std::fs::create_dir_all(workspace.join(".git"))?;
+    let config_contents = format!(
+        r#"model = "gpt-oss:20b"
+model_provider = "ollama"
+check_for_update_on_startup = false
+suppress_unstable_features_warning = true
 
-    std::fs::create_dir_all(workflow_dir.join("src"))?;
-    std::fs::create_dir_all(workflow_dir.join("state"))?;
-    std::fs::create_dir_all(workflow_dir.join("node_modules/.bin"))?;
-    std::fs::create_dir_all(workflow_dir.join(".git"))?;
-    std::fs::write(workflow_dir.join("README.md"), "# Code Review\n")?;
-    std::fs::write(workflow_dir.join("state/.gitkeep"), "")?;
-    std::fs::write(
-        workflow_dir.join("workflow.yaml"),
-        r#"id: code-review
-command: code-review
-title: /code-review
-userDescription: Emit progress and final markdown for TUI integration tests.
+[analytics]
+enabled = false
+
+[projects."{workspace}"]
+trust_level = "trusted"
 "#,
-    )?;
-    std::fs::write(
-        workflow_dir.join("package.json"),
-        r#"{
-  "name": "code-review-workflow-test",
-  "private": true,
-  "type": "module"
+        workspace = workspace.display(),
+    );
+    std::fs::write(codex_home.join("config.toml"), config_contents)?;
+    Ok(())
 }
-"#,
-    )?;
-    std::fs::write(
-        workflow_dir.join("src/workflow.ts"),
+
+fn write_single_status_workflow(workflow_dir: &Path) -> Result<()> {
+    write_workflow_fixture(
+        workflow_dir,
+        "code-review",
+        "code-review",
+        "Code Review",
         r##"const workflow = {
   async run(ctx) {
-    ctx.progress("Preparing workflow handoff", { stage: "testing", step: 1 });
+    ctx.status({ workflowName: "code-review", workflowStatus: "preparing" });
     await new Promise((resolve) => setTimeout(resolve, 250));
     ctx.reportToUserMarkdown("# Workflow Result\n\nVisible from PTY integration test.\n");
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -258,10 +295,95 @@ userDescription: Emit progress and final markdown for TUI integration tests.
 
 export default workflow;
 "##,
+    )
+}
+
+fn write_nested_multi_thread_workflows(codex_home: &Path) -> Result<()> {
+    write_workflow_fixture(
+        &codex_home.join("workflows/parent-review"),
+        "parent-review",
+        "parent-review",
+        "Parent Review",
+        r##"const workflow = {
+  async run(ctx) {
+    await ctx.runWorkflow("child-review", { prompt: "check child" }, {
+      onStatusUpdate(update, helpers) {
+        helpers.reportStatus(
+          helpers.attachOriginalChildStatus({
+            workflowName: "parent-review",
+            workflowStatus: "coordinating",
+            threads: [
+              { name: "reviewer-a", status: update.workflowStatus },
+              { name: "reviewer-b", status: "waiting" },
+            ],
+            childStatuses: [],
+          }),
+        );
+        return null;
+      },
+    });
+    ctx.reportToUserMarkdown("# Workflow Result\n\nVisible from PTY integration test.\n");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    return { workflowStatus: "done" };
+  },
+};
+
+export default workflow;
+"##,
+    )?;
+    write_workflow_fixture(
+        &codex_home.join("workflows/child-review"),
+        "child-review",
+        "child-review",
+        "Child Review",
+        r##"const workflow = {
+  async run(ctx) {
+    ctx.status({ workflowName: "child-review", workflowStatus: "scanning" });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    return { workflowStatus: "done" };
+  },
+};
+
+export default workflow;
+"##,
+    )
+}
+
+fn write_workflow_fixture(
+    workflow_dir: &Path,
+    id: &str,
+    command: &str,
+    title: &str,
+    workflow_source: &str,
+) -> Result<()> {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::create_dir_all(workflow_dir.join("src"))?;
+    std::fs::create_dir_all(workflow_dir.join("state"))?;
+    std::fs::create_dir_all(workflow_dir.join("node_modules/.bin"))?;
+    std::fs::create_dir_all(workflow_dir.join(".git"))?;
+    std::fs::write(workflow_dir.join("README.md"), format!("# {title}\n"))?;
+    std::fs::write(workflow_dir.join("state/.gitkeep"), "")?;
+    std::fs::write(
+        workflow_dir.join("workflow.yaml"),
+        format!(
+            "id: {id}\ncommand: {command}\ntitle: /{command}\nuserDescription: Emit progress and final markdown for TUI integration tests.\n"
+        ),
     )?;
     std::fs::write(
+        workflow_dir.join("package.json"),
+        r#"{
+  "name": "workflow-visibility-test",
+  "private": true,
+  "type": "module"
+}
+"#,
+    )?;
+    std::fs::write(workflow_dir.join("src/workflow.ts"), workflow_source)?;
+    std::fs::write(
         workflow_dir.join("node_modules/.bin/tsx"),
-        "#!/bin/sh\nprintf '%s\\n' '__CODEX_WORKFLOW_EVENT__{\"type\":\"progress\",\"message\":\"Preparing workflow handoff\",\"data\":{\"stage\":\"testing\",\"step\":1}}' >&2\n/bin/sleep 1\nprintf '%s\\n' '__CODEX_WORKFLOW_EVENT__{\"type\":\"reportToUserMarkdown\",\"markdown\":\"# Workflow Result\\n\\nVisible from PTY integration test.\\n\"}' >&2\n/bin/sleep 1\nprintf '%s\\n' '{\"workflowStatus\":\"done\"}'\n",
+        "#!/bin/sh\nrunner=\"$1\"\nworkflow_flag=\"$2\"\nworkflow_path=\"$3\"\ninput_flag=\"$4\"\ninput_value=\"$5\"\ntmp=$(/bin/mktemp \"${TMPDIR:-/tmp}/workflow-runtime-XXXXXX.mjs\")\n/bin/cp \"$workflow_path\" \"$tmp\"\nexec /usr/bin/node \"$runner\" \"$workflow_flag\" \"$tmp\" \"$input_flag\" \"$input_value\"\n",
     )?;
     #[cfg(unix)]
     std::fs::set_permissions(

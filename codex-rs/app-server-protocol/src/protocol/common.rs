@@ -1795,6 +1795,7 @@ mod tests {
             thread_id: Some("thread-1".to_string()),
             message: "starting".to_string(),
             data: Some(json!({"step": 1})),
+            status: None,
         });
         assert_eq!(
             json!({
@@ -1804,6 +1805,7 @@ mod tests {
                     "threadId": "thread-1",
                     "message": "starting",
                     "data": {"step": 1},
+                    "status": null,
                 }
             }),
             serde_json::to_value(&progress)?,
@@ -2661,6 +2663,7 @@ mod tests {
             thread_id: Some("thread-1".to_string()),
             message: "starting".to_string(),
             data: Some(json!({"step": 1})),
+            status: None,
         });
         assert_eq!(
             json!({
@@ -2670,6 +2673,7 @@ mod tests {
                     "threadId": "thread-1",
                     "message": "starting",
                     "data": {"step": 1},
+                    "status": null,
                 }
             }),
             serde_json::to_value(&progress)?,

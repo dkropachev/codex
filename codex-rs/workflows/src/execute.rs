@@ -438,7 +438,7 @@ fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -
     fs::write(
         path.join("README.md"),
         format!(
-            "# {title}\n\n{description}\n\n## Usage\n\n```sh\ncodex workflow run {id} --key value\n# or\ncodex workflow run {id} --input '{{}}'\n```\n\n## Workflow Runtime\n\nUse `ctx.progress(message, data?)` while the workflow is running so the TUI can keep the live workflow status row up to date. Use `ctx.reportToUserMarkdown(markdown)` only when the workflow should hand markdown back to the next plain user turn in the TUI.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json` and resolved from this directory's `node_modules`.\n"
+            "# {title}\n\n{description}\n\n## Usage\n\n```sh\ncodex workflow run {id} --key value\n# or\ncodex workflow run {id} --input '{{}}'\n```\n\n## Workflow Runtime\n\nPrefer `ctx.status({{ workflowName, workflowStatus, threads? }})` while the workflow is running so the TUI can render `Workflow <workflowName>: <workflowStatus>` with optional `-> <threadName>: <threadStatus>` rows when more than one thread is active. `ctx.progress(message, data?)` remains available as a legacy shorthand for single-string status updates. `ctx.runWorkflow(workflow, input?, {{ onStatusUpdate }})` can intercept child workflow status updates and either forward, transform, bundle, or suppress them. Use `ctx.reportToUserMarkdown(markdown)` only when the workflow should hand markdown back to the next plain user turn in the TUI.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json` and resolved from this directory's `node_modules`.\n"
         ),
     )?;
     fs::write(
@@ -804,6 +804,7 @@ fn workflow_config_value(key: &str, raw: &str) -> Result<Item> {
 mod tests {
     use super::*;
     use codex_config::types::WorkflowDefaultLocation;
+    use serial_test::serial;
 
     use pretty_assertions::assert_eq;
 
@@ -1182,6 +1183,122 @@ export default workflow;
         assert!(output.message.contains("workflowStatus"));
         assert!(output.message.contains("check status"));
         assert!(output.message.contains("\"nodePath\": null"));
+        assert_eq!(output.data["stderr"], json!(""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[serial]
+    fn run_workflow_hook_can_transform_and_attach_child_status_updates() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let workflow_dir = home.path().join("workflows/reports/parent-review");
+        fs::create_dir_all(workflow_dir.join("src")).unwrap();
+        fs::create_dir_all(workflow_dir.join("state")).unwrap();
+        fs::create_dir_all(workflow_dir.join("node_modules/.bin")).unwrap();
+        fs::create_dir_all(workflow_dir.join(".git")).unwrap();
+        fs::write(workflow_dir.join("README.md"), "# Parent Review\n").unwrap();
+        fs::write(workflow_dir.join("state/.gitkeep"), "").unwrap();
+        fs::write(
+            workflow_dir.join("src/workflow.ts"),
+            r##"const seen = [];
+
+const workflow = {
+  async run(ctx) {
+    await ctx.runWorkflow("child-review", { prompt: "check child" }, {
+      onStatusUpdate(update, helpers) {
+        const combined = helpers.attachOriginalChildStatus({
+          workflowName: "parent-review",
+          workflowStatus: "coordinating",
+          threads: [
+            { name: "reviewer-a", status: update.workflowStatus },
+            { name: "reviewer-b", status: "waiting" },
+          ],
+          childStatuses: [],
+        });
+        seen.push(combined);
+        helpers.reportStatus(combined);
+        return null;
+      },
+    });
+    return { seen };
+  },
+};
+
+export default workflow;
+"##,
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("node_modules/.bin/tsx"),
+            "#!/bin/sh\nrunner=\"$1\"\nworkflow_flag=\"$2\"\nworkflow_path=\"$3\"\ninput_flag=\"$4\"\ninput_value=\"$5\"\ntmp=$(/bin/mktemp \"${TMPDIR:-/tmp}/workflow-runtime-XXXXXX.mjs\")\n/bin/cp \"$workflow_path\" \"$tmp\"\nexec /usr/bin/node \"$runner\" \"$workflow_flag\" \"$tmp\" \"$input_flag\" \"$input_value\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(
+            workflow_dir.join("node_modules/.bin/tsx"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        write_workflow_spec(
+            &workflow_dir.join(WORKFLOW_YAML),
+            &crate::spec::WorkflowSpec {
+                id: "reports/parent-review".to_string(),
+                command: Some("parent-review".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let fake_codex = home.path().join("fake-codex.sh");
+        fs::write(
+            &fake_codex,
+            "#!/bin/sh\nprintf '%s\\n' '__CODEX_WORKFLOW_EVENT__{\"type\":\"status\",\"status\":{\"workflowName\":\"child-review\",\"workflowStatus\":\"scanning\",\"threads\":[],\"childStatuses\":[]}}' >&2\nprintf '%s\\n' '{\"ok\":true}'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&fake_codex, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let env_key = "CODEX_WORKFLOW_SELF_EXE";
+        let previous = std::env::var_os(env_key);
+        unsafe {
+            std::env::set_var(env_key, &fake_codex);
+        }
+
+        let output = execute_workflow_command(
+            WorkflowCommandContext {
+                codex_home: home.path(),
+                cwd: cwd.path(),
+                config: &WorkflowsConfigToml::default(),
+            },
+            WorkflowCommand::Run {
+                id: "reports/parent-review".to_string(),
+                input: Some(WorkflowInputSource::Inline("{}".to_string())),
+                input_fields: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+
+        match previous {
+            Some(previous) => unsafe { std::env::set_var(env_key, previous) },
+            None => unsafe { std::env::remove_var(env_key) },
+        }
+
+        let result: JsonValue = serde_json::from_str(&output.message).unwrap();
+        assert_eq!(result["seen"][0]["workflowName"], json!("parent-review"));
+        assert_eq!(result["seen"][0]["workflowStatus"], json!("coordinating"));
+        assert_eq!(result["seen"][0]["threads"][0]["name"], json!("reviewer-a"));
+        assert_eq!(result["seen"][0]["threads"][0]["status"], json!("scanning"));
+        assert_eq!(result["seen"][0]["threads"][1]["name"], json!("reviewer-b"));
+        assert_eq!(result["seen"][0]["threads"][1]["status"], json!("waiting"));
+        assert_eq!(
+            result["seen"][0]["childStatuses"][0]["workflowName"],
+            json!("child-review")
+        );
+        assert_eq!(
+            result["seen"][0]["childStatuses"][0]["workflowStatus"],
+            json!("scanning")
+        );
         assert_eq!(output.data["stderr"], json!(""));
     }
 }

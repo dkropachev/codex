@@ -505,6 +505,7 @@ export type { WindowsSandboxSetupStartResponse } from "./WindowsSandboxSetupStar
 export type { WindowsWorldWritableWarningNotification } from "./WindowsWorldWritableWarningNotification";
 export type { WorkflowAuthoringContextPrepareParams } from "./WorkflowAuthoringContextPrepareParams";
 export type { WorkflowAuthoringContextPrepareResponse } from "./WorkflowAuthoringContextPrepareResponse";
+export type { WorkflowChildStatus } from "./WorkflowChildStatus";
 export type { WorkflowCommandExecuteParams } from "./WorkflowCommandExecuteParams";
 export type { WorkflowCommandExecuteResponse } from "./WorkflowCommandExecuteResponse";
 export type { WorkflowConfigReadParams } from "./WorkflowConfigReadParams";
@@ -531,7 +532,9 @@ export type { WorkflowRootInfo } from "./WorkflowRootInfo";
 export type { WorkflowRootKind } from "./WorkflowRootKind";
 export type { WorkflowRunParams } from "./WorkflowRunParams";
 export type { WorkflowRunResponse } from "./WorkflowRunResponse";
+export type { WorkflowStatusUpdate } from "./WorkflowStatusUpdate";
 export type { WorkflowSummary } from "./WorkflowSummary";
+export type { WorkflowThreadStatus } from "./WorkflowThreadStatus";
 export type { WorkflowValidateParams } from "./WorkflowValidateParams";
 export type { WorkflowValidateResponse } from "./WorkflowValidateResponse";
 export type { WorkflowValidationInfo } from "./WorkflowValidationInfo";

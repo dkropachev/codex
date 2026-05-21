@@ -18,6 +18,7 @@ const WORKFLOW_ORIGIN_THREAD_ID_ENV: &str = "CODEX_WORKFLOW_ORIGIN_THREAD_ID";
 #[derive(Debug, Clone)]
 pub(crate) struct WorkflowRunState {
     pub(crate) origin_thread_id: Option<ThreadId>,
+    pub(crate) workflow_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +37,10 @@ impl App {
 
         let display_command = shlex::try_join(command.iter().map(String::as_str))
             .unwrap_or_else(|_| command.join(" "));
+        let workflow_name = command
+            .last()
+            .cloned()
+            .unwrap_or_else(|| display_command.clone());
         let origin_thread_id = self.current_displayed_thread_id();
         let origin_thread_id_for_events = origin_thread_id
             .as_ref()
@@ -65,12 +70,17 @@ impl App {
 
         match child_command.spawn() {
             Ok(mut child) => {
-                self.workflow_runs
-                    .insert(run_id.clone(), WorkflowRunState { origin_thread_id });
-                self.chat_widget
-                    .show_workflow_process_status(Some(display_command.clone()));
-                self.chat_widget
-                    .add_info_message(format!("Workflow started: {display_command}"), None);
+                self.workflow_runs.insert(
+                    run_id.clone(),
+                    WorkflowRunState {
+                        origin_thread_id,
+                        workflow_name: workflow_name.clone(),
+                    },
+                );
+                self.chat_widget.show_workflow_process_status(
+                    format!("Workflow {workflow_name}: starting"),
+                    None,
+                );
                 tokio::spawn(async move {
                     let stderr_task = child.stderr.take().map(|stderr| {
                         let app_event_tx = app_event_tx.clone();
@@ -134,14 +144,9 @@ impl App {
             .map(|state| state.origin_thread_id);
         let display_command = shlex::try_join(command.iter().map(String::as_str))
             .unwrap_or_else(|_| command.join(" "));
-        match result {
-            Ok(()) => self.chat_widget.add_info_message(
-                format!("Workflow finished: {display_command}"),
-                /*hint*/ None,
-            ),
-            Err(err) => self
-                .chat_widget
-                .add_error_message(format!("Workflow failed: {display_command}: {err}")),
+        if let Err(err) = result {
+            self.chat_widget
+                .add_error_message(format!("Workflow failed: {display_command}: {err}"));
         }
 
         if self.workflow_runs.is_empty() {
@@ -153,8 +158,12 @@ impl App {
         &mut self,
         notification: WorkflowProgressNotification,
     ) {
+        let workflow_name = self
+            .workflow_runs
+            .get(&notification.run_id)
+            .map(|state| state.workflow_name.as_str());
         self.chat_widget
-            .handle_workflow_progress_notification(notification, None);
+            .handle_workflow_progress_notification(workflow_name, notification, None);
     }
 
     pub(crate) fn handle_workflow_markdown_result_notification(
@@ -235,6 +244,47 @@ async fn read_workflow_child_stderr(
                             thread_id: origin_thread_id.clone(),
                             message,
                             data,
+                            status: None,
+                        },
+                    });
+                }
+                Ok(WorkflowRuntimeEvent::Status { status }) => {
+                    app_event_tx.send(AppEvent::WorkflowProgress {
+                        notification: WorkflowProgressNotification {
+                            run_id: run_id.clone(),
+                            thread_id: origin_thread_id.clone(),
+                            message: String::new(),
+                            data: None,
+                            status: Some(codex_app_server_protocol::WorkflowStatusUpdate {
+                                workflow_name: status.workflow_name,
+                                workflow_status: status.workflow_status,
+                                threads: status
+                                    .threads
+                                    .into_iter()
+                                    .map(|thread| codex_app_server_protocol::WorkflowThreadStatus {
+                                        name: thread.name,
+                                        status: thread.status,
+                                    })
+                                    .collect(),
+                                child_statuses: status
+                                    .child_statuses
+                                    .into_iter()
+                                    .map(|child| codex_app_server_protocol::WorkflowChildStatus {
+                                        workflow_name: child.workflow_name,
+                                        workflow_status: child.workflow_status,
+                                        threads: child
+                                            .threads
+                                            .into_iter()
+                                            .map(|thread| {
+                                                codex_app_server_protocol::WorkflowThreadStatus {
+                                                    name: thread.name,
+                                                    status: thread.status,
+                                                }
+                                            })
+                                            .collect(),
+                                    })
+                                    .collect(),
+                            }),
                         },
                     });
                 }

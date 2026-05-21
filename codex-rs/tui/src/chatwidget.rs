@@ -6375,7 +6375,7 @@ impl ChatWidget {
                 }
             }
             ServerNotification::WorkflowProgress(notification) => {
-                self.handle_workflow_progress_notification(notification, replay_kind)
+                self.handle_workflow_progress_notification(None, notification, replay_kind)
             }
             ServerNotification::WorkflowMarkdownResult(notification) => {
                 self.handle_workflow_markdown_result_notification(notification, replay_kind)

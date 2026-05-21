@@ -177,11 +177,39 @@ pub struct WorkflowCommandResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct WorkflowThreadStatus {
+    pub name: String,
+    pub status: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowChildStatus {
+    pub workflow_name: String,
+    pub workflow_status: String,
+    pub threads: Vec<WorkflowThreadStatus>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowStatusUpdate {
+    pub workflow_name: String,
+    pub workflow_status: String,
+    pub threads: Vec<WorkflowThreadStatus>,
+    pub child_statuses: Vec<WorkflowChildStatus>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct WorkflowProgressNotification {
     pub run_id: String,
     pub thread_id: Option<String>,
     pub message: String,
     pub data: Option<JsonValue>,
+    pub status: Option<WorkflowStatusUpdate>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

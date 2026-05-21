@@ -208,14 +208,20 @@ pub fn workflow_runtime_api_catalog() -> ApiCatalogWorkflowRuntime {
             symbol(
                 "WorkflowContext.runWorkflow",
                 ApiCatalogSymbolKind::Method,
-                "ctx.runWorkflow<Input, Output>(workflow, input?): Promise<Output>",
-                "Call another workflow using the current app-server connection and approval handling.",
+                "ctx.runWorkflow<Input, Output>(workflow, input?, options?): Promise<Output>",
+                "Call another workflow using the current app-server connection and approval handling. options.onStatusUpdate can forward, transform, bundle, or suppress child workflow status updates.",
             ),
             symbol(
                 "WorkflowContext.progress",
                 ApiCatalogSymbolKind::Method,
                 "ctx.progress(message: string, data?: unknown): void",
-                "Report live workflow progress to the host and connected clients.",
+                "Legacy workflow progress helper. Prefer ctx.status(...) for structured workflow and thread status updates.",
+            ),
+            symbol(
+                "WorkflowContext.status",
+                ApiCatalogSymbolKind::Method,
+                "ctx.status(status: WorkflowStatusUpdate): void",
+                "Report structured workflow status to the host and connected clients.",
             ),
             symbol(
                 "WorkflowContext.reportToUserMarkdown",

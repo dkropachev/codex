@@ -223,6 +223,7 @@ async fn workflow_progress_notification_updates_workflow_status_row() {
                 thread_id: None,
                 message: "Preparing workflow handoff".to_string(),
                 data: Some(serde_json::json!({"step": 2, "total": 4})),
+                status: None,
             },
         ),
         /*replay_kind*/ None,
@@ -233,12 +234,53 @@ async fn workflow_progress_notification_updates_workflow_status_row() {
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Workflow");
-    let details = status
-        .details()
-        .expect("workflow progress details should be visible");
-    assert!(details.contains("Preparing workflow handoff"));
-    assert!(details.contains("\"step\": 2"));
+    assert_eq!(
+        status.header(),
+        "Workflow: Preparing workflow handoff (step 2/4)"
+    );
+    assert_eq!(status.details(), None);
+}
+
+#[tokio::test]
+async fn workflow_structured_status_notification_renders_threads() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::WorkflowProgress(
+            codex_app_server_protocol::WorkflowProgressNotification {
+                run_id: "run-1".to_string(),
+                thread_id: None,
+                message: String::new(),
+                data: None,
+                status: Some(codex_app_server_protocol::WorkflowStatusUpdate {
+                    workflow_name: "code-review".to_string(),
+                    workflow_status: "reviewing".to_string(),
+                    threads: vec![
+                        codex_app_server_protocol::WorkflowThreadStatus {
+                            name: "reviewer".to_string(),
+                            status: "scanning".to_string(),
+                        },
+                        codex_app_server_protocol::WorkflowThreadStatus {
+                            name: "repro".to_string(),
+                            status: "waiting".to_string(),
+                        },
+                    ],
+                    child_statuses: Vec::new(),
+                }),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Workflow code-review: reviewing");
+    assert_eq!(
+        status.details(),
+        Some("-> reviewer: scanning\n-> repro: waiting")
+    );
 }
 
 #[tokio::test]

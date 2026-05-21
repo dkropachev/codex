@@ -1495,6 +1495,28 @@ fn workflow_notification_payloads_round_trip() {
         thread_id: Some("thread-1".to_string()),
         message: "starting".to_string(),
         data: Some(json!({"step": 1})),
+        status: Some(WorkflowStatusUpdate {
+            workflow_name: "code-review".to_string(),
+            workflow_status: "Preparing workflow handoff".to_string(),
+            threads: vec![
+                WorkflowThreadStatus {
+                    name: "reviewer".to_string(),
+                    status: "scanning".to_string(),
+                },
+                WorkflowThreadStatus {
+                    name: "repro".to_string(),
+                    status: "idle".to_string(),
+                },
+            ],
+            child_statuses: vec![WorkflowChildStatus {
+                workflow_name: "sub-review".to_string(),
+                workflow_status: "running".to_string(),
+                threads: vec![WorkflowThreadStatus {
+                    name: "child-a".to_string(),
+                    status: "checking".to_string(),
+                }],
+            }],
+        }),
     };
     let value = serde_json::to_value(&progress).expect("serialize workflow progress");
     assert_eq!(
@@ -1504,6 +1526,23 @@ fn workflow_notification_payloads_round_trip() {
             "threadId": "thread-1",
             "message": "starting",
             "data": {"step": 1},
+            "status": {
+                "workflowName": "code-review",
+                "workflowStatus": "Preparing workflow handoff",
+                "threads": [
+                    {"name": "reviewer", "status": "scanning"},
+                    {"name": "repro", "status": "idle"}
+                ],
+                "childStatuses": [
+                    {
+                        "workflowName": "sub-review",
+                        "workflowStatus": "running",
+                        "threads": [
+                            {"name": "child-a", "status": "checking"}
+                        ]
+                    }
+                ]
+            },
         })
     );
     let decoded = serde_json::from_value::<WorkflowProgressNotification>(value)
@@ -1537,6 +1576,12 @@ fn workflow_runtime_api_catalog_includes_reporting_methods() {
             .symbols
             .iter()
             .any(|symbol| symbol.name == "WorkflowContext.progress")
+    );
+    assert!(
+        catalog
+            .symbols
+            .iter()
+            .any(|symbol| symbol.name == "WorkflowContext.status")
     );
     assert!(
         catalog

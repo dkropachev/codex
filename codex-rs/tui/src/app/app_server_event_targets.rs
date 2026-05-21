@@ -231,6 +231,7 @@ mod tests {
                 thread_id: Some(thread_id.to_string()),
                 message: "starting".to_string(),
                 data: None,
+                status: None,
             },
         );
 

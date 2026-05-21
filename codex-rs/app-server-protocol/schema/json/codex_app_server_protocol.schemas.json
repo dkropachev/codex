@@ -20720,6 +20720,28 @@
         "title": "WorkflowAuthoringContextPrepareResponse",
         "type": "object"
       },
+      "WorkflowChildStatus": {
+        "properties": {
+          "threads": {
+            "items": {
+              "$ref": "#/definitions/v2/WorkflowThreadStatus"
+            },
+            "type": "array"
+          },
+          "workflowName": {
+            "type": "string"
+          },
+          "workflowStatus": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threads",
+          "workflowName",
+          "workflowStatus"
+        ],
+        "type": "object"
+      },
       "WorkflowCommandExecuteParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -21019,6 +21041,16 @@
           "runId": {
             "type": "string"
           },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/WorkflowStatusUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "threadId": {
             "type": [
               "string",
@@ -21159,6 +21191,35 @@
         "title": "WorkflowRunResponse",
         "type": "object"
       },
+      "WorkflowStatusUpdate": {
+        "properties": {
+          "childStatuses": {
+            "items": {
+              "$ref": "#/definitions/v2/WorkflowChildStatus"
+            },
+            "type": "array"
+          },
+          "threads": {
+            "items": {
+              "$ref": "#/definitions/v2/WorkflowThreadStatus"
+            },
+            "type": "array"
+          },
+          "workflowName": {
+            "type": "string"
+          },
+          "workflowStatus": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "childStatuses",
+          "threads",
+          "workflowName",
+          "workflowStatus"
+        ],
+        "type": "object"
+      },
       "WorkflowSummary": {
         "properties": {
           "command": {
@@ -21224,6 +21285,21 @@
           "searchTerms",
           "validation",
           "workflowYamlPath"
+        ],
+        "type": "object"
+      },
+      "WorkflowThreadStatus": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "status"
         ],
         "type": "object"
       },

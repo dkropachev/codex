@@ -463,8 +463,11 @@ sleep 0.2
         .chat_widget
         .status_widget_for_test()
         .expect("workflow placeholder status should be visible");
-    assert_eq!(placeholder_status.header(), "Workflow");
-    assert_eq!(placeholder_status.details(), Some("code-review"));
+    assert_eq!(
+        placeholder_status.header(),
+        "Workflow code-review: starting"
+    );
+    assert_eq!(placeholder_status.details(), None);
 
     let env_capture = time::timeout(Duration::from_secs(1), async {
         loop {
@@ -510,11 +513,11 @@ sleep 0.2
         .chat_widget
         .status_widget_for_test()
         .expect("live workflow status should be visible");
-    let live_details = live_status
-        .details()
-        .expect("workflow progress details should exist");
-    assert!(live_details.contains("Preparing workflow handoff"));
-    assert!(live_details.contains("\"stage\": \"testing\""));
+    assert_eq!(
+        live_status.header(),
+        "Workflow code-review: Preparing workflow handoff (testing, step 1)"
+    );
+    assert_eq!(live_status.details(), None);
 
     let markdown_notification = time::timeout(Duration::from_secs(1), async {
         loop {
@@ -547,10 +550,11 @@ sleep 0.2
         .chat_widget
         .status_widget_for_test()
         .expect("workflow status should remain visible until the process exits");
-    let status_before_finish_details = status_before_finish
-        .details()
-        .expect("workflow status details should remain visible until finish");
-    assert!(status_before_finish_details.contains("Preparing workflow handoff"));
+    assert_eq!(
+        status_before_finish.header(),
+        "Workflow code-review: Preparing workflow handoff (testing, step 1)"
+    );
+    assert_eq!(status_before_finish.details(), None);
 
     let result_cell = time::timeout(Duration::from_secs(1), app_event_rx.recv())
         .await
@@ -584,22 +588,6 @@ sleep 0.2
     .await
     .expect("timed out waiting for workflow finish event");
     app.handle_workflow_process_finished(finished_run_id, command, result);
-
-    let finished_cell = time::timeout(Duration::from_secs(1), async {
-        loop {
-            let event = app_event_rx
-                .recv()
-                .await
-                .expect("workflow event channel closed unexpectedly");
-            if let AppEvent::InsertHistoryCell(cell) = event {
-                return cell;
-            }
-        }
-    })
-    .await
-    .expect("timed out waiting for workflow completion info cell");
-    let finished_rendered = lines_to_single_string(&finished_cell.display_lines(/*width*/ 120));
-    assert!(finished_rendered.contains("Workflow finished: code-review"));
 
     assert!(app.workflow_runs.is_empty());
     assert!(app.chat_widget.status_widget_for_test().is_none());
@@ -644,8 +632,11 @@ exit 1
         .chat_widget
         .status_widget_for_test()
         .expect("workflow placeholder status should be visible");
-    assert_eq!(placeholder_status.header(), "Workflow");
-    assert_eq!(placeholder_status.details(), Some("code-review"));
+    assert_eq!(
+        placeholder_status.header(),
+        "Workflow code-review: starting"
+    );
+    assert_eq!(placeholder_status.details(), None);
 
     let env_capture = wait_for_workflow_env_capture(&env_capture_path).await;
     assert!(env_capture.contains(&format!("thread_id={thread_id}")));
@@ -670,11 +661,11 @@ exit 1
         .chat_widget
         .status_widget_for_test()
         .expect("workflow progress should be visible before failure completion");
-    assert_eq!(live_status.header(), "Workflow");
-    let live_details = live_status
-        .details()
-        .expect("workflow progress details should exist before failure completion");
-    assert!(live_details.contains("Running workflow"));
+    assert_eq!(
+        live_status.header(),
+        "Workflow code-review: Running workflow (testing)"
+    );
+    assert_eq!(live_status.details(), None);
 
     let (finished_run_id, command, result) = time::timeout(Duration::from_secs(1), async {
         loop {
@@ -737,6 +728,7 @@ async fn app_server_thread_scoped_workflow_notifications_are_visible_and_queue_h
                     thread_id: Some(thread_id.to_string()),
                     message: "Preparing workflow handoff".to_string(),
                     data: Some(serde_json::json!({"step": 2, "total": 4})),
+                    status: None,
                 },
             ),
         ),
@@ -760,11 +752,48 @@ async fn app_server_thread_scoped_workflow_notifications_are_visible_and_queue_h
         .chat_widget
         .status_widget_for_test()
         .expect("workflow progress from app-server should be visible");
-    let progress_details = progress_status
-        .details()
-        .expect("workflow progress details should be visible");
-    assert!(progress_details.contains("Preparing workflow handoff"));
-    assert!(progress_details.contains("\"step\": 2"));
+    assert_eq!(
+        progress_status.header(),
+        "Workflow: Preparing workflow handoff (step 2/4)"
+    );
+    assert_eq!(progress_status.details(), None);
+
+    app.handle_workflow_progress_notification(
+        codex_app_server_protocol::WorkflowProgressNotification {
+            run_id: "run-2".to_string(),
+            thread_id: Some(thread_id.to_string()),
+            message: String::new(),
+            data: None,
+            status: Some(codex_app_server_protocol::WorkflowStatusUpdate {
+                workflow_name: "code-review".to_string(),
+                workflow_status: "reviewing".to_string(),
+                threads: vec![
+                    codex_app_server_protocol::WorkflowThreadStatus {
+                        name: "reviewer".to_string(),
+                        status: "scanning".to_string(),
+                    },
+                    codex_app_server_protocol::WorkflowThreadStatus {
+                        name: "repro".to_string(),
+                        status: "waiting".to_string(),
+                    },
+                ],
+                child_statuses: Vec::new(),
+            }),
+        },
+    );
+
+    let structured_status = app
+        .chat_widget
+        .status_widget_for_test()
+        .expect("structured workflow status should be visible");
+    assert_eq!(
+        structured_status.header(),
+        "Workflow code-review: reviewing"
+    );
+    assert_eq!(
+        structured_status.details(),
+        Some("-> reviewer: scanning\n-> repro: waiting")
+    );
 
     app.handle_app_server_event(
         &mut app_server,
