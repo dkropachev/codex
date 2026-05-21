@@ -28,7 +28,8 @@ export function createMockClient(url: string): TestClient {
         mock: {
           name: "Mock provider for test",
           base_url: url,
-          wire_api: "responses",
+          request_max_retries: 0,
+          stream_max_retries: 0,
           supports_websockets: false,
         },
       },
@@ -68,7 +69,8 @@ function mergeTestConfig(
             mock: {
               name: "Mock provider for test",
               base_url: baseUrl,
-              wire_api: "responses",
+              request_max_retries: 0,
+              stream_max_retries: 0,
               supports_websockets: false,
             },
           },
