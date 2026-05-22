@@ -66,6 +66,7 @@ fn usage_limit_reached_error_formats_plus_plan() {
 #[test]
 fn server_overloaded_maps_to_protocol() {
     let err = CodexErr::ServerOverloaded;
+    assert!(err.is_retryable());
     assert_eq!(
         err.to_codex_protocol_error(),
         CodexErrorInfo::ServerOverloaded
