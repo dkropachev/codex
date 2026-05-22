@@ -142,6 +142,8 @@ pub fn scaffold_workflow_spec(
                 "progress": true,
                 "finalResult": true,
                 "failureUx": true,
+                "load": true,
+                "autocomplete": true,
                 "recovery": false
             }
         }),

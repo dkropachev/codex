@@ -36,6 +36,8 @@ const REQUIRED_COVERAGE_KEYS: &[&str] = &[
     "progress",
     "finalResult",
     "failureUx",
+    "load",
+    "autocomplete",
     "recovery",
 ];
 const REQUIRED_MARKERS: &[&str] = &[
@@ -44,6 +46,8 @@ const REQUIRED_MARKERS: &[&str] = &[
     "progress",
     "finalResult",
     "failureUx",
+    "load",
+    "autocomplete",
 ];
 const REQUIRED_TRUE_COVERAGE_KEYS: &[&str] = &[
     "positive",
@@ -51,6 +55,8 @@ const REQUIRED_TRUE_COVERAGE_KEYS: &[&str] = &[
     "progress",
     "finalResult",
     "failureUx",
+    "load",
+    "autocomplete",
 ];
 const WORKFLOW_TEST_MARKER_PREFIX: &str = "workflow-covers:";
 const BARE_NODE_BUILTINS: &[&str] = &[
@@ -665,6 +671,16 @@ test("workflow completes successfully", async () => {
         )
         .unwrap();
         fs::write(
+            workflow_dir.join("src/tests/workflow.load.test.ts"),
+            "// workflow-covers: load\nexport {};\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("src/tests/workflow.autocomplete.test.ts"),
+            "// workflow-covers: autocomplete\nexport {};\n",
+        )
+        .unwrap();
+        fs::write(
             workflow_dir.join("src/tests/workflow.negative.test.ts"),
             r#"// workflow-covers: negative failureUx
 import assert from "node:assert/strict";
@@ -696,6 +712,8 @@ test("workflow rejects invalid input", async () => {
                         "progress": true,
                         "finalResult": true,
                         "failureUx": true,
+                        "load": true,
+                        "autocomplete": true,
                         "recovery": false,
                     }
                 }),
@@ -731,6 +749,42 @@ test("workflow rejects invalid input", async () => {
                 .messages
                 .contains(&"missing DESIGN.md".to_string())
         );
+    }
+
+    #[test]
+    fn validate_workflow_dir_reports_missing_load_marker() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = create_valid_workflow_dir(&root, "example");
+        fs::write(
+            workflow_dir.join("src/tests/workflow.load.test.ts"),
+            "export {};\n",
+        )
+        .unwrap();
+
+        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
+        assert!(validation.messages.iter().any(|message| {
+            message.contains("missing test coverage marker `// workflow-covers: load`")
+        }));
+    }
+
+    #[test]
+    fn validate_workflow_dir_reports_missing_autocomplete_marker() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = create_valid_workflow_dir(&root, "example");
+        fs::write(
+            workflow_dir.join("src/tests/workflow.autocomplete.test.ts"),
+            "export {};\n",
+        )
+        .unwrap();
+
+        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
+        assert!(validation.messages.iter().any(|message| {
+            message.contains("missing test coverage marker `// workflow-covers: autocomplete`")
+        }));
     }
 
     #[test]
@@ -773,6 +827,8 @@ export default { async run() { return leftPad("x", 2); } };
                         "progress": true,
                         "finalResult": true,
                         "failureUx": true,
+                        "load": true,
+                        "autocomplete": true,
                         "recovery": true,
                     }
                 }),

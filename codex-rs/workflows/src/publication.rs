@@ -426,7 +426,7 @@ mod tests {
         std::fs::create_dir_all(dir.join(".git")).unwrap();
         std::fs::write(
             dir.join("workflow.yaml"),
-            "id: reports/jira-summary\ntitle: Jira Summary\nuserDescription: Summarize Jira work\nvalidation:\n  commands:\n    - npm run build\n    - npm test\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    recovery: false\ntool:\n  description: Run the Jira summary workflow\n  inputSchema:\n    type: object\n  outputSchema: null\n  registerOn:\n    - afterAgent\n",
+            "id: reports/jira-summary\ntitle: Jira Summary\nuserDescription: Summarize Jira work\nvalidation:\n  commands:\n    - npm run build\n    - npm test\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\ntool:\n  description: Run the Jira summary workflow\n  inputSchema:\n    type: object\n  outputSchema: null\n  registerOn:\n    - afterAgent\n",
         )
         .unwrap();
         std::fs::write(
@@ -443,6 +443,16 @@ mod tests {
         std::fs::write(
             dir.join("src/tests/workflow.positive.test.ts"),
             "// workflow-covers: positive progress finalResult\nexport {};\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/tests/workflow.load.test.ts"),
+            "// workflow-covers: load\nexport {};\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/tests/workflow.autocomplete.test.ts"),
+            "// workflow-covers: autocomplete\nexport {};\n",
         )
         .unwrap();
         std::fs::write(

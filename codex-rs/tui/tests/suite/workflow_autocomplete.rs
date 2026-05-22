@@ -388,7 +388,7 @@ fn write_review_workflow(workflow_dir: &Path) -> Result<()> {
   async run(ctx) {
     ctx.status({ workflowName: "code-review", workflowStatus: "reviewing" });
     await new Promise((resolve) => setTimeout(resolve, 250));
-    ctx.reportToUserMarkdown(`# Workflow Result\n\n${input.text}\n`);
+    ctx.reportToUserMarkdown(`# Workflow Result\n\nCode review complete.\n`);
     await new Promise((resolve) => setTimeout(resolve, 250));
     return { workflowStatus: "done" };
   },

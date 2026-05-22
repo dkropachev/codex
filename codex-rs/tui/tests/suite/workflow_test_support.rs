@@ -69,7 +69,29 @@ pub(super) fn write_workflow_fixture_with_metadata(
     std::fs::write(workflow_dir.join("src/workflow.ts"), workflow_source)?;
     std::fs::write(
         workflow_dir.join("node_modules/.bin/tsx"),
-        "#!/usr/bin/node\nconst fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst { spawnSync } = require('node:child_process');\n\nconst [runner, ...args] = process.argv.slice(2);\nconst workflowPathIndex = args.indexOf('--workflow-path');\nif (workflowPathIndex === -1 || workflowPathIndex + 1 >= args.length) {\n  console.error('missing --workflow-path');\n  process.exit(1);\n}\nconst workflowPath = args[workflowPathIndex + 1];\nconst tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-runtime-'));\nconst tmpPath = path.join(tmpDir, path.basename(workflowPath) + '.mjs');\nfs.copyFileSync(workflowPath, tmpPath);\nargs[workflowPathIndex + 1] = tmpPath;\nconst result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });\nprocess.exit(result.status ?? 1);\n",
+        r#"#!/usr/bin/node
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+const [runner, ...args] = process.argv.slice(2);
+const workflowPathIndex = args.indexOf('--workflow-path');
+if (workflowPathIndex === -1 || workflowPathIndex + 1 >= args.length) {
+  console.error('missing --workflow-path');
+  process.exit(1);
+}
+const workflowPath = args[workflowPathIndex + 1];
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-runtime-'));
+const workflowDir = path.dirname(workflowPath);
+const tmpWorkflowDir = path.join(tmpDir, path.basename(workflowDir));
+fs.cpSync(workflowDir, tmpWorkflowDir, { recursive: true });
+const tmpPath = path.join(tmpWorkflowDir, path.basename(workflowPath) + '.mjs');
+fs.copyFileSync(workflowPath, tmpPath);
+args[workflowPathIndex + 1] = tmpPath;
+const result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });
+process.exit(result.status ?? 1);
+"#,
     )?;
     #[cfg(unix)]
     std::fs::set_permissions(

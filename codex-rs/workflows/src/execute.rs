@@ -471,7 +471,7 @@ fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -
     fs::write(
         path.join("DESIGN.md"),
         format!(
-            "# {title} Design\n\n## Overview\n\nThis workflow is a local TypeScript package driven by `tsx` and validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `src/workflow.ts` owns the runtime behavior.\n- `src/tests/` carries the coverage contract for positive, negative, and recovery paths.\n- `workflow.yaml` records validation commands and coverage expectations.\n- `state/` holds any persistent data.\n\n## Data Flow\n\n1. A registered workflow command loads the workflow from the local package.\n2. The workflow validates input, emits progress, and reports markdown when it has a user-facing result.\n3. `codex workflow validate {id}` runs the local validation commands and checks the required docs, layout, and coverage markers.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.ts`: positive path, progress, and final markdown handoff.\n- `src/tests/workflow.negative.test.ts`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.ts`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep dependency usage local. Keep `// workflow-covers:` markers aligned with `validation.coverage`. Update this file when the workflow behavior or review expectations change.\n"
+            "# {title} Design\n\n## Overview\n\nThis workflow is a local TypeScript package driven by `tsx` and validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `src/workflow.ts` owns the runtime behavior.\n- `src/tests/` carries the coverage contract for positive, load, autocomplete, negative, and recovery paths.\n- `workflow.yaml` records validation commands and coverage expectations.\n- `state/` holds any persistent data.\n\n## Data Flow\n\n1. A registered workflow command loads the workflow from the local package.\n2. The workflow validates input, emits progress, and reports markdown when it has a user-facing result.\n3. `codex workflow validate {id}` runs the local validation commands and checks the required docs, layout, and coverage markers, including loadability and autocomplete readiness.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.ts`: positive path, progress, and final markdown handoff.\n- `src/tests/workflow.load.test.ts`: loadability smoke.\n- `src/tests/workflow.autocomplete.test.ts`: registry and command-completion readiness smoke.\n- `src/tests/workflow.negative.test.ts`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.ts`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep dependency usage local. Keep `// workflow-covers:` markers aligned with `validation.coverage`, including load and autocomplete. Update this file when the workflow behavior or review expectations change.\n"
         ),
     )?;
     fs::write(
@@ -581,6 +581,14 @@ test("workflow reports progress and markdown", async () => {{
 "#,
             markdown = escape_ts_string(&format!("# {title}\n\nWorkflow complete.")),
         ),
+    )?;
+    fs::write(
+        path.join("src/tests/workflow.load.test.ts"),
+        "// workflow-covers: load\nexport {};\n",
+    )?;
+    fs::write(
+        path.join("src/tests/workflow.autocomplete.test.ts"),
+        "// workflow-covers: autocomplete\nexport {};\n",
     )?;
     fs::write(
         path.join("src/tests/workflow.negative.test.ts"),
@@ -868,6 +876,16 @@ mod tests {
         )
         .unwrap();
         fs::write(
+            workflow_dir.join("src/tests/workflow.load.test.ts"),
+            "// workflow-covers: load\nexport {};\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("src/tests/workflow.autocomplete.test.ts"),
+            "// workflow-covers: autocomplete\nexport {};\n",
+        )
+        .unwrap();
+        fs::write(
             workflow_dir.join("src/tests/workflow.negative.test.ts"),
             "// workflow-covers: negative failureUx\nexport {};\n",
         )
@@ -885,6 +903,8 @@ mod tests {
                         "progress": true,
                         "finalResult": true,
                         "failureUx": true,
+                        "load": true,
+                        "autocomplete": true,
                         "recovery": false,
                     }
                 }),
@@ -952,6 +972,16 @@ mod tests {
         );
         assert!(
             cwd.path()
+                .join(".codex/workflows/jira-summary/src/tests/workflow.load.test.ts")
+                .is_file()
+        );
+        assert!(
+            cwd.path()
+                .join(".codex/workflows/jira-summary/src/tests/workflow.autocomplete.test.ts")
+                .is_file()
+        );
+        assert!(
+            cwd.path()
                 .join(".codex/workflows/jira-summary/src/tests/workflow.negative.test.ts")
                 .is_file()
         );
@@ -988,6 +1018,11 @@ mod tests {
         );
         assert_eq!(
             spec.validation["coverage"]["failureUx"],
+            JsonValue::Bool(true)
+        );
+        assert_eq!(spec.validation["coverage"]["load"], JsonValue::Bool(true));
+        assert_eq!(
+            spec.validation["coverage"]["autocomplete"],
             JsonValue::Bool(true)
         );
         assert_eq!(
@@ -1168,10 +1203,20 @@ mod tests {
         fs::write(workflow_dir.join("README.md"), "# Runtime Progress\n").unwrap();
         fs::write(workflow_dir.join("state/.gitkeep"), "").unwrap();
         fs::write(
+            workflow_dir.join("src/helper.js"),
+            r#"export function progressMessage() {
+  return "Preparing review";
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
             workflow_dir.join("src/workflow.ts"),
-            r#"const workflow = {
+            r#"import { progressMessage } from "./helper.js";
+
+const workflow = {
   async run(ctx, input) {
-    ctx.progress("Preparing review", { prompt: input.prompt, stage: "testing" });
+    ctx.progress(progressMessage(), { prompt: input.prompt, stage: "testing" });
     ctx.reportToUserMarkdown(`# Workflow Result\n\n${input.prompt}`);
     return { workflowStatus: "done", prompt: input.prompt, nodePath: process.env.NODE_PATH ?? null };
   },
@@ -1183,7 +1228,33 @@ export default workflow;
         .unwrap();
         fs::write(
             workflow_dir.join("node_modules/.bin/tsx"),
-            "#!/usr/bin/node\nconst fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst { spawnSync } = require('node:child_process');\n\nconst [runner, ...args] = process.argv.slice(2);\nif (args[0] === '--serve') {\n  const result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });\n  process.exit(result.status ?? 1);\n}\nconst workflowPathIndex = args.indexOf('--workflow-path');\nif (workflowPathIndex === -1 || workflowPathIndex + 1 >= args.length) {\n  console.error('missing --workflow-path');\n  process.exit(1);\n}\nconst workflowPath = args[workflowPathIndex + 1];\nconst tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-runtime-'));\nconst tmpPath = path.join(tmpDir, path.basename(workflowPath) + '.mjs');\nfs.copyFileSync(workflowPath, tmpPath);\nargs[workflowPathIndex + 1] = tmpPath;\nconst result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });\nprocess.exit(result.status ?? 1);\n",
+            r#"#!/usr/bin/node
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+const [runner, ...args] = process.argv.slice(2);
+if (args[0] === '--serve') {
+  const result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });
+  process.exit(result.status ?? 1);
+}
+const workflowPathIndex = args.indexOf('--workflow-path');
+if (workflowPathIndex === -1 || workflowPathIndex + 1 >= args.length) {
+  console.error('missing --workflow-path');
+  process.exit(1);
+}
+const workflowPath = args[workflowPathIndex + 1];
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-runtime-'));
+const workflowDir = path.dirname(workflowPath);
+const tmpWorkflowDir = path.join(tmpDir, path.basename(workflowDir));
+fs.cpSync(workflowDir, tmpWorkflowDir, { recursive: true });
+const tmpPath = path.join(tmpWorkflowDir, path.basename(workflowPath) + '.mjs');
+fs.copyFileSync(workflowPath, tmpPath);
+args[workflowPathIndex + 1] = tmpPath;
+const result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });
+process.exit(result.status ?? 1);
+"#,
         )
         .unwrap();
         fs::set_permissions(
@@ -1270,7 +1341,34 @@ export default workflow;
         fs::write(
             workflow_dir.join("node_modules/.bin/tsx"),
             format!(
-                "#!/usr/bin/node\nconst fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst {{ spawnSync }} = require('node:child_process');\nconst logPath = '{}';\nconst logFd = fs.openSync(logPath, 'a');\nconst [runner, ...args] = process.argv.slice(2);\nif (args[0] === '--serve') {{\n  const result = spawnSync('/usr/bin/node', [runner, ...args], {{ stdio: ['ignore', logFd, logFd] }});\n  process.exit(result.status ?? 1);\n}}\nconst workflowPathIndex = args.indexOf('--workflow-path');\nif (workflowPathIndex === -1 || workflowPathIndex + 1 >= args.length) {{\n  fs.writeSync(logFd, 'missing --workflow-path\\n');\n  process.exit(1);\n}}\nconst workflowPath = args[workflowPathIndex + 1];\nconst tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-runtime-'));\nconst tmpPath = path.join(tmpDir, path.basename(workflowPath) + '.mjs');\nfs.copyFileSync(workflowPath, tmpPath);\nargs[workflowPathIndex + 1] = tmpPath;\nconst result = spawnSync('/usr/bin/node', [runner, ...args], {{ stdio: ['ignore', logFd, logFd] }});\nprocess.exit(result.status ?? 1);\n",
+                r#"#!/usr/bin/node
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const {{ spawnSync }} = require('node:child_process');
+const logPath = '{}';
+const logFd = fs.openSync(logPath, 'a');
+const [runner, ...args] = process.argv.slice(2);
+if (args[0] === '--serve') {{
+  const result = spawnSync('/usr/bin/node', [runner, ...args], {{ stdio: ['ignore', logFd, logFd] }});
+  process.exit(result.status ?? 1);
+}}
+const workflowPathIndex = args.indexOf('--workflow-path');
+if (workflowPathIndex === -1 || workflowPathIndex + 1 >= args.length) {{
+  fs.writeSync(logFd, 'missing --workflow-path\n');
+  process.exit(1);
+}}
+const workflowPath = args[workflowPathIndex + 1];
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-runtime-'));
+const workflowDir = path.dirname(workflowPath);
+const tmpWorkflowDir = path.join(tmpDir, path.basename(workflowDir));
+fs.cpSync(workflowDir, tmpWorkflowDir, {{ recursive: true }});
+const tmpPath = path.join(tmpWorkflowDir, path.basename(workflowPath) + '.mjs');
+fs.copyFileSync(workflowPath, tmpPath);
+args[workflowPathIndex + 1] = tmpPath;
+const result = spawnSync('/usr/bin/node', [runner, ...args], {{ stdio: ['ignore', logFd, logFd] }});
+process.exit(result.status ?? 1);
+"#,
                 host_log.display()
             ),
         )
@@ -1373,7 +1471,28 @@ export default workflow;
         .unwrap();
         fs::write(
             workflow_dir.join("node_modules/.bin/tsx"),
-            "#!/usr/bin/node\nconst fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst { spawnSync } = require('node:child_process');\nconst [runner, ...args] = process.argv.slice(2);\nconst workflowPathIndex = args.indexOf('--workflow-path');\nif (workflowPathIndex === -1 || workflowPathIndex + 1 >= args.length) {\n  console.error('missing --workflow-path');\n  process.exit(1);\n}\nconst workflowPath = args[workflowPathIndex + 1];\nconst tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-runtime-'));\nconst tmpPath = path.join(tmpDir, path.basename(workflowPath) + '.mjs');\nfs.copyFileSync(workflowPath, tmpPath);\nargs[workflowPathIndex + 1] = tmpPath;\nconst result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });\nprocess.exit(result.status ?? 1);\n",
+            r#"#!/usr/bin/node
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const [runner, ...args] = process.argv.slice(2);
+const workflowPathIndex = args.indexOf('--workflow-path');
+if (workflowPathIndex === -1 || workflowPathIndex + 1 >= args.length) {
+  console.error('missing --workflow-path');
+  process.exit(1);
+}
+const workflowPath = args[workflowPathIndex + 1];
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-runtime-'));
+const workflowDir = path.dirname(workflowPath);
+const tmpWorkflowDir = path.join(tmpDir, path.basename(workflowDir));
+fs.cpSync(workflowDir, tmpWorkflowDir, { recursive: true });
+const tmpPath = path.join(tmpWorkflowDir, path.basename(workflowPath) + '.mjs');
+fs.copyFileSync(workflowPath, tmpPath);
+args[workflowPathIndex + 1] = tmpPath;
+const result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });
+process.exit(result.status ?? 1);
+"#,
         )
         .unwrap();
         fs::set_permissions(

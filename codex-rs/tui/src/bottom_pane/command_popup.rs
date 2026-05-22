@@ -434,7 +434,10 @@ impl WidgetRef for CommandPopup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_config::types::WorkflowsConfigToml;
+    use codex_workflows::discover_workflows;
     use pretty_assertions::assert_eq;
+    use std::fs;
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -666,6 +669,124 @@ api:
         insta::assert_snapshot!(
             "workflow_exact_command_options",
             render_popup(&popup, /*width*/ 88)
+        );
+    }
+
+    #[test]
+    fn discovered_workflow_metadata_surfaces_in_popup() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("workflows");
+        let path = root.join("code-review");
+        fs::create_dir_all(path.join("src/tests")).expect("workflow dir");
+        fs::create_dir_all(path.join("state")).expect("workflow dir");
+        fs::create_dir_all(path.join(".git")).expect("workflow dir");
+        fs::write(path.join("README.md"), "# Code Review\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n").expect("workflow readme");
+        fs::write(path.join("DESIGN.md"), "# Code Review Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n").expect("workflow design");
+        fs::write(path.join("package.json"), "{\n  \"name\": \"codex-workflow-code-review\",\n  \"private\": true,\n  \"type\": \"module\"\n}\n").expect("workflow package");
+        fs::write(path.join("src/workflow.ts"), "export {};\n").expect("workflow source");
+        fs::write(
+            path.join("src/tests/workflow.positive.test.ts"),
+            "// workflow-covers: positive progress finalResult\nexport {};\n",
+        )
+        .expect("positive test");
+        fs::write(
+            path.join("src/tests/workflow.load.test.ts"),
+            "// workflow-covers: load\nexport {};\n",
+        )
+        .expect("load test");
+        fs::write(
+            path.join("src/tests/workflow.autocomplete.test.ts"),
+            "// workflow-covers: autocomplete\nexport {};\n",
+        )
+        .expect("autocomplete test");
+        fs::write(
+            path.join("src/tests/workflow.negative.test.ts"),
+            "// workflow-covers: negative failureUx\nexport {};\n",
+        )
+        .expect("negative test");
+        fs::write(path.join("state/.gitkeep"), "").expect("state marker");
+        let workflow_yaml = concat!(
+            "id: code-review\n",
+            "command: code-review\n",
+            "title: Code Review\n",
+            "userDescription: Review an existing submission.\n",
+            "api:\n",
+            "  inputSchema:\n",
+            "    type: object\n",
+            "    required:\n",
+            "      - reviewId\n",
+            "    properties:\n",
+            "      reviewId:\n",
+            "        type: string\n",
+            "        description: Review identifier\n",
+            "      format:\n",
+            "        type: string\n",
+            "        enum:\n",
+            "          - summary\n",
+            "          - full\n",
+            "        description: Output format\n",
+            "      includeComments:\n",
+            "        type: boolean\n",
+            "        description: Include comment bodies\n",
+            "validation:\n",
+            "  commands:\n",
+            "    - npm run build\n",
+            "    - npm test\n",
+            "  coverage:\n",
+            "    positive: true\n",
+            "    negative: true\n",
+            "    progress: true\n",
+            "    finalResult: true\n",
+            "    failureUx: true\n",
+            "    load: true\n",
+            "    autocomplete: true\n",
+            "    recovery: false\n",
+        );
+        fs::write(path.join("workflow.yaml"), workflow_yaml).expect("workflow spec");
+
+        let workflow =
+            discover_workflows(temp.path(), temp.path(), &WorkflowsConfigToml::default())
+                .expect("discover workflows")
+                .into_iter()
+                .next()
+                .expect("workflow discovery result");
+        assert_eq!(
+            workflow.command_option_hints,
+            vec![
+                codex_workflows::WorkflowCommandOptionHint {
+                    display: "--review-id <string>".to_string(),
+                    description: Some("required · Review identifier".to_string()),
+                },
+                codex_workflows::WorkflowCommandOptionHint {
+                    display: "--format <summary|full>".to_string(),
+                    description: Some("Output format".to_string()),
+                },
+                codex_workflows::WorkflowCommandOptionHint {
+                    display: "--include-comments".to_string(),
+                    description: Some("Include comment bodies".to_string()),
+                },
+            ]
+        );
+
+        let mut popup = CommandPopup::new(CommandPopupFlags {
+            workflows_enabled: true,
+            ..CommandPopupFlags::default()
+        });
+        popup.set_workflows(Some(std::slice::from_ref(&workflow)));
+        popup.on_composer_text_change("/code-review".to_string());
+
+        assert!(popup.filtered_items().iter().any(|item| {
+            matches!(
+                item,
+                CommandItem::WorkflowOption(option)
+                    if option.display == "--review-id <string>"
+            )
+        }));
+        assert_eq!(
+            popup.selected_item(),
+            Some(CommandItem::Workflow(Box::new(
+                super::load_workflow_command_info(&workflow)
+            )))
         );
     }
 

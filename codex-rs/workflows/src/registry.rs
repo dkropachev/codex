@@ -564,6 +564,16 @@ mod tests {
         )
         .unwrap();
         fs::write(
+            workflow.join("src/tests/workflow.load.test.ts"),
+            "// workflow-covers: load\nexport {};\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow.join("src/tests/workflow.autocomplete.test.ts"),
+            "// workflow-covers: autocomplete\nexport {};\n",
+        )
+        .unwrap();
+        fs::write(
             workflow.join("src/tests/workflow.negative.test.ts"),
             "// workflow-covers: negative failureUx\nexport {};\n",
         )
@@ -582,6 +592,8 @@ mod tests {
                         "progress": true,
                         "finalResult": true,
                         "failureUx": true,
+                        "load": true,
+                        "autocomplete": true,
                         "recovery": false,
                     }
                 }),
@@ -640,6 +652,16 @@ mod tests {
         )
         .unwrap();
         fs::write(
+            dir.join("src/tests/workflow.load.test.ts"),
+            "// workflow-covers: load\nexport {};\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("src/tests/workflow.autocomplete.test.ts"),
+            "// workflow-covers: autocomplete\nexport {};\n",
+        )
+        .unwrap();
+        fs::write(
             dir.join("src/tests/workflow.negative.test.ts"),
             "// workflow-covers: negative failureUx\nexport {};\n",
         )
@@ -658,6 +680,8 @@ mod tests {
                         "progress": true,
                         "finalResult": true,
                         "failureUx": true,
+                        "load": true,
+                        "autocomplete": true,
                         "recovery": false,
                     }
                 }),

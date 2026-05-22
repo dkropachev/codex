@@ -36,7 +36,7 @@ async fn workflow_list_returns_discovered_workflows() -> Result<()> {
     fs::create_dir_all(workflow_dir.join(".git"))?;
     fs::write(
         workflow_dir.join("workflow.yaml"),
-        "id: reports/jira-summary\ntitle: Jira Summary\nuserDescription: Summarize Jira work\nvalidation:\n  commands:\n    - npm run build\n    - npm test\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    recovery: false\n",
+        "id: reports/jira-summary\ntitle: Jira Summary\nuserDescription: Summarize Jira work\nvalidation:\n  commands:\n    - npm run build\n    - npm test\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
     )?;
     fs::write(
         workflow_dir.join("README.md"),
@@ -54,6 +54,14 @@ async fn workflow_list_returns_discovered_workflows() -> Result<()> {
     fs::write(
         workflow_dir.join("src/tests/workflow.positive.test.ts"),
         "// workflow-covers: positive progress finalResult\nexport {};\n",
+    )?;
+    fs::write(
+        workflow_dir.join("src/tests/workflow.load.test.ts"),
+        "// workflow-covers: load\nexport {};\n",
+    )?;
+    fs::write(
+        workflow_dir.join("src/tests/workflow.autocomplete.test.ts"),
+        "// workflow-covers: autocomplete\nexport {};\n",
     )?;
     fs::write(
         workflow_dir.join("src/tests/workflow.negative.test.ts"),
