@@ -1,0 +1,45 @@
+---
+source: tui/src/bottom_pane/command_popup.rs
+assertion_line: 893
+expression: "render_popup(&popup, 54)"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 54, height: 10 },
+    content: [
+        "  /code-review                        Code Review     ",
+        "    --reportId 1034 --format summary  Focused summary ",
+        "                                      output that     ",
+        "                                      wraps across    ",
+        "                                      multiple        ",
+        "                                      terminal columns",
+        "    --reportId 1035 --format full     Expanded report ",
+        "                                      output with a   ",
+        "                                      longer          ",
+        "                                      explanatory     ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 3, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 14, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 38, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 49, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 1, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 53, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 49, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 3, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 50, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 4, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 46, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 5, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 0, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 38, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 53, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 38, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 51, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 38, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 44, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 38, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 49, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

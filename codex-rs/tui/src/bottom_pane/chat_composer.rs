@@ -63,7 +63,9 @@
 //! popup selection path and the CLI path stay aligned when a workflow advertises `command`.
 //! When the typed alias is exact, the popup can append dimmed option hints cached from
 //! `workflow.yaml` plus live workflow-provided suggestions from an optional `complete(ctx, input)`
-//! hook.
+//! hook. If exactly one workflow completion remains after filtering by the typed argument prefix,
+//! the composer renders the untyped suffix inline in dimmed text and `Tab` accepts it as literal
+//! input before submission.
 //!
 //! # Large Paste Placeholders
 //!
@@ -405,6 +407,7 @@ pub(crate) struct ChatComposer {
         HashMap<WorkflowCommandCompletionCacheKey, Vec<WorkflowCommandCompletionSuggestion>>,
     pending_workflow_command_completion_requests: HashSet<WorkflowCommandCompletionCacheKey>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
+    dismissed_command_popup_token: Option<String>,
     dismissed_mention_popup_token: Option<String>,
     mention_bindings: HashMap<u64, ComposerMentionBinding>,
     recent_submission_mention_bindings: Vec<MentionBinding>,
@@ -597,6 +600,7 @@ impl ChatComposer {
             workflow_command_completion_cache: HashMap::new(),
             pending_workflow_command_completion_requests: HashSet::new(),
             connectors_snapshot: None,
+            dismissed_command_popup_token: None,
             dismissed_mention_popup_token: None,
             mention_bindings: HashMap::new(),
             recent_submission_mention_bindings: Vec::new(),
@@ -3372,6 +3376,19 @@ impl ChatComposer {
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
+        if matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Tab,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }
+        ) && self.accept_workflow_inline_completion()
+        {
+            return (InputResult::None, true);
+        }
+
         if self.queue_keys.is_pressed(key_event)
             && (self.is_task_running || !self.is_bang_shell_command())
         {
@@ -4038,6 +4055,105 @@ impl ChatComposer {
         WorkflowCommandInput { argv, text }
     }
 
+    fn workflow_completion_candidates(
+        &self,
+        workflow: &WorkflowSummary,
+        rest_after_name: &str,
+        input: &WorkflowCommandInput,
+    ) -> Vec<String> {
+        let mut candidates = workflow
+            .command_option_hints
+            .iter()
+            .filter(|hint| hint.display.starts_with(rest_after_name))
+            .map(|hint| hint.display.clone())
+            .collect::<Vec<_>>();
+
+        let Some(command) = workflow.command.as_deref() else {
+            candidates.sort_unstable();
+            candidates.dedup();
+            return candidates;
+        };
+
+        if let Some(suggestions) =
+            self.workflow_command_completion_cache
+                .get(&WorkflowCommandCompletionCacheKey {
+                    command: command.to_string(),
+                    text: input.text.clone(),
+                })
+        {
+            candidates.extend(
+                suggestions
+                    .iter()
+                    .filter(|suggestion| suggestion.insert_text.starts_with(rest_after_name))
+                    .map(|suggestion| suggestion.insert_text.clone()),
+            );
+        }
+
+        candidates.sort_unstable();
+        candidates.dedup();
+        candidates
+    }
+
+    fn workflow_inline_completion_for_workflow(
+        &self,
+        workflow: &WorkflowSummary,
+        rest_after_name: &str,
+        input: &WorkflowCommandInput,
+    ) -> Option<(String, String)> {
+        if rest_after_name.is_empty() {
+            return None;
+        }
+
+        let candidates = self.workflow_completion_candidates(workflow, rest_after_name, input);
+        let [candidate_text] = candidates.as_slice() else {
+            return None;
+        };
+
+        let preview_tail = candidate_text.strip_prefix(rest_after_name)?;
+        if preview_tail.is_empty() {
+            return None;
+        }
+
+        Some((candidate_text.clone(), preview_tail.to_string()))
+    }
+
+    fn workflow_inline_completion(&self) -> Option<(String, String)> {
+        let text = self.textarea.text();
+        let first_line_end = text.find('\n').unwrap_or(text.len());
+        let first_line = &text[..first_line_end];
+        if self.textarea.cursor() != first_line_end {
+            return None;
+        }
+
+        let (name, rest_after_name, _) = parse_slash_name(first_line)?;
+        let workflow = self.workflow_command_by_name(name)?;
+        let input = Self::workflow_command_completion_input(rest_after_name);
+        self.workflow_inline_completion_for_workflow(workflow, rest_after_name, &input)
+    }
+
+    fn accept_workflow_inline_completion(&mut self) -> bool {
+        let Some((candidate_text, _preview_tail)) = self.workflow_inline_completion() else {
+            return false;
+        };
+
+        let Some(text) = self.textarea.text().lines().next() else {
+            return false;
+        };
+        let Some((name, _, _)) = parse_slash_name(text) else {
+            return false;
+        };
+
+        self.textarea
+            .set_text_clearing_elements(&format!("/{name} {candidate_text} "));
+        self.dismissed_command_popup_token =
+            self.textarea.text().lines().next().map(ToString::to_string);
+        self.is_bash_mode = false;
+        if !self.textarea.text().is_empty() {
+            self.textarea.set_cursor(self.textarea.text().len());
+        }
+        true
+    }
+
     /// Synchronize `self.command_popup` with the current text in the
     /// textarea. This must be called after every modification that can change
     /// the text so the popup is shown/updated/hidden as appropriate.
@@ -4055,15 +4171,23 @@ impl ChatComposer {
         let cursor = self.textarea.cursor();
         let caret_on_first_line = cursor <= first_line_end;
 
+        if self.dismissed_command_popup_token.as_ref() == Some(&first_line) {
+            if matches!(self.active_popup, ActivePopup::Command(_)) {
+                self.active_popup = ActivePopup::None;
+            }
+            return;
+        }
+
         let is_editing_slash_command_name = caret_on_first_line
             && Self::slash_command_under_cursor(&first_line, cursor)
                 .is_some_and(|(name, rest)| self.looks_like_slash_prefix(name, rest));
         let exact_workflow_command = if caret_on_first_line {
-            Self::slash_command_under_cursor(&first_line, cursor).and_then(|(name, rest)| {
+            parse_slash_name(&first_line).and_then(|(name, rest, _)| {
                 self.workflow_command_by_name(name).map(|workflow| {
                     (
                         name.to_string(),
                         workflow.clone(),
+                        rest.to_string(),
                         Self::workflow_command_completion_input(rest),
                     )
                 })
@@ -4075,9 +4199,25 @@ impl ChatComposer {
             .registered_workflows()
             .map(<[codex_workflows::WorkflowSummary]>::to_vec);
 
-        if let Some((_command, workflow, input)) = exact_workflow_command.as_ref() {
+        if let Some((_command, workflow, rest_after_name, input)) = exact_workflow_command.as_ref()
+        {
             self.request_workflow_command_completions_if_needed(workflow, input.clone());
+
+            if self
+                .workflow_inline_completion_for_workflow(workflow, rest_after_name, input)
+                .is_some()
+                && matches!(self.active_popup, ActivePopup::Command(_))
+            {
+                self.active_popup = ActivePopup::None;
+                return;
+            }
         }
+
+        let workflow_inline_completion = exact_workflow_command.as_ref().and_then(
+            |(_command, workflow, rest_after_name, input)| {
+                self.workflow_inline_completion_for_workflow(workflow, rest_after_name, input)
+            },
+        );
 
         // If the cursor is currently positioned within an `@token`, prefer the
         // file-search popup over the slash popup so users can insert a file path
@@ -4091,7 +4231,9 @@ impl ChatComposer {
         match &mut self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.set_workflows(workflows.as_deref());
-                if let Some((command, _workflow, input)) = exact_workflow_command.as_ref() {
+                if let Some((command, _workflow, _rest_after_name, input)) =
+                    exact_workflow_command.as_ref()
+                {
                     popup.set_workflow_suggestions(
                         command,
                         self.workflow_command_completion_cache
@@ -4103,14 +4245,14 @@ impl ChatComposer {
                             .unwrap_or_default(),
                     );
                 }
-                if is_editing_slash_command_name || exact_workflow_command.is_some() {
+                if is_editing_slash_command_name || workflow_inline_completion.is_none() {
                     popup.on_composer_text_change(first_line);
                 } else {
                     self.active_popup = ActivePopup::None;
                 }
             }
             _ => {
-                if is_editing_slash_command_name || exact_workflow_command.is_some() {
+                if is_editing_slash_command_name || workflow_inline_completion.is_none() {
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
                     let connectors_enabled = self.connectors_enabled;
                     let plugins_command_enabled = self.plugins_command_enabled;
@@ -4134,7 +4276,9 @@ impl ChatComposer {
                         side_conversation_active: self.side_conversation_active,
                     });
                     command_popup.set_workflows(workflows.as_deref());
-                    if let Some((command, _workflow, input)) = exact_workflow_command.as_ref() {
+                    if let Some((command, _workflow, _rest_after_name, input)) =
+                        exact_workflow_command.as_ref()
+                    {
                         command_popup.set_workflow_suggestions(
                             command,
                             self.workflow_command_completion_cache
@@ -4979,6 +5123,58 @@ impl ChatComposer {
                 }
             }
         }
+
+        if matches!(self.active_popup, ActivePopup::None)
+            && let Some((_candidate_text, preview_tail)) = self.workflow_inline_completion()
+        {
+            let text = self.textarea.text().to_string();
+            let Some((cursor_x, cursor_y)) =
+                self.textarea.cursor_pos_with_state(textarea_rect, *state)
+            else {
+                return;
+            };
+
+            let mut preview_textarea = TextArea::new();
+            let mut preview_text = text;
+            preview_text.push_str(&preview_tail);
+            preview_textarea.set_text_with_elements(&preview_text, &self.textarea.text_elements());
+            preview_textarea.set_cursor(self.textarea.cursor());
+
+            let mut scratch = Buffer::empty(textarea_rect);
+            let mut scratch_state = *state;
+            if is_zellij {
+                preview_textarea.render_ref_styled(
+                    textarea_rect,
+                    &mut scratch,
+                    &mut scratch_state,
+                    textarea_style,
+                );
+            } else {
+                StatefulWidgetRef::render_ref(
+                    &&preview_textarea,
+                    textarea_rect,
+                    &mut scratch,
+                    &mut scratch_state,
+                );
+            }
+
+            let preview_style = if is_zellij {
+                textarea_style.dim()
+            } else {
+                Style::default().dim()
+            };
+            for y in cursor_y..textarea_rect.bottom() {
+                let start_x = if y == cursor_y {
+                    cursor_x
+                } else {
+                    textarea_rect.x
+                };
+                for x in start_x..textarea_rect.right() {
+                    buf[(x, y)] = scratch[(x, y)].clone();
+                    buf[(x, y)].set_style(preview_style);
+                }
+            }
+        }
     }
 }
 
@@ -4987,6 +5183,9 @@ mod tests {
     use super::*;
     use crate::test_support::PathBufExt;
     use crate::test_support::test_path_buf;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
     use image::ImageBuffer;
     use image::Rgba;
     use pretty_assertions::assert_eq;
@@ -6997,6 +7196,18 @@ mod tests {
         }
     }
 
+    fn test_workflow_summary_with_command_options(
+        id: &str,
+        title: &str,
+        command: &str,
+        option_hints: Vec<codex_workflows::WorkflowCommandOptionHint>,
+    ) -> codex_workflows::WorkflowSummary {
+        let mut workflow = test_workflow_summary(id, title);
+        workflow.command = Some(command.to_string());
+        workflow.command_option_hints = option_hints;
+        workflow
+    }
+
     #[test]
     fn set_connector_mentions_excludes_disabled_apps_from_mention_popup() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -8044,6 +8255,214 @@ mod tests {
                 workflow.command = Some("jira-summary".to_string());
                 composer.set_workflow_mentions(Some(vec![workflow]));
                 composer.set_text_content("/jira-summary".to_string(), Vec::new(), Vec::new());
+            },
+        );
+    }
+
+    #[test]
+    fn workflow_inline_preview_unique_option_snapshot() {
+        snapshot_composer_state_with_width(
+            "workflow_inline_preview_unique_option",
+            /*width*/ 72,
+            /*enhanced_keys_supported*/ false,
+            |composer| {
+                composer.set_workflows_enabled(true);
+                composer.set_workflow_mentions(Some(vec![
+                    test_workflow_summary_with_command_options(
+                        "reports/code-review",
+                        "Code Review",
+                        "code-review",
+                        vec![
+                            codex_workflows::WorkflowCommandOptionHint {
+                                display: "--assignee <string>".to_string(),
+                                description: Some("Assign a reviewer".to_string()),
+                            },
+                            codex_workflows::WorkflowCommandOptionHint {
+                                display: "--format <summary|full>".to_string(),
+                                description: Some("Output format".to_string()),
+                            },
+                            codex_workflows::WorkflowCommandOptionHint {
+                                display: "--include-comments".to_string(),
+                                description: Some("Include comment bodies".to_string()),
+                            },
+                        ],
+                    ),
+                ]));
+                composer.set_text_content("/code-review --a".to_string(), Vec::new(), Vec::new());
+                composer.move_cursor_to_end();
+
+                assert_eq!(composer.current_text(), "/code-review --a");
+                assert!(!composer.popup_active());
+            },
+        );
+    }
+
+    #[test]
+    fn workflow_inline_preview_unique_option_narrow_snapshot() {
+        snapshot_composer_state_with_width(
+            "workflow_inline_preview_unique_option_narrow",
+            /*width*/ 44,
+            /*enhanced_keys_supported*/ false,
+            |composer| {
+                composer.set_workflows_enabled(true);
+                composer.set_workflow_mentions(Some(vec![
+                    test_workflow_summary_with_command_options(
+                        "reports/code-review",
+                        "Code Review",
+                        "code-review",
+                        vec![
+                            codex_workflows::WorkflowCommandOptionHint {
+                                display: "--assignee <string>".to_string(),
+                                description: Some("Assign a reviewer".to_string()),
+                            },
+                            codex_workflows::WorkflowCommandOptionHint {
+                                display: "--format <summary|full>".to_string(),
+                                description: Some("Output format".to_string()),
+                            },
+                            codex_workflows::WorkflowCommandOptionHint {
+                                display: "--include-comments".to_string(),
+                                description: Some("Include comment bodies".to_string()),
+                            },
+                        ],
+                    ),
+                ]));
+                composer.set_text_content("/code-review --a".to_string(), Vec::new(), Vec::new());
+                composer.move_cursor_to_end();
+
+                assert_eq!(composer.current_text(), "/code-review --a");
+                assert!(!composer.popup_active());
+            },
+        );
+    }
+
+    #[test]
+    fn workflow_inline_preview_dynamic_snapshot() {
+        snapshot_composer_state_with_width(
+            "workflow_inline_preview_dynamic",
+            /*width*/ 76,
+            /*enhanced_keys_supported*/ false,
+            |composer| {
+                composer.set_workflows_enabled(true);
+                composer.set_workflow_mentions(Some(vec![
+                    test_workflow_summary_with_command_options(
+                        "reports/code-review",
+                        "Code Review",
+                        "code-review",
+                        Vec::new(),
+                    ),
+                ]));
+                composer.set_text_content(
+                    "/code-review --reportId 1034".to_string(),
+                    Vec::new(),
+                    Vec::new(),
+                );
+                composer.move_cursor_to_end();
+                composer.on_workflow_command_completion_result(
+                    "code-review".to_string(),
+                    codex_workflows::WorkflowCommandInput {
+                        argv: vec!["--reportId".to_string(), "1034".to_string()],
+                        text: "--reportId 1034".to_string(),
+                    },
+                    vec![codex_workflows::WorkflowCommandCompletionSuggestion {
+                        display: "--reportId 1034 --format summary".to_string(),
+                        insert_text: "--reportId 1034 --format summary".to_string(),
+                        description: Some("Focused summary output".to_string()),
+                    }],
+                );
+
+                assert_eq!(composer.current_text(), "/code-review --reportId 1034");
+                assert!(!composer.popup_active());
+            },
+        );
+    }
+
+    #[test]
+    fn workflow_inline_preview_dynamic_narrow_snapshot() {
+        snapshot_composer_state_with_width(
+            "workflow_inline_preview_dynamic_narrow",
+            /*width*/ 48,
+            /*enhanced_keys_supported*/ false,
+            |composer| {
+                composer.set_workflows_enabled(true);
+                composer.set_workflow_mentions(Some(vec![
+                    test_workflow_summary_with_command_options(
+                        "reports/code-review",
+                        "Code Review",
+                        "code-review",
+                        Vec::new(),
+                    ),
+                ]));
+                composer.set_text_content(
+                    "/code-review --reportId 1034".to_string(),
+                    Vec::new(),
+                    Vec::new(),
+                );
+                composer.move_cursor_to_end();
+                composer.on_workflow_command_completion_result(
+                    "code-review".to_string(),
+                    codex_workflows::WorkflowCommandInput {
+                        argv: vec!["--reportId".to_string(), "1034".to_string()],
+                        text: "--reportId 1034".to_string(),
+                    },
+                    vec![codex_workflows::WorkflowCommandCompletionSuggestion {
+                        display: "--reportId 1034 --format summary".to_string(),
+                        insert_text: "--reportId 1034 --format summary".to_string(),
+                        description: Some("Focused summary output that wraps cleanly".to_string()),
+                    }],
+                );
+
+                assert_eq!(composer.current_text(), "/code-review --reportId 1034");
+                assert!(!composer.popup_active());
+            },
+        );
+    }
+
+    #[test]
+    fn workflow_inline_preview_accepts_tab_and_clears_preview() {
+        snapshot_composer_state_with_width(
+            "workflow_inline_preview_accepts_tab",
+            /*width*/ 76,
+            /*enhanced_keys_supported*/ false,
+            |composer| {
+                composer.set_workflows_enabled(true);
+                composer.set_workflow_mentions(Some(vec![
+                    test_workflow_summary_with_command_options(
+                        "reports/code-review",
+                        "Code Review",
+                        "code-review",
+                        Vec::new(),
+                    ),
+                ]));
+                composer.set_text_content(
+                    "/code-review --reportId 1034".to_string(),
+                    Vec::new(),
+                    Vec::new(),
+                );
+                composer.move_cursor_to_end();
+                composer.on_workflow_command_completion_result(
+                    "code-review".to_string(),
+                    codex_workflows::WorkflowCommandInput {
+                        argv: vec!["--reportId".to_string(), "1034".to_string()],
+                        text: "--reportId 1034".to_string(),
+                    },
+                    vec![codex_workflows::WorkflowCommandCompletionSuggestion {
+                        display: "--reportId 1034 --format summary".to_string(),
+                        insert_text: "--reportId 1034 --format summary".to_string(),
+                        description: Some("Focused summary output".to_string()),
+                    }],
+                );
+
+                assert_eq!(composer.current_text(), "/code-review --reportId 1034");
+                assert!(!composer.popup_active());
+
+                let result =
+                    composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+                assert_eq!(result.0, InputResult::None);
+                assert_eq!(
+                    composer.current_text(),
+                    "/code-review --reportId 1034 --format summary "
+                );
+                assert!(!composer.popup_active());
             },
         );
     }

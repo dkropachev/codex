@@ -17,7 +17,10 @@ and `codex-rs/tui/src/bottom_pane/paste_burst.rs`.
 - The alias appears in the slash popup as `/<cmd>` when workflows are enabled.
 - When the alias is an exact match, the popup can append dimmed option hints from
   `workflow.yaml` (`usage.options`, then `api.inputSchema`) and live suggestions from an optional
-  workflow `complete(ctx, input)` hook.
+  workflow `complete(ctx, input)` hook. It filters those hints and suggestions by the typed
+  argument prefix, and when exactly one completion remains the composer shows the untyped suffix
+  inline in dimmed text instead of keeping the popup open.
+- Press `Tab` to accept the inline preview before submitting.
 - The same alias is accepted by the shared workflow parser used by `codex workflow`, `codex <cmd>`, and `/<cmd>`.
 - Built-in slash commands still win on name collisions.
 - If `command` is omitted, workflows with simple ids that do not contain `/` fall back to an alias from the last id segment.

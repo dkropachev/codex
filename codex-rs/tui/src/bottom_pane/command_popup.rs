@@ -40,6 +40,7 @@ pub(crate) enum CommandItem {
 
 pub(crate) struct CommandPopup {
     command_filter: String,
+    workflow_argument_filter: String,
     builtins: Vec<(&'static str, SlashCommand)>,
     workflows: Vec<WorkflowCommandInfo>,
     state: ScrollState,
@@ -89,6 +90,7 @@ impl CommandPopup {
                 .collect();
         Self {
             command_filter: String::new(),
+            workflow_argument_filter: String::new(),
             builtins,
             workflows: Vec::new(),
             state: ScrollState::new(),
@@ -129,18 +131,22 @@ impl CommandPopup {
         if let Some(stripped) = first_line.strip_prefix('/') {
             // Extract the *first* token (sequence of non-whitespace
             // characters) after the slash so that `/clear something` still
-            // shows the help for `/clear`.
+            // shows the help for `/clear`, while the remainder narrows the
+            // workflow option/suggestion surface.
             let token = stripped.trim_start();
             let cmd_token = token.split_whitespace().next().unwrap_or("");
+            let workflow_argument_filter = token.strip_prefix(cmd_token).unwrap_or("").trim_start();
 
-            // Update the filter keeping the original case (commands are all
+            // Update the filters keeping the original case (commands are all
             // lower-case for now but this may change in the future).
             self.command_filter = cmd_token.to_string();
+            self.workflow_argument_filter = workflow_argument_filter.to_string();
         } else {
             // The composer no longer starts with '/'. Reset the filter so the
             // popup shows the *full* command list if it is still displayed
             // for some reason.
             self.command_filter.clear();
+            self.workflow_argument_filter.clear();
         }
 
         self.sync_selection();
@@ -251,19 +257,24 @@ impl CommandPopup {
                         .command
                         .as_deref()
                         .is_some_and(|command| command.eq_ignore_ascii_case(filter));
+                    let workflow_filter = self.workflow_argument_filter.trim();
                     exact.push((item, indices));
                     if show_option_hints {
                         for option in &workflow.option_hints {
-                            exact.push((CommandItem::WorkflowOption(option.clone()), None));
+                            if option.display.starts_with(workflow_filter) {
+                                exact.push((CommandItem::WorkflowOption(option.clone()), None));
+                            }
                         }
                         for suggestion in &workflow.dynamic_suggestions {
-                            exact.push((
-                                CommandItem::WorkflowSuggestion {
-                                    command: filter.to_string(),
-                                    suggestion: suggestion.clone(),
-                                },
-                                None,
-                            ));
+                            if suggestion.insert_text.starts_with(workflow_filter) {
+                                exact.push((
+                                    CommandItem::WorkflowSuggestion {
+                                        command: filter.to_string(),
+                                        suggestion: suggestion.clone(),
+                                    },
+                                    None,
+                                ));
+                            }
                         }
                     }
                 }
@@ -458,6 +469,37 @@ mod tests {
                 .unwrap_or_else(|| workflow.workflow.id.clone()),
             CommandItem::WorkflowOption(option) => option.display.clone(),
             CommandItem::WorkflowSuggestion { suggestion, .. } => suggestion.display.clone(),
+        }
+    }
+
+    fn workflow_summary_with_command_options(
+        id: &str,
+        title: &str,
+        command: &str,
+        option_hints: Vec<codex_workflows::WorkflowCommandOptionHint>,
+    ) -> WorkflowSummary {
+        let root = PathBuf::from("/tmp/workflows");
+        let path = root.join(id);
+        let workflow_yaml_path = path.join("workflow.yaml");
+
+        WorkflowSummary {
+            id: id.to_string(),
+            command: Some(command.to_string()),
+            title: Some(title.to_string()),
+            user_description: Some("Review an existing submission.".to_string()),
+            search_terms: vec!["review".to_string()],
+            command_option_hints: option_hints,
+            root_label: "global".to_string(),
+            root_kind: codex_workflows::WorkflowRootKind::Global,
+            root_path: root.clone(),
+            path,
+            workflow_yaml_path,
+            mention_target: codex_workflows::mention_target(&root, id).unwrap(),
+            validation: codex_workflows::WorkflowValidation {
+                status: codex_workflows::WorkflowValidationStatus::Valid,
+                messages: Vec::new(),
+            },
+            repair_mode: "threshold:3".to_string(),
         }
     }
 
@@ -669,6 +711,188 @@ api:
         insta::assert_snapshot!(
             "workflow_exact_command_options",
             render_popup(&popup, /*width*/ 88)
+        );
+    }
+
+    #[test]
+    fn exact_workflow_command_filters_dimmed_option_hints_by_prefix() {
+        let workflow = workflow_summary_with_command_options(
+            "code-review",
+            "Code Review",
+            "code-review",
+            vec![
+                codex_workflows::WorkflowCommandOptionHint {
+                    display: "--all-comments".to_string(),
+                    description: Some("Include all comment bodies".to_string()),
+                },
+                codex_workflows::WorkflowCommandOptionHint {
+                    display: "--archive".to_string(),
+                    description: Some("Archive the reviewed branch".to_string()),
+                },
+                codex_workflows::WorkflowCommandOptionHint {
+                    display: "--assignee <string>".to_string(),
+                    description: Some("Assign a reviewer".to_string()),
+                },
+                codex_workflows::WorkflowCommandOptionHint {
+                    display: "--format <summary|full>".to_string(),
+                    description: Some("Output format".to_string()),
+                },
+            ],
+        );
+
+        let mut popup = CommandPopup::new(CommandPopupFlags {
+            workflows_enabled: true,
+            ..CommandPopupFlags::default()
+        });
+        popup.set_workflows(Some(std::slice::from_ref(&workflow)));
+        popup.on_composer_text_change("/code-review --a".to_string());
+
+        let filtered = popup.filtered_items();
+        assert!(filtered.iter().any(|item| {
+            matches!(
+                item,
+                CommandItem::WorkflowOption(option)
+                    if option.display == "--all-comments"
+            )
+        }));
+        assert!(filtered.iter().any(|item| {
+            matches!(
+                item,
+                CommandItem::WorkflowOption(option) if option.display == "--archive"
+            )
+        }));
+        assert!(filtered.iter().any(|item| {
+            matches!(
+                item,
+                CommandItem::WorkflowOption(option)
+                    if option.display == "--assignee <string>"
+            )
+        }));
+        assert!(!filtered.iter().any(|item| {
+            matches!(
+                item,
+                CommandItem::WorkflowOption(option)
+                    if option.display == "--format <summary|full>"
+            )
+        }));
+        assert_eq!(
+            popup.selected_item(),
+            Some(CommandItem::Workflow(Box::new(
+                super::load_workflow_command_info(&workflow)
+            )))
+        );
+
+        insta::assert_snapshot!(
+            "workflow_exact_command_a_prefix_options",
+            render_popup(&popup, /*width*/ 88)
+        );
+    }
+
+    #[test]
+    fn exact_workflow_command_renders_dynamic_suggestions() {
+        let workflow = workflow_summary_with_command_options(
+            "code-review",
+            "Code Review",
+            "code-review",
+            vec![codex_workflows::WorkflowCommandOptionHint {
+                display: "--review-id <string>".to_string(),
+                description: Some("required · Review identifier".to_string()),
+            }],
+        );
+
+        let mut popup = CommandPopup::new(CommandPopupFlags {
+            workflows_enabled: true,
+            ..CommandPopupFlags::default()
+        });
+        popup.set_workflows(Some(std::slice::from_ref(&workflow)));
+        popup.set_workflow_suggestions(
+            "code-review",
+            vec![
+                WorkflowCommandCompletionSuggestion {
+                    display: "--reportId 1034 --format summary".to_string(),
+                    insert_text: "--reportId 1034 --format summary".to_string(),
+                    description: Some("Focused summary output".to_string()),
+                },
+                WorkflowCommandCompletionSuggestion {
+                    display: "--reportId 1035 --format full".to_string(),
+                    insert_text: "--reportId 1035 --format full".to_string(),
+                    description: Some("Expanded report output".to_string()),
+                },
+            ],
+        );
+        popup.on_composer_text_change("/code-review --reportId ".to_string());
+
+        let filtered = popup.filtered_items();
+        assert!(filtered.iter().any(|item| {
+            matches!(
+                item,
+                CommandItem::WorkflowSuggestion { suggestion, .. }
+                    if suggestion.insert_text == "--reportId 1034 --format summary"
+            )
+        }));
+        assert!(filtered.iter().any(|item| {
+            matches!(
+                item,
+                CommandItem::WorkflowSuggestion { suggestion, .. }
+                    if suggestion.insert_text == "--reportId 1035 --format full"
+            )
+        }));
+
+        popup.move_down();
+        assert!(matches!(
+            popup.selected_item(),
+            Some(CommandItem::WorkflowSuggestion { .. })
+        ));
+
+        insta::assert_snapshot!(
+            "workflow_exact_command_dynamic_suggestions",
+            render_popup(&popup, /*width*/ 88)
+        );
+    }
+
+    #[test]
+    fn exact_workflow_command_renders_dynamic_suggestions_narrow_width() {
+        let workflow = workflow_summary_with_command_options(
+            "code-review",
+            "Code Review",
+            "code-review",
+            vec![codex_workflows::WorkflowCommandOptionHint {
+                display: "--review-id <string>".to_string(),
+                description: Some("required · Review identifier".to_string()),
+            }],
+        );
+
+        let mut popup = CommandPopup::new(CommandPopupFlags {
+            workflows_enabled: true,
+            ..CommandPopupFlags::default()
+        });
+        popup.set_workflows(Some(std::slice::from_ref(&workflow)));
+        popup.set_workflow_suggestions(
+            "code-review",
+            vec![
+                WorkflowCommandCompletionSuggestion {
+                    display: "--reportId 1034 --format summary".to_string(),
+                    insert_text: "--reportId 1034 --format summary".to_string(),
+                    description: Some(
+                        "Focused summary output that wraps across multiple terminal columns"
+                            .to_string(),
+                    ),
+                },
+                WorkflowCommandCompletionSuggestion {
+                    display: "--reportId 1035 --format full".to_string(),
+                    insert_text: "--reportId 1035 --format full".to_string(),
+                    description: Some(
+                        "Expanded report output with a longer explanatory description".to_string(),
+                    ),
+                },
+            ],
+        );
+        popup.on_composer_text_change("/code-review --reportId ".to_string());
+        popup.move_down();
+
+        insta::assert_snapshot!(
+            "workflow_exact_command_dynamic_suggestions_narrow_width",
+            render_popup(&popup, /*width*/ 54)
         );
     }
 

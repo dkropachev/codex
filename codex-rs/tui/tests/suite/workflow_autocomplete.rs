@@ -147,6 +147,106 @@ async fn slash_workflow_exact_command_shows_option_hints_and_runs_workflow_end_t
     .await
 }
 
+#[tokio::test]
+async fn slash_workflow_autocomplete_shows_static_option_popup_for_argument_prefix() -> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex = ensure_codex_binary(&repo_root)?;
+    let codex_home = tempdir()?;
+    let workspace = tempdir()?;
+    write_trusted_workspace_config(codex_home.path(), workspace.path())?;
+    write_review_workflow(&codex_home.path().join("workflows/code-review"))?;
+
+    run_workflow_autocomplete_session(
+        &repo_root,
+        &codex,
+        codex_home.path(),
+        workspace.path(),
+        WorkflowAutocompleteScenario {
+            typed_prefix: "/code-review --a",
+            popup_snippets: &["--all-comments", "--archive", "--assignee <string>"],
+            run_snippets: &[],
+            workflow_status_prefix: "Workflow code-review:",
+            popup_keys: &[],
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn slash_workflow_autocomplete_completes_dynamic_argument_prefix_and_runs_workflow_end_to_end()
+-> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex = ensure_codex_binary(&repo_root)?;
+    let codex_home = tempdir()?;
+    let workspace = tempdir()?;
+    write_trusted_workspace_config(codex_home.path(), workspace.path())?;
+    write_review_workflow(&codex_home.path().join("workflows/code-review"))?;
+
+    run_workflow_autocomplete_session(
+        &repo_root,
+        &codex,
+        codex_home.path(),
+        workspace.path(),
+        WorkflowAutocompleteScenario {
+            typed_prefix: "/code-review --reportId ",
+            popup_snippets: &["--reportId 1034", "--reportId 1035"],
+            run_snippets: &["Input argv: --reportId 1034", "Workflow Result"],
+            workflow_status_prefix: "Workflow code-review:",
+            popup_keys: &[
+                WorkflowAutocompletePopupKey::Down,
+                WorkflowAutocompletePopupKey::Enter,
+                WorkflowAutocompletePopupKey::Enter,
+            ],
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn slash_workflow_autocomplete_commits_unique_dynamic_preview_and_runs_workflow_end_to_end()
+-> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex = ensure_codex_binary(&repo_root)?;
+    let codex_home = tempdir()?;
+    let workspace = tempdir()?;
+    write_trusted_workspace_config(codex_home.path(), workspace.path())?;
+    write_review_workflow(&codex_home.path().join("workflows/code-review"))?;
+
+    run_workflow_autocomplete_session(
+        &repo_root,
+        &codex,
+        codex_home.path(),
+        workspace.path(),
+        WorkflowAutocompleteScenario {
+            typed_prefix: "/code-review --reportId 1034",
+            popup_snippets: &["--format summary"],
+            run_snippets: &[
+                "Input text: --reportId 1034 --format summary",
+                "Input argv: --reportId 1034 --format summary",
+                "Workflow Result",
+            ],
+            workflow_status_prefix: "Workflow code-review:",
+            popup_keys: &[
+                WorkflowAutocompletePopupKey::Tab,
+                WorkflowAutocompletePopupKey::Enter,
+            ],
+        },
+    )
+    .await
+}
+
 async fn run_workflow_autocomplete_session(
     repo_root: &Path,
     codex: &Path,
@@ -211,6 +311,7 @@ async fn run_workflow_autocomplete_session(
     let mut sent_interrupts = false;
     let mut saw_popup = vec![false; scenario.popup_snippets.len()];
     let mut saw_run = vec![false; scenario.run_snippets.len()];
+    let should_run = !scenario.run_snippets.is_empty();
 
     let exit_code_result = timeout(Duration::from_secs(30), async {
         loop {
@@ -264,13 +365,28 @@ async fn run_workflow_autocomplete_session(
                             *seen |= output_text.contains(snippet) || screen.contains(snippet);
                         }
 
-                        if saw_run.iter().all(|seen| *seen)
-                            && !screen.contains(scenario.workflow_status_prefix)
+                        if should_run {
+                            if saw_run.iter().all(|seen| *seen)
+                                && !screen.contains(scenario.workflow_status_prefix)
+                                && !sent_interrupts
+                            {
+                                sent_interrupts = true;
+                                let interrupt_writer = writer_tx.clone();
+                                tokio::spawn(async move {
+                                    for _ in 0..4 {
+                                        let _ = interrupt_writer.send(vec![3]).await;
+                                        sleep(Duration::from_millis(150)).await;
+                                    }
+                                });
+                            }
+                        } else if scheduled_completion
+                            && saw_popup.iter().all(|seen| *seen)
                             && !sent_interrupts
                         {
                             sent_interrupts = true;
                             let interrupt_writer = writer_tx.clone();
                             tokio::spawn(async move {
+                                sleep(Duration::from_millis(500)).await;
                                 for _ in 0..4 {
                                     let _ = interrupt_writer.send(vec![3]).await;
                                     sleep(Duration::from_millis(150)).await;
@@ -373,6 +489,31 @@ fn write_review_workflow(workflow_dir: &Path) -> Result<()> {
         "Code Review",
         r##"const workflow = {
   async complete(_ctx, request) {
+    if (request.text === "--reportId 1034") {
+      return [
+        {
+          display: "--reportId 1034 --format summary",
+          insertText: "--reportId 1034 --format summary",
+          description: "Focused summary output",
+        },
+      ];
+    }
+
+    if (request.text === "--reportId") {
+      return [
+        {
+          display: "--reportId 1034",
+          insertText: "--reportId 1034",
+          description: "Primary report",
+        },
+        {
+          display: "--reportId 1035",
+          insertText: "--reportId 1035",
+          description: "Fallback report",
+        },
+      ];
+    }
+
     if (Array.isArray(request.argv) && request.argv.length === 0) {
       return [
         {
@@ -385,10 +526,14 @@ fn write_review_workflow(workflow_dir: &Path) -> Result<()> {
     return [];
   },
 
-  async run(ctx) {
+  async run(ctx, input) {
     ctx.status({ workflowName: "code-review", workflowStatus: "reviewing" });
     await new Promise((resolve) => setTimeout(resolve, 250));
-    ctx.reportToUserMarkdown(`# Workflow Result\n\nCode review complete.\n`);
+    const argv = Array.isArray(input?.argv) ? input.argv.join(" ") : "";
+    const text = typeof input?.text === "string" ? input.text : "";
+    ctx.reportToUserMarkdown(
+      `# Workflow Result\n\nInput text: ${text}\nInput argv: ${argv}\n\nCode review complete.\n`,
+    );
     await new Promise((resolve) => setTimeout(resolve, 250));
     return { workflowStatus: "done" };
   },
@@ -405,6 +550,18 @@ export default workflow;
       reviewId:
         type: string
         description: Review identifier
+      assignee:
+        type: string
+        description: Reviewer assignment
+      archive:
+        type: boolean
+        description: Archive the reviewed branch
+      allComments:
+        type: boolean
+        description: Include all comment bodies
+      reportId:
+        type: string
+        description: Report identifier
       format:
         type: string
         enum:
