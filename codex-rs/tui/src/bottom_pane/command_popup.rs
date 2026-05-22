@@ -10,9 +10,12 @@ use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height_with_col_width_mode;
 use super::selection_popup_common::render_rows_with_col_width_mode;
 use super::slash_commands;
+use super::workflow_command_options::WorkflowCommandInfo;
+use super::workflow_command_options::load_workflow_command_info;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
+use codex_workflows::WorkflowCommandCompletionSuggestion;
 use codex_workflows::WorkflowSummary;
 
 // Hide alias commands in the default popup list so each unique action appears once.
@@ -27,13 +30,18 @@ const COMMAND_COLUMN_WIDTH: ColumnWidthConfig = ColumnWidthConfig::new(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CommandItem {
     Builtin(SlashCommand),
-    Workflow(Box<WorkflowSummary>),
+    Workflow(Box<WorkflowCommandInfo>),
+    WorkflowOption(codex_workflows::WorkflowCommandOptionHint),
+    WorkflowSuggestion {
+        command: String,
+        suggestion: WorkflowCommandCompletionSuggestion,
+    },
 }
 
 pub(crate) struct CommandPopup {
     command_filter: String,
     builtins: Vec<(&'static str, SlashCommand)>,
-    workflows: Vec<WorkflowSummary>,
+    workflows: Vec<WorkflowCommandInfo>,
     state: ScrollState,
 }
 
@@ -88,8 +96,26 @@ impl CommandPopup {
     }
 
     pub(crate) fn set_workflows(&mut self, workflows: Option<&[WorkflowSummary]>) {
-        self.workflows =
-            workflows.map_or_else(Vec::new, <[codex_workflows::WorkflowSummary]>::to_vec);
+        self.workflows = workflows.map_or_else(Vec::new, |workflows| {
+            workflows.iter().map(load_workflow_command_info).collect()
+        });
+        self.sync_selection();
+    }
+
+    pub(crate) fn set_workflow_suggestions(
+        &mut self,
+        command: &str,
+        suggestions: Vec<WorkflowCommandCompletionSuggestion>,
+    ) {
+        if let Some(workflow) = self.workflows.iter_mut().find(|workflow| {
+            workflow
+                .workflow
+                .command
+                .as_deref()
+                .is_some_and(|workflow_command| workflow_command == command)
+        }) {
+            workflow.dynamic_suggestions = suggestions;
+        }
         self.sync_selection();
     }
 
@@ -122,8 +148,17 @@ impl CommandPopup {
 
     fn sync_selection(&mut self) {
         // Reset or clamp selected index based on new filtered list.
-        let matches_len = self.filtered_items().len();
+        let matches = self.filtered_items();
+        let matches_len = matches.len();
         self.state.clamp_selection(matches_len);
+        if self
+            .state
+            .selected_idx
+            .and_then(|idx| matches.get(idx))
+            .is_some_and(Self::item_is_disabled)
+        {
+            self.state.selected_idx = Self::first_selectable_index(&matches);
+        }
         self.state
             .ensure_visible(matches_len, MAX_POPUP_ROWS.min(matches_len));
     }
@@ -142,9 +177,9 @@ impl CommandPopup {
         )
     }
 
-    /// Compute exact/prefix matches over built-in commands and user prompts,
-    /// paired with optional highlight indices. Preserves the original
-    /// presentation order for built-ins and prompts.
+    /// Compute exact/prefix matches over built-in commands and registered
+    /// workflows, paired with optional highlight indices. Preserves the
+    /// original presentation order for built-ins and workflows.
     fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>)> {
         let filter = self.command_filter.trim();
         let mut out: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
@@ -156,7 +191,7 @@ impl CommandPopup {
                 out.push((CommandItem::Builtin(*cmd), None));
             }
             for workflow in self.workflows.iter() {
-                if workflow.command.is_some() {
+                if workflow.workflow.command.is_some() {
                     out.push((CommandItem::Workflow(Box::new(workflow.clone())), None));
                 }
             }
@@ -195,15 +230,45 @@ impl CommandPopup {
         }
 
         for workflow in self.workflows.iter() {
-            let Some(command) = workflow.command.as_deref() else {
+            let Some(match_kind) = slash_commands::workflow_match_kind(&workflow.workflow, filter)
+            else {
                 continue;
             };
-            push_match(
-                CommandItem::Workflow(Box::new(workflow.clone())),
-                command,
-                None,
-                0,
-            );
+
+            let indices = workflow.workflow.command.as_deref().and_then(|command| {
+                let command_lower = command.to_lowercase();
+                if command_lower == filter_lower || command_lower.starts_with(&filter_lower) {
+                    Some((0..filter_chars).collect())
+                } else {
+                    None
+                }
+            });
+            let item = CommandItem::Workflow(Box::new(workflow.clone()));
+            match match_kind {
+                slash_commands::WorkflowMatchKind::Exact => {
+                    let show_option_hints = workflow
+                        .workflow
+                        .command
+                        .as_deref()
+                        .is_some_and(|command| command.eq_ignore_ascii_case(filter));
+                    exact.push((item, indices));
+                    if show_option_hints {
+                        for option in &workflow.option_hints {
+                            exact.push((CommandItem::WorkflowOption(option.clone()), None));
+                        }
+                        for suggestion in &workflow.dynamic_suggestions {
+                            exact.push((
+                                CommandItem::WorkflowSuggestion {
+                                    command: filter.to_string(),
+                                    suggestion: suggestion.clone(),
+                                },
+                                None,
+                            ));
+                        }
+                    }
+                }
+                slash_commands::WorkflowMatchKind::Prefix => prefix.push((item, indices)),
+            }
         }
 
         out.extend(exact);
@@ -222,30 +287,60 @@ impl CommandPopup {
         matches
             .into_iter()
             .map(|(item, indices)| {
-                let (name, description) = match item {
-                    CommandItem::Builtin(cmd) => {
-                        (format!("/{}", cmd.command()), cmd.description().to_string())
-                    }
+                let (name, description, name_prefix_spans, match_indices, is_disabled) = match &item
+                {
+                    CommandItem::Builtin(cmd) => (
+                        format!("/{}", cmd.command()),
+                        Some(cmd.description().to_string()),
+                        Vec::new(),
+                        indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
+                        false,
+                    ),
                     CommandItem::Workflow(workflow) => {
-                        let command = workflow.command.as_deref().unwrap_or(workflow.id.as_str());
+                        let command = workflow
+                            .workflow
+                            .command
+                            .as_deref()
+                            .unwrap_or(workflow.workflow.id.as_str());
                         let description = workflow
+                            .workflow
                             .title
                             .as_deref()
-                            .or(workflow.user_description.as_deref())
-                            .unwrap_or(workflow.id.as_str())
+                            .or(workflow.workflow.user_description.as_deref())
+                            .unwrap_or(workflow.workflow.id.as_str())
                             .to_string();
-                        (format!("/{command}"), description)
+                        (
+                            format!("/{command}"),
+                            Some(description),
+                            Vec::new(),
+                            indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
+                            false,
+                        )
                     }
+                    CommandItem::WorkflowOption(option) => (
+                        option.display.clone(),
+                        option.description.clone(),
+                        vec!["  ".into()],
+                        None,
+                        true,
+                    ),
+                    CommandItem::WorkflowSuggestion { suggestion, .. } => (
+                        suggestion.display.clone(),
+                        suggestion.description.clone(),
+                        vec!["  ".into()],
+                        None,
+                        false,
+                    ),
                 };
                 GenericDisplayRow {
                     name,
-                    name_prefix_spans: Vec::new(),
-                    match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
+                    name_prefix_spans,
+                    match_indices,
                     display_shortcut: None,
-                    description: Some(description),
+                    description,
                     category_tag: None,
                     wrap_indent: None,
-                    is_disabled: false,
+                    is_disabled,
                     disabled_reason: None,
                 }
             })
@@ -254,15 +349,19 @@ impl CommandPopup {
 
     /// Move the selection cursor one step up.
     pub(crate) fn move_up(&mut self) {
-        let len = self.filtered_items().len();
-        self.state.move_up_wrap(len);
+        let items = self.filtered_items();
+        let len = items.len();
+        self.state.selected_idx =
+            Self::next_selectable_index(&items, self.state.selected_idx, NavigationDirection::Up);
         self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
     }
 
     /// Move the selection cursor one step down.
     pub(crate) fn move_down(&mut self) {
-        let matches_len = self.filtered_items().len();
-        self.state.move_down_wrap(matches_len);
+        let items = self.filtered_items();
+        let matches_len = items.len();
+        self.state.selected_idx =
+            Self::next_selectable_index(&items, self.state.selected_idx, NavigationDirection::Down);
         self.state
             .ensure_visible(matches_len, MAX_POPUP_ROWS.min(matches_len));
     }
@@ -273,7 +372,46 @@ impl CommandPopup {
         self.state
             .selected_idx
             .and_then(|idx| matches.get(idx).cloned())
+            .filter(|item| !Self::item_is_disabled(item))
     }
+
+    fn item_is_disabled(item: &CommandItem) -> bool {
+        matches!(item, CommandItem::WorkflowOption(_))
+    }
+
+    fn first_selectable_index(items: &[CommandItem]) -> Option<usize> {
+        items.iter().position(|item| !Self::item_is_disabled(item))
+    }
+
+    fn next_selectable_index(
+        items: &[CommandItem],
+        current: Option<usize>,
+        direction: NavigationDirection,
+    ) -> Option<usize> {
+        let first_selectable = Self::first_selectable_index(items)?;
+        let len = items.len();
+        let start = current.unwrap_or(first_selectable);
+        let mut idx = start;
+
+        loop {
+            idx = match direction {
+                NavigationDirection::Up => idx.checked_sub(1).unwrap_or(len - 1),
+                NavigationDirection::Down => (idx + 1) % len,
+            };
+            if !Self::item_is_disabled(&items[idx]) {
+                return Some(idx);
+            }
+            if idx == start {
+                return Some(first_selectable);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum NavigationDirection {
+    Up,
+    Down,
 }
 
 impl WidgetRef for CommandPopup {
@@ -298,14 +436,25 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    fn render_popup(popup: &CommandPopup, width: u16) -> String {
+        let area = Rect::new(0, 0, width, popup.calculate_required_height(width));
+        let mut buf = Buffer::empty(area);
+        popup.render_ref(area, &mut buf);
+        format!("{buf:?}")
+    }
 
     fn command_name(item: &CommandItem) -> String {
         match item {
             CommandItem::Builtin(cmd) => cmd.command().to_string(),
             CommandItem::Workflow(workflow) => workflow
+                .workflow
                 .command
                 .clone()
-                .unwrap_or_else(|| workflow.id.clone()),
+                .unwrap_or_else(|| workflow.workflow.id.clone()),
+            CommandItem::WorkflowOption(option) => option.display.clone(),
+            CommandItem::WorkflowSuggestion { suggestion, .. } => suggestion.display.clone(),
         }
     }
 
@@ -339,6 +488,14 @@ mod tests {
             Some(CommandItem::Workflow(workflow)) => {
                 panic!("expected builtin /init to be selected, got workflow {workflow:?}")
             }
+            Some(CommandItem::WorkflowOption(option)) => {
+                panic!("expected builtin /init to be selected, got option hint {option:?}")
+            }
+            Some(CommandItem::WorkflowSuggestion { suggestion, .. }) => {
+                panic!(
+                    "expected builtin /init to be selected, got dynamic suggestion {suggestion:?}"
+                )
+            }
             None => panic!("expected a selected command for exact match"),
         }
     }
@@ -354,6 +511,7 @@ mod tests {
             title: Some("Jira Summary".to_string()),
             user_description: Some("Prepare a focused workflow report".to_string()),
             search_terms: vec!["report".to_string()],
+            command_option_hints: Vec::new(),
             root_label: "global".to_string(),
             root_kind: codex_workflows::WorkflowRootKind::Global,
             root_path: root.clone(),
@@ -370,11 +528,145 @@ mod tests {
         popup.on_composer_text_change("/jira-summary".to_string());
 
         match popup.selected_item() {
-            Some(CommandItem::Workflow(selected)) => assert_eq!(selected.as_ref(), &workflow),
+            Some(CommandItem::Workflow(selected)) => assert_eq!(&selected.workflow, &workflow),
             other => {
                 panic!("expected workflow alias to be selected for exact match, got {other:?}")
             }
         }
+    }
+
+    #[test]
+    fn selecting_workflow_by_title_prefix() {
+        let mut popup = CommandPopup::new(CommandPopupFlags {
+            workflows_enabled: true,
+            ..CommandPopupFlags::default()
+        });
+        let root = PathBuf::from("/tmp/workflows");
+        let path = root.join("reports").join("jira-summary");
+        let workflow = WorkflowSummary {
+            id: "reports/jira-summary".to_string(),
+            command: Some("summary".to_string()),
+            title: Some("Jira Summary".to_string()),
+            user_description: Some("Prepare a focused workflow report".to_string()),
+            search_terms: vec!["report".to_string()],
+            command_option_hints: Vec::new(),
+            root_label: "global".to_string(),
+            root_kind: codex_workflows::WorkflowRootKind::Global,
+            root_path: root.clone(),
+            path: path.clone(),
+            workflow_yaml_path: path.join("workflow.yaml"),
+            mention_target: codex_workflows::mention_target(&root, "reports/jira-summary").unwrap(),
+            validation: codex_workflows::WorkflowValidation {
+                status: codex_workflows::WorkflowValidationStatus::Valid,
+                messages: Vec::new(),
+            },
+            repair_mode: "threshold:3".to_string(),
+        };
+        popup.set_workflows(Some(std::slice::from_ref(&workflow)));
+        popup.on_composer_text_change("/jira".to_string());
+
+        match popup.selected_item() {
+            Some(CommandItem::Workflow(selected)) => assert_eq!(&selected.workflow, &workflow),
+            other => {
+                panic!("expected workflow to be selected for title prefix match, got {other:?}")
+            }
+        }
+
+        insta::assert_snapshot!("workflow_title_prefix", render_popup(&popup, /*width*/ 72));
+    }
+
+    #[test]
+    fn exact_workflow_command_shows_dimmed_option_hints() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("workflows");
+        let path = root.join("code-review");
+        std::fs::create_dir_all(&path).expect("workflow dir");
+        let workflow_yaml_path = path.join("workflow.yaml");
+        std::fs::write(
+            &workflow_yaml_path,
+            r#"id: code-review
+command: code-review
+title: Code Review
+userDescription: Review an existing submission.
+api:
+  inputSchema:
+    type: object
+    required:
+      - reviewId
+    properties:
+      reviewId:
+        type: string
+        description: Review identifier
+      format:
+        type: string
+        enum:
+          - summary
+          - full
+        description: Output format
+      includeComments:
+        type: boolean
+        description: Include comment bodies
+"#,
+        )
+        .expect("workflow spec");
+
+        let workflow = WorkflowSummary {
+            id: "code-review".to_string(),
+            command: Some("code-review".to_string()),
+            title: Some("Code Review".to_string()),
+            user_description: Some("Review an existing submission.".to_string()),
+            search_terms: vec!["review".to_string()],
+            command_option_hints: vec![
+                codex_workflows::WorkflowCommandOptionHint {
+                    display: "--review-id <string>".to_string(),
+                    description: Some("required · Review identifier".to_string()),
+                },
+                codex_workflows::WorkflowCommandOptionHint {
+                    display: "--format <summary|full>".to_string(),
+                    description: Some("Output format".to_string()),
+                },
+                codex_workflows::WorkflowCommandOptionHint {
+                    display: "--include-comments".to_string(),
+                    description: Some("Include comment bodies".to_string()),
+                },
+            ],
+            root_label: "global".to_string(),
+            root_kind: codex_workflows::WorkflowRootKind::Global,
+            root_path: root.clone(),
+            path,
+            workflow_yaml_path,
+            mention_target: codex_workflows::mention_target(&root, "code-review").unwrap(),
+            validation: codex_workflows::WorkflowValidation {
+                status: codex_workflows::WorkflowValidationStatus::Valid,
+                messages: Vec::new(),
+            },
+            repair_mode: "threshold:3".to_string(),
+        };
+
+        let mut popup = CommandPopup::new(CommandPopupFlags {
+            workflows_enabled: true,
+            ..CommandPopupFlags::default()
+        });
+        popup.set_workflows(Some(std::slice::from_ref(&workflow)));
+        popup.on_composer_text_change("/code-review".to_string());
+
+        assert!(popup.filtered_items().iter().any(|item| {
+            matches!(
+                item,
+                CommandItem::WorkflowOption(option)
+                    if option.display == "--review-id <string>"
+            )
+        }));
+        assert_eq!(
+            popup.selected_item(),
+            Some(CommandItem::Workflow(Box::new(
+                super::load_workflow_command_info(&workflow)
+            )))
+        );
+        insta::assert_snapshot!(
+            "workflow_exact_command_options",
+            render_popup(&popup, /*width*/ 88)
+        );
     }
 
     #[test]
@@ -386,6 +678,12 @@ mod tests {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "model"),
             Some(CommandItem::Workflow(workflow)) => {
                 panic!("expected builtin /model to be first, got workflow {workflow:?}")
+            }
+            Some(CommandItem::WorkflowOption(option)) => {
+                panic!("expected builtin /model to be first, got option hint {option:?}")
+            }
+            Some(CommandItem::WorkflowSuggestion { suggestion, .. }) => {
+                panic!("expected builtin /model to be first, got dynamic suggestion {suggestion:?}")
             }
             None => panic!("expected at least one match for '/mo'"),
         }

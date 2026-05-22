@@ -10367,6 +10367,16 @@ impl ChatWidget {
         self.bottom_pane.on_file_search_result(query, matches);
     }
 
+    pub(crate) fn apply_workflow_command_completion_result(
+        &mut self,
+        command: String,
+        input: codex_workflows::WorkflowCommandInput,
+        suggestions: Vec<codex_workflows::WorkflowCommandCompletionSuggestion>,
+    ) {
+        self.bottom_pane
+            .on_workflow_command_completion_result(command, input, suggestions);
+    }
+
     /// Handles a Ctrl+C press at the chat-widget layer.
     ///
     /// The first press arms a time-bounded quit shortcut and shows a footer hint via the bottom

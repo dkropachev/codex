@@ -8,6 +8,7 @@ use codex_app_server_protocol::WorkflowAuthoringContextPrepareParams;
 use codex_app_server_protocol::WorkflowAuthoringContextPrepareResponse;
 use codex_app_server_protocol::WorkflowCommandExecuteParams;
 use codex_app_server_protocol::WorkflowCommandExecuteResponse;
+use codex_app_server_protocol::WorkflowCommandOptionHint;
 use codex_app_server_protocol::WorkflowCommandResponse;
 use codex_app_server_protocol::WorkflowConfigReadParams;
 use codex_app_server_protocol::WorkflowConfigReadResponse;
@@ -309,6 +310,14 @@ fn summary_to_api(summary: codex_workflows::WorkflowSummary) -> WorkflowSummary 
         title: summary.title,
         user_description: summary.user_description,
         search_terms: summary.search_terms,
+        command_option_hints: summary
+            .command_option_hints
+            .into_iter()
+            .map(|hint| WorkflowCommandOptionHint {
+                display: hint.display,
+                description: hint.description,
+            })
+            .collect(),
         root_label: summary.root_label,
         root_kind: root_kind_to_api(summary.root_kind),
         root_path: summary.root_path,
@@ -327,6 +336,14 @@ fn workflow_to_core(summary: &WorkflowSummary) -> codex_workflows::WorkflowSumma
         title: summary.title.clone(),
         user_description: summary.user_description.clone(),
         search_terms: summary.search_terms.clone(),
+        command_option_hints: summary
+            .command_option_hints
+            .iter()
+            .map(|hint| codex_workflows::WorkflowCommandOptionHint {
+                display: hint.display.clone(),
+                description: hint.description.clone(),
+            })
+            .collect(),
         root_label: summary.root_label.clone(),
         root_kind: root_kind_from_api(summary.root_kind),
         root_path: summary.root_path.clone(),

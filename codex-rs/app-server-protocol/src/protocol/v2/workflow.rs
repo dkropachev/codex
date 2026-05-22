@@ -40,6 +40,14 @@ pub struct WorkflowRootInfo {
     pub path: PathBuf,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowCommandOptionHint {
+    pub display: String,
+    pub description: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -49,6 +57,7 @@ pub struct WorkflowSummary {
     pub title: Option<String>,
     pub user_description: Option<String>,
     pub search_terms: Vec<String>,
+    pub command_option_hints: Vec<WorkflowCommandOptionHint>,
     pub root_label: String,
     pub root_kind: WorkflowRootKind,
     pub root_path: PathBuf,

@@ -97,6 +97,7 @@ pub(crate) mod prompt_args;
 mod skill_popup;
 mod skills_toggle_view;
 pub(crate) mod slash_commands;
+mod workflow_command_options;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use footer::GoalStatusIndicator;
 #[cfg(test)]
@@ -1485,6 +1486,17 @@ impl BottomPane {
 
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.composer.on_file_search_result(query, matches);
+        self.request_redraw();
+    }
+
+    pub(crate) fn on_workflow_command_completion_result(
+        &mut self,
+        command: String,
+        input: codex_workflows::WorkflowCommandInput,
+        suggestions: Vec<codex_workflows::WorkflowCommandCompletionSuggestion>,
+    ) {
+        self.composer
+            .on_workflow_command_completion_result(command, input, suggestions);
         self.request_redraw();
     }
 

@@ -1,0 +1,15 @@
+---
+source: tui/src/bottom_pane/command_popup.rs
+expression: "render_popup(&popup, 72)"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 72, height: 1 },
+    content: [
+        "  /summary  Jira Summary                                                ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 24, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

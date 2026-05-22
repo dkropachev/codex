@@ -1,6 +1,23 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "WorkflowCommandOptionHint": {
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "display": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "display"
+      ],
+      "type": "object"
+    },
     "WorkflowRootInfo": {
       "properties": {
         "kind": {
@@ -35,6 +52,12 @@
             "string",
             "null"
           ]
+        },
+        "commandOptionHints": {
+          "items": {
+            "$ref": "#/definitions/WorkflowCommandOptionHint"
+          },
+          "type": "array"
         },
         "id": {
           "type": "string"
@@ -83,6 +106,7 @@
         }
       },
       "required": [
+        "commandOptionHints",
         "id",
         "mentionTarget",
         "path",

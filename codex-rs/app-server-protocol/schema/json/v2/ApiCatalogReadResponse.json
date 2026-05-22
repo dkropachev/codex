@@ -283,6 +283,23 @@
       ],
       "type": "object"
     },
+    "WorkflowCommandOptionHint": {
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "display": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "display"
+      ],
+      "type": "object"
+    },
     "WorkflowRootKind": {
       "enum": [
         "global",
@@ -298,6 +315,12 @@
             "string",
             "null"
           ]
+        },
+        "commandOptionHints": {
+          "items": {
+            "$ref": "#/definitions/WorkflowCommandOptionHint"
+          },
+          "type": "array"
         },
         "id": {
           "type": "string"
@@ -346,6 +369,7 @@
         }
       },
       "required": [
+        "commandOptionHints",
         "id",
         "mentionTarget",
         "path",

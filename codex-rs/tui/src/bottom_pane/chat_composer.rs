@@ -61,6 +61,9 @@
 //! pasted content and text elements are preserved when extracting args.
 //! Workflow aliases use the same shared parser as the CLI and `/workflow` command engine, so the
 //! popup selection path and the CLI path stay aligned when a workflow advertises `command`.
+//! When the typed alias is exact, the popup can append dimmed option hints cached from
+//! `workflow.yaml` plus live workflow-provided suggestions from an optional `complete(ctx, input)`
+//! hook.
 //!
 //! # Large Paste Placeholders
 //!
@@ -214,7 +217,8 @@ use codex_protocol::models::local_image_label_text;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::TextElement;
-use codex_utils_fuzzy_match::fuzzy_match;
+use codex_workflows::WorkflowCommandCompletionSuggestion;
+use codex_workflows::WorkflowCommandInput;
 use codex_workflows::WorkflowSummary;
 
 mod history_search;
@@ -397,6 +401,9 @@ pub(crate) struct ChatComposer {
     skills: Option<Vec<SkillMetadata>>,
     plugins: Option<Vec<PluginCapabilitySummary>>,
     workflows: Option<Vec<WorkflowSummary>>,
+    workflow_command_completion_cache:
+        HashMap<WorkflowCommandCompletionCacheKey, Vec<WorkflowCommandCompletionSuggestion>>,
+    pending_workflow_command_completion_requests: HashSet<WorkflowCommandCompletionCacheKey>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
     dismissed_mention_popup_token: Option<String>,
     mention_bindings: HashMap<u64, ComposerMentionBinding>,
@@ -462,6 +469,12 @@ struct ComposerDraft {
 struct ComposerMentionBinding {
     mention: String,
     path: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct WorkflowCommandCompletionCacheKey {
+    command: String,
+    text: String,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -581,6 +594,8 @@ impl ChatComposer {
             skills: None,
             plugins: None,
             workflows: None,
+            workflow_command_completion_cache: HashMap::new(),
+            pending_workflow_command_completion_requests: HashSet::new(),
             connectors_snapshot: None,
             dismissed_mention_popup_token: None,
             mention_bindings: HashMap::new(),
@@ -666,6 +681,25 @@ impl ChatComposer {
 
     pub fn set_workflow_mentions(&mut self, workflows: Option<Vec<WorkflowSummary>>) {
         self.workflows = workflows;
+        self.workflow_command_completion_cache.clear();
+        self.pending_workflow_command_completion_requests.clear();
+        self.sync_popups();
+    }
+
+    pub(crate) fn on_workflow_command_completion_result(
+        &mut self,
+        command: String,
+        input: WorkflowCommandInput,
+        suggestions: Vec<WorkflowCommandCompletionSuggestion>,
+    ) {
+        let cache_key = WorkflowCommandCompletionCacheKey {
+            command,
+            text: input.text,
+        };
+        self.pending_workflow_command_completion_requests
+            .remove(&cache_key);
+        self.workflow_command_completion_cache
+            .insert(cache_key, suggestions);
         self.sync_popups();
     }
 
@@ -1745,19 +1779,32 @@ impl ChatComposer {
         enum SelectedSlashPopupCommand {
             Builtin(SlashCommand),
             Workflow(String),
+            WorkflowSuggestion {
+                command: String,
+                insert_text: String,
+            },
         }
 
         let selected_command_for_popup = |popup: &CommandPopup| {
-            popup.selected_item().map(|sel| match sel {
-                CommandItem::Builtin(cmd) => SelectedSlashPopupCommand::Builtin(cmd),
+            popup.selected_item().and_then(|sel| match sel {
+                CommandItem::Builtin(cmd) => Some(SelectedSlashPopupCommand::Builtin(cmd)),
                 CommandItem::Workflow(workflow) => {
                     let command = workflow
+                        .workflow
                         .command
                         .as_deref()
-                        .unwrap_or(workflow.id.as_str())
+                        .unwrap_or(workflow.workflow.id.as_str())
                         .to_string();
-                    SelectedSlashPopupCommand::Workflow(command)
+                    Some(SelectedSlashPopupCommand::Workflow(command))
                 }
+                CommandItem::WorkflowSuggestion {
+                    command,
+                    suggestion,
+                } => Some(SelectedSlashPopupCommand::WorkflowSuggestion {
+                    command,
+                    insert_text: suggestion.insert_text,
+                }),
+                CommandItem::WorkflowOption(_) => None,
             })
         };
 
@@ -1836,6 +1883,18 @@ impl ChatComposer {
                                 return (InputResult::None, true);
                             }
                         }
+                        SelectedSlashPopupCommand::WorkflowSuggestion {
+                            command,
+                            insert_text,
+                        } => {
+                            self.textarea
+                                .set_text_clearing_elements(&format!("/{command} {insert_text} "));
+                            self.is_bash_mode = false;
+                            if !self.textarea.text().is_empty() {
+                                self.textarea.set_cursor(self.textarea.text().len());
+                            }
+                            return (InputResult::None, true);
+                        }
                     }
                 }
                 if self.is_task_running {
@@ -1880,6 +1939,17 @@ impl ChatComposer {
                                 self.textarea.set_cursor(self.textarea.text().len());
                             }
                         }
+                        SelectedSlashPopupCommand::WorkflowSuggestion {
+                            command,
+                            insert_text,
+                        } => {
+                            self.textarea
+                                .set_text_clearing_elements(&format!("/{command} {insert_text} "));
+                            self.is_bash_mode = false;
+                            if !self.textarea.text().is_empty() {
+                                self.textarea.set_cursor(self.textarea.text().len());
+                            }
+                        }
                     }
                 }
                 (InputResult::None, true)
@@ -1903,6 +1973,18 @@ impl ChatComposer {
                             self.textarea.set_text_clearing_elements("");
                             self.is_bash_mode = false;
                             return (InputResult::WorkflowCommand(command), true);
+                        }
+                        SelectedSlashPopupCommand::WorkflowSuggestion {
+                            command,
+                            insert_text,
+                        } => {
+                            self.textarea
+                                .set_text_clearing_elements(&format!("/{command} {insert_text} "));
+                            self.is_bash_mode = false;
+                            if !self.textarea.text().is_empty() {
+                                self.textarea.set_cursor(self.textarea.text().len());
+                            }
+                            return (InputResult::None, true);
                         }
                     }
                 }
@@ -3906,13 +3988,54 @@ impl ChatComposer {
 
     fn workflow_command_has_prefix(&self, name: &str) -> bool {
         self.registered_workflows().is_some_and(|workflows| {
-            workflows.iter().any(|workflow| {
-                workflow
-                    .command
-                    .as_deref()
-                    .is_some_and(|command| fuzzy_match(command, name).is_some())
-            })
+            workflows
+                .iter()
+                .any(|workflow| slash_commands::workflow_match_kind(workflow, name).is_some())
         })
+    }
+
+    fn request_workflow_command_completions_if_needed(
+        &mut self,
+        workflow: &WorkflowSummary,
+        input: WorkflowCommandInput,
+    ) {
+        let Some(command) = workflow.command.as_deref() else {
+            return;
+        };
+
+        let cache_key = WorkflowCommandCompletionCacheKey {
+            command: command.to_string(),
+            text: input.text.clone(),
+        };
+
+        if self
+            .workflow_command_completion_cache
+            .contains_key(&cache_key)
+            || self
+                .pending_workflow_command_completion_requests
+                .contains(&cache_key)
+        {
+            return;
+        }
+
+        self.pending_workflow_command_completion_requests
+            .insert(cache_key);
+        self.app_event_tx
+            .send(AppEvent::WorkflowCommandCompletionStart {
+                workflow: workflow.clone(),
+                input,
+            });
+    }
+
+    fn workflow_command_completion_input(rest_after_name: &str) -> WorkflowCommandInput {
+        let text = rest_after_name.trim().to_string();
+        let argv = if text.is_empty() {
+            Vec::new()
+        } else {
+            shlex::split(&text)
+                .unwrap_or_else(|| text.split_whitespace().map(ToString::to_string).collect())
+        };
+        WorkflowCommandInput { argv, text }
     }
 
     /// Synchronize `self.command_popup` with the current text in the
@@ -3926,18 +4049,35 @@ impl ChatComposer {
             return;
         }
         // Determine whether the caret is inside the initial '/name' token on the first line.
-        let text = self.textarea.text();
+        let text = self.textarea.text().to_string();
         let first_line_end = text.find('\n').unwrap_or(text.len());
-        let first_line = &text[..first_line_end];
+        let first_line = text[..first_line_end].to_string();
         let cursor = self.textarea.cursor();
         let caret_on_first_line = cursor <= first_line_end;
 
         let is_editing_slash_command_name = caret_on_first_line
-            && Self::slash_command_under_cursor(first_line, cursor)
+            && Self::slash_command_under_cursor(&first_line, cursor)
                 .is_some_and(|(name, rest)| self.looks_like_slash_prefix(name, rest));
+        let exact_workflow_command = if caret_on_first_line {
+            Self::slash_command_under_cursor(&first_line, cursor).and_then(|(name, rest)| {
+                self.workflow_command_by_name(name).map(|workflow| {
+                    (
+                        name.to_string(),
+                        workflow.clone(),
+                        Self::workflow_command_completion_input(rest),
+                    )
+                })
+            })
+        } else {
+            None
+        };
         let workflows = self
             .registered_workflows()
             .map(<[codex_workflows::WorkflowSummary]>::to_vec);
+
+        if let Some((_command, workflow, input)) = exact_workflow_command.as_ref() {
+            self.request_workflow_command_completions_if_needed(workflow, input.clone());
+        }
 
         // If the cursor is currently positioned within an `@token`, prefer the
         // file-search popup over the slash popup so users can insert a file path
@@ -3951,14 +4091,26 @@ impl ChatComposer {
         match &mut self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.set_workflows(workflows.as_deref());
-                if is_editing_slash_command_name {
-                    popup.on_composer_text_change(first_line.to_string());
+                if let Some((command, _workflow, input)) = exact_workflow_command.as_ref() {
+                    popup.set_workflow_suggestions(
+                        command,
+                        self.workflow_command_completion_cache
+                            .get(&WorkflowCommandCompletionCacheKey {
+                                command: command.clone(),
+                                text: input.text.clone(),
+                            })
+                            .cloned()
+                            .unwrap_or_default(),
+                    );
+                }
+                if is_editing_slash_command_name || exact_workflow_command.is_some() {
+                    popup.on_composer_text_change(first_line);
                 } else {
                     self.active_popup = ActivePopup::None;
                 }
             }
             _ => {
-                if is_editing_slash_command_name {
+                if is_editing_slash_command_name || exact_workflow_command.is_some() {
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
                     let connectors_enabled = self.connectors_enabled;
                     let plugins_command_enabled = self.plugins_command_enabled;
@@ -3982,7 +4134,19 @@ impl ChatComposer {
                         side_conversation_active: self.side_conversation_active,
                     });
                     command_popup.set_workflows(workflows.as_deref());
-                    command_popup.on_composer_text_change(first_line.to_string());
+                    if let Some((command, _workflow, input)) = exact_workflow_command.as_ref() {
+                        command_popup.set_workflow_suggestions(
+                            command,
+                            self.workflow_command_completion_cache
+                                .get(&WorkflowCommandCompletionCacheKey {
+                                    command: command.clone(),
+                                    text: input.text.clone(),
+                                })
+                                .cloned()
+                                .unwrap_or_default(),
+                        );
+                    }
+                    command_popup.on_composer_text_change(first_line);
                     self.active_popup = ActivePopup::Command(command_popup);
                 }
             }
@@ -6818,6 +6982,7 @@ mod tests {
             title: Some(title.to_string()),
             user_description: Some("Prepare a focused workflow report".to_string()),
             search_terms: vec!["report".to_string()],
+            command_option_hints: Vec::new(),
             root_label: "global".to_string(),
             root_kind: codex_workflows::WorkflowRootKind::Global,
             root_path: root.clone(),
@@ -7905,6 +8070,14 @@ mod tests {
                 Some(CommandItem::Workflow(workflow)) => {
                     panic!("expected builtin /model to be selected, got workflow {workflow:?}")
                 }
+                Some(CommandItem::WorkflowOption(option)) => {
+                    panic!("expected builtin /model to be selected, got option hint {option:?}")
+                }
+                Some(CommandItem::WorkflowSuggestion { suggestion, .. }) => {
+                    panic!(
+                        "expected builtin /model to be selected, got workflow suggestion {suggestion:?}"
+                    )
+                }
                 None => panic!("no selected command for '/mo'"),
             },
             _ => panic!("slash popup not active after typing '/mo'"),
@@ -7960,6 +8133,14 @@ mod tests {
                 }
                 Some(CommandItem::Workflow(workflow)) => {
                     panic!("expected builtin /resume to be selected, got workflow {workflow:?}")
+                }
+                Some(CommandItem::WorkflowOption(option)) => {
+                    panic!("expected builtin /resume to be selected, got option hint {option:?}")
+                }
+                Some(CommandItem::WorkflowSuggestion { suggestion, .. }) => {
+                    panic!(
+                        "expected builtin /resume to be selected, got workflow suggestion {suggestion:?}"
+                    )
                 }
                 None => panic!("no selected command for '/res'"),
             },
@@ -10350,13 +10531,24 @@ mod tests {
             "'/ac' should activate slash popup via fuzzy match"
         );
 
-        // Case 4: invalid prefix "/zzz" – still allowed to open popup if it
-        // matches no built-in command; our current logic will not open popup.
-        // Verify that explicitly.
+        // Case 4: workflow search-term match "/report" should also open the
+        // slash popup now that registered workflows participate in matching.
+        let mut workflow =
+            test_workflow_summary("reports/google-calendar", "Google Calendar Report");
+        workflow.command = Some("calendar-summary".to_string());
+        composer.set_workflows_enabled(/*enabled*/ true);
+        composer.set_workflow_mentions(Some(vec![workflow]));
+        composer.set_text_content("/report".to_string(), Vec::new(), Vec::new());
+        assert!(
+            matches!(composer.active_popup, ActivePopup::Command(_)),
+            "'/report' should activate slash popup via workflow search-term match"
+        );
+
+        // Case 5: invalid prefix "/zzz" – still should not open the popup.
         composer.set_text_content("/zzz".to_string(), Vec::new(), Vec::new());
         assert!(
             matches!(composer.active_popup, ActivePopup::None),
-            "'/zzz' should not activate slash popup because it is not a prefix of any built-in command"
+            "'/zzz' should not activate slash popup because it does not match a built-in or workflow command"
         );
     }
 

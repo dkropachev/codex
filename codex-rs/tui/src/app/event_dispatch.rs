@@ -89,6 +89,38 @@ impl App {
             } => {
                 self.handle_workflow_process_finished(run_id, command, result);
             }
+            AppEvent::WorkflowCommandCompletionStart { workflow, input } => {
+                let tx = self.app_event_tx.clone();
+                tokio::spawn(async move {
+                    let command = workflow
+                        .command
+                        .clone()
+                        .unwrap_or_else(|| workflow.id.clone());
+                    let suggestions = codex_workflows::complete_workflow(
+                        &workflow.path,
+                        &workflow.path.join("src/workflow.ts"),
+                        &input,
+                    )
+                    .await
+                    .unwrap_or_default();
+                    tx.send(AppEvent::WorkflowCommandCompletionResult {
+                        command,
+                        input,
+                        suggestions,
+                    });
+                });
+            }
+            AppEvent::WorkflowCommandCompletionResult {
+                command,
+                input,
+                suggestions,
+            } => {
+                self.chat_widget.apply_workflow_command_completion_result(
+                    command,
+                    input,
+                    suggestions,
+                );
+            }
             AppEvent::OpenResumePicker => {
                 let picker_app_server = match crate::start_app_server_for_picker(
                     &self.config,

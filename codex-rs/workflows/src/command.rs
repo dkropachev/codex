@@ -360,6 +360,7 @@ mod tests {
             title: Some("Jira Summary".to_string()),
             user_description: Some("Prepare a concise Jira summary".to_string()),
             search_terms: vec!["jira".to_string()],
+            command_option_hints: Vec::new(),
             root_label: "global".to_string(),
             root_kind: crate::registry::WorkflowRootKind::Global,
             root_path: PathBuf::from("/tmp/workflows"),

@@ -6,6 +6,7 @@
 use std::str::FromStr;
 
 use codex_utils_fuzzy_match::fuzzy_match;
+use codex_workflows::WorkflowSummary;
 
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
@@ -72,6 +73,78 @@ pub(crate) fn has_builtin_prefix(name: &str, flags: BuiltinCommandFlags) -> bool
     builtins_for_input(flags)
         .into_iter()
         .any(|(command_name, _)| fuzzy_match(command_name, name).is_some())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WorkflowMatchKind {
+    Exact,
+    Prefix,
+}
+
+/// Return whether a workflow alias matches a typed slash-command prefix.
+///
+/// Workflow aliases are discoverable by their command, workflow id, title,
+/// and search terms so partial workflow names can surface even when the alias
+/// is not the same as the workflow title.
+pub(crate) fn workflow_match_kind(
+    workflow: &WorkflowSummary,
+    filter: &str,
+) -> Option<WorkflowMatchKind> {
+    let command = workflow.command.as_deref()?;
+
+    let filter = filter.trim();
+    if filter.is_empty() {
+        return None;
+    }
+
+    let filter_lower = filter.to_lowercase();
+    let candidates = [
+        command,
+        workflow.id.as_str(),
+        workflow.title.as_deref().unwrap_or(""),
+    ];
+
+    if candidates
+        .into_iter()
+        .filter(|candidate| !candidate.is_empty())
+        .any(|candidate| term_matches_exact(candidate, &filter_lower))
+        || workflow
+            .search_terms
+            .iter()
+            .any(|term| term_matches_exact(term, &filter_lower))
+    {
+        return Some(WorkflowMatchKind::Exact);
+    }
+
+    if candidates
+        .into_iter()
+        .filter(|candidate| !candidate.is_empty())
+        .any(|candidate| term_matches_prefix(candidate, &filter_lower))
+        || workflow
+            .search_terms
+            .iter()
+            .any(|term| term_matches_prefix(term, &filter_lower))
+    {
+        return Some(WorkflowMatchKind::Prefix);
+    }
+
+    None
+}
+
+fn term_matches_exact(term: &str, filter_lower: &str) -> bool {
+    term.to_lowercase() == filter_lower
+        || term
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|token| !token.is_empty())
+            .any(|token| token.to_lowercase() == filter_lower)
+}
+
+fn term_matches_prefix(term: &str, filter_lower: &str) -> bool {
+    term.to_lowercase().starts_with(filter_lower)
+        || term
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|token| !token.is_empty())
+            .any(|token| token.to_lowercase().starts_with(filter_lower))
 }
 
 #[cfg(test)]

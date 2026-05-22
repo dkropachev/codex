@@ -56,6 +56,7 @@ fn workflow_summary(id: &str, command: &str) -> codex_workflows::WorkflowSummary
         title: Some("Jira Summary".to_string()),
         user_description: Some("Prepare a focused workflow report".to_string()),
         search_terms: vec!["report".to_string()],
+        command_option_hints: Vec::new(),
         root_label: "global".to_string(),
         root_kind: codex_workflows::WorkflowRootKind::Global,
         root_path: root.clone(),
@@ -97,16 +98,22 @@ async fn workflow_alias_with_args_emits_run_workflow_event() {
 
     submit_composer_text(&mut chat, "/jira-summary --project COD");
 
-    match rx.try_recv() {
-        Ok(AppEvent::RunWorkflow { command }) => assert_eq!(
-            command,
-            vec![
-                "jira-summary".to_string(),
-                "--project".to_string(),
-                "COD".to_string(),
-            ]
-        ),
-        other => panic!("expected RunWorkflow event, got {other:?}"),
+    loop {
+        match rx.try_recv() {
+            Ok(AppEvent::WorkflowCommandCompletionStart { .. }) => continue,
+            Ok(AppEvent::RunWorkflow { command }) => {
+                assert_eq!(
+                    command,
+                    vec![
+                        "jira-summary".to_string(),
+                        "--project".to_string(),
+                        "COD".to_string(),
+                    ]
+                );
+                break;
+            }
+            other => panic!("expected RunWorkflow event, got {other:?}"),
+        }
     }
 }
 
@@ -122,11 +129,15 @@ async fn workflow_alias_without_args_emits_run_workflow_event() {
 
     submit_composer_text(&mut chat, "/jira-summary");
 
-    match rx.try_recv() {
-        Ok(AppEvent::RunWorkflow { command }) => {
-            assert_eq!(command, vec!["jira-summary".to_string()])
+    loop {
+        match rx.try_recv() {
+            Ok(AppEvent::WorkflowCommandCompletionStart { .. }) => continue,
+            Ok(AppEvent::RunWorkflow { command }) => {
+                assert_eq!(command, vec!["jira-summary".to_string()]);
+                break;
+            }
+            other => panic!("expected RunWorkflow event, got {other:?}"),
         }
-        other => panic!("expected RunWorkflow event, got {other:?}"),
     }
 }
 

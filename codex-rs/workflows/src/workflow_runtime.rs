@@ -23,6 +23,21 @@ pub const WORKFLOW_RUNTIME_EVENT_PREFIX: &str = "__CODEX_WORKFLOW_EVENT__";
 const WORKFLOW_SELF_EXE_ENV: &str = "CODEX_WORKFLOW_SELF_EXE";
 const WORKFLOW_NAME_ENV: &str = "CODEX_WORKFLOW_NAME";
 
+#[derive(Clone, Copy)]
+enum WorkflowRuntimeInvocationMode {
+    Run,
+    Complete,
+}
+
+impl WorkflowRuntimeInvocationMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            WorkflowRuntimeInvocationMode::Run => "run",
+            WorkflowRuntimeInvocationMode::Complete => "complete",
+        }
+    }
+}
+
 const WORKFLOW_RUNNER_SOURCE: &str = r#"
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -35,8 +50,14 @@ const EVENT_PREFIX = "__CODEX_WORKFLOW_EVENT__";
 function parseArgs(argv) {
   let workflowPath;
   let rawInput = "{}";
+  let mode = "run";
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (arg === "--mode") {
+      mode = argv[index + 1] ?? "run";
+      index += 1;
+      continue;
+    }
     if (arg === "--workflow-path") {
       workflowPath = argv[index + 1];
       index += 1;
@@ -50,7 +71,10 @@ function parseArgs(argv) {
   if (!workflowPath) {
     throw new Error("missing --workflow-path");
   }
-  return { workflowPath, rawInput };
+  if (mode !== "run" && mode !== "complete") {
+    throw new Error(`unsupported --mode ${mode}`);
+  }
+  return { workflowPath, rawInput, mode };
 }
 
 function emitEvent(event) {
@@ -292,17 +316,58 @@ function createRuntimeContext() {
   };
 }
 
-const { workflowPath, rawInput } = parseArgs(process.argv.slice(2));
+function normalizeCompletionSuggestion(value) {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return {
+      display: value.trim(),
+      insertText: value.trim(),
+      description: undefined,
+    };
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("workflow completion entries must be strings or objects");
+  }
+
+  const display = stringValue(value.display) ?? stringValue(value.insertText);
+  const insertText = stringValue(value.insertText) ?? stringValue(value.display);
+  if (!display || !insertText) {
+    throw new Error("workflow completion entries require non-empty display or insertText");
+  }
+
+  return {
+    display,
+    insertText,
+    description: stringValue(value.description),
+  };
+}
+
+const { workflowPath, rawInput, mode } = parseArgs(process.argv.slice(2));
 const moduleUrl = pathToFileURL(path.resolve(workflowPath)).href;
 const workflowModule = await import(moduleUrl);
 const workflow = workflowModule.default;
 
-if (!workflow || typeof workflow.run !== "function") {
-  throw new Error("workflow module must export a default object with a run(ctx, input) method");
+if (!workflow || typeof workflow !== "object") {
+  throw new Error("workflow module must export a default object");
 }
 
 const input = JSON.parse(rawInput ?? "{}");
-const output = await workflow.run(createRuntimeContext(), input);
+let output;
+if (mode === "complete") {
+  if (typeof workflow.complete !== "function") {
+    output = [];
+  } else {
+    const suggestions = await workflow.complete(createRuntimeContext(), input);
+    output = Array.isArray(suggestions)
+      ? suggestions.map(normalizeCompletionSuggestion)
+      : [];
+  }
+} else {
+  if (typeof workflow.run !== "function") {
+    throw new Error("workflow module must export a default object with a run(ctx, input) method");
+  }
+  output = await workflow.run(createRuntimeContext(), input);
+}
 process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 "#;
 
@@ -326,6 +391,34 @@ pub enum WorkflowRuntimeEvent {
     },
     #[serde(rename = "reportToUserMarkdown")]
     ReportToUserMarkdown { markdown: String },
+}
+
+pub async fn complete_workflow(
+    workflow_dir: &Path,
+    workflow_path: &Path,
+    input: &crate::command::WorkflowCommandInput,
+) -> Result<Vec<crate::command_completion::WorkflowCommandCompletionSuggestion>> {
+    let output = run_workflow_process(
+        workflow_dir,
+        workflow_path,
+        &serde_json::to_string(input).context("failed to serialize workflow completion input")?,
+        WorkflowRuntimeInvocationMode::Complete,
+    )
+    .await?;
+
+    if !output.success {
+        anyhow::bail!(
+            "workflow completion exited with {}: {}",
+            output.exit_status,
+            output.stderr.trim()
+        );
+    }
+
+    let suggestions = serde_json::from_str::<
+        Vec<crate::command_completion::WorkflowCommandCompletionSuggestion>,
+    >(&output.stdout)
+    .context("failed to parse workflow completion output")?;
+    Ok(suggestions)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -393,6 +486,21 @@ async fn run_workflow_legacy(
     workflow_path: &Path,
     input: &str,
 ) -> Result<WorkflowRuntimeOutput> {
+    run_workflow_process(
+        workflow_dir,
+        workflow_path,
+        input,
+        WorkflowRuntimeInvocationMode::Run,
+    )
+    .await
+}
+
+async fn run_workflow_process(
+    workflow_dir: &Path,
+    workflow_path: &Path,
+    input: &str,
+    mode: WorkflowRuntimeInvocationMode,
+) -> Result<WorkflowRuntimeOutput> {
     let runner_path = write_runner_script()?;
     let tsx_path = workflow_tsx_path(workflow_dir);
     if !tsx_path.is_file() {
@@ -405,6 +513,8 @@ async fn run_workflow_legacy(
     let mut child = Command::new(&tsx_path);
     child
         .arg(&runner_path)
+        .arg("--mode")
+        .arg(mode.as_str())
         .arg("--workflow-path")
         .arg(workflow_path)
         .arg("--input")
@@ -542,8 +652,18 @@ pub(crate) fn workflow_tsx_path(workflow_dir: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::Path;
+
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    use crate::WorkflowCommandInput;
+
     use super::WORKFLOW_RUNNER_SOURCE;
     use super::WORKFLOW_RUNTIME_EVENT_PREFIX;
+    use super::complete_workflow;
+    use super::workflow_tsx_path;
 
     #[test]
     fn runner_script_emits_prefixed_events() {
@@ -552,5 +672,116 @@ mod tests {
         assert!(WORKFLOW_RUNNER_SOURCE.contains("progress"));
         assert!(WORKFLOW_RUNNER_SOURCE.contains("status:"));
         assert!(WORKFLOW_RUNNER_SOURCE.contains("runWorkflow:"));
+        assert!(WORKFLOW_RUNNER_SOURCE.contains("mode === \"complete\""));
+    }
+
+    #[tokio::test]
+    async fn complete_workflow_invokes_complete_hook_and_normalizes_suggestions() {
+        let temp = TempDir::new().expect("temp dir");
+        let workflow_dir = temp.path().join("code-review");
+        let workflow_path = workflow_dir.join("workflow.mjs");
+        write_test_workflow(
+            &workflow_dir,
+            &workflow_path,
+            r#"const workflow = {
+  async complete(_ctx, input) {
+    if (input.text === "--review-id") {
+      return [
+        {
+          display: "--review-id review-123",
+          insertText: "--review-id review-123",
+          description: "Pending review",
+        },
+        "--format summary",
+      ];
+    }
+    return [];
+  },
+  async run() {
+    return { workflowStatus: "done" };
+  },
+};
+
+export default workflow;
+"#,
+        );
+
+        let suggestions = complete_workflow(
+            &workflow_dir,
+            &workflow_path,
+            &WorkflowCommandInput {
+                argv: vec!["--review-id".to_string()],
+                text: "--review-id".to_string(),
+            },
+        )
+        .await
+        .expect("workflow completion should succeed");
+
+        assert_eq!(
+            suggestions,
+            vec![
+                crate::WorkflowCommandCompletionSuggestion {
+                    display: "--review-id review-123".to_string(),
+                    insert_text: "--review-id review-123".to_string(),
+                    description: Some("Pending review".to_string()),
+                },
+                crate::WorkflowCommandCompletionSuggestion {
+                    display: "--format summary".to_string(),
+                    insert_text: "--format summary".to_string(),
+                    description: None,
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_workflow_returns_empty_when_hook_is_missing() {
+        let temp = TempDir::new().expect("temp dir");
+        let workflow_dir = temp.path().join("summary");
+        let workflow_path = workflow_dir.join("workflow.mjs");
+        write_test_workflow(
+            &workflow_dir,
+            &workflow_path,
+            r#"const workflow = {
+  async run() {
+    return { workflowStatus: "done" };
+  },
+};
+
+export default workflow;
+"#,
+        );
+
+        let suggestions = complete_workflow(
+            &workflow_dir,
+            &workflow_path,
+            &WorkflowCommandInput {
+                argv: Vec::new(),
+                text: String::new(),
+            },
+        )
+        .await
+        .expect("missing complete hook should return empty suggestions");
+
+        assert!(suggestions.is_empty());
+    }
+
+    fn write_test_workflow(workflow_dir: &Path, workflow_path: &Path, source: &str) {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::create_dir_all(workflow_dir.join("node_modules/.bin")).expect("workflow dir");
+        fs::write(workflow_path, source).expect("workflow source");
+        fs::write(
+            workflow_tsx_path(workflow_dir),
+            "#!/bin/sh\nexec /usr/bin/node \"$@\"\n",
+        )
+        .expect("tsx wrapper");
+        #[cfg(unix)]
+        fs::set_permissions(
+            workflow_tsx_path(workflow_dir),
+            fs::Permissions::from_mode(0o755),
+        )
+        .expect("tsx permissions");
     }
 }

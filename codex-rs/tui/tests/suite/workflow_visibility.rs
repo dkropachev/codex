@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::path::PathBuf;
-use std::process::Command;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -9,6 +7,10 @@ use tempfile::tempdir;
 use tokio::select;
 use tokio::time::sleep;
 use tokio::time::timeout;
+
+use super::workflow_test_support::ensure_codex_binary;
+use super::workflow_test_support::write_trusted_workspace_config;
+use super::workflow_test_support::write_workflow_fixture;
 
 #[tokio::test]
 async fn slash_workflow_shows_single_line_status_and_final_result_in_terminal_output() -> Result<()>
@@ -98,6 +100,10 @@ async fn run_workflow_visibility_session(
 ) -> Result<()> {
     let mut env = HashMap::new();
     env.insert("CODEX_HOME".to_string(), codex_home.display().to_string());
+    env.insert(
+        "CODEX_WORKFLOW_RUNTIME_MODE".to_string(),
+        "process".to_string(),
+    );
 
     let args = vec![
         "--no-alt-screen".to_string(),
@@ -257,26 +263,6 @@ async fn run_workflow_visibility_session(
     Ok(())
 }
 
-fn write_trusted_workspace_config(codex_home: &Path, workspace: &Path) -> Result<()> {
-    std::fs::create_dir_all(workspace.join(".git"))?;
-    let config_contents = format!(
-        r#"model = "gpt-oss:20b"
-model_provider = "ollama"
-check_for_update_on_startup = false
-suppress_unstable_features_warning = true
-
-[analytics]
-enabled = false
-
-[projects."{workspace}"]
-trust_level = "trusted"
-"#,
-        workspace = workspace.display(),
-    );
-    std::fs::write(codex_home.join("config.toml"), config_contents)?;
-    Ok(())
-}
-
 fn write_single_status_workflow(workflow_dir: &Path) -> Result<()> {
     write_workflow_fixture(
         workflow_dir,
@@ -347,68 +333,4 @@ export default workflow;
 export default workflow;
 "##,
     )
-}
-
-fn write_workflow_fixture(
-    workflow_dir: &Path,
-    id: &str,
-    command: &str,
-    title: &str,
-    workflow_source: &str,
-) -> Result<()> {
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
-
-    std::fs::create_dir_all(workflow_dir.join("src"))?;
-    std::fs::create_dir_all(workflow_dir.join("state"))?;
-    std::fs::create_dir_all(workflow_dir.join("node_modules/.bin"))?;
-    std::fs::create_dir_all(workflow_dir.join(".git"))?;
-    std::fs::write(workflow_dir.join("README.md"), format!("# {title}\n"))?;
-    std::fs::write(workflow_dir.join("state/.gitkeep"), "")?;
-    std::fs::write(
-        workflow_dir.join("workflow.yaml"),
-        format!(
-            "id: {id}\ncommand: {command}\ntitle: /{command}\nuserDescription: Emit progress and final markdown for TUI integration tests.\n"
-        ),
-    )?;
-    std::fs::write(
-        workflow_dir.join("package.json"),
-        r#"{
-  "name": "workflow-visibility-test",
-  "private": true,
-  "type": "module"
-}
-"#,
-    )?;
-    std::fs::write(workflow_dir.join("src/workflow.ts"), workflow_source)?;
-    std::fs::write(
-        workflow_dir.join("node_modules/.bin/tsx"),
-        "#!/bin/sh\nrunner=\"$1\"\nworkflow_flag=\"$2\"\nworkflow_path=\"$3\"\ninput_flag=\"$4\"\ninput_value=\"$5\"\ntmp=$(/bin/mktemp \"${TMPDIR:-/tmp}/workflow-runtime-XXXXXX.mjs\")\n/bin/cp \"$workflow_path\" \"$tmp\"\nexec /usr/bin/node \"$runner\" \"$workflow_flag\" \"$tmp\" \"$input_flag\" \"$input_value\"\n",
-    )?;
-    #[cfg(unix)]
-    std::fs::set_permissions(
-        workflow_dir.join("node_modules/.bin/tsx"),
-        std::fs::Permissions::from_mode(0o755),
-    )?;
-    Ok(())
-}
-
-fn ensure_codex_binary(repo_root: &Path) -> Result<PathBuf> {
-    let build_status = Command::new("cargo")
-        .arg("build")
-        .arg("-p")
-        .arg("codex-cli")
-        .arg("--bin")
-        .arg("codex")
-        .current_dir(repo_root.join("codex-rs"))
-        .status()?;
-    anyhow::ensure!(build_status.success(), "failed to build codex binary");
-
-    let fallback = repo_root.join("codex-rs/target/debug/codex");
-    anyhow::ensure!(
-        fallback.is_file(),
-        "codex binary is unavailable after build: {}",
-        fallback.display()
-    );
-    Ok(fallback)
 }

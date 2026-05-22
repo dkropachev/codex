@@ -51,6 +51,9 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
+use codex_workflows::WorkflowCommandCompletionSuggestion;
+use codex_workflows::WorkflowCommandInput;
+use codex_workflows::WorkflowSummary;
 
 use crate::history_cell::HistoryCell;
 
@@ -160,6 +163,19 @@ pub(crate) enum AppEvent {
         run_id: String,
         command: Vec<String>,
         result: Result<(), String>,
+    },
+
+    /// Start an asynchronous workflow command completion request.
+    WorkflowCommandCompletionStart {
+        workflow: WorkflowSummary,
+        input: WorkflowCommandInput,
+    },
+
+    /// Result of an asynchronous workflow command completion request.
+    WorkflowCommandCompletionResult {
+        command: String,
+        input: WorkflowCommandInput,
+        suggestions: Vec<WorkflowCommandCompletionSuggestion>,
     },
 
     /// Submit an op to the specified thread, regardless of current focus.

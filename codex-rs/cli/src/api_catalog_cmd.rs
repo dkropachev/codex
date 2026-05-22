@@ -178,6 +178,16 @@ fn api_catalog_workflow_to_info(
         title: workflow.title,
         user_description: workflow.user_description,
         search_terms: workflow.search_terms,
+        command_option_hints: workflow
+            .command_option_hints
+            .into_iter()
+            .map(
+                |hint| codex_app_server_protocol::WorkflowCommandOptionHint {
+                    display: hint.display,
+                    description: hint.description,
+                },
+            )
+            .collect(),
         root_label: workflow.root_label,
         root_kind: match workflow.root_kind {
             codex_workflows::WorkflowRootKind::Global => {

@@ -1007,6 +1007,7 @@ mod tests {
             title: Some("Fix".to_string()),
             user_description: Some("Fix workflow".to_string()),
             search_terms: Vec::new(),
+            command_option_hints: Vec::new(),
             root_label: "global".to_string(),
             root_kind: crate::registry::WorkflowRootKind::Global,
             root_path: temp_dir.path().to_path_buf(),
@@ -1042,6 +1043,7 @@ mod tests {
             title: Some("Fix".to_string()),
             user_description: Some("Fix workflow".to_string()),
             search_terms: Vec::new(),
+            command_option_hints: Vec::new(),
             root_label: "global".to_string(),
             root_kind: crate::registry::WorkflowRootKind::Global,
             root_path: temp_dir.path().to_path_buf(),
@@ -1181,7 +1183,7 @@ export default workflow;
         .unwrap();
         fs::write(
             workflow_dir.join("node_modules/.bin/tsx"),
-            "#!/bin/sh\nrunner=\"$1\"\nmode=\"$2\"\nif [ \"$mode\" = \"--serve\" ]; then\n  socket_path=\"$3\"\n  exec node \"$runner\" \"$mode\" \"$socket_path\"\nfi\nworkflow_path=\"$3\"\ninput_flag=\"$4\"\ninput_value=\"$5\"\ntmp=$(mktemp \"${TMPDIR:-/tmp}/workflow-runtime-XXXXXX.mjs\")\ncp \"$workflow_path\" \"$tmp\"\nexec node \"$runner\" \"$mode\" \"$tmp\" \"$input_flag\" \"$input_value\"\n",
+            "#!/usr/bin/node\nconst fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst { spawnSync } = require('node:child_process');\n\nconst [runner, ...args] = process.argv.slice(2);\nif (args[0] === '--serve') {\n  const result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });\n  process.exit(result.status ?? 1);\n}\nconst workflowPathIndex = args.indexOf('--workflow-path');\nif (workflowPathIndex === -1 || workflowPathIndex + 1 >= args.length) {\n  console.error('missing --workflow-path');\n  process.exit(1);\n}\nconst workflowPath = args[workflowPathIndex + 1];\nconst tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-runtime-'));\nconst tmpPath = path.join(tmpDir, path.basename(workflowPath) + '.mjs');\nfs.copyFileSync(workflowPath, tmpPath);\nargs[workflowPathIndex + 1] = tmpPath;\nconst result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });\nprocess.exit(result.status ?? 1);\n",
         )
         .unwrap();
         fs::set_permissions(
@@ -1268,7 +1270,7 @@ export default workflow;
         fs::write(
             workflow_dir.join("node_modules/.bin/tsx"),
             format!(
-                "#!/bin/sh\nrunner=\"$1\"\nmode=\"$2\"\nif [ \"$mode\" = \"--serve\" ]; then\n  socket_path=\"$3\"\n  exec node \"$runner\" \"$mode\" \"$socket_path\" >>\"{}\" 2>&1\nfi\nworkflow_path=\"$3\"\ninput_flag=\"$4\"\ninput_value=\"$5\"\ntmp=$(mktemp \"${{TMPDIR:-/tmp}}/workflow-runtime-XXXXXX.mjs\")\ncp \"$workflow_path\" \"$tmp\"\nexec node \"$runner\" \"$mode\" \"$tmp\" \"$input_flag\" \"$input_value\"\n",
+                "#!/usr/bin/node\nconst fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst {{ spawnSync }} = require('node:child_process');\nconst logPath = '{}';\nconst logFd = fs.openSync(logPath, 'a');\nconst [runner, ...args] = process.argv.slice(2);\nif (args[0] === '--serve') {{\n  const result = spawnSync('/usr/bin/node', [runner, ...args], {{ stdio: ['ignore', logFd, logFd] }});\n  process.exit(result.status ?? 1);\n}}\nconst workflowPathIndex = args.indexOf('--workflow-path');\nif (workflowPathIndex === -1 || workflowPathIndex + 1 >= args.length) {{\n  fs.writeSync(logFd, 'missing --workflow-path\\n');\n  process.exit(1);\n}}\nconst workflowPath = args[workflowPathIndex + 1];\nconst tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-runtime-'));\nconst tmpPath = path.join(tmpDir, path.basename(workflowPath) + '.mjs');\nfs.copyFileSync(workflowPath, tmpPath);\nargs[workflowPathIndex + 1] = tmpPath;\nconst result = spawnSync('/usr/bin/node', [runner, ...args], {{ stdio: ['ignore', logFd, logFd] }});\nprocess.exit(result.status ?? 1);\n",
                 host_log.display()
             ),
         )
@@ -1371,7 +1373,7 @@ export default workflow;
         .unwrap();
         fs::write(
             workflow_dir.join("node_modules/.bin/tsx"),
-            "#!/bin/sh\nrunner=\"$1\"\nworkflow_flag=\"$2\"\nworkflow_path=\"$3\"\ninput_flag=\"$4\"\ninput_value=\"$5\"\ntmp=$(/bin/mktemp \"${TMPDIR:-/tmp}/workflow-runtime-XXXXXX.mjs\")\n/bin/cp \"$workflow_path\" \"$tmp\"\nexec /usr/bin/node \"$runner\" \"$workflow_flag\" \"$tmp\" \"$input_flag\" \"$input_value\"\n",
+            "#!/usr/bin/node\nconst fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst { spawnSync } = require('node:child_process');\nconst [runner, ...args] = process.argv.slice(2);\nconst workflowPathIndex = args.indexOf('--workflow-path');\nif (workflowPathIndex === -1 || workflowPathIndex + 1 >= args.length) {\n  console.error('missing --workflow-path');\n  process.exit(1);\n}\nconst workflowPath = args[workflowPathIndex + 1];\nconst tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-runtime-'));\nconst tmpPath = path.join(tmpDir, path.basename(workflowPath) + '.mjs');\nfs.copyFileSync(workflowPath, tmpPath);\nargs[workflowPathIndex + 1] = tmpPath;\nconst result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });\nprocess.exit(result.status ?? 1);\n",
         )
         .unwrap();
         fs::set_permissions(

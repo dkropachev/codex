@@ -508,6 +508,7 @@ export type { WorkflowAuthoringContextPrepareResponse } from "./WorkflowAuthorin
 export type { WorkflowChildStatus } from "./WorkflowChildStatus";
 export type { WorkflowCommandExecuteParams } from "./WorkflowCommandExecuteParams";
 export type { WorkflowCommandExecuteResponse } from "./WorkflowCommandExecuteResponse";
+export type { WorkflowCommandOptionHint } from "./WorkflowCommandOptionHint";
 export type { WorkflowConfigReadParams } from "./WorkflowConfigReadParams";
 export type { WorkflowConfigReadResponse } from "./WorkflowConfigReadResponse";
 export type { WorkflowConfigValues } from "./WorkflowConfigValues";

@@ -16,6 +16,8 @@ use serde_json::Value as JsonValue;
 use serde_json::json;
 use thiserror::Error;
 
+use crate::command_completion::WorkflowCommandOptionHint;
+use crate::command_completion::command_option_hints_from_spec;
 use crate::id::mention_target;
 use crate::id::normalize_workflow_id;
 use crate::spec::WORKFLOW_YAML;
@@ -65,6 +67,8 @@ pub struct WorkflowSummary {
     pub title: Option<String>,
     pub user_description: Option<String>,
     pub search_terms: Vec<String>,
+    #[serde(default)]
+    pub command_option_hints: Vec<WorkflowCommandOptionHint>,
     pub root_label: String,
     pub root_kind: WorkflowRootKind,
     pub root_path: PathBuf,
@@ -341,6 +345,7 @@ pub(crate) fn summarize_workflow(
         .and_then(|repair| repair.mode.clone())
         .or_else(|| config.repair_mode.clone())
         .unwrap_or_else(|| DEFAULT_REPAIR_MODE.to_string());
+    let command_option_hints = command_option_hints_from_spec(&spec);
     let command =
         normalize_workflow_command(spec.command).or_else(|| default_workflow_command(&id));
     let validation = validate_workflow_dir(&root.path, workflow_dir, &id);
@@ -351,6 +356,7 @@ pub(crate) fn summarize_workflow(
         title: spec.title,
         user_description: spec.user_description,
         search_terms: spec.search_terms,
+        command_option_hints,
         root_label: root.label.clone(),
         root_kind: root.kind,
         root_path: root.path.clone(),

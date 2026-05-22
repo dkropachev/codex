@@ -15,6 +15,9 @@ and `codex-rs/tui/src/bottom_pane/paste_burst.rs`.
 
 - Workflows can register `workflow.yaml.command`.
 - The alias appears in the slash popup as `/<cmd>` when workflows are enabled.
+- When the alias is an exact match, the popup can append dimmed option hints from
+  `workflow.yaml` (`usage.options`, then `api.inputSchema`) and live suggestions from an optional
+  workflow `complete(ctx, input)` hook.
 - The same alias is accepted by the shared workflow parser used by `codex workflow`, `codex <cmd>`, and `/<cmd>`.
 - Built-in slash commands still win on name collisions.
 - If `command` is omitted, workflows with simple ids that do not contain `/` fall back to an alias from the last id segment.
@@ -30,3 +33,7 @@ and `codex-rs/tui/src/bottom_pane/paste_burst.rs`.
 - Start with `codex-rs/tui/src/bottom_pane/chat_composer.rs` for state transitions and `codex-rs/tui/src/bottom_pane/command_popup.rs` for popup rendering.
 - For slash dispatch, inspect `codex-rs/tui/src/chatwidget/slash_dispatch.rs`.
 - For shared workflow alias parsing, inspect `codex-rs/workflows/src/command.rs` and `codex-rs/workflows/src/registry.rs`.
+- For cached workflow option hints, inspect `codex-rs/workflows/src/command_completion.rs`.
+- For live workflow suggestions, inspect `codex-rs/workflows/src/workflow_runtime.rs` and the
+  `WorkflowCommandCompletion*` flow in `codex-rs/tui/src/app_event.rs` plus
+  `codex-rs/tui/src/app/event_dispatch.rs`.

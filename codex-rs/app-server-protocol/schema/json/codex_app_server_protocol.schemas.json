@@ -20773,6 +20773,23 @@
         "title": "WorkflowCommandExecuteResponse",
         "type": "object"
       },
+      "WorkflowCommandOptionHint": {
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "display"
+        ],
+        "type": "object"
+      },
       "WorkflowConfigReadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "WorkflowConfigReadParams",
@@ -21228,6 +21245,12 @@
               "null"
             ]
           },
+          "commandOptionHints": {
+            "items": {
+              "$ref": "#/definitions/v2/WorkflowCommandOptionHint"
+            },
+            "type": "array"
+          },
           "id": {
             "type": "string"
           },
@@ -21275,6 +21298,7 @@
           }
         },
         "required": [
+          "commandOptionHints",
           "id",
           "mentionTarget",
           "path",

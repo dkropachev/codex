@@ -157,6 +157,7 @@ async fn published_workflow_tools_are_added_to_router_specs() -> anyhow::Result<
             path: PathBuf::from("/tmp/workflows/reports/jira-summary"),
             workflow_yaml_path: PathBuf::from("/tmp/workflows/reports/jira-summary/workflow.yaml"),
             mention_target: "@workflow/reports/jira-summary".to_string(),
+            command_option_hints: Vec::new(),
             validation: WorkflowValidation {
                 status: WorkflowValidationStatus::Valid,
                 messages: Vec::new(),
