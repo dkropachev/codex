@@ -398,6 +398,49 @@ mod tests {
     }
 
     #[test]
+    fn block_decision_can_also_record_additional_context() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(
+                Some(0),
+                r#"{"decision":"block","reason":"[WF-007] validation metadata is inaccurate","hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"Continue the workflow development cycle by fixing WF-007 before completion."}}"#,
+                "",
+            ),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            PostToolUseHandlerData {
+                should_stop: false,
+                stop_reason: None,
+                additional_contexts_for_model: vec![
+                    "Continue the workflow development cycle by fixing WF-007 before completion."
+                        .to_string(),
+                ],
+                feedback_messages_for_model: vec![
+                    "[WF-007] validation metadata is inaccurate".to_string(),
+                ],
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![
+                HookOutputEntry {
+                    kind: HookOutputEntryKind::Context,
+                    text: "Continue the workflow development cycle by fixing WF-007 before completion."
+                        .to_string(),
+                },
+                HookOutputEntry {
+                    kind: HookOutputEntryKind::Feedback,
+                    text: "[WF-007] validation metadata is inaccurate".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn unsupported_updated_mcp_tool_output_fails_open() {
         let parsed = parse_completed(
             &handler(),

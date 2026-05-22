@@ -1,5 +1,8 @@
 use codex_config::ConfigLayerStack;
+use codex_config::types::WorkflowsConfigToml;
 use codex_plugin::PluginHookSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use std::path::PathBuf;
 use tokio::process::Command;
 
 use crate::engine::ClaudeHooksEngine;
@@ -35,6 +38,9 @@ pub struct HooksConfig {
     pub plugin_hook_load_warnings: Vec<String>,
     pub shell_program: Option<String>,
     pub shell_args: Vec<String>,
+    pub codex_self_exe: Option<PathBuf>,
+    pub codex_home: Option<AbsolutePathBuf>,
+    pub workflows_config: Option<WorkflowsConfigToml>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -69,6 +75,9 @@ impl Hooks {
             config.config_layer_stack.as_ref(),
             config.plugin_hook_sources,
             config.plugin_hook_load_warnings,
+            config.codex_self_exe,
+            config.codex_home,
+            config.workflows_config,
             CommandShell {
                 program: config.shell_program.unwrap_or_default(),
                 args: config.shell_args,
@@ -215,6 +224,9 @@ pub fn list_hooks(config: HooksConfig) -> HookListOutcome {
         config.config_layer_stack.as_ref(),
         config.plugin_hook_sources,
         config.plugin_hook_load_warnings,
+        config.codex_self_exe.as_deref(),
+        config.codex_home.as_deref(),
+        config.workflows_config.as_ref(),
     );
     HookListOutcome {
         hooks: discovered.hook_entries,

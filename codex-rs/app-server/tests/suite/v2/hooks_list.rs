@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -65,6 +66,69 @@ fn command_hook_hash(
     codex_config::version_for_toml(&value)
 }
 
+fn workflow_quality_hook_source_path() -> AbsolutePathBuf {
+    #[cfg(windows)]
+    {
+        AbsolutePathBuf::resolve_path_against_base(
+            "<codex-workflow-quality-hook>/workflow-quality-hook.toml",
+            r"C:\",
+        )
+    }
+
+    #[cfg(not(windows))]
+    {
+        AbsolutePathBuf::resolve_path_against_base(
+            "<codex-workflow-quality-hook>/workflow-quality-hook.toml",
+            "/",
+        )
+    }
+}
+
+fn shell_quote_path(path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        format!("\"{}\"", path.display())
+    }
+
+    #[cfg(not(windows))]
+    {
+        format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+    }
+}
+
+fn workflow_quality_hook_metadata() -> Result<HookMetadata> {
+    let codex_self_exe = codex_utils_cargo_bin::cargo_bin("codex-app-server")?;
+    let command = format!(
+        "{} workflow-quality-hook",
+        shell_quote_path(&codex_self_exe)
+    );
+    let source_path = workflow_quality_hook_source_path();
+
+    Ok(HookMetadata {
+        key: format!("{}:post_tool_use:0:0", source_path.as_path().display()),
+        event_name: HookEventName::PostToolUse,
+        handler_type: HookHandlerType::Command,
+        matcher: Some("Bash|apply_patch".to_string()),
+        command: Some(command.clone()),
+        timeout_sec: 600,
+        status_message: Some("checking workflow quality".to_string()),
+        source_path,
+        source: HookSource::System,
+        plugin_id: None,
+        display_order: 0,
+        enabled: true,
+        is_managed: true,
+        current_hash: command_hook_hash(
+            "post_tool_use",
+            Some("Bash|apply_patch"),
+            &command,
+            /*timeout_sec*/ 600,
+            Some("checking workflow quality"),
+        ),
+        trust_status: HookTrustStatus::Managed,
+    })
+}
+
 fn write_user_hook_config(codex_home: &std::path::Path) -> Result<()> {
     std::fs::write(
         codex_home.join("config.toml"),
@@ -129,33 +193,37 @@ async fn hooks_list_shows_discovered_hook() -> Result<()> {
     let config_path = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
         codex_home.path().join("config.toml"),
     )?)?;
+    let workflow_quality_hook = workflow_quality_hook_metadata()?;
     assert_eq!(
         data,
         vec![HooksListEntry {
             cwd: cwd.path().to_path_buf(),
-            hooks: vec![HookMetadata {
-                key: format!("{}:pre_tool_use:0:0", config_path.as_path().display()),
-                event_name: HookEventName::PreToolUse,
-                handler_type: HookHandlerType::Command,
-                matcher: Some("Bash".to_string()),
-                command: Some("python3 /tmp/listed-hook.py".to_string()),
-                timeout_sec: 5,
-                status_message: Some("running listed hook".to_string()),
-                source_path: config_path,
-                source: HookSource::User,
-                plugin_id: None,
-                display_order: 0,
-                enabled: true,
-                is_managed: false,
-                current_hash: command_hook_hash(
-                    "pre_tool_use",
-                    Some("Bash"),
-                    "python3 /tmp/listed-hook.py",
-                    /*timeout_sec*/ 5,
-                    Some("running listed hook"),
-                ),
-                trust_status: HookTrustStatus::Untrusted,
-            }],
+            hooks: vec![
+                workflow_quality_hook,
+                HookMetadata {
+                    key: format!("{}:pre_tool_use:0:0", config_path.as_path().display()),
+                    event_name: HookEventName::PreToolUse,
+                    handler_type: HookHandlerType::Command,
+                    matcher: Some("Bash".to_string()),
+                    command: Some("python3 /tmp/listed-hook.py".to_string()),
+                    timeout_sec: 5,
+                    status_message: Some("running listed hook".to_string()),
+                    source_path: config_path,
+                    source: HookSource::User,
+                    plugin_id: None,
+                    display_order: 1,
+                    enabled: true,
+                    is_managed: false,
+                    current_hash: command_hook_hash(
+                        "pre_tool_use",
+                        Some("Bash"),
+                        "python3 /tmp/listed-hook.py",
+                        /*timeout_sec*/ 5,
+                        Some("running listed hook"),
+                    ),
+                    trust_status: HookTrustStatus::Untrusted,
+                },
+            ],
             warnings: Vec::new(),
             errors: Vec::new(),
         }]
@@ -207,33 +275,37 @@ async fn hooks_list_shows_discovered_plugin_hook() -> Result<()> {
             .path()
             .join("plugins/cache/test/demo/local/hooks/hooks.json"),
     )?)?;
+    let workflow_quality_hook = workflow_quality_hook_metadata()?;
     assert_eq!(
         data,
         vec![HooksListEntry {
             cwd: cwd.path().to_path_buf(),
-            hooks: vec![HookMetadata {
-                key: "demo@test:hooks/hooks.json:pre_tool_use:0:0".to_string(),
-                event_name: HookEventName::PreToolUse,
-                handler_type: HookHandlerType::Command,
-                matcher: Some("Bash".to_string()),
-                command: Some("echo plugin hook".to_string()),
-                timeout_sec: 7,
-                status_message: Some("running plugin hook".to_string()),
-                source_path: plugin_hooks_path,
-                source: HookSource::Plugin,
-                plugin_id: Some("demo@test".to_string()),
-                display_order: 0,
-                enabled: true,
-                is_managed: false,
-                current_hash: command_hook_hash(
-                    "pre_tool_use",
-                    Some("Bash"),
-                    "echo plugin hook",
-                    /*timeout_sec*/ 7,
-                    Some("running plugin hook"),
-                ),
-                trust_status: HookTrustStatus::Untrusted,
-            }],
+            hooks: vec![
+                workflow_quality_hook,
+                HookMetadata {
+                    key: "demo@test:hooks/hooks.json:pre_tool_use:0:0".to_string(),
+                    event_name: HookEventName::PreToolUse,
+                    handler_type: HookHandlerType::Command,
+                    matcher: Some("Bash".to_string()),
+                    command: Some("echo plugin hook".to_string()),
+                    timeout_sec: 7,
+                    status_message: Some("running plugin hook".to_string()),
+                    source_path: plugin_hooks_path,
+                    source: HookSource::Plugin,
+                    plugin_id: Some("demo@test".to_string()),
+                    display_order: 1,
+                    enabled: true,
+                    is_managed: false,
+                    current_hash: command_hook_hash(
+                        "pre_tool_use",
+                        Some("Bash"),
+                        "echo plugin hook",
+                        /*timeout_sec*/ 7,
+                        Some("running plugin hook"),
+                    ),
+                    trust_status: HookTrustStatus::Untrusted,
+                },
+            ],
             warnings: Vec::new(),
             errors: Vec::new(),
         }]
@@ -261,9 +333,10 @@ async fn hooks_list_shows_plugin_hook_load_warnings() -> Result<()> {
     )
     .await??;
     let HooksListResponse { data } = to_response(response)?;
+    let workflow_quality_hook = workflow_quality_hook_metadata()?;
 
     assert_eq!(data.len(), 1);
-    assert_eq!(data[0].hooks, Vec::new());
+    assert_eq!(data[0].hooks, vec![workflow_quality_hook]);
     assert_eq!(data[0].warnings.len(), 1);
     assert!(
         data[0].warnings[0].contains("failed to parse plugin hooks config"),
@@ -322,6 +395,7 @@ timeout = 5
     let HooksListResponse { data } = to_response(response)?;
     let project_config_path =
         AbsolutePathBuf::try_from(workspace.path().join(".codex/config.toml"))?;
+    let workflow_quality_hook = workflow_quality_hook_metadata()?;
     assert_eq!(
         data,
         vec![
@@ -333,32 +407,35 @@ timeout = 5
             },
             HooksListEntry {
                 cwd: workspace.path().to_path_buf(),
-                hooks: vec![HookMetadata {
-                    key: format!(
-                        "{}:pre_tool_use:0:0",
-                        project_config_path.as_path().display()
-                    ),
-                    event_name: HookEventName::PreToolUse,
-                    handler_type: HookHandlerType::Command,
-                    matcher: Some("Bash".to_string()),
-                    command: Some("echo project hook".to_string()),
-                    timeout_sec: 5,
-                    status_message: None,
-                    source_path: project_config_path,
-                    source: HookSource::Project,
-                    plugin_id: None,
-                    display_order: 0,
-                    enabled: true,
-                    is_managed: false,
-                    current_hash: command_hook_hash(
-                        "pre_tool_use",
-                        Some("Bash"),
-                        "echo project hook",
-                        /*timeout_sec*/ 5,
-                        /*status_message*/ None,
-                    ),
-                    trust_status: HookTrustStatus::Untrusted,
-                }],
+                hooks: vec![
+                    workflow_quality_hook,
+                    HookMetadata {
+                        key: format!(
+                            "{}:pre_tool_use:0:0",
+                            project_config_path.as_path().display()
+                        ),
+                        event_name: HookEventName::PreToolUse,
+                        handler_type: HookHandlerType::Command,
+                        matcher: Some("Bash".to_string()),
+                        command: Some("echo project hook".to_string()),
+                        timeout_sec: 5,
+                        status_message: None,
+                        source_path: project_config_path,
+                        source: HookSource::Project,
+                        plugin_id: None,
+                        display_order: 1,
+                        enabled: true,
+                        is_managed: false,
+                        current_hash: command_hook_hash(
+                            "pre_tool_use",
+                            Some("Bash"),
+                            "echo project hook",
+                            /*timeout_sec*/ 5,
+                            /*status_message*/ None,
+                        ),
+                        trust_status: HookTrustStatus::Untrusted,
+                    },
+                ],
                 warnings: Vec::new(),
                 errors: Vec::new(),
             },
@@ -387,7 +464,12 @@ async fn config_batch_write_toggles_user_hook() -> Result<()> {
     )
     .await??;
     let HooksListResponse { data } = to_response(response)?;
-    let hook = &data[0].hooks[0];
+    let hook = data[0]
+        .hooks
+        .iter()
+        .find(|hook| hook.event_name == HookEventName::PreToolUse)
+        .expect("user hook");
+    let hook_key = hook.key.clone();
     assert_eq!(hook.enabled, true);
 
     let write_id = mcp
@@ -395,7 +477,7 @@ async fn config_batch_write_toggles_user_hook() -> Result<()> {
             edits: vec![ConfigEdit {
                 key_path: "hooks.state".to_string(),
                 value: serde_json::json!({
-                    hook.key.clone(): {
+                    hook_key.clone(): {
                         "enabled": false
                     }
                 }),
@@ -424,16 +506,20 @@ async fn config_batch_write_toggles_user_hook() -> Result<()> {
     )
     .await??;
     let HooksListResponse { data } = to_response(response)?;
-    assert_eq!(data[0].hooks.len(), 1);
-    assert_eq!(data[0].hooks[0].key, hook.key);
-    assert_eq!(data[0].hooks[0].enabled, false);
+    assert_eq!(data[0].hooks.len(), 2);
+    let disabled_hook = data[0]
+        .hooks
+        .iter()
+        .find(|hook| hook.key == hook_key)
+        .expect("disabled user hook");
+    assert_eq!(disabled_hook.enabled, false);
 
     let write_id = mcp
         .send_config_batch_write_request(ConfigBatchWriteParams {
             edits: vec![ConfigEdit {
                 key_path: "hooks.state".to_string(),
                 value: serde_json::json!({
-                    hook.key.clone(): {
+                    hook_key.clone(): {
                         "enabled": true
                     }
                 }),
@@ -462,7 +548,12 @@ async fn config_batch_write_toggles_user_hook() -> Result<()> {
     )
     .await??;
     let HooksListResponse { data } = to_response(response)?;
-    assert_eq!(data[0].hooks[0].enabled, true);
+    let enabled_hook = data[0]
+        .hooks
+        .iter()
+        .find(|hook| hook.key == hook_key)
+        .expect("enabled user hook");
+    assert_eq!(enabled_hook.enabled, true);
     Ok(())
 }
 
@@ -537,7 +628,13 @@ command = "python3 {hook_script_path}"
     )
     .await??;
     let HooksListResponse { data } = to_response(response)?;
-    let hook = data[0].hooks[0].clone();
+    let hook = data[0]
+        .hooks
+        .iter()
+        .find(|hook| hook.event_name == HookEventName::UserPromptSubmit)
+        .expect("user prompt submit hook")
+        .clone();
+    let hook_key = hook.key.clone();
     assert_eq!(hook.trust_status, HookTrustStatus::Untrusted);
 
     let thread_start_id = mcp
@@ -609,7 +706,11 @@ command = "python3 {hook_script_path}"
     )
     .await??;
     let HooksListResponse { data } = to_response(response)?;
-    let trusted_hook = &data[0].hooks[0];
+    let trusted_hook = data[0]
+        .hooks
+        .iter()
+        .find(|candidate| candidate.key == hook_key)
+        .expect("trusted user hook");
     assert_eq!(trusted_hook.key, hook.key);
     assert_eq!(trusted_hook.current_hash, hook.current_hash);
     assert_eq!(trusted_hook.trust_status, HookTrustStatus::Trusted);
@@ -678,7 +779,11 @@ command = "python3 {hook_script_path}"
     )
     .await??;
     let HooksListResponse { data } = to_response(response)?;
-    let modified_hook = &data[0].hooks[0];
+    let modified_hook = data[0]
+        .hooks
+        .iter()
+        .find(|hook| hook.event_name == HookEventName::UserPromptSubmit)
+        .expect("modified user hook");
     assert_eq!(modified_hook.key, hook.key);
     assert_ne!(modified_hook.current_hash, hook.current_hash);
     assert_eq!(modified_hook.trust_status, HookTrustStatus::Modified);
@@ -783,7 +888,12 @@ command = "python3 {hook_script_path}"
     )
     .await??;
     let HooksListResponse { data } = to_response(response)?;
-    let hook = &data[0].hooks[0];
+    let hook = data[0]
+        .hooks
+        .iter()
+        .find(|hook| hook.event_name == HookEventName::UserPromptSubmit)
+        .expect("user prompt submit hook");
+    let hook_key = hook.key.clone();
     assert_eq!(hook.enabled, true);
 
     let write_id = mcp
@@ -791,7 +901,7 @@ command = "python3 {hook_script_path}"
             edits: vec![ConfigEdit {
                 key_path: "hooks.state".to_string(),
                 value: serde_json::json!({
-                    hook.key.clone(): {
+                    hook_key.clone(): {
                         "trusted_hash": hook.current_hash.clone()
                     }
                 }),

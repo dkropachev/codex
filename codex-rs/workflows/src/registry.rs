@@ -243,8 +243,12 @@ pub fn workflow_impact(summary: &WorkflowSummary) -> Result<WorkflowImpact> {
         path: summary.path.clone(),
         dependencies: package_dependency_names(&package, "dependencies"),
         dev_dependencies: package_dependency_names(&package, "devDependencies"),
-        git_status: git_status_lines(&summary.path),
+        git_status: workflow_git_status(summary),
     })
+}
+
+pub(crate) fn workflow_git_status(summary: &WorkflowSummary) -> Vec<String> {
+    git_status_lines(&summary.path)
 }
 
 pub fn discover_workflow_tools(

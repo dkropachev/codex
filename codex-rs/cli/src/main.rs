@@ -53,6 +53,7 @@ mod desktop_app;
 mod marketplace_cmd;
 mod mcp_cmd;
 mod workflow_cmd;
+mod workflow_quality_hook_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
@@ -63,6 +64,7 @@ use crate::mcp_cmd::McpCli;
 use crate::workflow_cmd::WorkflowCli;
 use crate::workflow_cmd::load_workflow_command_context;
 use crate::workflow_cmd::run_workflow_command;
+use crate::workflow_quality_hook_cmd::run_workflow_quality_hook;
 
 use codex_config::LoaderOverrides;
 use codex_core::build_models_manager;
@@ -262,6 +264,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 arg0_paths.clone(),
             )
             .await?;
+        }
+        Some(Subcommand::WorkflowQualityHook) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "workflow-quality-hook",
+            )?;
+            run_workflow_quality_hook()?;
         }
         Some(Subcommand::ToolRouter(tool_router_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -786,6 +796,10 @@ enum Subcommand {
 
     /// Manage Codex workflows.
     Workflow(WorkflowCli),
+
+    /// Internal: verify workflow quality after mutating tool calls.
+    #[clap(hide = true, name = "workflow-quality-hook")]
+    WorkflowQualityHook,
 
     /// Tune tool-router guidance.
     #[clap(name = "tool-router")]
@@ -5002,6 +5016,17 @@ mod tests {
         let cli = MultitoolCli::try_parse_from(["codex", "no-such-command"]).expect("parse");
         assert_eq!(cli.interactive.prompt, vec!["no-such-command".to_string()]);
         assert!(cli.subcommand.is_none());
+    }
+
+    #[test]
+    fn workflow_quality_hook_hidden_subcommand_parses() {
+        let cli = MultitoolCli::try_parse_from(["codex", "workflow-quality-hook"])
+            .expect("parse should succeed");
+        assert!(matches!(
+            cli.subcommand,
+            Some(Subcommand::WorkflowQualityHook)
+        ));
+        assert!(cli.interactive.prompt.is_empty());
     }
 
     #[test]

@@ -31,6 +31,9 @@ use crate::spec::WORKFLOW_YAML;
 use crate::spec::read_workflow_spec;
 use crate::spec::scaffold_workflow_spec;
 use crate::spec::write_workflow_spec;
+use crate::validation_runner::run_validation_command;
+use crate::validation_runner::validate_workflow;
+use crate::validation_runner::validation_report_message;
 use crate::workflow_runtime;
 
 pub struct WorkflowCommandContext<'a> {
@@ -44,24 +47,6 @@ pub struct WorkflowCommandContext<'a> {
 pub struct WorkflowCommandOutput {
     pub message: String,
     pub data: JsonValue,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkflowValidationCommandResult {
-    command: String,
-    succeeded: bool,
-    exit_code: Option<i32>,
-    stdout: String,
-    stderr: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkflowValidationReport {
-    status: crate::registry::WorkflowValidationStatus,
-    messages: Vec<String>,
-    command_results: Vec<WorkflowValidationCommandResult>,
 }
 
 pub fn execute_workflow_command(
@@ -405,14 +390,6 @@ fn validation_message(validation: &crate::registry::WorkflowValidation) -> Strin
     }
 }
 
-fn validation_report_message(report: &WorkflowValidationReport) -> String {
-    if report.messages.is_empty() {
-        "valid".to_string()
-    } else {
-        report.messages.join("\n")
-    }
-}
-
 fn slugify(description: &str) -> String {
     let mut slug = String::new();
     let mut previous_dash = false;
@@ -660,97 +637,6 @@ fn read_input(
 
 fn parse_input_field_value(raw_value: &str) -> JsonValue {
     serde_json::from_str(raw_value).unwrap_or_else(|_| JsonValue::String(raw_value.to_string()))
-}
-
-fn validate_workflow<F>(
-    workflow: &crate::registry::WorkflowSummary,
-    mut command_runner: F,
-) -> Result<WorkflowValidationReport>
-where
-    F: FnMut(&str, &Path) -> Result<WorkflowValidationCommandResult>,
-{
-    let mut messages = workflow.validation.messages.clone();
-    let mut command_results = Vec::new();
-
-    if let Ok(spec) = read_workflow_spec(&workflow.workflow_yaml_path) {
-        for command in validation_commands(&spec) {
-            let result = command_runner(&command, &workflow.path)?;
-            let command_failed = !result.succeeded;
-            if command_failed {
-                messages.push(format!(
-                    "validation command `{command}` failed with {}",
-                    exit_status_label(result.exit_code)
-                ));
-            }
-            command_results.push(result);
-            if command_failed {
-                break;
-            }
-        }
-    }
-
-    let status = if messages.is_empty() {
-        crate::registry::WorkflowValidationStatus::Valid
-    } else {
-        crate::registry::WorkflowValidationStatus::Invalid
-    };
-    Ok(WorkflowValidationReport {
-        status,
-        messages,
-        command_results,
-    })
-}
-
-fn validation_commands(spec: &crate::spec::WorkflowSpec) -> Vec<String> {
-    let commands = spec
-        .validation
-        .get("commands")
-        .and_then(JsonValue::as_array)
-        .map(|commands| {
-            commands
-                .iter()
-                .filter_map(JsonValue::as_str)
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if commands.is_empty() {
-        vec!["npm test".to_string()]
-    } else {
-        commands
-    }
-}
-
-fn run_validation_command(command: &str, cwd: &Path) -> Result<WorkflowValidationCommandResult> {
-    let output = validation_shell_command(command)
-        .current_dir(cwd)
-        .output()
-        .with_context(|| format!("failed to run validation command `{command}`"))?;
-    Ok(WorkflowValidationCommandResult {
-        command: command.to_string(),
-        succeeded: output.status.success(),
-        exit_code: output.status.code(),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-    })
-}
-
-fn validation_shell_command(command: &str) -> Command {
-    if cfg!(windows) {
-        let mut process = Command::new("cmd");
-        process.args(["/C", command]);
-        process
-    } else {
-        let mut process = Command::new("sh");
-        process.args(["-lc", command]);
-        process
-    }
-}
-
-fn exit_status_label(exit_code: Option<i32>) -> String {
-    exit_code
-        .map(|code| format!("exit code {code}"))
-        .unwrap_or_else(|| "a non-zero status".to_string())
 }
 
 fn commit_workflow_changes(config: &WorkflowsConfigToml, path: &Path, message: &str) -> Result<()> {

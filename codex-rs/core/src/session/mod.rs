@@ -1390,6 +1390,9 @@ impl Session {
             plugin_hook_load_warnings: Vec::new(),
             shell_program: Some(hook_shell_program),
             shell_args: hook_shell_argv,
+            codex_self_exe: config.codex_self_exe.clone(),
+            codex_home: Some(config.codex_home.clone()),
+            workflows_config: Some(config.workflows.clone()),
         })
     }
 

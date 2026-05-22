@@ -24,6 +24,7 @@ use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::output_spill::HookOutputSpiller;
 use codex_config::ConfigLayerStack;
+use codex_config::types::WorkflowsConfigToml;
 use codex_plugin::PluginHookSource;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::HookEventName;
@@ -104,11 +105,15 @@ pub(crate) struct ClaudeHooksEngine {
 }
 
 impl ClaudeHooksEngine {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         enabled: bool,
         config_layer_stack: Option<&ConfigLayerStack>,
         plugin_hook_sources: Vec<PluginHookSource>,
         plugin_hook_load_warnings: Vec<String>,
+        codex_self_exe: Option<std::path::PathBuf>,
+        codex_home: Option<AbsolutePathBuf>,
+        workflows_config: Option<WorkflowsConfigToml>,
         shell: CommandShell,
     ) -> Self {
         if !enabled {
@@ -125,6 +130,9 @@ impl ClaudeHooksEngine {
             config_layer_stack,
             plugin_hook_sources,
             plugin_hook_load_warnings,
+            codex_self_exe.as_deref(),
+            codex_home.as_deref(),
+            workflows_config.as_ref(),
         );
         Self {
             handlers: discovered.handlers,

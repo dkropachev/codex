@@ -14,6 +14,7 @@ use codex_config::ManagedHooksRequirementsToml;
 use codex_config::MatcherGroup;
 use codex_config::RequirementSource;
 use codex_config::TomlValue;
+use codex_config::types::WorkflowsConfigToml;
 use codex_config::version_for_toml;
 use codex_plugin::PluginHookSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -50,6 +51,9 @@ pub(crate) fn discover_handlers(
     config_layer_stack: Option<&ConfigLayerStack>,
     plugin_hook_sources: Vec<PluginHookSource>,
     plugin_hook_load_warnings: Vec<String>,
+    codex_self_exe: Option<&Path>,
+    codex_home: Option<&Path>,
+    workflows_config: Option<&WorkflowsConfigToml>,
 ) -> DiscoveryResult {
     let mut handlers = Vec::new();
     let mut hook_entries = Vec::new();
@@ -64,6 +68,17 @@ pub(crate) fn discover_handlers(
             &mut warnings,
             &mut display_order,
             config_layer_stack,
+            &hook_states,
+        );
+
+        append_builtin_workflow_quality_hook(
+            &mut handlers,
+            &mut hook_entries,
+            &mut warnings,
+            &mut display_order,
+            codex_self_exe,
+            codex_home,
+            workflows_config,
             &hook_states,
         );
 
@@ -204,6 +219,73 @@ fn append_plugin_hook_sources(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn append_builtin_workflow_quality_hook(
+    handlers: &mut Vec<ConfiguredHandler>,
+    hook_entries: &mut Vec<HookListEntry>,
+    warnings: &mut Vec<String>,
+    display_order: &mut i64,
+    codex_self_exe: Option<&Path>,
+    codex_home: Option<&Path>,
+    workflows_config: Option<&WorkflowsConfigToml>,
+    hook_states: &HashMap<String, HookStateToml>,
+) {
+    let Some(codex_self_exe) = codex_self_exe else {
+        return;
+    };
+    let (Some(codex_home), Some(workflows_config)) = (codex_home, workflows_config) else {
+        return;
+    };
+
+    let source_path =
+        synthetic_layer_path("<codex-workflow-quality-hook>/workflow-quality-hook.toml");
+    let mut env = HashMap::new();
+    env.insert(
+        "CODEX_WORKFLOW_QUALITY_HOME".to_string(),
+        codex_home.display().to_string(),
+    );
+    let Ok(workflows_config_json) = serde_json::to_string(workflows_config) else {
+        warnings.push(
+            "skipping built-in workflow quality hook: failed to serialize workflows config"
+                .to_string(),
+        );
+        return;
+    };
+    env.insert(
+        "CODEX_WORKFLOW_QUALITY_WORKFLOWS_CONFIG".to_string(),
+        workflows_config_json,
+    );
+
+    let command = format!("{} workflow-quality-hook", shell_quote_path(codex_self_exe));
+    append_hook_events(
+        handlers,
+        hook_entries,
+        warnings,
+        display_order,
+        HookHandlerSource {
+            path: &source_path,
+            key_source: source_path.display().to_string(),
+            source: HookSource::System,
+            is_managed: true,
+            hook_states,
+            env,
+            plugin_id: None,
+        },
+        HookEventsToml {
+            post_tool_use: vec![MatcherGroup {
+                matcher: Some("Bash|apply_patch".to_string()),
+                hooks: vec![HookHandlerConfig::Command {
+                    command,
+                    timeout_sec: Some(600),
+                    r#async: false,
+                    status_message: Some("checking workflow quality".to_string()),
+                }],
+            }],
+            ..Default::default()
+        },
+    );
+}
+
 fn managed_hooks_source_path(
     managed_hooks: &ManagedHooksRequirementsToml,
     requirement_source: Option<&RequirementSource>,
@@ -337,6 +419,18 @@ fn synthetic_layer_path(path: &str) -> AbsolutePathBuf {
     #[cfg(not(windows))]
     {
         AbsolutePathBuf::resolve_path_against_base(path, "/")
+    }
+}
+
+fn shell_quote_path(path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        format!("\"{}\"", path.display())
+    }
+
+    #[cfg(not(windows))]
+    {
+        format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
     }
 }
 

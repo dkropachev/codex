@@ -114,6 +114,9 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
+        None,
+        None,
+        None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -131,6 +134,9 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
+        codex_self_exe: None,
+        codex_home: None,
+        workflows_config: None,
     });
     assert!(listed.hooks[0].is_managed);
     let cwd = cwd();
@@ -167,6 +173,43 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     assert!(!outcome.should_block);
     let log_contents = fs::read_to_string(log_path).expect("read managed hook log");
     assert!(log_contents.contains("\"hook_event_name\": \"PreToolUse\""));
+}
+
+#[test]
+fn builtin_workflow_quality_hook_is_discovered_for_post_tool_use() {
+    let config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("config layer stack");
+
+    let listed = crate::list_hooks(crate::HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(config_layer_stack),
+        codex_self_exe: Some(std::env::temp_dir().join("codex")),
+        codex_home: Some(
+            AbsolutePathBuf::try_from(std::env::temp_dir().join("codex-home"))
+                .expect("absolute path"),
+        ),
+        workflows_config: Some(codex_config::types::WorkflowsConfigToml::default()),
+        ..crate::HooksConfig::default()
+    });
+
+    assert_eq!(listed.hooks.len(), 1);
+    assert_eq!(
+        listed.hooks[0].event_name,
+        codex_protocol::protocol::HookEventName::PostToolUse
+    );
+    assert_eq!(listed.hooks[0].matcher.as_deref(), Some("Bash|apply_patch"));
+    assert_eq!(listed.hooks[0].source, HookSource::System);
+    assert!(listed.hooks[0].is_managed);
+    assert!(
+        listed.hooks[0]
+            .command
+            .as_deref()
+            .is_some_and(|command| command.contains("workflow-quality-hook"))
+    );
 }
 
 #[test]
@@ -211,6 +254,9 @@ fn unknown_requirement_source_hooks_stay_managed() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
+        None,
+        None,
+        None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -219,8 +265,14 @@ fn unknown_requirement_source_hooks_stay_managed() {
 
     assert_eq!(engine.handlers.len(), 1);
     assert_eq!(engine.handlers[0].source, HookSource::Unknown);
-    let discovered =
-        super::discovery::discover_handlers(Some(&config_layer_stack), Vec::new(), Vec::new());
+    let discovered = super::discovery::discover_handlers(
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+        None,
+    );
     assert_eq!(discovered.hook_entries.len(), 1);
     assert_eq!(discovered.hook_entries[0].source, HookSource::Unknown);
     assert_eq!(discovered.hook_entries[0].enabled, true);
@@ -284,6 +336,9 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
+        None,
+        None,
+        None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -292,8 +347,14 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
 
     assert_eq!(engine.handlers.len(), 1);
     assert_eq!(engine.handlers[0].source, HookSource::CloudRequirements);
-    let discovered =
-        super::discovery::discover_handlers(Some(&config_layer_stack), Vec::new(), Vec::new());
+    let discovered = super::discovery::discover_handlers(
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+        None,
+    );
     assert_eq!(discovered.hook_entries.len(), 2);
     assert_eq!(discovered.hook_entries[0].key, managed_disabled_key);
     assert_eq!(discovered.hook_entries[0].enabled, true);
@@ -341,6 +402,9 @@ fn user_disablement_does_not_filter_managed_layer_hooks() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
+        None,
+        None,
+        None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -352,8 +416,14 @@ fn user_disablement_does_not_filter_managed_layer_hooks() {
         engine.handlers[0].source,
         HookSource::LegacyManagedConfigFile
     );
-    let discovered =
-        super::discovery::discover_handlers(Some(&config_layer_stack), Vec::new(), Vec::new());
+    let discovered = super::discovery::discover_handlers(
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+        None,
+    );
     assert_eq!(discovered.hook_entries.len(), 1);
     assert_eq!(discovered.hook_entries[0].key, managed_key);
     assert_eq!(discovered.hook_entries[0].enabled, true);
@@ -421,6 +491,9 @@ fn trusted_plugin_hook_stack(
         /*config_layer_stack*/ None,
         plugin_hook_sources.to_vec(),
         Vec::new(),
+        None,
+        None,
+        None,
     );
     let state = discovered
         .hook_entries
@@ -492,6 +565,9 @@ fn requirements_managed_hooks_warn_when_managed_dir_is_missing() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
+        None,
+        None,
+        None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -601,6 +677,9 @@ fn discovers_hooks_from_json_and_toml_in_the_same_layer() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
+        None,
+        None,
+        None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -691,6 +770,9 @@ print(json.dumps({
         Some(&config_layer_stack),
         plugin_hook_sources.clone(),
         Vec::new(),
+        None,
+        None,
+        None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -720,6 +802,9 @@ print(json.dumps({
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
+        codex_self_exe: None,
+        codex_home: None,
+        workflows_config: None,
     });
     assert_eq!(
         listed.hooks[0].plugin_id.as_deref(),
@@ -799,6 +884,9 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
         Some(&config_layer_stack),
         plugin_hook_sources,
         Vec::new(),
+        None,
+        None,
+        None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -842,6 +930,9 @@ fn plugin_hook_load_warnings_are_startup_warnings() {
         /*config_layer_stack*/ None,
         Vec::new(),
         vec!["failed plugin hook".to_string()],
+        None,
+        None,
+        None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),

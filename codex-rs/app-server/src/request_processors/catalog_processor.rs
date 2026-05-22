@@ -678,6 +678,9 @@ impl CatalogRequestProcessor {
                 config_layer_stack: Some(config.config_layer_stack),
                 plugin_hook_sources: plugin_outcome.effective_plugin_hook_sources(),
                 plugin_hook_load_warnings: plugin_outcome.effective_plugin_hook_warnings(),
+                codex_self_exe: config.codex_self_exe.clone(),
+                codex_home: Some(config.codex_home.clone()),
+                workflows_config: Some(config.workflows.clone()),
                 ..Default::default()
             });
             data.push(codex_app_server_protocol::HooksListEntry {
