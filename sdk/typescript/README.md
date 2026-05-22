@@ -164,11 +164,11 @@ To see JavaScript workflow progress and results in the regular Codex TUI, enable
 workflows = true
 ```
 
-Then launch the workflow from the TUI:
+Then launch the workflow from the TUI with its registered command alias:
 
 ```bash
 /workflow list
-/workflow run reports/jira-summary --input '{"project":"COD"}'
+/<workflow-command>
 ```
 
 The TUI starts a loopback app-server automatically and runs the same shared workflow command engine as `codex workflow`.

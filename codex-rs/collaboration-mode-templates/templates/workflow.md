@@ -25,7 +25,7 @@ Use the workflow command surface and registry-backed discovery first:
 - `/workflow where <id>` to locate the workflow on disk.
 - `/workflow status [id]`, `/workflow validate <id>`, `/workflow impact <id>`, `/workflow config ...`
 - `/workflow develop <description>` to scaffold a new workflow.
-- `/workflow edit`, `/workflow docs`, `/workflow repair`, `/workflow run` for maintenance and execution.
+- `/workflow edit`, `/workflow docs`, and `/workflow repair` for maintenance. Use registered workflow command aliases for execution.
 
 The canonical workflow roots are `$CODEX_HOME/workflows`, `.codex/workflows`, and `[workflows].search_paths`. Each workflow directory is its own git repo with `workflow.yaml`, `README.md`, `DESIGN.md`, and workflow source files. Workflow layout rules are strict: source code lives under `src/`, tests live under `src/tests/`, and persistent state or database files live under `state/`. Every workflow must keep `workflow.yaml` aligned with its `validation.coverage` contract, and each test file should declare the markers it covers with `// workflow-covers: ...`. Workflows must not rely on globally installed packages. Built-in platform modules are allowed, but third-party packages must be declared in the workflow's local `package.json` and resolved from that workflow directory's own `node_modules`. Use those paths only after a workflow is identified; do not run broad file search, web search, or unrelated repo spelunking to rediscover existing workflows or the workflow system.
 

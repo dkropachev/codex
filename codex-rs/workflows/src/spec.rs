@@ -111,7 +111,6 @@ pub fn scaffold_workflow_spec(
         .filter(|command| !command.is_empty() && !command.contains('/'))
         .map(ToString::to_string);
     let command_label = command.as_deref().unwrap_or("<cmd>");
-    let id_for_usage = id.clone();
     let repair_mode = config
         .repair_mode
         .clone()
@@ -127,7 +126,7 @@ pub fn scaffold_workflow_spec(
         }),
         usage: json!({
             "summary": format!(
-                "Run this workflow with `/{command_label}` or `codex {command_label}`. Use `codex workflow run {id_for_usage} --key value` for object fields or `--input '{{...}}'` for raw JSON input."
+                "Run this workflow with `/{command_label}` or `codex {command_label}`."
             )
         }),
         dependencies: json!({

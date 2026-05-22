@@ -230,7 +230,7 @@ async fn ensure_workflow_host(
     let tsx_path = workflow_tsx_path(workflow_dir);
     if !tsx_path.is_file() {
         return Err(anyhow::anyhow!(
-            "workflow host requires local `{}`; global package installs are ignored, so run the workflow install step in this workflow directory before `codex workflow run`",
+            "workflow host requires local `{}`; global package installs are ignored, so run the workflow install step in this workflow directory before executing the workflow directly",
             tsx_path.display()
         ));
     }

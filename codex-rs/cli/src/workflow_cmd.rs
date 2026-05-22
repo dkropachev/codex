@@ -12,7 +12,7 @@ use codex_workflows::parse_workflow_command_with_workflows;
 #[derive(Debug, clap::Parser)]
 #[command(bin_name = "codex workflow")]
 pub struct WorkflowCli {
-    /// Workflow command and arguments, such as `list` or `run <id> --input '{...}'`.
+    /// Workflow command and arguments, such as `list`, `validate <id>`, or a registered alias.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
 }
