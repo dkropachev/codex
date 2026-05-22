@@ -762,7 +762,7 @@ async function serve(socketPath) {
   const enqueue = createRequestQueue();
   const server = createServer((socket) => {
     socket.setEncoding("utf8");
-    void enqueue(async () => {
+    void (async () => {
       try {
         const payload = await readRequestLine(socket);
         if (payload === null) {
@@ -770,13 +770,38 @@ async function serve(socketPath) {
         }
         const request = JSON.parse(payload);
         const registry = registryMap(request.registry ?? []);
-        const result = await executeWorkflowRequest(
-          request,
-          registry,
-          (event) => emitEvent(socket, event),
-          undefined,
-        );
-        sendResult(socket, result);
+        let responseStarted = false;
+        const onClose = () => {
+          if (!responseStarted) {
+            process.exit(0);
+          }
+        };
+        socket.once("close", onClose);
+        await enqueue(async () => {
+          try {
+            const result = await executeWorkflowRequest(
+              request,
+              registry,
+              (event) => emitEvent(socket, event),
+              undefined,
+            );
+            responseStarted = true;
+            sendResult(socket, result);
+          } catch (error) {
+            responseStarted = true;
+            try {
+              sendResult(socket, failureResult(error));
+            } catch {
+              try {
+                socket.end();
+              } catch {
+                // Ignore secondary failures while closing a broken socket.
+              }
+            }
+          } finally {
+            socket.off("close", onClose);
+          }
+        });
       } catch (error) {
         try {
           sendResult(socket, failureResult(error));
@@ -788,7 +813,7 @@ async function serve(socketPath) {
           }
         }
       }
-    });
+    })();
   });
 
   await new Promise((resolve, reject) => {
@@ -800,3 +825,164 @@ async function serve(socketPath) {
 const { socketPath } = parseArgs(process.argv.slice(2));
 await serve(socketPath);
 "##;
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
+
+    use serial_test::serial;
+    use tempfile::TempDir;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::UnixStream;
+    use tokio::time::sleep;
+    use tokio::time::timeout;
+
+    use crate::registry::discover_workflows;
+    use crate::spec::WORKFLOW_YAML;
+    use crate::spec::write_workflow_spec;
+
+    use super::WorkflowHostRegistryEntry;
+    use super::WorkflowHostRequest;
+    use super::connect_to_host;
+    use super::ensure_workflow_host;
+    use super::run_workflow_via_host;
+    use super::workflow_host_socket_path;
+
+    #[tokio::test]
+    #[serial]
+    async fn disconnected_client_forces_host_restart_before_next_run() {
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let workflow_dir = home.path().join("workflows/reports/disconnect-restart");
+        fs::create_dir_all(workflow_dir.join("src")).unwrap();
+        fs::create_dir_all(workflow_dir.join("state")).unwrap();
+        fs::create_dir_all(workflow_dir.join("node_modules/.bin")).unwrap();
+        fs::create_dir_all(workflow_dir.join(".git")).unwrap();
+        fs::write(workflow_dir.join("README.md"), "# Disconnect Restart\n").unwrap();
+        fs::write(workflow_dir.join("state/.gitkeep"), "").unwrap();
+        fs::write(
+            workflow_dir.join("src/workflow.ts"),
+            r#"const workflow = {
+  async run(_ctx, input) {
+    if (input?.hang) {
+      await new Promise(() => {});
+    }
+    return { pid: process.pid, recovered: true };
+  },
+};
+
+export default workflow;
+"#,
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("node_modules/.bin/tsx"),
+            r#"#!/usr/bin/node
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+const [runner, ...args] = process.argv.slice(2);
+if (args[0] === '--serve') {
+  const result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });
+  process.exit(result.status ?? 1);
+}
+
+const workflowPathIndex = args.indexOf('--workflow-path');
+if (workflowPathIndex === -1 || workflowPathIndex + 1 >= args.length) {
+  console.error('missing --workflow-path');
+  process.exit(1);
+}
+
+const workflowPath = args[workflowPathIndex + 1];
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-runtime-'));
+const workflowDir = path.dirname(workflowPath);
+const tmpWorkflowDir = path.join(tmpDir, path.basename(workflowDir));
+fs.cpSync(workflowDir, tmpWorkflowDir, { recursive: true });
+const tmpPath = path.join(tmpWorkflowDir, path.basename(workflowPath) + '.mjs');
+fs.copyFileSync(workflowPath, tmpPath);
+args[workflowPathIndex + 1] = tmpPath;
+const result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });
+process.exit(result.status ?? 1);
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(
+            workflow_dir.join("node_modules/.bin/tsx"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        write_workflow_spec(
+            &workflow_dir.join(WORKFLOW_YAML),
+            &crate::spec::WorkflowSpec {
+                id: "reports/disconnect-restart".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let workflows = discover_workflows(home.path(), cwd.path(), &Default::default()).unwrap();
+        let workflow = workflows
+            .iter()
+            .find(|entry| entry.id == "reports/disconnect-restart")
+            .unwrap()
+            .clone();
+        let socket_path = workflow_host_socket_path(home.path());
+        ensure_workflow_host(home.path(), &workflow.path, &socket_path)
+            .await
+            .unwrap();
+
+        let request = WorkflowHostRequest {
+            workflow_path: workflow.path.join("src/workflow.ts").display().to_string(),
+            workflow_name: "disconnect-restart".to_string(),
+            cwd: workflow.path.display().to_string(),
+            input: r#"{"hang":true}"#.to_string(),
+            run_id: "run-1".to_string(),
+            execution_id: "exec-1".to_string(),
+            origin_thread_id: None,
+            registry: vec![WorkflowHostRegistryEntry {
+                id: workflow.id.clone(),
+                path: workflow.path.display().to_string(),
+            }],
+        };
+
+        let mut stream = UnixStream::connect(&socket_path).await.unwrap();
+        let request_json = serde_json::to_string(&request).unwrap();
+        stream.write_all(request_json.as_bytes()).await.unwrap();
+        stream.write_all(b"\n").await.unwrap();
+        stream.flush().await.unwrap();
+        sleep(Duration::from_millis(100)).await;
+        drop(stream);
+
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if connect_to_host(&socket_path).await.is_err() {
+                    break;
+                }
+                sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("host should exit after the client disconnects mid-request");
+
+        let recovered = timeout(
+            Duration::from_secs(5),
+            run_workflow_via_host(
+                home.path(),
+                &workflow.path,
+                &workflow.path.join("src/workflow.ts"),
+                "{}",
+                &workflows,
+            ),
+        )
+        .await
+        .expect("next workflow run should not hang behind a disconnected client")
+        .unwrap();
+
+        let result: serde_json::Value = serde_json::from_str(&recovered.stdout).unwrap();
+        assert_eq!(result["recovered"], serde_json::json!(true));
+    }
+}
