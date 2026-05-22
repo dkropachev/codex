@@ -28,18 +28,19 @@ For these reasons, we focus external contributions on discussion, analysis, and 
 
 ### Development workflow
 
-If you are invited by a Codex team member to contribute a PR, here is the recommended development workflow.
+If you are invited by a Codex team member to contribute a PR, keep the loop tight:
 
 - Create a _topic branch_ from `main` - e.g. `feat/interactive-prompt`.
-- Keep your changes focused. Multiple unrelated fixes should be opened as separate PRs.
-- Ensure your change is free of lint warnings and test failures.
+- Keep each branch focused on one logical change.
+- Update the code, tests, docs, and any generated artifacts that the change touches in the same commit series.
+- Run the local checks before you commit: `just fmt`, `just fix -p <crate>`, and the relevant tests (`cargo test -p ...` or `just test` when you need a broader sweep). Regenerate any derived schemas or lockfiles before rerunning the affected checks.
+- Keep commits atomic. Each commit should build, stay lint-clean, and pass its tests.
 
 ### Guidance for invited code contributions
 
 1. **Start with an issue.** Open a new one or comment on an existing discussion so we can agree on the solution before code is written.
 2. **Add or update tests.** A bug fix should generally come with test coverage that fails before your change and passes afterwards. 100% coverage is not required, but aim for meaningful assertions.
 3. **Document behavior.** If your change affects user-facing behavior, update the README, inline help (`codex --help`), or relevant example projects.
-4. **Keep commits atomic.** Each commit should compile and the tests should pass. This makes reviews and potential rollbacks easier.
 
 ### Model metadata updates
 
@@ -54,8 +55,7 @@ When a change updates model catalogs or model metadata (`/models` payloads, pres
 
 - Fill in the PR template (or include similar information) - **What? Why? How?**
 - Include a link to a bug report or enhancement request in the issue tracker
-- Run **all** checks locally. Use the root `just` helpers so you stay consistent with the rest of the workspace: `just fmt`, `just fix -p <crate>` for the crate you touched, and the relevant tests (e.g., `cargo test -p codex-tui` or `just test` if you need a full sweep). CI failures that could have been caught locally slow down the process.
-- Make sure your branch is up-to-date with `main` and that you have resolved merge conflicts.
+- Make sure your branch is up to date with `main`, has no merge conflicts, and still passes the local checks above.
 - Mark the PR as **Ready for review** only when you believe it is in a merge-able state.
 
 ### Review process
