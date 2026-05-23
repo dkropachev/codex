@@ -85,11 +85,13 @@ impl App {
             AppEvent::WorkflowProcessFinished {
                 run_id,
                 command,
+                stdout,
                 result,
             } => {
-                self.handle_workflow_process_finished(run_id, command, result);
+                self.handle_workflow_process_finished(run_id, command, stdout, result);
             }
             AppEvent::WorkflowCommandCompletionStart { workflow, input } => {
+                let working_directory = self.chat_widget.config_ref().cwd.clone();
                 let tx = self.app_event_tx.clone();
                 tokio::spawn(async move {
                     let command = workflow
@@ -98,6 +100,7 @@ impl App {
                         .unwrap_or_else(|| workflow.id.clone());
                     let suggestions = codex_workflows::complete_workflow(
                         &workflow.path,
+                        working_directory.as_path(),
                         &workflow.path.join("src/workflow.ts"),
                         &input,
                     )

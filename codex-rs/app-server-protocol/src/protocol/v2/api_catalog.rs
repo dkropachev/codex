@@ -179,13 +179,13 @@ pub fn workflow_runtime_api_catalog() -> ApiCatalogWorkflowRuntime {
                 "defineWorkflow",
                 ApiCatalogSymbolKind::Function,
                 "defineWorkflow<Input, Output>(workflow: DefinedWorkflow<Input, Output>): DefinedWorkflow<Input, Output>",
-                "Define a reusable workflow that can run standalone, from the TUI, or from another workflow.",
+                "Legacy object-style workflow helper retained for compatibility. New workflows should export a named default async function, optional complete(...) autocomplete hook, and optional WorkflowOutput.toTuiMarkdown(result) companion.",
             ),
             symbol(
                 "runWorkflow",
                 ApiCatalogSymbolKind::Function,
                 "runWorkflow<Input, Output>(workflow, options?): Promise<Output>",
-                "Run a workflow and return its structured JavaScript result.",
+                "Run a workflow and return its structured JSON result. Generated workflow wrappers use this internally.",
             ),
             symbol(
                 "CodexWorkflow.start",
@@ -227,7 +227,7 @@ pub fn workflow_runtime_api_catalog() -> ApiCatalogWorkflowRuntime {
                 "WorkflowContext.reportToUserMarkdown",
                 ApiCatalogSymbolKind::Method,
                 "ctx.reportToUserMarkdown(markdown: string): void",
-                "Report user-facing markdown that should be rendered for the user and handed to the next turn.",
+                "Legacy markdown handoff. Prefer WorkflowOutput.toTuiMarkdown(result) for user-facing rendering and use this only as a compatibility escape hatch.",
             ),
             symbol(
                 "WorkflowContext.mcp.listServers",

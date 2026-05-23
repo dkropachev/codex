@@ -16,12 +16,16 @@ use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
 
+use crate::api_contract::read_published_workflow_api_contract;
+use crate::workflow_contract_validation::validate_json_against_schema;
 #[cfg(unix)]
 use crate::workflow_host;
 
 pub const WORKFLOW_RUNTIME_EVENT_PREFIX: &str = "__CODEX_WORKFLOW_EVENT__";
 const WORKFLOW_SELF_EXE_ENV: &str = "CODEX_WORKFLOW_SELF_EXE";
 const WORKFLOW_NAME_ENV: &str = "CODEX_WORKFLOW_NAME";
+const WORKFLOW_WORKING_DIRECTORY_ENV: &str = "CODEX_WORKFLOW_WORKING_DIRECTORY";
+const WORKFLOW_OUTPUT_FORMAT_ENV: &str = "CODEX_WORKFLOW_OUTPUT_FORMAT";
 
 #[derive(Clone, Copy)]
 enum WorkflowRuntimeInvocationMode {
@@ -46,6 +50,8 @@ import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 
 const EVENT_PREFIX = "__CODEX_WORKFLOW_EVENT__";
+const WORKFLOW_WORKING_DIRECTORY_ENV = "CODEX_WORKFLOW_WORKING_DIRECTORY";
+const WORKFLOW_OUTPUT_FORMAT_ENV = "CODEX_WORKFLOW_OUTPUT_FORMAT";
 
 function parseArgs(argv) {
   let workflowPath;
@@ -208,6 +214,48 @@ function parseWorkflowEventLine(line, workflowName) {
   return null;
 }
 
+async function emitRequestedFormat(workflowModule, workflow, result) {
+  const requestedFormat = stringValue(process.env[WORKFLOW_OUTPUT_FORMAT_ENV]);
+  if (!requestedFormat) {
+    return;
+  }
+
+  if (requestedFormat !== "tui.markdown.v1") {
+    if (typeof workflow.format === "function") {
+      const formatted = await workflow.format(result, { format: requestedFormat });
+      if (requestedFormat === "tui.markdown.v1") {
+        const markdown = stringValue(formatted?.markdown);
+        if (markdown) {
+          emitEvent({ type: "reportToUserMarkdown", markdown });
+        }
+        return;
+      }
+    }
+    throw new Error(`unsupported host output format ${requestedFormat}`);
+  }
+
+  const formatter = workflowModule.WorkflowOutput?.toTuiMarkdown;
+  if (typeof formatter === "function") {
+    const formatted = await formatter(result);
+    const markdown = stringValue(formatted?.markdown);
+    if (!markdown) {
+      throw new Error(
+        `workflow format ${requestedFormat} must return { markdown: string }`,
+      );
+    }
+    emitEvent({ type: "reportToUserMarkdown", markdown });
+    return;
+  }
+
+  if (typeof workflow.format === "function") {
+    const formatted = await workflow.format(result, { format: requestedFormat });
+    const markdown = stringValue(formatted?.markdown);
+    if (markdown) {
+      emitEvent({ type: "reportToUserMarkdown", markdown });
+    }
+  }
+}
+
 async function runChildWorkflow(workflow, input, options, emitStatus) {
   const workflowId = typeof workflow === "string" ? workflow : workflow?.id;
   if (!workflowId || typeof workflowId !== "string") {
@@ -220,12 +268,17 @@ async function runChildWorkflow(workflow, input, options, emitStatus) {
   }
 
   const rawInput = JSON.stringify(input ?? {});
+  const workflowDirectory = process.cwd();
+  const workingDirectory = process.env[WORKFLOW_WORKING_DIRECTORY_ENV] ?? workflowDirectory;
   const child = spawn(
     codexExe,
     ["workflow", "run", workflowId, "--input", rawInput],
     {
-      cwd: process.cwd(),
-      env: process.env,
+      cwd: workingDirectory,
+      env: {
+        ...process.env,
+        [WORKFLOW_WORKING_DIRECTORY_ENV]: workingDirectory,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -301,14 +354,16 @@ async function runChildWorkflow(workflow, input, options, emitStatus) {
 }
 
 function createRuntimeContext() {
-  const cwd = process.cwd();
-  const workflowName = process.env.CODEX_WORKFLOW_NAME ?? path.basename(cwd);
+  const workflowDirectory = process.cwd();
+  const workingDirectory =
+    process.env[WORKFLOW_WORKING_DIRECTORY_ENV] ?? workflowDirectory;
+  const workflowName = process.env.CODEX_WORKFLOW_NAME ?? path.basename(workflowDirectory);
   const emitStatus = (status) => emitEvent({ type: "status", status: normalizeStatusUpdate(status) });
   return {
-    workingDirectory: cwd,
-    cwd,
-    currentWorkingDirectory: cwd,
-    repoRoot: cwd,
+    workingDirectory,
+    cwd: workingDirectory,
+    currentWorkingDirectory: workingDirectory,
+    repoRoot: workingDirectory,
     progress: (message, data) => emitStatus(legacyProgressToStatus(workflowName, message, data)),
     status: emitStatus,
     reportToUserMarkdown: (markdown) => emitEvent({ type: "reportToUserMarkdown", markdown }),
@@ -347,26 +402,30 @@ const moduleUrl = pathToFileURL(path.resolve(workflowPath)).href;
 const workflowModule = await import(moduleUrl);
 const workflow = workflowModule.default;
 
-if (!workflow || typeof workflow !== "object") {
-  throw new Error("workflow module must export a default object");
-}
-
 const input = JSON.parse(rawInput ?? "{}");
 let output;
 if (mode === "complete") {
-  if (typeof workflow.complete !== "function") {
-    output = [];
+  if (typeof workflowModule.complete === "function") {
+    output = await workflowModule.complete(createRuntimeContext(), input);
+  } else if (workflow && typeof workflow.complete === "function") {
+    output = await workflow.complete(createRuntimeContext(), input);
   } else {
-    const suggestions = await workflow.complete(createRuntimeContext(), input);
-    output = Array.isArray(suggestions)
-      ? suggestions.map(normalizeCompletionSuggestion)
-      : [];
+    output = [];
   }
+  output = Array.isArray(output)
+    ? output.map(normalizeCompletionSuggestion)
+    : [];
 } else {
-  if (typeof workflow.run !== "function") {
-    throw new Error("workflow module must export a default object with a run(ctx, input) method");
+  if (typeof workflow === "function") {
+    output = await workflow(createRuntimeContext(), input);
+  } else if (workflow && typeof workflow.run === "function") {
+    output = await workflow.run(createRuntimeContext(), input);
+  } else {
+    throw new Error(
+      "workflow module must export a named default async function or a default object with a run(ctx, input) method",
+    );
   }
-  output = await workflow.run(createRuntimeContext(), input);
+  await emitRequestedFormat(workflowModule, workflow, output);
 }
 process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 "#;
@@ -395,10 +454,12 @@ pub enum WorkflowRuntimeEvent {
 
 pub async fn complete_workflow(
     workflow_dir: &Path,
+    working_directory: &Path,
     workflow_path: &Path,
     input: &crate::command::WorkflowCommandInput,
 ) -> Result<Vec<crate::command_completion::WorkflowCommandCompletionSuggestion>> {
     let output = run_workflow_process(
+        working_directory,
         workflow_dir,
         workflow_path,
         &serde_json::to_string(input).context("failed to serialize workflow completion input")?,
@@ -451,42 +512,54 @@ pub struct WorkflowStatusUpdate {
 #[cfg(unix)]
 pub(crate) async fn run_workflow(
     codex_home: &Path,
+    working_directory: &Path,
     workflow_dir: &Path,
     workflow_path: &Path,
     input: &str,
     workflows: &[crate::registry::WorkflowSummary],
 ) -> Result<WorkflowRuntimeOutput> {
     if workflow_host::should_use_host() {
-        return workflow_host::run_workflow_via_host(
+        let output = workflow_host::run_workflow_via_host(
             codex_home,
+            working_directory,
             workflow_dir,
             workflow_path,
             input,
             workflows,
         )
         .await;
+        let output = output?;
+        validate_workflow_runtime_output(codex_home, workflows, workflow_dir, &output)?;
+        return Ok(output);
     }
 
-    run_workflow_legacy(workflow_dir, workflow_path, input).await
+    let output = run_workflow_legacy(working_directory, workflow_dir, workflow_path, input).await?;
+    validate_workflow_runtime_output(codex_home, workflows, workflow_dir, &output)?;
+    Ok(output)
 }
 
 #[cfg(not(unix))]
 pub(crate) async fn run_workflow(
     _codex_home: &Path,
+    working_directory: &Path,
     workflow_dir: &Path,
     workflow_path: &Path,
     input: &str,
-    _workflows: &[crate::registry::WorkflowSummary],
+    workflows: &[crate::registry::WorkflowSummary],
 ) -> Result<WorkflowRuntimeOutput> {
-    run_workflow_legacy(workflow_dir, workflow_path, input).await
+    let output = run_workflow_legacy(working_directory, workflow_dir, workflow_path, input).await?;
+    validate_workflow_runtime_output(_codex_home, workflows, workflow_dir, &output)?;
+    Ok(output)
 }
 
 async fn run_workflow_legacy(
+    working_directory: &Path,
     workflow_dir: &Path,
     workflow_path: &Path,
     input: &str,
 ) -> Result<WorkflowRuntimeOutput> {
     run_workflow_process(
+        working_directory,
         workflow_dir,
         workflow_path,
         input,
@@ -495,7 +568,45 @@ async fn run_workflow_legacy(
     .await
 }
 
+fn validate_workflow_runtime_output(
+    codex_home: &Path,
+    workflows: &[crate::registry::WorkflowSummary],
+    workflow_dir: &Path,
+    output: &WorkflowRuntimeOutput,
+) -> Result<()> {
+    if !output.success || output.stdout.trim().is_empty() {
+        return Ok(());
+    }
+
+    let Some(workflow) = workflows
+        .iter()
+        .find(|workflow| workflow.path == workflow_dir)
+    else {
+        return Ok(());
+    };
+
+    let Some(contract) = read_published_workflow_api_contract(codex_home, workflow)? else {
+        return Ok(());
+    };
+
+    let output_json = serde_json::from_str::<JsonValue>(&output.stdout).with_context(|| {
+        format!(
+            "failed to parse workflow output for {} as JSON",
+            workflow.id
+        )
+    })?;
+    validate_json_against_schema(&contract.output_schema, &output_json).with_context(|| {
+        format!(
+            "workflow output for {} did not match the published contract",
+            workflow.id
+        )
+    })?;
+
+    Ok(())
+}
+
 async fn run_workflow_process(
+    working_directory: &Path,
     workflow_dir: &Path,
     workflow_path: &Path,
     input: &str,
@@ -519,6 +630,14 @@ async fn run_workflow_process(
         .arg(workflow_path)
         .arg("--input")
         .arg(input)
+        .env(
+            WORKFLOW_WORKING_DIRECTORY_ENV,
+            working_directory.display().to_string(),
+        )
+        .env(
+            WORKFLOW_OUTPUT_FORMAT_ENV,
+            env::var(WORKFLOW_OUTPUT_FORMAT_ENV).unwrap_or_default(),
+        )
         .current_dir(workflow_dir)
         .env(
             WORKFLOW_SELF_EXE_ENV,
@@ -672,6 +791,8 @@ mod tests {
         assert!(WORKFLOW_RUNNER_SOURCE.contains("progress"));
         assert!(WORKFLOW_RUNNER_SOURCE.contains("status:"));
         assert!(WORKFLOW_RUNNER_SOURCE.contains("runWorkflow:"));
+        assert!(WORKFLOW_RUNNER_SOURCE.contains("CODEX_WORKFLOW_WORKING_DIRECTORY"));
+        assert!(WORKFLOW_RUNNER_SOURCE.contains("repoRoot: workingDirectory"));
         assert!(WORKFLOW_RUNNER_SOURCE.contains("mode === \"complete\""));
     }
 
@@ -685,12 +806,12 @@ mod tests {
             &workflow_path,
             r#"const workflow = {
   async complete(_ctx, input) {
-    if (input.text === "--review-id") {
+    if (input.text === "--workflow-id") {
       return [
         {
-          display: "--review-id review-123",
-          insertText: "--review-id review-123",
-          description: "Pending review",
+          display: "--workflow-id workflow-123",
+          insertText: "--workflow-id workflow-123",
+          description: "Pending workflow",
         },
         "--format summary",
       ];
@@ -708,10 +829,11 @@ export default workflow;
 
         let suggestions = complete_workflow(
             &workflow_dir,
+            &workflow_dir,
             &workflow_path,
             &WorkflowCommandInput {
-                argv: vec!["--review-id".to_string()],
-                text: "--review-id".to_string(),
+                argv: vec!["--workflow-id".to_string()],
+                text: "--workflow-id".to_string(),
             },
         )
         .await
@@ -721,9 +843,9 @@ export default workflow;
             suggestions,
             vec![
                 crate::WorkflowCommandCompletionSuggestion {
-                    display: "--review-id review-123".to_string(),
-                    insert_text: "--review-id review-123".to_string(),
-                    description: Some("Pending review".to_string()),
+                    display: "--workflow-id workflow-123".to_string(),
+                    insert_text: "--workflow-id workflow-123".to_string(),
+                    description: Some("Pending workflow".to_string()),
                 },
                 crate::WorkflowCommandCompletionSuggestion {
                     display: "--format summary".to_string(),
@@ -754,6 +876,7 @@ export default workflow;
 
         let suggestions = complete_workflow(
             &workflow_dir,
+            &workflow_dir,
             &workflow_path,
             &WorkflowCommandInput {
                 argv: Vec::new(),
@@ -764,6 +887,51 @@ export default workflow;
         .expect("missing complete hook should return empty suggestions");
 
         assert!(suggestions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn complete_workflow_uses_workspace_cwd_for_runtime_context() {
+        let temp = TempDir::new().expect("temp dir");
+        let workflow_dir = temp.path().join("summary");
+        let workspace_cwd = temp.path().join("workspace");
+        let workflow_path = workflow_dir.join("workflow.mjs");
+        fs::create_dir_all(&workspace_cwd).expect("workspace cwd");
+        write_test_workflow(
+            &workflow_dir,
+            &workflow_path,
+            r#"const workflow = {
+  async complete(ctx) {
+    return [ctx.cwd];
+  },
+  async run() {
+    return { workflowStatus: "done" };
+  },
+};
+
+export default workflow;
+"#,
+        );
+
+        let suggestions = complete_workflow(
+            &workflow_dir,
+            &workspace_cwd,
+            &workflow_path,
+            &WorkflowCommandInput {
+                argv: Vec::new(),
+                text: String::new(),
+            },
+        )
+        .await
+        .expect("workflow completion should succeed");
+
+        assert_eq!(
+            suggestions,
+            vec![crate::WorkflowCommandCompletionSuggestion {
+                display: workspace_cwd.display().to_string(),
+                insert_text: workspace_cwd.display().to_string(),
+                description: None,
+            }]
+        );
     }
 
     fn write_test_workflow(workflow_dir: &Path, workflow_path: &Path, source: &str) {

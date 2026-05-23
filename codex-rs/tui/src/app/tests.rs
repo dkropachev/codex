@@ -569,7 +569,7 @@ sleep 0.2
     assert!(rendered.contains("Workflow Result"));
     assert!(rendered.contains("Captured from test."));
 
-    let (finished_run_id, command, result) = time::timeout(Duration::from_secs(1), async {
+    let (finished_run_id, command, stdout, result) = time::timeout(Duration::from_secs(1), async {
         loop {
             let event = app_event_rx
                 .recv()
@@ -578,19 +578,133 @@ sleep 0.2
             if let AppEvent::WorkflowProcessFinished {
                 run_id,
                 command,
+                stdout,
                 result,
             } = event
             {
-                return (run_id, command, result);
+                return (run_id, command, stdout, result);
             }
         }
     })
     .await
     .expect("timed out waiting for workflow finish event");
-    app.handle_workflow_process_finished(finished_run_id, command, result);
+    app.handle_workflow_process_finished(finished_run_id, command, stdout, result);
 
     assert!(app.workflow_runs.is_empty());
     assert!(app.chat_widget.status_widget_for_test().is_none());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn workflow_command_end_to_end_without_markdown_renders_stdout_json_result_cell() -> Result<()>
+{
+    let temp = tempdir()?;
+    let env_capture_path = temp.path().join("workflow-env-json.txt");
+    let fake_codex_path = temp.path().join("fake-codex-json.sh");
+    write_fake_workflow_executable(
+        &fake_codex_path,
+        &env_capture_path,
+        &format!(
+            r#"cat <<'EOF' 1>&2
+{WORKFLOW_RUNTIME_EVENT_PREFIX}{{"type":"progress","message":"Preparing workflow fallback","data":{{"stage":"testing","step":1}}}}
+EOF
+printf '%s\n' '{{"status":"done","findings":[]}}'
+sleep 0.2
+"#,
+        ),
+    )?;
+
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.cwd = AbsolutePathBuf::try_from(temp.path().to_path_buf())
+        .expect("temp workflow cwd should be absolute");
+    while app_event_rx.try_recv().is_ok() {}
+
+    let thread_id = ThreadId::new();
+    let session = test_thread_session(thread_id, test_path_buf("/tmp/project"));
+    app.chat_widget.handle_thread_session(session);
+    app.config.codex_self_exe = Some(fake_codex_path);
+
+    app.run_workflow_command(vec!["code-review".to_string()]);
+    assert_eq!(
+        app.workflow_runs.len(),
+        1,
+        "workflow child should have started"
+    );
+
+    let placeholder_status = app
+        .chat_widget
+        .status_widget_for_test()
+        .expect("workflow placeholder status should be visible");
+    assert_eq!(
+        placeholder_status.header(),
+        "Workflow code-review: starting"
+    );
+    assert_eq!(placeholder_status.details(), None);
+
+    let env_capture = wait_for_workflow_env_capture(&env_capture_path).await;
+    assert!(env_capture.contains(&format!("thread_id={thread_id}")));
+    let progress_notification = time::timeout(Duration::from_secs(1), async {
+        loop {
+            let event = app_event_rx
+                .recv()
+                .await
+                .expect("workflow event channel closed unexpectedly");
+            if let AppEvent::WorkflowProgress { notification } = event {
+                return notification;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for workflow progress event");
+    assert_eq!(progress_notification.thread_id, Some(thread_id.to_string()));
+    assert_eq!(progress_notification.message, "Preparing workflow fallback");
+    app.handle_workflow_progress_notification(progress_notification);
+
+    let live_status = app
+        .chat_widget
+        .status_widget_for_test()
+        .expect("workflow progress should be visible before completion");
+    assert_eq!(
+        live_status.header(),
+        "Workflow code-review: Preparing workflow fallback (testing, step 1)"
+    );
+    assert_eq!(live_status.details(), None);
+
+    let (finished_run_id, command, stdout, result) = time::timeout(Duration::from_secs(1), async {
+        loop {
+            let event = app_event_rx
+                .recv()
+                .await
+                .expect("workflow event channel closed unexpectedly");
+            if let AppEvent::WorkflowProcessFinished {
+                run_id,
+                command,
+                stdout,
+                result,
+            } = event
+            {
+                return (run_id, command, stdout, result);
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for workflow finish event");
+    app.handle_workflow_process_finished(finished_run_id, command, stdout, result);
+
+    assert!(app.workflow_runs.is_empty());
+    assert!(app.chat_widget.status_widget_for_test().is_none());
+
+    let cell = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => Some(cell),
+            _ => None,
+        })
+        .expect("expected workflow JSON history cell");
+    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 120));
+    assert!(rendered.contains("Workflow Result"));
+    assert!(rendered.contains("\"status\": \"done\""));
+    assert!(rendered.contains("\"findings\": []"));
 
     Ok(())
 }
@@ -667,7 +781,7 @@ exit 1
     );
     assert_eq!(live_status.details(), None);
 
-    let (finished_run_id, command, result) = time::timeout(Duration::from_secs(1), async {
+    let (finished_run_id, command, stdout, result) = time::timeout(Duration::from_secs(1), async {
         loop {
             let event = app_event_rx
                 .recv()
@@ -676,16 +790,17 @@ exit 1
             if let AppEvent::WorkflowProcessFinished {
                 run_id,
                 command,
+                stdout,
                 result,
             } = event
             {
-                return (run_id, command, result);
+                return (run_id, command, stdout, result);
             }
         }
     })
     .await
     .expect("timed out waiting for workflow finish event");
-    app.handle_workflow_process_finished(finished_run_id, command, result);
+    app.handle_workflow_process_finished(finished_run_id, command, stdout, result);
 
     assert!(app.workflow_runs.is_empty());
     assert!(app.chat_widget.status_widget_for_test().is_none());

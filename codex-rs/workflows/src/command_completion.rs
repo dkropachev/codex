@@ -29,7 +29,13 @@ pub(crate) fn command_option_hints_from_spec(
         return usage_hints;
     }
 
-    input_schema_option_hints(spec.api.get("inputSchema"))
+    command_option_hints_from_input_schema(spec.api.get("inputSchema"))
+}
+
+pub(crate) fn command_option_hints_from_input_schema(
+    schema: Option<&JsonValue>,
+) -> Vec<WorkflowCommandOptionHint> {
+    input_schema_option_hints(schema)
 }
 
 fn usage_option_hints(usage: &JsonValue) -> Vec<WorkflowCommandOptionHint> {
@@ -223,7 +229,7 @@ mod tests {
         let spec = WorkflowSpec {
             usage: json!({
                 "options": [
-                    "--review-id <id>",
+                    "--workflow-id <id>",
                     {
                         "flag": "--format",
                         "valueHint": "<summary|full>",
@@ -238,7 +244,7 @@ mod tests {
             command_option_hints_from_spec(&spec),
             vec![
                 WorkflowCommandOptionHint {
-                    display: "--review-id <id>".to_string(),
+                    display: "--workflow-id <id>".to_string(),
                     description: None,
                 },
                 WorkflowCommandOptionHint {
@@ -255,11 +261,11 @@ mod tests {
             api: json!({
                 "inputSchema": {
                     "type": "object",
-                    "required": ["reviewId"],
+                    "required": ["workflowId"],
                     "properties": {
-                        "reviewId": {
+                        "workflowId": {
                             "type": "string",
-                            "description": "Review identifier"
+                            "description": "Workflow identifier"
                         },
                         "format": {
                             "type": "string",
@@ -280,8 +286,8 @@ mod tests {
             command_option_hints_from_spec(&spec),
             vec![
                 WorkflowCommandOptionHint {
-                    display: "--review-id <string>".to_string(),
-                    description: Some("required · Review identifier".to_string()),
+                    display: "--workflow-id <string>".to_string(),
+                    description: Some("required · Workflow identifier".to_string()),
                 },
                 WorkflowCommandOptionHint {
                     display: "--format <summary|full>".to_string(),

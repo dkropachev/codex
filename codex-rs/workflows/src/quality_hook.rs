@@ -11,8 +11,8 @@ use crate::registry::workflow_git_status;
 use crate::validation_runner::WorkflowValidationCommandResult;
 use crate::validation_runner::WorkflowValidationReport;
 use crate::validation_runner::run_validation_command;
-use crate::validation_runner::validate_workflow;
 use crate::validation_runner::validation_report_message;
+use crate::workflow_api::validate_and_publish_workflow_api;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkflowQualityHookFeedback {
@@ -46,6 +46,22 @@ pub fn workflow_quality_feedback(
         if let Some(failure) = workflow_quality_failure_for_workflow(&workflow)? {
             failures.push(failure);
         }
+
+        let report = validate_and_publish_workflow_api(
+            codex_home,
+            cwd,
+            config,
+            &workflow,
+            run_validation_command,
+        )?;
+        if report.status == crate::registry::WorkflowValidationStatus::Valid {
+            continue;
+        }
+
+        failures.push(WorkflowQualityFailure {
+            findings: findings_for_report(&workflow, &report),
+            workflow,
+        });
     }
 
     if failures.is_empty() {
@@ -424,12 +440,26 @@ mod tests {
 "#,
         )
         .expect("write package.json");
-        fs::write(workflow_dir.join("src/workflow.ts"), "export {}\n").expect("write workflow");
+        fs::write(
+            workflow_dir.join("src/workflow.ts"),
+            "export interface WorkflowInput { input?: string; }\nexport interface WorkflowOutput { ok: boolean; }\nexport {}\n",
+        )
+        .expect("write workflow");
         fs::write(
             workflow_dir.join("src/tests/workflow.positive.test.ts"),
             "// workflow-covers: positive progress finalResult\nexport {}\n",
         )
         .expect("write positive test");
+        fs::write(
+            workflow_dir.join("src/tests/workflow.load.test.ts"),
+            "// workflow-covers: load\nexport {}\n",
+        )
+        .expect("write load test");
+        fs::write(
+            workflow_dir.join("src/tests/workflow.autocomplete.test.ts"),
+            "// workflow-covers: autocomplete\nexport {}\n",
+        )
+        .expect("write autocomplete test");
         fs::write(
             workflow_dir.join("src/tests/workflow.negative.test.ts"),
             "// workflow-covers: negative failureUx\nexport {}\n",
@@ -448,7 +478,7 @@ mod tests {
         fs::create_dir_all(workflow_dir.join(".git")).expect("create git dir");
         fs::write(
             workflow_dir.join("workflow.yaml"),
-            "id: review/fix\nvalidation:\n  commands:\n    - exit 0\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
+            "id: review/fix\napi:\n  inputSchema:\n    type: object\n  outputSchema:\n    type: object\nvalidation:\n  commands:\n    - exit 0\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
         )
         .expect("write workflow spec");
 

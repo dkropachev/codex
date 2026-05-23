@@ -1,3 +1,4 @@
+mod api_contract;
 mod command;
 mod command_completion;
 mod context;
@@ -9,10 +10,14 @@ mod registry;
 mod spec;
 mod validation;
 mod validation_runner;
+mod workflow_api;
+mod workflow_client_generation;
+mod workflow_contract_validation;
 #[cfg(unix)]
 mod workflow_host;
 mod workflow_runtime;
 
+pub use api_contract::WorkflowApiContract;
 pub use command::WorkflowCommand;
 pub use command::WorkflowCommandInput;
 pub use command::WorkflowCommandParseError;

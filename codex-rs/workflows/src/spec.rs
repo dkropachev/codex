@@ -29,6 +29,7 @@ pub enum WorkflowHookKind {
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowToolSpec {
     pub description: String,
+    #[serde(default, skip_serializing_if = "JsonValue::is_null")]
     pub input_schema: JsonValue,
     #[serde(default, skip_serializing_if = "JsonValue::is_null")]
     pub output_schema: JsonValue,
@@ -120,10 +121,7 @@ pub fn scaffold_workflow_spec(
         title: Some(title),
         user_description: Some(user_description),
         search_terms: Vec::new(),
-        api: json!({
-            "inputSchema": { "type": "object" },
-            "outputSchema": { "type": "object" }
-        }),
+        api: JsonValue::Null,
         usage: json!({
             "summary": format!(
                 "Run this workflow with `/{command_label}` or `codex {command_label}`."

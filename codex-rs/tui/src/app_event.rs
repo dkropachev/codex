@@ -162,6 +162,7 @@ pub(crate) enum AppEvent {
     WorkflowProcessFinished {
         run_id: String,
         command: Vec<String>,
+        stdout: String,
         result: Result<(), String>,
     },
 

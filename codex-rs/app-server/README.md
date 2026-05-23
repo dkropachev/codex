@@ -75,18 +75,7 @@ codex app-server generate-json-schema --out DIR
 
 For runtime discovery, use `apiCatalog/read` over app-server or `codex api` from the CLI. The catalog is JSON intended for IDEs, coding agents, and workflow code; it includes app-server methods, configured MCP servers and tool schemas, built-in workflow helpers, the JavaScript workflow runtime surface, and discovered workflow metadata, including each workflow's command alias when one is registered.
 
-The JavaScript workflow runtime exposes `WorkflowContext.status(status)` for structured live
-workflow status updates, `WorkflowContext.progress(message, data?)` as a legacy compatibility
-helper that maps into workflow status text, and `WorkflowContext.reportToUserMarkdown(markdown)`
-for an explicit markdown handoff when the workflow should leave a user-facing result for the next
-turn. A structured status update carries `workflowName`, `workflowStatus`, and an optional list of
-thread rows (`{ name, status }`). The TUI renders a single-thread workflow as `Workflow
-<workflowName>: <workflowStatus>` and only expands to thread rows when more than one thread status
-is present. `WorkflowContext.runWorkflow(workflow, input?, { onStatusUpdate })` lets a workflow
-run another workflow and intercept each child status update; the hook may forward the original
-status, transform it, drop it, or attach bundled child status metadata before reporting. The TUI
-renders the reported top-level status and carries workflow markdown handoffs forward as hidden
-context for the next plain user submission.
+The JavaScript workflow runtime now treats a named default-export async function in `src/workflow.ts` as the execution entrypoint, optional `complete(...)` as autocomplete-only, and optional `WorkflowOutput.toTuiMarkdown(result)` as the host markdown formatter. `WorkflowContext.status(status)` reports structured live workflow status, `WorkflowContext.progress(message, data?)` remains a legacy compatibility helper that maps into workflow status text, and `WorkflowContext.reportToUserMarkdown(markdown)` remains a legacy markdown handoff. A structured status update carries `workflowName`, `workflowStatus`, and an optional list of thread rows (`{ name, status }`). The TUI renders a single-thread workflow as `Workflow <workflowName>: <workflowStatus>` and only expands to thread rows when more than one thread status is present. `WorkflowContext.runWorkflow(workflow, input?, { onStatusUpdate })` lets a workflow run another workflow and intercept each child status update; the hook may forward the original status, transform it, drop it, or attach bundled child status metadata before reporting. The TUI renders the published formatter first, then legacy markdown handoffs, and falls back to pretty JSON when no formatter is present.
 
 ## Core Primitives
 
@@ -242,8 +231,8 @@ Example with notification opt-out:
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
 - `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental).
 - `apiCatalog/read` — return a machine-readable catalog of app-server methods, configured MCP servers/tools, built-in workflow helpers, JavaScript workflow SDK symbols, and discovered workflows. Optional `include` selects sections and `mcpDetail: "toolsAndAuthOnly"` skips MCP resource inventory.
-- `workflow/list`, `workflow/read`, `workflow/impact` — discover git-backed TypeScript workflows from `$CODEX_HOME/workflows`, `.codex/workflows`, and `[workflows].search_paths`; read `workflow.yaml`/`README.md`; and report dependency plus git impact. Workflow summaries surface `command` when `workflow.yaml.command` is set, or a fallback alias for simple ids without `/`. They also expose cached `commandOptionHints` derived from `usage.options` or `api.inputSchema` in `workflow.yaml`.
-- `workflow/develop`, `workflow/edit`, `workflow/run`, `workflow/validate`, `workflow/repair` — scaffold, update, execute, validate, or repair a workflow using the same command engine as `codex workflow` and `/workflow`. Validation checks workflow layout (`src/`, `src/tests/`, `state/`) and runs the workflow validation commands/tests before reporting readiness.
+- `workflow/list`, `workflow/read`, `workflow/impact` — discover git-backed TypeScript workflows from `$CODEX_HOME/workflows`, `.codex/workflows`, and `[workflows].search_paths`; read `workflow.yaml`/`README.md`; and report dependency plus git impact. Workflow summaries surface `command` when `workflow.yaml.command` is set, or a fallback alias for simple ids without `/`. They also expose cached `commandOptionHints` derived from the last validated contract when available, with legacy `usage.options` or `api.inputSchema` metadata used as a migration fallback.
+- `workflow/develop`, `workflow/edit`, `workflow/run`, `workflow/validate`, `workflow/repair` — scaffold, update, execute, validate, or repair a workflow using the same command engine as `codex workflow` and `/workflow`. Validation checks workflow layout (`src/`, `src/tests/`, `state/`), runs the workflow validation commands/tests, extracts and publishes the TS contract, and regenerates the local generated workflow client module before reporting readiness.
 - `workflow/config/read`, `workflow/config/write` — inspect or edit `[workflows]` config values.
 - `workflow/command/execute`, `workflow/authoringContext/prepare` — execute the shared workflow command parser or prepare registry/config context for workflow authoring clients. The parser recognizes the same workflow aliases used by `/<cmd>` and `codex <cmd>`.
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.

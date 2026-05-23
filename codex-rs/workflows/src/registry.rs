@@ -16,7 +16,9 @@ use serde_json::Value as JsonValue;
 use serde_json::json;
 use thiserror::Error;
 
+use crate::api_contract::read_published_workflow_api_contract;
 use crate::command_completion::WorkflowCommandOptionHint;
+use crate::command_completion::command_option_hints_from_input_schema;
 use crate::command_completion::command_option_hints_from_spec;
 use crate::id::mention_target;
 use crate::id::normalize_workflow_id;
@@ -178,7 +180,7 @@ pub fn discover_workflows(
 ) -> Result<Vec<WorkflowSummary>> {
     let mut workflows = Vec::new();
     for root in workflow_roots(codex_home, cwd, config) {
-        collect_workflows(&root, &root.path, config, &mut workflows)?;
+        collect_workflows(codex_home, &root, &root.path, config, &mut workflows)?;
     }
     workflows.sort_by(|left, right| {
         left.id
@@ -282,6 +284,9 @@ pub(crate) fn discover_workflow_tools_from_filesystem_for_hook(
         let Some(tool) = spec.tool else {
             continue;
         };
+        let Ok(tool) = crate::publication::resolve_tool_spec(codex_home, &workflow, tool) else {
+            continue;
+        };
         if !tool.register_on.contains(&hook) {
             continue;
         }
@@ -309,6 +314,7 @@ fn push_root(
 }
 
 fn collect_workflows(
+    codex_home: &Path,
     root: &WorkflowRoot,
     dir: &Path,
     config: &WorkflowsConfigToml,
@@ -318,7 +324,7 @@ fn collect_workflows(
         return Ok(());
     }
     if dir.join(WORKFLOW_YAML).is_file() {
-        if let Some(summary) = summarize_workflow(root, dir, config) {
+        if let Some(summary) = summarize_workflow(codex_home, root, dir, config) {
             workflows.push(summary);
         }
         return Ok(());
@@ -329,12 +335,13 @@ fn collect_workflows(
         if !path.is_dir() || should_skip_dir(&path) {
             continue;
         }
-        collect_workflows(root, &path, config, workflows)?;
+        collect_workflows(codex_home, root, &path, config, workflows)?;
     }
     Ok(())
 }
 
 pub(crate) fn summarize_workflow(
+    codex_home: &Path,
     root: &WorkflowRoot,
     workflow_dir: &Path,
     config: &WorkflowsConfigToml,
@@ -349,11 +356,32 @@ pub(crate) fn summarize_workflow(
         .and_then(|repair| repair.mode.clone())
         .or_else(|| config.repair_mode.clone())
         .unwrap_or_else(|| DEFAULT_REPAIR_MODE.to_string());
-    let command_option_hints = command_option_hints_from_spec(&spec);
     let command =
-        normalize_workflow_command(spec.command).or_else(|| default_workflow_command(&id));
+        normalize_workflow_command(spec.command.clone()).or_else(|| default_workflow_command(&id));
     let validation = validate_workflow_dir(&root.path, workflow_dir, &id);
     let mention_target = mention_target(&root.path, &id).ok()?;
+    let published_summary = WorkflowSummary {
+        id: id.clone(),
+        command: command.clone(),
+        title: spec.title.clone(),
+        user_description: spec.user_description.clone(),
+        search_terms: spec.search_terms.clone(),
+        command_option_hints: Vec::new(),
+        root_label: root.label.clone(),
+        root_kind: root.kind,
+        root_path: root.path.clone(),
+        path: workflow_dir.to_path_buf(),
+        workflow_yaml_path: workflow_yaml_path.clone(),
+        mention_target: mention_target.clone(),
+        validation: validation.clone(),
+        repair_mode: repair_mode.clone(),
+    };
+    let command_option_hints = read_published_workflow_api_contract(codex_home, &published_summary)
+        .ok()
+        .flatten()
+        .map(|contract| command_option_hints_from_input_schema(Some(&contract.input_schema)))
+        .filter(|hints| !hints.is_empty())
+        .unwrap_or_else(|| command_option_hints_from_spec(&spec));
     Some(WorkflowSummary {
         id,
         command,

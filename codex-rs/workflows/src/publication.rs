@@ -15,9 +15,11 @@ use codex_artifactory::file_sha256;
 use codex_artifactory::sharded_state_dir;
 use codex_artifactory::source_key;
 use codex_config::types::WorkflowsConfigToml;
+use serde_json::Value as JsonValue;
 use sha2::Digest;
 use sha2::Sha256;
 
+use crate::api_contract::read_published_workflow_api_contract;
 use crate::registry::WorkflowPublishedTool;
 use crate::registry::WorkflowRoot;
 use crate::registry::WorkflowSummary;
@@ -115,6 +117,7 @@ pub fn publish_tool(
     tool: &WorkflowToolSpec,
     hook: WorkflowHookKind,
 ) -> Result<WorkflowPublishedTool> {
+    let tool = resolve_tool_spec(codex_home, workflow, tool.clone())?;
     if !tool.register_on.contains(&hook) {
         return Err(anyhow!(
             "workflow {} does not register a tool on {hook:?}",
@@ -137,7 +140,7 @@ pub fn publish_tool(
         updated_at_unix_sec: now,
         refresh_after_unix_sec: None,
         expires_at_unix_sec: None,
-        tool_spec: serde_json::to_value(tool)?,
+        tool_spec: serde_json::to_value(&tool)?,
     };
 
     let mut store = Artifactory::open(codex_home)?;
@@ -156,7 +159,7 @@ pub fn publish_tool(
 
     Ok(WorkflowPublishedTool {
         workflow: workflow.clone(),
-        tool: tool.clone(),
+        tool,
     })
 }
 
@@ -185,7 +188,9 @@ pub fn refresh_tool_registration(
         label: workflow.root_label.clone(),
         path: workflow.root_path.clone(),
     };
-    let Some(fresh_workflow) = summarize_workflow(&root, workflow.path.as_path(), config) else {
+    let Some(fresh_workflow) =
+        summarize_workflow(codex_home, &root, workflow.path.as_path(), config)
+    else {
         return Ok(None);
     };
     let spec = read_workflow_spec(&fresh_workflow.workflow_yaml_path)?;
@@ -197,6 +202,45 @@ pub fn refresh_tool_registration(
     }
 
     publish_tool(codex_home, &fresh_workflow, &tool, hook).map(Some)
+}
+
+pub(crate) fn resolve_tool_spec(
+    codex_home: &Path,
+    workflow: &WorkflowSummary,
+    mut tool: WorkflowToolSpec,
+) -> Result<WorkflowToolSpec> {
+    if !tool.input_schema.is_null() && !tool.output_schema.is_null() {
+        return Ok(tool);
+    }
+
+    if let Some(contract) = read_published_workflow_api_contract(codex_home, workflow)? {
+        if tool.input_schema.is_null() {
+            tool.input_schema = contract.input_schema;
+        }
+        if tool.output_schema.is_null() {
+            tool.output_schema = contract.output_schema;
+        }
+    }
+
+    if tool.input_schema.is_null() || tool.output_schema.is_null() {
+        let spec = read_workflow_spec(&workflow.workflow_yaml_path)?;
+        if tool.input_schema.is_null() {
+            tool.input_schema = spec
+                .api
+                .get("inputSchema")
+                .cloned()
+                .unwrap_or(JsonValue::Null);
+        }
+        if tool.output_schema.is_null() {
+            tool.output_schema = spec
+                .api
+                .get("outputSchema")
+                .cloned()
+                .unwrap_or(JsonValue::Null);
+        }
+    }
+
+    Ok(tool)
 }
 
 fn bootstrap_workflow_tools_from_filesystem_for_hook(

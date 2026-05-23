@@ -681,6 +681,45 @@ impl HistoryCell for WorkflowMarkdownCell {
 }
 
 #[derive(Debug)]
+pub(crate) struct WorkflowJsonCell {
+    json_source: String,
+}
+
+impl WorkflowJsonCell {
+    pub(crate) fn new(json: serde_json::Value) -> Self {
+        let json_source = serde_json::to_string_pretty(&json).unwrap_or_else(|_| json.to_string());
+        Self { json_source }
+    }
+}
+
+impl HistoryCell for WorkflowJsonCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let Some(_) = crate::width::usable_content_width_u16(width, /*reserved_cols*/ 2) else {
+            return prefix_lines(vec![Line::default()], "• ".dim(), "  ".into());
+        };
+
+        let mut lines: Vec<Line<'static>> = vec![vec!["• ".dim(), "Workflow Result".bold()].into()];
+        lines.push(Line::from(" "));
+
+        let mut body: Vec<Line<'static>> = self
+            .json_source
+            .lines()
+            .map(|line| Line::from(line.to_string()))
+            .collect();
+        if body.is_empty() {
+            body.push(Line::from("(empty)".dim().italic()));
+        }
+
+        lines.extend(prefix_lines(body, "  ".into(), "  ".into()));
+        lines
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        raw_lines_from_source(&self.json_source)
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct PlainHistoryCell {
     lines: Vec<Line<'static>>,
 }

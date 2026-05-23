@@ -27,6 +27,7 @@ use tokio::time::sleep;
 const WORKFLOW_RUNTIME_MODE_ENV: &str = "CODEX_WORKFLOW_RUNTIME_MODE";
 const WORKFLOW_RUN_ID_ENV: &str = "CODEX_WORKFLOW_RUN_ID";
 const WORKFLOW_ORIGIN_THREAD_ID_ENV: &str = "CODEX_WORKFLOW_ORIGIN_THREAD_ID";
+const WORKFLOW_OUTPUT_FORMAT_ENV: &str = "CODEX_WORKFLOW_OUTPUT_FORMAT";
 const WORKFLOW_HOST_RESULT_PREFIX: &str = "__CODEX_WORKFLOW_RESULT__";
 const WORKFLOW_HOST_SOCKET_NAME: &str = "runtime.sock";
 const WORKFLOW_HOST_SCRIPT_PREFIX: &str = "codex-workflow-host";
@@ -39,10 +40,12 @@ struct WorkflowHostRequest {
     workflow_path: String,
     workflow_name: String,
     cwd: String,
+    working_directory: String,
     input: String,
     run_id: String,
     execution_id: String,
     origin_thread_id: Option<String>,
+    output_format: Option<String>,
     registry: Vec<WorkflowHostRegistryEntry>,
 }
 
@@ -78,6 +81,7 @@ pub(crate) fn should_use_host() -> bool {
 #[cfg(unix)]
 pub(crate) async fn run_workflow_via_host(
     codex_home: &Path,
+    working_directory: &Path,
     workflow_dir: &Path,
     workflow_path: &Path,
     input: &str,
@@ -94,6 +98,7 @@ pub(crate) async fn run_workflow_via_host(
             .unwrap_or("workflow")
             .to_string(),
         cwd: workflow_dir.display().to_string(),
+        working_directory: working_directory.display().to_string(),
         input: input.to_string(),
         run_id: env::var(WORKFLOW_RUN_ID_ENV).unwrap_or_else(|_| {
             format!(
@@ -114,6 +119,9 @@ pub(crate) async fn run_workflow_via_host(
                 .as_nanos(),
         ),
         origin_thread_id: env::var(WORKFLOW_ORIGIN_THREAD_ID_ENV)
+            .ok()
+            .filter(|value| !value.is_empty()),
+        output_format: env::var(WORKFLOW_OUTPUT_FORMAT_ENV)
             .ok()
             .filter(|value| !value.is_empty()),
         registry: workflows
@@ -202,6 +210,7 @@ pub(crate) async fn run_workflow_via_host(
 #[cfg(not(unix))]
 pub(crate) async fn run_workflow_via_host(
     _codex_home: &Path,
+    _working_directory: &Path,
     _workflow_dir: &Path,
     _workflow_path: &Path,
     _input: &str,
@@ -326,6 +335,8 @@ const EVENT_PREFIX = "__CODEX_WORKFLOW_EVENT__";
 const RESULT_PREFIX = "__CODEX_WORKFLOW_RESULT__";
 const WORKFLOW_RUN_ID_ENV = "CODEX_WORKFLOW_RUN_ID";
 const WORKFLOW_ORIGIN_THREAD_ID_ENV = "CODEX_WORKFLOW_ORIGIN_THREAD_ID";
+const WORKFLOW_WORKING_DIRECTORY_ENV = "CODEX_WORKFLOW_WORKING_DIRECTORY";
+const WORKFLOW_OUTPUT_FORMAT_ENV = "CODEX_WORKFLOW_OUTPUT_FORMAT";
 const WORKFLOW_NAME_ENV = "CODEX_WORKFLOW_NAME";
 
 function parseArgs(argv) {
@@ -570,10 +581,18 @@ function withWorkflowContext(request, callback) {
     runId: process.env[WORKFLOW_RUN_ID_ENV],
     originThreadId: process.env[WORKFLOW_ORIGIN_THREAD_ID_ENV],
     workflowName: process.env[WORKFLOW_NAME_ENV],
+    workingDirectory: process.env[WORKFLOW_WORKING_DIRECTORY_ENV],
+    outputFormat: process.env[WORKFLOW_OUTPUT_FORMAT_ENV],
     nodePath: process.env.NODE_PATH,
   };
 
   process.chdir(request.cwd);
+  process.env[WORKFLOW_WORKING_DIRECTORY_ENV] = request.workingDirectory ?? request.cwd;
+  if (request.outputFormat) {
+    process.env[WORKFLOW_OUTPUT_FORMAT_ENV] = request.outputFormat;
+  } else {
+    delete process.env[WORKFLOW_OUTPUT_FORMAT_ENV];
+  }
   process.env[WORKFLOW_RUN_ID_ENV] = request.runId;
   if (request.originThreadId) {
     process.env[WORKFLOW_ORIGIN_THREAD_ID_ENV] = request.originThreadId;
@@ -604,12 +623,59 @@ function withWorkflowContext(request, callback) {
     } else {
       process.env[WORKFLOW_NAME_ENV] = previous.workflowName;
     }
+    if (previous.workingDirectory === undefined) {
+      delete process.env[WORKFLOW_WORKING_DIRECTORY_ENV];
+    } else {
+      process.env[WORKFLOW_WORKING_DIRECTORY_ENV] = previous.workingDirectory;
+    }
+    if (previous.outputFormat === undefined) {
+      delete process.env[WORKFLOW_OUTPUT_FORMAT_ENV];
+    } else {
+      process.env[WORKFLOW_OUTPUT_FORMAT_ENV] = previous.outputFormat;
+    }
     if (previous.nodePath === undefined) {
       delete process.env.NODE_PATH;
     } else {
       process.env.NODE_PATH = previous.nodePath;
     }
   });
+}
+
+async function emitRequestedFormat(workflowModule, workflow, result, request, emit) {
+  const requestedFormat = request.outputFormat ?? process.env[WORKFLOW_OUTPUT_FORMAT_ENV];
+  if (typeof requestedFormat !== "string" || requestedFormat.trim().length === 0) {
+    return;
+  }
+
+  if (requestedFormat !== "tui.markdown.v1") {
+    if (typeof workflow.format === "function") {
+      await workflow.format(result, { format: requestedFormat });
+      return;
+    }
+    throw new Error(`unsupported host output format ${requestedFormat}`);
+  }
+
+  const formatter = workflowModule.WorkflowOutput?.toTuiMarkdown;
+  if (typeof formatter === "function") {
+    const formatted = await formatter(result);
+    const markdown = typeof formatted?.markdown === "string" && formatted.markdown.trim().length > 0
+      ? formatted.markdown
+      : undefined;
+    if (markdown) {
+      emit({ type: "reportToUserMarkdown", markdown });
+    }
+    return;
+  }
+
+  if (typeof workflow.format === "function") {
+    const formatted = await workflow.format(result, { format: requestedFormat });
+    const markdown = typeof formatted?.markdown === "string" && formatted.markdown.trim().length > 0
+      ? formatted.markdown
+      : undefined;
+    if (markdown) {
+      emit({ type: "reportToUserMarkdown", markdown });
+    }
+  }
 }
 
 function registryMap(entries) {
@@ -652,11 +718,22 @@ async function executeWorkflowRequest(request, registry, emit, statusHook) {
   const stderrCapture = captureStderr();
   try {
     return await withWorkflowContext(request, async () => {
-      const workflow = await loadWorkflow(request.workflowPath, request.executionId ?? randomUUID());
+      const workflowModule = await loadWorkflow(request.workflowPath, request.executionId ?? randomUUID());
+      const workflow = workflowModule.default;
       const status = createStatusDispatcher(emit, statusHook);
       const context = createRuntimeContext(request, registry, emit, status);
       const input = JSON.parse(request.input ?? "{}");
-      const output = await workflow.run(context, input);
+      let output;
+      if (typeof workflow === "function") {
+        output = await workflow(context, input);
+      } else if (workflow && typeof workflow.run === "function") {
+        output = await workflow.run(context, input);
+      } else {
+        throw new Error(
+          "workflow module must export a named default async function or a default object with a run(ctx, input) method",
+        );
+      }
+      await emitRequestedFormat(workflowModule, workflow, output, request, emit);
       return {
         stdout: `${JSON.stringify(output, null, 2)}\n`,
         stderr: stderrCapture.value,
@@ -679,22 +756,18 @@ async function executeWorkflowRequest(request, registry, emit, statusHook) {
 }
 
 async function loadWorkflow(workflowPath, executionId) {
-  const workflowModule = await import(cacheBustedWorkflowUrl(workflowPath, executionId));
-  const workflow = workflowModule.default;
-  if (!workflow || typeof workflow.run !== "function") {
-    throw new Error("workflow module must export a default object with a run(ctx, input) method");
-  }
-  return workflow;
+  return import(cacheBustedWorkflowUrl(workflowPath, executionId));
 }
 
 function createRuntimeContext(request, registry, emit, statusSink) {
-  const cwd = request.cwd;
-  const workflowName = request.workflowName ?? path.basename(cwd);
+  const workflowDirectory = request.cwd;
+  const workingDirectory = request.workingDirectory ?? workflowDirectory;
+  const workflowName = request.workflowName ?? path.basename(workflowDirectory);
   return {
-    workingDirectory: cwd,
-    cwd,
-    currentWorkingDirectory: cwd,
-    repoRoot: cwd,
+    workingDirectory,
+    cwd: workingDirectory,
+    currentWorkingDirectory: workingDirectory,
+    repoRoot: workingDirectory,
     progress(message, data) {
       statusSink(legacyProgressToStatus(workflowName, message, data));
     },
@@ -720,6 +793,8 @@ function createRuntimeContext(request, registry, emit, statusSink) {
         workflowPath: childPath,
         cwd: path.dirname(childPath),
         workflowName: path.basename(path.dirname(childPath)),
+        workingDirectory: request.workingDirectory ?? request.cwd,
+        outputFormat: request.outputFormat,
         input: JSON.stringify(input ?? {}),
         executionId: randomUUID(),
       };
@@ -865,11 +940,19 @@ mod tests {
         fs::write(
             workflow_dir.join("src/workflow.ts"),
             r#"const workflow = {
-  async run(_ctx, input) {
+  async run(ctx, input) {
     if (input?.hang) {
       await new Promise(() => {});
     }
-    return { pid: process.pid, recovered: true };
+    return {
+      pid: process.pid,
+      recovered: true,
+      cwd: ctx.cwd,
+      currentWorkingDirectory: ctx.currentWorkingDirectory,
+      repoRoot: ctx.repoRoot,
+      workingDirectory: ctx.workingDirectory,
+      processCwd: process.cwd(),
+    };
   },
 };
 
@@ -939,10 +1022,12 @@ process.exit(result.status ?? 1);
             workflow_path: workflow.path.join("src/workflow.ts").display().to_string(),
             workflow_name: "disconnect-restart".to_string(),
             cwd: workflow.path.display().to_string(),
+            working_directory: cwd.path().display().to_string(),
             input: r#"{"hang":true}"#.to_string(),
             run_id: "run-1".to_string(),
             execution_id: "exec-1".to_string(),
             origin_thread_id: None,
+            output_format: None,
             registry: vec![WorkflowHostRegistryEntry {
                 id: workflow.id.clone(),
                 path: workflow.path.display().to_string(),
@@ -972,6 +1057,7 @@ process.exit(result.status ?? 1);
             Duration::from_secs(5),
             run_workflow_via_host(
                 home.path(),
+                cwd.path(),
                 &workflow.path,
                 &workflow.path.join("src/workflow.ts"),
                 "{}",
@@ -984,5 +1070,25 @@ process.exit(result.status ?? 1);
 
         let result: serde_json::Value = serde_json::from_str(&recovered.stdout).unwrap();
         assert_eq!(result["recovered"], serde_json::json!(true));
+        assert_eq!(
+            result["cwd"],
+            serde_json::json!(cwd.path().display().to_string())
+        );
+        assert_eq!(
+            result["currentWorkingDirectory"],
+            serde_json::json!(cwd.path().display().to_string())
+        );
+        assert_eq!(
+            result["repoRoot"],
+            serde_json::json!(cwd.path().display().to_string())
+        );
+        assert_eq!(
+            result["workingDirectory"],
+            serde_json::json!(cwd.path().display().to_string())
+        );
+        assert_eq!(
+            result["processCwd"],
+            serde_json::json!(workflow.path.display().to_string())
+        );
     }
 }

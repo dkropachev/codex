@@ -1973,10 +1973,32 @@ impl ChatComposer {
                             return (InputResult::Command(cmd), true);
                         }
                         SelectedSlashPopupCommand::Workflow(command) => {
-                            self.stage_slash_command_history_text(format!("/{command}"));
+                            let first_line = self
+                                .textarea
+                                .text()
+                                .lines()
+                                .next()
+                                .unwrap_or("")
+                                .to_string();
+                            let trimmed_rest = parse_slash_name(&first_line)
+                                .map(|(_, rest, _)| rest.trim().to_string())
+                                .unwrap_or_default();
+                            let history_text = if trimmed_rest.is_empty() {
+                                format!("/{command}")
+                            } else {
+                                format!("/{command} {trimmed_rest}")
+                            };
+                            self.stage_slash_command_history_text(history_text);
                             self.textarea.set_text_clearing_elements("");
                             self.is_bash_mode = false;
-                            return (InputResult::WorkflowCommand(command), true);
+                            return if trimmed_rest.is_empty() {
+                                (InputResult::WorkflowCommand(command), true)
+                            } else {
+                                (
+                                    InputResult::WorkflowCommandWithArgs(command, trimmed_rest),
+                                    true,
+                                )
+                            };
                         }
                         SelectedSlashPopupCommand::WorkflowSuggestion {
                             command,

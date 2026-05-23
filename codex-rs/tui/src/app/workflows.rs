@@ -8,17 +8,19 @@ use codex_app_server_protocol::WorkflowMarkdownResultNotification;
 use codex_app_server_protocol::WorkflowProgressNotification;
 use codex_workflows::WORKFLOW_RUNTIME_EVENT_PREFIX;
 use codex_workflows::WorkflowRuntimeEvent;
+use tokio::io::AsyncReadExt;
 
 const WORKFLOW_APPROVALS_ENV: &str = "CODEX_WORKFLOW_APPROVALS";
 const WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR_ENV: &str =
     "CODEX_WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR";
+const WORKFLOW_OUTPUT_FORMAT_ENV: &str = "CODEX_WORKFLOW_OUTPUT_FORMAT";
 const WORKFLOW_RUN_ID_ENV: &str = "CODEX_WORKFLOW_RUN_ID";
 const WORKFLOW_ORIGIN_THREAD_ID_ENV: &str = "CODEX_WORKFLOW_ORIGIN_THREAD_ID";
 
 #[derive(Debug, Clone)]
 pub(crate) struct WorkflowRunState {
-    pub(crate) origin_thread_id: Option<ThreadId>,
     pub(crate) workflow_name: String,
+    pub(crate) markdown_result_emitted: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -61,8 +63,9 @@ impl App {
             .env(WORKFLOW_RUN_ID_ENV, &run_id)
             .env(WORKFLOW_APPROVALS_ENV, "delegate")
             .env(WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR_ENV, "defer")
+            .env(WORKFLOW_OUTPUT_FORMAT_ENV, "tui.markdown.v1")
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         if let Some(thread_id) = origin_thread_id.as_ref() {
             child_command.env(WORKFLOW_ORIGIN_THREAD_ID_ENV, thread_id.to_string());
@@ -73,8 +76,8 @@ impl App {
                 self.workflow_runs.insert(
                     run_id.clone(),
                     WorkflowRunState {
-                        origin_thread_id,
                         workflow_name: workflow_name.clone(),
+                        markdown_result_emitted: false,
                     },
                 );
                 self.chat_widget.show_workflow_process_status(
@@ -82,6 +85,16 @@ impl App {
                     None,
                 );
                 tokio::spawn(async move {
+                    let stdout_task = child.stdout.take().map(|stdout| {
+                        tokio::spawn(async move {
+                            let mut reader = BufReader::new(stdout);
+                            let mut output = String::new();
+                            match reader.read_to_string(&mut output).await {
+                                Ok(_) => output,
+                                Err(err) => format!("failed to read workflow stdout: {err}"),
+                            }
+                        })
+                    });
                     let stderr_task = child.stderr.take().map(|stderr| {
                         let app_event_tx = app_event_tx.clone();
                         let run_id = run_id.clone();
@@ -96,6 +109,14 @@ impl App {
                             .await
                         })
                     });
+
+                    let stdout = match stdout_task {
+                        Some(task) => match task.await {
+                            Ok(output) => output,
+                            Err(err) => format!("failed to join workflow stdout task: {err}"),
+                        },
+                        None => String::new(),
+                    };
 
                     let result = match child.wait().await {
                         Ok(status) if status.success() => Ok(()),
@@ -121,6 +142,7 @@ impl App {
                     app_event_tx.send(AppEvent::WorkflowProcessFinished {
                         run_id,
                         command,
+                        stdout,
                         result,
                     });
                 });
@@ -136,17 +158,29 @@ impl App {
         &mut self,
         run_id: String,
         command: Vec<String>,
+        stdout: String,
         result: Result<(), String>,
     ) {
-        let _origin_thread_id = self
-            .workflow_runs
-            .remove(&run_id)
-            .map(|state| state.origin_thread_id);
+        let workflow_state = self.workflow_runs.remove(&run_id);
         let display_command = shlex::try_join(command.iter().map(String::as_str))
             .unwrap_or_else(|_| command.join(" "));
         if let Err(err) = result {
             self.chat_widget
                 .add_error_message(format!("Workflow failed: {display_command}: {err}"));
+        } else if let Some(state) = workflow_state
+            && !state.markdown_result_emitted
+        {
+            match serde_json::from_str::<serde_json::Value>(&stdout) {
+                Ok(json) => {
+                    self.chat_widget
+                        .add_to_history(crate::history_cell::WorkflowJsonCell::new(json));
+                }
+                Err(err) => {
+                    self.chat_widget.add_error_message(format!(
+                        "Workflow result for {display_command} was not valid JSON: {err}"
+                    ));
+                }
+            }
         }
 
         if self.workflow_runs.is_empty() {
@@ -170,6 +204,9 @@ impl App {
         &mut self,
         notification: WorkflowMarkdownResultNotification,
     ) {
+        if let Some(state) = self.workflow_runs.get_mut(&notification.run_id) {
+            state.markdown_result_emitted = true;
+        }
         let destination_thread_id = notification
             .thread_id
             .as_deref()

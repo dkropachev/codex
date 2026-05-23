@@ -629,45 +629,59 @@ mod tests {
         .unwrap();
         fs::write(
             workflow_dir.join("src/workflow.ts"),
-            r##"import { defineWorkflow } from "@openai/codex-sdk/workflow";
+            r##"import { WorkflowContext } from "@openai/codex-sdk/workflow";
 
-const workflow = defineWorkflow({
-  id: "example",
-  title: "Example",
-  description: "Example",
-  async run(ctx, input) {
-    ctx.progress("Running workflow", { input });
-    ctx.reportToUserMarkdown("# Example\n\nDone.");
-    return { ok: true, input };
+export interface WorkflowInput { input?: string; }
+
+export interface WorkflowOutput { ok: boolean; input: WorkflowInput; }
+
+export const WorkflowOutput = {
+  toTuiMarkdown(_result: WorkflowOutput) {
+    return { markdown: "# Example\n\nDone." };
   },
-});
+};
 
-export default workflow;
+export default async function example(ctx: WorkflowContext, input: WorkflowInput): Promise<WorkflowOutput> {
+  ctx.progress("Running workflow", { input });
+  return { ok: true, input };
+}
+
+export async function complete() {
+  return [];
+}
 "##,
         )
         .unwrap();
         fs::write(
             workflow_dir.join("src/tests/workflow.positive.test.ts"),
-            r#"// workflow-covers: positive progress finalResult
+            r##"// workflow-covers: positive progress finalResult
 import assert from "node:assert/strict";
 import test from "node:test";
-import workflow from "../workflow.js";
+import workflow, { WorkflowOutput } from "../workflow.js";
 
 test("workflow completes successfully", async () => {
   const events: Array<[string, unknown]> = [];
-  const output = await workflow.run({
+  const output = await workflow({
     progress(message, data) {
       events.push([message, data]);
     },
     reportToUserMarkdown(markdown) {
       events.push([markdown, null]);
     },
-  }, { input: "example" });
+    cwd: process.cwd(),
+    currentWorkingDirectory: process.cwd(),
+    repoRoot: process.cwd(),
+    workingDirectory: process.cwd(),
+    status() {},
+    runWorkflow() { throw new Error("runWorkflow() is unavailable in unit tests"); },
+  } as never, { input: "example" });
+  const formatted = WorkflowOutput.toTuiMarkdown(output);
 
   assert.deepEqual(output, { ok: true, input: { input: "example" } });
-  assert.equal(events.length, 2);
+  assert.deepEqual(formatted, { markdown: "# Example\n\nDone." });
+  assert.equal(events.length, 1);
 });
-"#,
+"##,
         )
         .unwrap();
         fs::write(
@@ -677,7 +691,26 @@ test("workflow completes successfully", async () => {
         .unwrap();
         fs::write(
             workflow_dir.join("src/tests/workflow.autocomplete.test.ts"),
-            "// workflow-covers: autocomplete\nexport {};\n",
+            r#"// workflow-covers: autocomplete
+import assert from "node:assert/strict";
+import test from "node:test";
+import { complete } from "../workflow.js";
+
+test("workflow exposes complete", async () => {
+  const suggestions = await complete({
+    cwd: process.cwd(),
+    currentWorkingDirectory: process.cwd(),
+    repoRoot: process.cwd(),
+    workingDirectory: process.cwd(),
+    progress() {},
+    status() {},
+    reportToUserMarkdown() {},
+    runWorkflow() { throw new Error("runWorkflow() is unavailable in unit tests"); },
+  } as never, { argv: [], text: "" });
+
+  assert.deepEqual(suggestions, []);
+});
+"#,
         )
         .unwrap();
         fs::write(
@@ -689,10 +722,16 @@ import workflow from "../workflow.js";
 
 test("workflow rejects invalid input", async () => {
   await assert.rejects(
-    workflow.run({
+    workflow({
       progress() {},
       reportToUserMarkdown() {},
-    }, null),
+      cwd: process.cwd(),
+      currentWorkingDirectory: process.cwd(),
+      repoRoot: process.cwd(),
+      workingDirectory: process.cwd(),
+      status() {},
+      runWorkflow() { throw new Error("runWorkflow() is unavailable in unit tests"); },
+    } as never, null),
     /workflow input must be a JSON object/
   );
 });
