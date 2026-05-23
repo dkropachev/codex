@@ -377,6 +377,84 @@ fn test_merge_configured_model_providers_applies_deepseek_token_override() {
 }
 
 #[test]
+fn test_merge_configured_model_providers_applies_ollama_base_url_override() {
+    let configured_model_providers = std::collections::HashMap::from([(
+        OLLAMA_OSS_PROVIDER_ID.to_string(),
+        ModelProviderInfo {
+            base_url: Some("http://127.0.0.1:11434/v1".to_string()),
+            ..ModelProviderInfo::default()
+        },
+    )]);
+
+    let mut expected = built_in_model_providers(/*openai_base_url*/ None);
+    let expected_ollama = expected
+        .get_mut(OLLAMA_OSS_PROVIDER_ID)
+        .expect("Ollama provider should be built in");
+    expected_ollama.base_url = Some("http://127.0.0.1:11434/v1".to_string());
+
+    assert_eq!(
+        merge_configured_model_providers(
+            built_in_model_providers(/*openai_base_url*/ None),
+            configured_model_providers,
+        ),
+        Ok(expected)
+    );
+}
+
+#[test]
+fn test_merge_configured_model_providers_rejects_ollama_non_default_fields() {
+    let configured_model_providers = std::collections::HashMap::from([(
+        OLLAMA_OSS_PROVIDER_ID.to_string(),
+        ModelProviderInfo {
+            name: "Custom Ollama".to_string(),
+            base_url: Some("http://127.0.0.1:11434/v1".to_string()),
+            ..ModelProviderInfo::default()
+        },
+    )]);
+
+    assert_eq!(
+        merge_configured_model_providers(
+            built_in_model_providers(/*openai_base_url*/ None),
+            configured_model_providers,
+        ),
+        Err(
+            "model_providers.ollama only supports changing `base_url`; other non-default provider fields are not supported"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn test_built_in_ollama_is_not_config_ready_without_explicit_address() {
+    let provider = built_in_model_providers(/*openai_base_url*/ None)
+        .remove(OLLAMA_OSS_PROVIDER_ID)
+        .expect("Ollama provider should be built in");
+
+    assert!(!provider.is_config_ready(OLLAMA_OSS_PROVIDER_ID));
+}
+
+#[test]
+fn test_built_in_ollama_is_config_ready_after_explicit_address_override() {
+    let providers = merge_configured_model_providers(
+        built_in_model_providers(/*openai_base_url*/ None),
+        std::collections::HashMap::from([(
+            OLLAMA_OSS_PROVIDER_ID.to_string(),
+            ModelProviderInfo {
+                base_url: Some("http://127.0.0.1:11434/v1".to_string()),
+                ..ModelProviderInfo::default()
+            },
+        )]),
+    )
+    .expect("provider merge should succeed");
+
+    let provider = providers
+        .get(OLLAMA_OSS_PROVIDER_ID)
+        .expect("Ollama provider should be present");
+
+    assert!(provider.is_config_ready(OLLAMA_OSS_PROVIDER_ID));
+}
+
+#[test]
 fn test_merge_configured_model_providers_rejects_deepseek_non_default_fields() {
     let configured_model_providers = std::collections::HashMap::from([(
         DEEPSEEK_PROVIDER_ID.to_string(),

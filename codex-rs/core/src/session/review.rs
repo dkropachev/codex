@@ -35,6 +35,12 @@ async fn ensure_review_provider_ready(
         _ => return Ok(()),
     }
 
+    if !provider.info().is_config_ready(provider_id) {
+        return Err(std::io::Error::other(format!(
+            "review provider {provider_id} is not configured; set its base_url first"
+        )));
+    }
+
     let base_url = provider.info().base_url.as_deref().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,

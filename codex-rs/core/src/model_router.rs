@@ -13,8 +13,7 @@ use codex_config::config_toml::AccountPoolToml;
 use codex_config::config_toml::ModelRouterCandidateToml;
 use codex_config::config_toml::ModelRouterDiscoveryToml;
 use codex_login::AuthManager;
-use codex_model_provider::create_model_provider;
-use codex_model_provider_info::ModelProviderAwsAuthInfo;
+use codex_model_provider::list_provider_models_for_discovery;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_model_router::CandidateMetrics;
@@ -30,8 +29,6 @@ use codex_model_router::policy;
 use codex_model_router::policy::PolicyAvailableModel;
 use codex_model_router::policy::PolicyRoute;
 use codex_model_router::select_candidate_with_score_bias;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::openai_models::ModelInfo;
@@ -1003,7 +1000,7 @@ impl ModelRouterDiscoveryCache {
 
     async fn models_for_provider(
         &self,
-        config: &Config,
+        _config: &Config,
         provider_id: &str,
         provider: &ModelProviderInfo,
     ) -> Vec<AvailableRouterModel> {
@@ -1011,20 +1008,22 @@ impl ModelRouterDiscoveryCache {
             return models;
         }
 
-        let provider_handle =
-            create_model_provider(provider_id, provider.clone(), /*auth_manager*/ None);
-        let models_manager = provider_handle.models_manager(
-            config.codex_home.to_path_buf(),
-            /*config_model_catalog*/ None,
-            CollaborationModesConfig::default(),
-        );
-        let models: Vec<AvailableRouterModel> = models_manager
-            .raw_model_catalog(RefreshStrategy::Online)
-            .await
-            .models
-            .iter()
-            .map(|model| AvailableRouterModel::from_model_info(provider_id, model))
-            .collect();
+        let models = match list_provider_models_for_discovery(
+            provider_id,
+            provider,
+            env!("CARGO_PKG_VERSION"),
+        )
+        .await
+        {
+            Ok(models) => models
+                .iter()
+                .map(|model| AvailableRouterModel::from_model_info(provider_id, model))
+                .collect::<Vec<_>>(),
+            Err(err) => {
+                tracing::debug!(provider_id, error = %err, "failed to fetch provider model catalog for model router discovery");
+                return Vec::new();
+            }
+        };
 
         let mut entries = self.entries.lock().await;
         entries.insert(
@@ -1105,9 +1104,7 @@ async fn additional_provider_router_models(
     providers.sort_by_key(|(provider_id, _provider)| *provider_id);
     let mut models = Vec::new();
     for (provider_id, provider) in providers {
-        if provider_id == &config.model_provider_id
-            || !provider_is_additional_discovery_eligible(provider)
-        {
+        if provider_id == &config.model_provider_id || !provider.is_config_ready(provider_id) {
             continue;
         }
         models.extend(
@@ -1117,77 +1114,6 @@ async fn additional_provider_router_models(
         );
     }
     models
-}
-
-fn provider_is_additional_discovery_eligible(provider: &ModelProviderInfo) -> bool {
-    provider_has_non_empty_base_url(provider) && provider_has_discovery_auth(provider)
-}
-
-fn provider_has_non_empty_base_url(provider: &ModelProviderInfo) -> bool {
-    provider
-        .base_url
-        .as_deref()
-        .is_some_and(|base_url| !base_url.trim().is_empty())
-}
-
-fn provider_has_discovery_auth(provider: &ModelProviderInfo) -> bool {
-    if provider
-        .experimental_bearer_token
-        .as_deref()
-        .is_some_and(|token| !token.trim().is_empty())
-    {
-        return true;
-    }
-    if provider.auth.is_some()
-        || provider_has_configured_http_headers(provider)
-        || provider_has_configured_env_http_headers(provider)
-    {
-        return true;
-    }
-    if let Some(aws) = provider.aws.as_ref() {
-        return provider_has_aws_discovery_auth(aws);
-    }
-    if let Some(env_key) = provider.env_key.as_deref() {
-        return std::env::var(env_key).is_ok_and(|value| !value.trim().is_empty());
-    }
-    !provider.requires_openai_auth
-}
-
-fn provider_has_configured_http_headers(provider: &ModelProviderInfo) -> bool {
-    provider
-        .http_headers
-        .as_ref()
-        .is_some_and(|headers| headers.values().any(|value| !value.trim().is_empty()))
-}
-
-fn provider_has_configured_env_http_headers(provider: &ModelProviderInfo) -> bool {
-    provider.env_http_headers.as_ref().is_some_and(|headers| {
-        headers
-            .values()
-            .any(|env_key| std::env::var(env_key).is_ok_and(|value| !value.trim().is_empty()))
-    })
-}
-
-fn provider_has_aws_discovery_auth(aws: &ModelProviderAwsAuthInfo) -> bool {
-    aws.profile
-        .as_deref()
-        .is_some_and(|profile| !profile.trim().is_empty())
-        || aws
-            .region
-            .as_deref()
-            .is_some_and(|region| !region.trim().is_empty())
-        || env_var_has_non_empty_value("AWS_PROFILE")
-        || (env_var_has_non_empty_value("AWS_ACCESS_KEY_ID")
-            && env_var_has_non_empty_value("AWS_SECRET_ACCESS_KEY"))
-        || (env_var_has_non_empty_value("AWS_BEARER_TOKEN_BEDROCK")
-            && (env_var_has_non_empty_value("AWS_REGION")
-                || env_var_has_non_empty_value("AWS_DEFAULT_REGION")))
-        || (env_var_has_non_empty_value("AWS_WEB_IDENTITY_TOKEN_FILE")
-            && env_var_has_non_empty_value("AWS_ROLE_ARN"))
-}
-
-fn env_var_has_non_empty_value(env_key: &str) -> bool {
-    std::env::var(env_key).is_ok_and(|value| !value.trim().is_empty())
 }
 
 struct CandidateSet {
@@ -1597,6 +1523,8 @@ mod tests {
     use codex_model_provider_info::DEEPSEEK_PROVIDER_ID;
     use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
     use codex_model_provider_info::OPENAI_PROVIDER_ID;
+    use codex_model_provider_info::built_in_model_providers;
+    use codex_model_provider_info::merge_configured_model_providers;
     use codex_model_router::RouterSavings;
     use codex_models_manager::manager::SharedModelsManager;
     use codex_models_manager::manager::StaticModelsManager;
@@ -1677,7 +1605,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_explicit_candidates_uses_available_models() {
+    async fn no_explicit_candidates_do_not_switch_to_unmeasured_available_models() {
         let mut config = config::test_config().await;
         config.model = Some("gpt-5.4".to_string());
         config.model_router = Some(ModelRouterToml {
@@ -1695,7 +1623,7 @@ mod tests {
         )
         .expect("router should apply");
 
-        assert_eq!(config.model.as_deref(), Some("gpt-5.3-codex-spark"));
+        assert_eq!(config.model.as_deref(), Some("gpt-5.4"));
     }
 
     #[tokio::test]
@@ -1788,11 +1716,17 @@ mod tests {
             candidates: Vec::new(),
             ..Default::default()
         });
-        let ollama = config
-            .model_providers
-            .get_mut(OLLAMA_OSS_PROVIDER_ID)
-            .expect("Ollama provider should be built in");
-        ollama.base_url = Some(server.uri());
+        config.model_providers = merge_configured_model_providers(
+            built_in_model_providers(/*openai_base_url*/ None),
+            std::collections::HashMap::from([(
+                OLLAMA_OSS_PROVIDER_ID.to_string(),
+                ModelProviderInfo {
+                    base_url: Some(server.uri()),
+                    ..Default::default()
+                },
+            )]),
+        )
+        .expect("provider merge should succeed");
         retain_only_additional_providers(&mut config, &[OLLAMA_OSS_PROVIDER_ID]);
 
         let available_models = available_router_models(
@@ -1817,7 +1751,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ready_builtin_deepseek_candidate_is_production_selectable_by_default() {
+    async fn available_router_models_skips_builtin_no_auth_provider_without_explicit_address() {
+        let mut config = config::test_config().await;
+        config.model = Some("gpt-5.4".to_string());
+        config.model_router = Some(ModelRouterToml {
+            enabled: true,
+            candidates: Vec::new(),
+            ..Default::default()
+        });
+        retain_only_additional_providers(&mut config, &[OLLAMA_OSS_PROVIDER_ID]);
+
+        let available_models = available_router_models(
+            &config,
+            &empty_models_manager(),
+            &ModelRouterDiscoveryCache::new(),
+        )
+        .await;
+        let candidate_set =
+            build_candidate_set(&config, "module.review.triage", 80, &available_models, &[])
+                .expect("candidate set should build");
+
+        assert!(candidate_set.candidates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn ready_builtin_deepseek_candidate_is_not_selected_without_metrics() {
         let (_codex_home, runtime) = state_runtime().await;
         let mut config = config::test_config().await;
         config.model = Some("gpt-5.4".to_string());
@@ -1843,14 +1801,12 @@ mod tests {
         .await
         .expect("router should apply");
 
-        assert_eq!(config.model_provider_id, DEEPSEEK_PROVIDER_ID);
-        assert_eq!(config.model.as_deref(), Some("deepseek-v4-flash"));
+        assert_eq!(config.model_provider_id, OPENAI_PROVIDER_ID);
+        assert_eq!(config.model.as_deref(), Some("gpt-5.4"));
     }
 
     #[tokio::test]
-    async fn custom_discovered_candidate_switches_provider_and_model() {
-        let server = MockServer::start().await;
-        mount_models_response(&server, 200, vec!["deepseek-chat"]).await;
+    async fn custom_discovered_candidate_does_not_switch_without_metrics() {
         let mut config = config::test_config().await;
         config.model = Some("gpt-5.4".to_string());
         config.model_router = Some(ModelRouterToml {
@@ -1860,7 +1816,7 @@ mod tests {
         });
         config.model_providers.insert(
             "deepseek-custom".to_string(),
-            custom_provider_for_base_url(server.uri()),
+            custom_provider_for_base_url("https://deepseek.example.com/v1".to_string()),
         );
         retain_only_additional_providers(&mut config, &["deepseek-custom"]);
 
@@ -1878,14 +1834,12 @@ mod tests {
         )
         .expect("router should apply");
 
-        assert_eq!(config.model_provider_id, "deepseek-custom");
-        assert_eq!(config.model.as_deref(), Some("deepseek-chat"));
+        assert_eq!(config.model_provider_id, OPENAI_PROVIDER_ID);
+        assert_eq!(config.model.as_deref(), Some("gpt-5.4"));
     }
 
     #[tokio::test]
-    async fn custom_provider_discovery_failure_falls_back_without_error() {
-        let server = MockServer::start().await;
-        mount_models_response(&server, 500, Vec::new()).await;
+    async fn custom_provider_without_address_falls_back_without_error() {
         let mut config = config::test_config().await;
         config.model = Some("gpt-5.4".to_string());
         config.model_router = Some(ModelRouterToml {
@@ -1895,7 +1849,10 @@ mod tests {
         });
         config.model_providers.insert(
             "deepseek-custom".to_string(),
-            custom_provider_for_base_url(server.uri()),
+            ModelProviderInfo {
+                name: "DeepSeek".to_string(),
+                ..Default::default()
+            },
         );
         retain_only_additional_providers(&mut config, &["deepseek-custom"]);
 
@@ -2068,13 +2025,21 @@ mod tests {
         config.model = Some("gpt-5.4".to_string());
         config.model_router = Some(ModelRouterToml {
             enabled: true,
-            candidates: vec![ModelRouterCandidateToml {
-                model: Some("gpt-5.3-codex-spark".to_string()),
-                service_tier: Some(ServiceTier::Flex),
-                reasoning_effort: Some(ModelRouterReasoningEffortToml::Low),
-                account: Some("spark-account".to_string()),
-                ..Default::default()
-            }],
+            candidates: vec![
+                ModelRouterCandidateToml {
+                    model: Some("gpt-5.4".to_string()),
+                    median_latency_ms: Some(10_000),
+                    ..Default::default()
+                },
+                ModelRouterCandidateToml {
+                    model: Some("gpt-5.3-codex-spark".to_string()),
+                    service_tier: Some(ServiceTier::Flex),
+                    reasoning_effort: Some(ModelRouterReasoningEffortToml::Low),
+                    account: Some("spark-account".to_string()),
+                    median_latency_ms: Some(1_000),
+                    ..Default::default()
+                },
+            ],
             ..Default::default()
         });
 

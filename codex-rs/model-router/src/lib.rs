@@ -98,15 +98,15 @@ impl RouterTaskClass {
         if key.contains("learn") {
             return Self::RareQualitySensitive;
         }
+        if key.contains("tool") || key.contains("mcp") || key.contains("triage") {
+            return Self::LatencySensitive;
+        }
         if key.contains("review")
             || key.contains("fix")
             || key.contains("commit")
             || key.contains("memory_consolidation")
         {
             return Self::QualitySensitive;
-        }
-        if key.contains("tool") || key.contains("mcp") || key.contains("triage") {
-            return Self::LatencySensitive;
         }
         if key.contains("compact") || prompt_bytes > 256_000 {
             return Self::CostSensitive;
@@ -386,10 +386,7 @@ fn infer_missing_metrics(candidate: &CandidateRoute) -> CandidateMetrics {
             .intelligence_score
             .or_else(|| inferred_intelligence_score(model)),
         success_rate: candidate.metrics.success_rate,
-        median_latency_ms: candidate
-            .metrics
-            .median_latency_ms
-            .or_else(|| inferred_latency_ms(model)),
+        median_latency_ms: candidate.metrics.median_latency_ms,
         estimated_cost_usd_micros: candidate.metrics.estimated_cost_usd_micros,
     }
 }
@@ -417,27 +414,6 @@ fn inferred_intelligence_score(model: &str) -> Option<f64> {
         0.55
     };
     Some(score)
-}
-
-fn inferred_latency_ms(model: &str) -> Option<u64> {
-    let model = model.to_ascii_lowercase();
-    if model.is_empty() {
-        return None;
-    }
-    let latency = if model.contains("spark") || model.contains("nano") {
-        2_000
-    } else if model.contains("mini") {
-        4_000
-    } else if model.contains("gpt-5.5") {
-        45_000
-    } else if model.contains("gpt-5.4") {
-        30_000
-    } else if model.contains("gpt-5.3") {
-        18_000
-    } else {
-        12_000
-    };
-    Some(latency)
 }
 
 fn metric_range(values: impl Iterator<Item = f64>) -> Option<(f64, f64)> {
@@ -526,7 +502,10 @@ mod tests {
                 model_provider: Some("openai".to_string()),
                 usable_context_window_tokens: Some(100_000),
                 is_incumbent: true,
-                metrics: CandidateMetrics::default(),
+                metrics: CandidateMetrics {
+                    median_latency_ms: Some(10_000),
+                    ..Default::default()
+                },
             },
             CandidateRoute {
                 id: Some("fast".to_string()),
@@ -536,6 +515,7 @@ mod tests {
                 is_incumbent: false,
                 metrics: CandidateMetrics {
                     success_rate: Some(0.95),
+                    median_latency_ms: Some(1_000),
                     ..Default::default()
                 },
             },
@@ -545,6 +525,34 @@ mod tests {
             select_candidate("module.review.triage", 1_000, &candidates)
                 .map(|selection| (selection.index, selection.task_class)),
             Some((1, RouterTaskClass::LatencySensitive))
+        );
+    }
+
+    #[test]
+    fn missing_latency_does_not_use_model_name_heuristics() {
+        let candidates = vec![
+            CandidateRoute {
+                id: Some("spark".to_string()),
+                model: Some("gpt-5.3-codex-spark".to_string()),
+                model_provider: Some("openai".to_string()),
+                usable_context_window_tokens: Some(100_000),
+                is_incumbent: false,
+                metrics: CandidateMetrics::default(),
+            },
+            CandidateRoute {
+                id: Some("quality".to_string()),
+                model: Some("gpt-5.5".to_string()),
+                model_provider: Some("openai".to_string()),
+                usable_context_window_tokens: Some(100_000),
+                is_incumbent: false,
+                metrics: CandidateMetrics::default(),
+            },
+        ];
+
+        assert_eq!(
+            select_candidate("module.review.triage", 1_000, &candidates)
+                .map(|selection| selection.index),
+            Some(1)
         );
     }
 

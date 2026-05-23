@@ -18,6 +18,21 @@ pub async fn ensure_oss_provider_ready(
     provider_id: &str,
     config: &Config,
 ) -> Result<(), std::io::Error> {
+    let Some(provider) = config.model_providers.get(provider_id) else {
+        return Ok(());
+    };
+    if !provider.is_config_ready(provider_id) {
+        let message = match provider_id {
+            LMSTUDIO_OSS_PROVIDER_ID => {
+                "LM Studio provider is not configured. Set `model_providers.lmstudio.base_url` in config.toml or `CODEX_OSS_BASE_URL`/`CODEX_OSS_PORT` before using it."
+            }
+            OLLAMA_OSS_PROVIDER_ID => {
+                "Ollama provider is not configured. Set `model_providers.ollama.base_url` in config.toml or `CODEX_OSS_BASE_URL`/`CODEX_OSS_PORT` before using it."
+            }
+            _ => "OSS provider is not configured.",
+        };
+        return Err(std::io::Error::other(message));
+    }
     match provider_id {
         LMSTUDIO_OSS_PROVIDER_ID => {
             codex_lmstudio::ensure_oss_ready(config)

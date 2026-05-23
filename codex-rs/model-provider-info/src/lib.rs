@@ -399,6 +399,64 @@ impl ModelProviderInfo {
     pub fn has_command_auth(&self) -> bool {
         self.auth.is_some()
     }
+
+    pub fn is_config_ready(&self, _provider_id: &str) -> bool {
+        if self
+            .base_url
+            .as_deref()
+            .is_none_or(|base_url| base_url.trim().is_empty())
+        {
+            return false;
+        }
+        if self
+            .experimental_bearer_token
+            .as_deref()
+            .is_some_and(|token| !token.trim().is_empty())
+        {
+            return true;
+        }
+        if self.auth.is_some()
+            || self
+                .http_headers
+                .as_ref()
+                .is_some_and(|headers| headers.values().any(|value| !value.trim().is_empty()))
+        {
+            return true;
+        }
+        if self.env_http_headers.as_ref().is_some_and(|headers| {
+            headers
+                .values()
+                .any(|env_key| std::env::var(env_key).is_ok_and(|value| !value.trim().is_empty()))
+        }) {
+            return true;
+        }
+        if let Some(aws) = self.aws.as_ref() {
+            return aws
+                .profile
+                .as_deref()
+                .is_some_and(|profile| !profile.trim().is_empty())
+                || aws
+                    .region
+                    .as_deref()
+                    .is_some_and(|region| !region.trim().is_empty())
+                || env_var_has_non_empty_value("AWS_PROFILE")
+                || (env_var_has_non_empty_value("AWS_ACCESS_KEY_ID")
+                    && env_var_has_non_empty_value("AWS_SECRET_ACCESS_KEY"))
+                || (env_var_has_non_empty_value("AWS_BEARER_TOKEN_BEDROCK")
+                    && (env_var_has_non_empty_value("AWS_REGION")
+                        || env_var_has_non_empty_value("AWS_DEFAULT_REGION")))
+                || (env_var_has_non_empty_value("AWS_WEB_IDENTITY_TOKEN_FILE")
+                    && env_var_has_non_empty_value("AWS_ROLE_ARN"));
+        }
+        if let Some(env_key) = self.env_key.as_deref() {
+            return env_var_has_non_empty_value(env_key);
+        }
+        !self.requires_openai_auth
+    }
+}
+
+fn env_var_has_non_empty_value(env_key: &str) -> bool {
+    std::env::var(env_key).is_ok_and(|value| !value.trim().is_empty())
 }
 
 pub const DEFAULT_LMSTUDIO_PORT: u16 = 1234;
@@ -422,14 +480,8 @@ pub fn built_in_model_providers(
         (OPENAI_PROVIDER_ID, openai_provider),
         (DEEPSEEK_PROVIDER_ID, deepseek_provider),
         (AMAZON_BEDROCK_PROVIDER_ID, amazon_bedrock_provider),
-        (
-            OLLAMA_OSS_PROVIDER_ID,
-            create_oss_provider(DEFAULT_OLLAMA_PORT),
-        ),
-        (
-            LMSTUDIO_OSS_PROVIDER_ID,
-            create_oss_provider(DEFAULT_LMSTUDIO_PORT),
-        ),
+        (OLLAMA_OSS_PROVIDER_ID, create_oss_provider()),
+        (LMSTUDIO_OSS_PROVIDER_ID, create_oss_provider()),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
@@ -482,6 +534,22 @@ other non-default provider fields are not supported"
                 built_in_provider.experimental_bearer_token = Some(token);
                 built_in_provider.env_key = None;
             }
+        } else if matches!(
+            key.as_str(),
+            OLLAMA_OSS_PROVIDER_ID | LMSTUDIO_OSS_PROVIDER_ID
+        ) {
+            let base_url_override = provider.base_url.take();
+            if provider != ModelProviderInfo::default() {
+                return Err(format!(
+                    "model_providers.{key} only supports changing `base_url`; other non-default provider fields are not supported"
+                ));
+            }
+
+            if let Some(base_url) = base_url_override
+                && let Some(built_in_provider) = model_providers.get_mut(key.as_str())
+            {
+                built_in_provider.base_url = Some(base_url);
+            }
         } else {
             model_providers.entry(key).or_insert(provider);
         }
@@ -490,23 +558,48 @@ other non-default provider fields are not supported"
     Ok(model_providers)
 }
 
-pub fn create_oss_provider(default_provider_port: u16) -> ModelProviderInfo {
+pub fn create_oss_provider() -> ModelProviderInfo {
+    match oss_provider_base_url_from_env() {
+        Some(base_url) => create_oss_provider_with_base_url(&base_url),
+        None => create_unconfigured_oss_provider(),
+    }
+}
+
+fn oss_provider_base_url_from_env() -> Option<String> {
     // These CODEX_OSS_ environment variables are experimental: we may
     // switch to reading values from config.toml instead.
-    let default_codex_oss_base_url = format!(
-        "http://localhost:{codex_oss_port}/v1",
-        codex_oss_port = std::env::var("CODEX_OSS_PORT")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .and_then(|value| value.parse::<u16>().ok())
-            .unwrap_or(default_provider_port)
-    );
-
-    let codex_oss_base_url = std::env::var("CODEX_OSS_BASE_URL")
+    if let Some(base_url) = std::env::var("CODEX_OSS_BASE_URL")
         .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or(default_codex_oss_base_url);
-    create_oss_provider_with_base_url(&codex_oss_base_url)
+        .filter(|value| !value.trim().is_empty())
+    {
+        return Some(base_url);
+    }
+    std::env::var("CODEX_OSS_PORT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .and_then(|value| value.parse::<u16>().ok())
+        .map(|port| format!("http://localhost:{port}/v1"))
+}
+
+fn create_unconfigured_oss_provider() -> ModelProviderInfo {
+    ModelProviderInfo {
+        name: "gpt-oss".into(),
+        base_url: None,
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: None,
+        aws: None,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    }
 }
 
 pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
