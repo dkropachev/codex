@@ -21,6 +21,7 @@ use crate::command::WorkflowCommand;
 use crate::command::WorkflowConfigCommand;
 use crate::command::WorkflowInputSource;
 use crate::id::normalize_workflow_id;
+use crate::quality_hook::workflow_quality_block_reason_for_path;
 use crate::registry::DEFAULT_MAX_REPAIR_CYCLES;
 use crate::registry::default_workflow_root;
 use crate::registry::discover_workflows;
@@ -213,7 +214,7 @@ fn develop(ctx: WorkflowCommandContext<'_>, description: &str) -> Result<Workflo
     );
     write_workflow_spec(&path.join(WORKFLOW_YAML), &spec)?;
     write_scaffold_files(&path, &id, &title, description)?;
-    commit_workflow_changes(ctx.config, &path, "Create workflow scaffold")?;
+    commit_workflow_changes(&ctx, &path, "Create workflow scaffold")?;
 
     Ok(WorkflowCommandOutput {
         message: format!("Created workflow {id} at {}", path.display()),
@@ -230,7 +231,7 @@ fn describe(
     let mut spec = read_workflow_spec(&workflow.workflow_yaml_path)?;
     spec.user_description = Some(description.to_string());
     write_workflow_spec(&workflow.workflow_yaml_path, &spec)?;
-    commit_workflow_changes(ctx.config, &workflow.path, "Update workflow description")?;
+    commit_workflow_changes(&ctx, &workflow.path, "Update workflow description")?;
     Ok(WorkflowCommandOutput {
         message: format!("Updated description for {}", workflow.id),
         data: json!({ "workflow": workflow, "spec": spec }),
@@ -244,7 +245,7 @@ fn docs(
 ) -> Result<WorkflowCommandOutput> {
     let workflow = find_workflow(ctx.codex_home, ctx.cwd, ctx.config, id)?;
     append_readme_note(&workflow.path, "Documentation", instruction)?;
-    commit_workflow_changes(ctx.config, &workflow.path, "Update workflow documentation")?;
+    commit_workflow_changes(&ctx, &workflow.path, "Update workflow documentation")?;
     Ok(WorkflowCommandOutput {
         message: format!("Updated docs for {}", workflow.id),
         data: json!({ "workflow": workflow }),
@@ -258,7 +259,7 @@ fn edit(
 ) -> Result<WorkflowCommandOutput> {
     let workflow = find_workflow(ctx.codex_home, ctx.cwd, ctx.config, id)?;
     append_readme_note(&workflow.path, "Edit request", instruction)?;
-    commit_workflow_changes(ctx.config, &workflow.path, "Record workflow edit request")?;
+    commit_workflow_changes(&ctx, &workflow.path, "Record workflow edit request")?;
     Ok(WorkflowCommandOutput {
         message: format!("Recorded edit request for {}", workflow.id),
         data: json!({ "workflow": workflow }),
@@ -276,7 +277,7 @@ fn fix(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommandOutpu
     }
     if changed {
         write_workflow_spec(&workflow.workflow_yaml_path, &spec)?;
-        commit_workflow_changes(ctx.config, &workflow.path, "Repair workflow metadata")?;
+        commit_workflow_changes(&ctx, &workflow.path, "Repair workflow metadata")?;
     }
     let validation = validate_workflow_dir(&workflow.root_path, &workflow.path, &workflow.id);
     Ok(WorkflowCommandOutput {
@@ -639,7 +640,12 @@ fn parse_input_field_value(raw_value: &str) -> JsonValue {
     serde_json::from_str(raw_value).unwrap_or_else(|_| JsonValue::String(raw_value.to_string()))
 }
 
-fn commit_workflow_changes(config: &WorkflowsConfigToml, path: &Path, message: &str) -> Result<()> {
+fn commit_workflow_changes(
+    ctx: &WorkflowCommandContext<'_>,
+    path: &Path,
+    message: &str,
+) -> Result<()> {
+    let config = ctx.config;
     if matches!(
         config.commit_policy.as_deref(),
         Some("manual" | "none" | "disabled")
@@ -647,6 +653,13 @@ fn commit_workflow_changes(config: &WorkflowsConfigToml, path: &Path, message: &
         return Ok(());
     }
     run_git(path, &["init"])?;
+    if let Some(reason) =
+        workflow_quality_block_reason_for_path(ctx.codex_home, ctx.cwd, ctx.config, path)?
+    {
+        return Err(anyhow!(
+            "workflow changes failed validation and were not committed:\n{reason}"
+        ));
+    }
     run_git(path, &["add", "."])?;
     let diff = Command::new("git")
         .args(["diff", "--cached", "--quiet"])
@@ -734,7 +747,6 @@ mod tests {
     fn write_validation_fixture(workflow_dir: &Path, validation_commands: JsonValue) {
         fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
         fs::create_dir_all(workflow_dir.join("state")).unwrap();
-        fs::create_dir_all(workflow_dir.join(".git")).unwrap();
         fs::write(
             workflow_dir.join("README.md"),
             "# Test\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
@@ -798,6 +810,40 @@ mod tests {
             },
         )
         .unwrap();
+
+        let status = Command::new("git")
+            .args(["init"])
+            .current_dir(workflow_dir)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git init should succeed");
+        let status = Command::new("git")
+            .args([
+                "-c",
+                "user.name=Codex",
+                "-c",
+                "user.email=codex@openai.com",
+                "add",
+                ".",
+            ])
+            .current_dir(workflow_dir)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git add should succeed");
+        let status = Command::new("git")
+            .args([
+                "-c",
+                "user.name=Codex",
+                "-c",
+                "user.email=codex@openai.com",
+                "commit",
+                "-m",
+                "init",
+            ])
+            .current_dir(workflow_dir)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git commit should succeed");
     }
 
     #[test]
@@ -986,6 +1032,53 @@ mod tests {
             report.messages,
             vec!["validation command `exit 1` failed with exit code 1".to_string()]
         );
+    }
+
+    #[test]
+    fn commit_workflow_changes_refuses_invalid_workflow() {
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let workflow_dir = home.path().join("workflows/review/fix");
+        write_validation_fixture(&workflow_dir, json!(["exit 0"]));
+        fs::write(
+            workflow_dir.join(WORKFLOW_YAML),
+            "id: review/other\nvalidation:\n  commands:\n    - exit 0\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
+        )
+        .unwrap();
+
+        let before_head = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&workflow_dir)
+            .output()
+            .unwrap();
+        assert!(before_head.status.success());
+        let before_head = String::from_utf8(before_head.stdout).unwrap();
+
+        let config = WorkflowsConfigToml::default();
+        let ctx = WorkflowCommandContext {
+            codex_home: home.path(),
+            cwd: cwd.path(),
+            config: &config,
+        };
+
+        let err = commit_workflow_changes(&ctx, &workflow_dir, "Update workflow documentation")
+            .expect_err("invalid workflow should not be committed");
+
+        assert!(
+            err.to_string()
+                .contains("workflow changes failed validation and were not committed")
+        );
+        assert!(err.to_string().contains("[WF-007]"));
+
+        let after_head = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&workflow_dir)
+            .output()
+            .unwrap();
+        assert!(after_head.status.success());
+        let after_head = String::from_utf8(after_head.stdout).unwrap();
+
+        assert_eq!(after_head, before_head);
     }
 
     #[test]

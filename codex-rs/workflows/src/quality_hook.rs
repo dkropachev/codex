@@ -2,6 +2,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use anyhow::anyhow;
 use codex_config::types::WorkflowsConfigToml;
 
 use crate::registry::WorkflowSummary;
@@ -42,19 +43,9 @@ pub fn workflow_quality_feedback(
     let mut failures = Vec::new();
 
     for workflow in workflows {
-        if workflow_git_status(&workflow).is_empty() {
-            continue;
+        if let Some(failure) = workflow_quality_failure_for_workflow(&workflow)? {
+            failures.push(failure);
         }
-
-        let report = validate_workflow(&workflow, run_validation_command)?;
-        if report.status == crate::registry::WorkflowValidationStatus::Valid {
-            continue;
-        }
-
-        failures.push(WorkflowQualityFailure {
-            findings: findings_for_report(&workflow, &report),
-            workflow,
-        });
     }
 
     if failures.is_empty() {
@@ -73,6 +64,45 @@ pub fn workflow_quality_block_reason(
     config: &WorkflowsConfigToml,
 ) -> Result<Option<String>> {
     Ok(workflow_quality_feedback(codex_home, cwd, config)?.map(|feedback| feedback.reason))
+}
+
+pub(crate) fn workflow_quality_block_reason_for_path(
+    codex_home: &Path,
+    cwd: &Path,
+    config: &WorkflowsConfigToml,
+    workflow_path: &Path,
+) -> Result<Option<String>> {
+    let workflow = discover_workflows(codex_home, cwd, config)?
+        .into_iter()
+        .find(|workflow| workflow.path == workflow_path)
+        .ok_or_else(|| anyhow!("workflow at {} was not found", workflow_path.display()))?;
+
+    Ok(
+        workflow_quality_failure_for_workflow(&workflow)?.map(|failure| {
+            render_findings(
+                std::slice::from_ref(&failure),
+                /*include_guidance*/ false,
+            )
+        }),
+    )
+}
+
+fn workflow_quality_failure_for_workflow(
+    workflow: &WorkflowSummary,
+) -> Result<Option<WorkflowQualityFailure>> {
+    if workflow_git_status(workflow).is_empty() {
+        return Ok(None);
+    }
+
+    let report = validate_workflow(workflow, run_validation_command)?;
+    if report.status == crate::registry::WorkflowValidationStatus::Valid {
+        return Ok(None);
+    }
+
+    Ok(Some(WorkflowQualityFailure {
+        findings: findings_for_report(workflow, &report),
+        workflow: workflow.clone(),
+    }))
 }
 
 fn findings_for_report(
@@ -405,10 +435,20 @@ mod tests {
             "// workflow-covers: negative failureUx\nexport {}\n",
         )
         .expect("write negative test");
+        fs::write(
+            workflow_dir.join("src/tests/workflow.load.test.ts"),
+            "// workflow-covers: load\nexport {}\n",
+        )
+        .expect("write load test");
+        fs::write(
+            workflow_dir.join("src/tests/workflow.autocomplete.test.ts"),
+            "// workflow-covers: autocomplete\nexport {}\n",
+        )
+        .expect("write autocomplete test");
         fs::create_dir_all(workflow_dir.join(".git")).expect("create git dir");
         fs::write(
             workflow_dir.join("workflow.yaml"),
-            "id: review/fix\nvalidation:\n  commands:\n    - exit 0\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    recovery: false\n",
+            "id: review/fix\nvalidation:\n  commands:\n    - exit 0\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
         )
         .expect("write workflow spec");
 
