@@ -36,6 +36,7 @@ use crate::mentions::build_skill_name_counts;
 use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
+use crate::model_router::model_client_for_config;
 use crate::parse_turn_item;
 use crate::plugins::build_plugin_injections;
 use crate::resolve_skill_dependencies_for_turn;
@@ -385,8 +386,16 @@ pub(crate) async fn run_turn(
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
-    let mut client_session =
-        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let mut client_session = match prewarmed_client_session {
+        Some(client_session) => client_session,
+        None if turn_context.model_router_route_changed => model_client_for_config(
+            &turn_context.config,
+            &sess.services.model_client,
+            &sess.services.auth_manager,
+        )
+        .new_session(),
+        None => sess.services.model_client.new_session(),
+    };
     // Pending input is drained into history before building the next model request.
     // However, we defer that drain until after sampling in two cases:
     // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.

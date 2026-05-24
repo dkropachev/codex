@@ -24,7 +24,6 @@ use codex_config::loader::project_trust_key;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_login::CodexAuth;
-use codex_model_provider_info::DEEPSEEK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info;
@@ -2975,10 +2974,14 @@ async fn normal_chat_turn_applies_model_router_and_records_usage() -> anyhow::Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn routed_deepseek_turn_uses_responses_api_and_records_usage() -> anyhow::Result<()> {
-    let server = start_mock_server().await;
+async fn routed_bedrock_cmb_turn_uses_candidate_provider_client() -> anyhow::Result<()> {
+    const BEDROCK_CMB_MODEL: &str = "openai.gpt-5.4-cmb";
+    const ROUTED_PROVIDER_ID: &str = "routed-bedrock-provider";
+
+    let primary_server = start_mock_server().await;
+    let routed_server = start_mock_server().await;
     let response = mount_sse_once(
-        &server,
+        &routed_server,
         sse(vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "done"),
@@ -2987,19 +2990,24 @@ async fn routed_deepseek_turn_uses_responses_api_and_records_usage() -> anyhow::
     )
     .await;
 
-    let base_url = format!("{}/v1", server.uri());
+    let routed_base_url = format!("{}/v1", routed_server.uri());
     let mut builder = test_codex()
         .with_model("gpt-5.4")
         .with_config(move |config| {
-            let deepseek = config
-                .model_providers
-                .get_mut(DEEPSEEK_PROVIDER_ID)
-                .expect("DeepSeek provider should be built in");
-            deepseek.base_url = Some(base_url);
-            deepseek.env_key = None;
-            deepseek.experimental_bearer_token = Some("deepseek-test-token".to_string());
+            config.model_providers.insert(
+                ROUTED_PROVIDER_ID.to_string(),
+                ModelProviderInfo {
+                    name: "Routed test provider".to_string(),
+                    base_url: Some(routed_base_url),
+                    experimental_bearer_token: Some("routed-provider-token".to_string()),
+                    requires_openai_auth: false,
+                    supports_websockets: false,
+                    ..Default::default()
+                },
+            );
             config.model_router = Some(codex_config::config_toml::ModelRouterToml {
                 enabled: true,
+                discovery: Some(codex_config::config_toml::ModelRouterDiscoveryToml::Manual),
                 candidates: vec![
                     codex_config::config_toml::ModelRouterCandidateToml {
                         id: Some("incumbent-price".to_string()),
@@ -3009,9 +3017,9 @@ async fn routed_deepseek_turn_uses_responses_api_and_records_usage() -> anyhow::
                         ..Default::default()
                     },
                     codex_config::config_toml::ModelRouterCandidateToml {
-                        id: Some("deepseek-chat".to_string()),
-                        model_provider: Some(DEEPSEEK_PROVIDER_ID.to_string()),
-                        model: Some("deepseek-chat".to_string()),
+                        id: Some(BEDROCK_CMB_MODEL.to_string()),
+                        model_provider: Some(ROUTED_PROVIDER_ID.to_string()),
+                        model: Some(BEDROCK_CMB_MODEL.to_string()),
                         input_price_per_million: Some(1.0),
                         output_price_per_million: Some(2.0),
                         ..Default::default()
@@ -3019,31 +3027,40 @@ async fn routed_deepseek_turn_uses_responses_api_and_records_usage() -> anyhow::
                 ],
                 models: Some(codex_config::config_toml::ModelRouterModelsToml {
                     rules: vec![codex_config::config_toml::ModelRouterModelRuleToml {
-                        id: Some("chat-default-deepseek".to_string()),
+                        id: Some("chat-default-routed-provider".to_string()),
                         rule_type: codex_config::config_toml::ModelRouterModelRuleTypeToml::Require,
                         tasks: vec!["chat.default".to_string()],
                         except_tasks: Vec::new(),
                         models: vec![codex_config::config_toml::ModelRouterModelSelectorToml {
-                            provider: Some(DEEPSEEK_PROVIDER_ID.to_string()),
-                            model: Some("deepseek-chat".to_string()),
+                            provider: Some(ROUTED_PROVIDER_ID.to_string()),
+                            model: Some(BEDROCK_CMB_MODEL.to_string()),
                         }],
                     }],
                 }),
                 ..Default::default()
             });
         });
-    let test = builder.build(&server).await?;
+    let test = builder.build(&primary_server).await?;
 
     test.submit_turn("hello").await?;
 
     assert_eq!(
         response.single_request().body_json()["model"].as_str(),
-        Some("deepseek-chat")
+        Some(BEDROCK_CMB_MODEL)
     );
+
+    let primary_response_request_count = primary_server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter(|request| request.method == "POST" && request.url.path().ends_with("/responses"))
+        .count();
+    assert_eq!(primary_response_request_count, 0);
 
     let runtime = codex_state::StateRuntime::init(
         test.codex_home_path().to_path_buf(),
-        DEEPSEEK_PROVIDER_ID.to_string(),
+        ROUTED_PROVIDER_ID.to_string(),
     )
     .await?;
     let summary = runtime
