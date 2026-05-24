@@ -295,6 +295,18 @@ fn write_layout_fixable_workflow_fixture(workflow_dir: &Path) {
     .unwrap();
 }
 
+#[cfg(unix)]
+fn write_ai_repair_exec_script(exe_path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::write(
+        exe_path,
+        "#!/bin/sh\nif [ \"$1\" = \"exec\" ] && [ \"${2-}\" = \"--help\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"exec\" ]; then\n  count_file=state/ai-repair-count\n  count=0\n  if [ -f \"$count_file\" ]; then\n    count=$(cat \"$count_file\")\n  fi\n  count=$((count + 1))\n  mkdir -p state\n  printf '%s\\n' \"$count\" > \"$count_file\"\n  if [ \"$count\" -eq 1 ]; then\n    exit 0\n  fi\n  awk '{gsub(/exit 1/, \"exit 0\"); print}' workflow.yaml > workflow.yaml.tmp && mv workflow.yaml.tmp workflow.yaml\n  exit 0\nfi\nexit 1\n",
+    )
+    .unwrap();
+    fs::set_permissions(exe_path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
 #[test]
 fn repair_workflow_command_repairs_validation_findings_iteratively() {
     let home = TempDir::new().unwrap();
@@ -311,6 +323,7 @@ fn repair_workflow_command_repairs_validation_findings_iteratively() {
         codex_home: home.path(),
         cwd: cwd.path(),
         config: &config,
+        codex_self_exe: None,
         stage_session_id: None,
     };
 
@@ -360,6 +373,7 @@ fn repair_workflow_command_reports_blocked_findings_when_mode_is_too_narrow() {
         codex_home: home.path(),
         cwd: cwd.path(),
         config: &config,
+        codex_self_exe: None,
         stage_session_id: None,
     };
 
@@ -400,6 +414,7 @@ fn repair_workflow_command_reports_unsupported_validation_command_failures() {
         codex_home: home.path(),
         cwd: cwd.path(),
         config: &config,
+        codex_self_exe: None,
         stage_session_id: None,
     };
 
@@ -433,6 +448,53 @@ fn repair_workflow_command_reports_unsupported_validation_command_failures() {
     assert_eq!(output.data["repair"]["changed"], false);
 }
 
+#[cfg(unix)]
+#[test]
+fn repair_workflow_command_uses_ai_fallback_until_validation_passes() {
+    let home = TempDir::new().unwrap();
+    let cwd = TempDir::new().unwrap();
+    let workflow_dir = home.path().join("workflows/broken/fix");
+    fs::create_dir_all(&workflow_dir).unwrap();
+    write_command_failure_workflow_fixture(&workflow_dir);
+
+    let codex_self_exe = home.path().join("fake-codex");
+    write_ai_repair_exec_script(&codex_self_exe);
+
+    let config = codex_config::types::WorkflowsConfigToml {
+        commit_policy: Some("manual".to_string()),
+        ..Default::default()
+    };
+    let ctx = WorkflowCommandContext {
+        codex_home: home.path(),
+        cwd: cwd.path(),
+        config: &config,
+        codex_self_exe: Some(codex_self_exe),
+        stage_session_id: None,
+    };
+
+    let output = repair_workflow_command(ctx, "broken/fix").unwrap();
+
+    assert!(output.message.contains("Validation passed."));
+    assert_eq!(output.data["repair"]["stopReason"], "valid");
+    assert_eq!(output.data["repair"]["changed"], true);
+    assert_eq!(output.data["validation"]["findings"], serde_json::json!([]));
+    assert_eq!(
+        output.data["repair"]["appliedFixes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|fix| fix["kind"] == "aiRepair")
+            .count(),
+        2
+    );
+    assert_eq!(
+        fs::read_to_string(workflow_dir.join("state/ai-repair-count"))
+            .unwrap()
+            .trim(),
+        "2"
+    );
+}
+
 #[test]
 fn repair_workflow_command_applies_known_build_command_fixers() {
     let home = TempDir::new().unwrap();
@@ -449,6 +511,7 @@ fn repair_workflow_command_applies_known_build_command_fixers() {
         codex_home: home.path(),
         cwd: cwd.path(),
         config: &config,
+        codex_self_exe: None,
         stage_session_id: None,
     };
 
@@ -480,6 +543,8 @@ fn repair_workflow_command_reports_created_layout_directories() {
         codex_home: home.path(),
         cwd: cwd.path(),
         config: &config,
+        codex_self_exe: None,
+        stage_session_id: None,
     };
 
     let output = repair_workflow_command(ctx, "broken/layout").unwrap();
@@ -511,6 +576,7 @@ fn repair_workflow_command_commits_successful_repairs_when_commit_policy_allows_
         codex_home: home.path(),
         cwd: cwd.path(),
         config: &config,
+        codex_self_exe: None,
         stage_session_id: None,
     };
 

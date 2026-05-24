@@ -58,6 +58,7 @@ pub struct WorkflowCommandContext<'a> {
     pub codex_home: &'a Path,
     pub cwd: &'a Path,
     pub config: &'a WorkflowsConfigToml,
+    pub codex_self_exe: Option<PathBuf>,
     pub stage_session_id: Option<String>,
 }
 
@@ -1368,6 +1369,7 @@ mod tests {
                 codex_home: home.path(),
                 cwd: cwd.path(),
                 config: &config,
+                codex_self_exe: None,
                 stage_session_id: None,
             },
             WorkflowCommand::Develop {
@@ -1570,6 +1572,7 @@ mod tests {
             codex_home: home.path(),
             cwd: cwd.path(),
             config: &config,
+            codex_self_exe: None,
             stage_session_id: None,
         };
 
@@ -1605,6 +1608,7 @@ mod tests {
             codex_home: home.path(),
             cwd: cwd.path(),
             config: &config,
+            codex_self_exe: None,
             stage_session_id: None,
         };
         let workflow = find_workflow(home.path(), cwd.path(), &config, "review/fix").unwrap();
@@ -1642,6 +1646,7 @@ mod tests {
             codex_home: home.path(),
             cwd: cwd.path(),
             config: &config,
+            codex_self_exe: None,
             stage_session_id: Some(session_id.clone()),
         };
 
@@ -1685,6 +1690,7 @@ mod tests {
             codex_home: home.path(),
             cwd: cwd.path(),
             config: &config,
+            codex_self_exe: None,
             stage_session_id: Some(session_id.clone()),
         };
 
@@ -1722,6 +1728,7 @@ mod tests {
             codex_home: home.path(),
             cwd: cwd.path(),
             config: &config,
+            codex_self_exe: None,
             stage_session_id: Some(session_id.clone()),
         };
 
@@ -1762,6 +1769,7 @@ mod tests {
             codex_home: home.path(),
             cwd: cwd.path(),
             config: &config,
+            codex_self_exe: None,
             stage_session_id: Some(session_id.clone()),
         };
 
@@ -1970,6 +1978,7 @@ process.exit(result.status ?? 1);
                 codex_home: home.path(),
                 cwd: cwd.path(),
                 config: &WorkflowsConfigToml::default(),
+                codex_self_exe: None,
                 stage_session_id: None,
             },
             WorkflowCommand::Run {
@@ -2081,6 +2090,7 @@ process.exit(result.status ?? 1);
                 codex_home: home.path(),
                 cwd: cwd.path(),
                 config: &WorkflowsConfigToml::default(),
+                codex_self_exe: None,
                 stage_session_id: None,
             },
             WorkflowCommand::Run {
@@ -2101,6 +2111,7 @@ process.exit(result.status ?? 1);
                 codex_home: home.path(),
                 cwd: cwd.path(),
                 config: &WorkflowsConfigToml::default(),
+                codex_self_exe: None,
                 stage_session_id: None,
             },
             WorkflowCommand::Run {
@@ -2238,6 +2249,7 @@ process.exit(result.status ?? 1);
                 codex_home: home.path(),
                 cwd: cwd.path(),
                 config: &WorkflowsConfigToml::default(),
+                codex_self_exe: None,
                 stage_session_id: None,
             },
             WorkflowCommand::Run {

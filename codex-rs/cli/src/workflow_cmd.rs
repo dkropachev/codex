@@ -43,6 +43,7 @@ pub(crate) async fn load_workflow_command_context(
         codex_home: config.codex_home.as_path(),
         cwd: config.cwd.as_path(),
         config: &config.workflows,
+        codex_self_exe: config.codex_self_exe.clone(),
         stage_session_id: stage_session_id.map(ToString::to_string),
     })?;
     Ok((config, workflows))
@@ -67,6 +68,7 @@ pub async fn run_workflow_command(
             codex_home: config.codex_home.as_path(),
             cwd: config.cwd.as_path(),
             config: &config.workflows,
+            codex_self_exe: config.codex_self_exe.clone(),
             stage_session_id: cmd.stage_session_id,
         },
         command,

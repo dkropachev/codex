@@ -91,6 +91,7 @@ async fn run_workflow(
     let codex_home = turn.config.codex_home.clone();
     let cwd = turn.cwd.clone();
     let config = turn.config.workflows.clone();
+    let codex_self_exe = turn.config.codex_self_exe.clone();
 
     spawn_blocking(move || {
         execute_workflow_command(
@@ -98,6 +99,7 @@ async fn run_workflow(
                 codex_home: codex_home.as_path(),
                 cwd: cwd.as_path(),
                 config: &config,
+                codex_self_exe,
                 stage_session_id: Some(session_id),
             },
             WorkflowCommand::Run {
