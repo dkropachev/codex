@@ -301,7 +301,7 @@ fn write_ai_repair_exec_script(exe_path: &Path) {
 
     fs::write(
         exe_path,
-        "#!/bin/sh\nif [ \"$1\" = \"exec\" ] && [ \"${2-}\" = \"--help\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"exec\" ]; then\n  count_file=state/ai-repair-count\n  count=0\n  if [ -f \"$count_file\" ]; then\n    count=$(cat \"$count_file\")\n  fi\n  count=$((count + 1))\n  mkdir -p state\n  printf '%s\\n' \"$count\" > \"$count_file\"\n  if [ \"$count\" -eq 1 ]; then\n    exit 0\n  fi\n  awk '{gsub(/exit 1/, \"exit 0\"); print}' workflow.yaml > workflow.yaml.tmp && mv workflow.yaml.tmp workflow.yaml\n  exit 0\nfi\nexit 1\n",
+        "#!/bin/sh\nif [ \"$1\" = \"exec\" ] && [ \"${2-}\" = \"--help\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"exec\" ]; then\n  count_file=state/ai-repair-count\n  count=0\n  if [ -f \"$count_file\" ]; then\n    count=$(cat \"$count_file\")\n  fi\n  count=$((count + 1))\n  mkdir -p state\n  printf '%s\\n' \"$count\" > \"$count_file\"\n  if [ \"$count\" -eq 1 ]; then\n    exit 0\n  fi\n  awk '{gsub(/process.exit\\(1\\)/, \"process.exit(0)\"); print}' workflow.yaml > workflow.yaml.tmp && mv workflow.yaml.tmp workflow.yaml\n  exit 0\nfi\nexit 1\n",
     )
     .unwrap();
     fs::set_permissions(exe_path, fs::Permissions::from_mode(0o755)).unwrap();

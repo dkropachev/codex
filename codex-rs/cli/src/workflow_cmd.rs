@@ -15,7 +15,7 @@ pub struct WorkflowCli {
     #[arg(long, hide = true)]
     pub stage_session_id: Option<String>,
 
-    /// Workflow command and arguments, such as `list`, `validate <id>`, `run <id> --input '{...}'`, `run <id> --findings confirmed|filtered|both`, or a registered alias.
+    /// Workflow command and arguments, such as `list`, `validate <id>`, `repair <id>` / `fix <id>`, `run <id> --input '{...}'`, `run <id> --findings confirmed|filtered|both`, or a registered alias.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
 }

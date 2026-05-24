@@ -125,6 +125,9 @@ pub fn parse_workflow_command(
             id: required(args, 1, "edit", "a workflow id")?.to_string(),
             instruction: joined_tail(args, 2, "edit", "an instruction")?,
         }),
+        "repair" => Ok(WorkflowCommand::Fix {
+            id: single_id(args, "repair")?,
+        }),
         "fix" => Ok(WorkflowCommand::Fix {
             id: single_id(args, "fix")?,
         }),
@@ -401,6 +404,12 @@ mod tests {
         assert_eq!(
             parse_workflow_command_line("discard").unwrap(),
             WorkflowCommand::Discard
+        );
+        assert_eq!(
+            parse_workflow_command_line("repair reports/jira").unwrap(),
+            WorkflowCommand::Fix {
+                id: "reports/jira".to_string(),
+            }
         );
         assert_eq!(
             parse_workflow_command_line("config set repair_mode threshold:2").unwrap(),
