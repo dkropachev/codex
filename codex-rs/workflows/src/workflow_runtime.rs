@@ -954,7 +954,7 @@ export default workflow;
                 .expect("tsx wrapper should have a parent directory"),
         )
         .expect("temporary tsx wrapper");
-        std::io::Write::write_all(&mut tsx_file, b"#!/bin/sh\nexec /usr/bin/node \"$@\"\n")
+        std::io::Write::write_all(&mut tsx_file, b"#!/bin/sh\nexec node \"$@\"\n")
             .expect("tsx wrapper");
         tsx_file
             .persist(&tsx_path)

@@ -706,7 +706,7 @@ fn unix_now() -> u64 {
 }
 
 #[cfg(test)]
-pub(crate) fn prepare_typescript_workflow_dir(workflow_dir: &Path) {
+pub(crate) fn prepare_typescript_workflow_dir(workflow_dir: &Path) -> bool {
     fs::create_dir_all(workflow_dir.join("src")).expect("workflow src");
     fs::create_dir_all(workflow_dir.join("node_modules/typescript"))
         .expect("workflow node_modules");
@@ -735,8 +735,10 @@ pub(crate) fn prepare_typescript_workflow_dir(workflow_dir: &Path) {
 
     let typescript_library = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../node_modules/typescript/lib/typescript.js")
-        .canonicalize()
-        .expect("typescript library");
+        .canonicalize();
+    let Ok(typescript_library) = typescript_library else {
+        return false;
+    };
     let typescript_module = workflow_dir.join("node_modules/typescript/index.js");
     let typescript_package = workflow_dir.join("node_modules/typescript/package.json");
 
@@ -759,6 +761,8 @@ pub(crate) fn prepare_typescript_workflow_dir(workflow_dir: &Path) {
 "#,
     )
     .expect("typescript package json");
+
+    true
 }
 
 #[cfg(test)]
@@ -782,9 +786,12 @@ mod tests {
     use crate::registry::WorkflowValidation;
     use crate::registry::WorkflowValidationStatus;
 
-    fn write_workflow_source(workflow_dir: &Path, source: &str) {
-        super::prepare_typescript_workflow_dir(workflow_dir);
+    fn write_workflow_source(workflow_dir: &Path, source: &str) -> bool {
+        if !super::prepare_typescript_workflow_dir(workflow_dir) {
+            return false;
+        }
         fs::write(workflow_dir.join("src/workflow.ts"), source).expect("workflow ts");
+        true
     }
 
     #[test]
@@ -864,7 +871,7 @@ mod tests {
     fn extract_workflow_source_contract_from_typescript_extracts_named_default_export_and_formatter()
      {
         let workflow_dir = TempDir::new().expect("workflow dir");
-        write_workflow_source(
+        if !write_workflow_source(
             workflow_dir.path(),
             r#"
 export interface WorkflowInput {
@@ -885,7 +892,9 @@ export default async function codeReview(_ctx: unknown, input: WorkflowInput): P
   return { status: input.workflowId };
 }
 "#,
-        );
+        ) {
+            return;
+        }
 
         let contract = extract_workflow_source_contract_from_typescript(workflow_dir.path())
             .expect("workflow source contract");
@@ -932,7 +941,7 @@ export default async function codeReview(_ctx: unknown, input: WorkflowInput): P
     #[test]
     fn extract_workflow_source_contract_from_typescript_rejects_anonymous_default_export() {
         let workflow_dir = TempDir::new().expect("workflow dir");
-        write_workflow_source(
+        if !write_workflow_source(
             workflow_dir.path(),
             r#"
 export interface WorkflowInput {
@@ -953,7 +962,9 @@ export default async function (_ctx: unknown, input: WorkflowInput): Promise<Wor
   return { status: input.workflowId };
 }
 "#,
-        );
+        ) {
+            return;
+        }
 
         let err = extract_workflow_source_contract_from_typescript(workflow_dir.path())
             .expect_err("anonymous default export should be rejected");
@@ -966,7 +977,7 @@ export default async function (_ctx: unknown, input: WorkflowInput): Promise<Wor
     #[test]
     fn extract_workflow_source_contract_from_typescript_rejects_recursive_types() {
         let workflow_dir = TempDir::new().expect("workflow dir");
-        write_workflow_source(
+        if !write_workflow_source(
             workflow_dir.path(),
             r#"
 export interface WorkflowInput {
@@ -988,7 +999,9 @@ export default async function codeReview(_ctx: unknown, input: WorkflowInput): P
   return { status: input.workflowId };
 }
 "#,
-        );
+        ) {
+            return;
+        }
 
         let err = extract_workflow_source_contract_from_typescript(workflow_dir.path())
             .expect_err("recursive types should be rejected");
@@ -1001,7 +1014,7 @@ export default async function codeReview(_ctx: unknown, input: WorkflowInput): P
     #[test]
     fn extract_workflow_source_contract_from_typescript_rejects_invalid_formatter_shape() {
         let workflow_dir = TempDir::new().expect("workflow dir");
-        write_workflow_source(
+        if !write_workflow_source(
             workflow_dir.path(),
             r#"
 export interface WorkflowInput {
@@ -1022,7 +1035,9 @@ export default async function codeReview(_ctx: unknown, input: WorkflowInput): P
   return { status: input.workflowId };
 }
 "#,
-        );
+        ) {
+            return;
+        }
 
         let err = extract_workflow_source_contract_from_typescript(workflow_dir.path())
             .expect_err("invalid formatter return shape should be rejected");

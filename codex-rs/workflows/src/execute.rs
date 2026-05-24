@@ -1232,6 +1232,7 @@ fn workflow_config_value(key: &str, raw: &str) -> Result<Item> {
 mod tests {
     use super::*;
     use codex_config::types::WorkflowDefaultLocation;
+    #[cfg(unix)]
     use serial_test::serial;
 
     use pretty_assertions::assert_eq;
@@ -1906,7 +1907,7 @@ export default workflow;
         .unwrap();
         fs::write(
             workflow_dir.join("node_modules/.bin/tsx"),
-            r#"#!/usr/bin/node
+            r#"#!/usr/bin/env node
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -1914,7 +1915,7 @@ const { spawnSync } = require('node:child_process');
 
 const [runner, ...args] = process.argv.slice(2);
 if (args[0] === '--serve') {
-  const result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });
+  const result = spawnSync('node', [runner, ...args], { stdio: 'inherit' });
   process.exit(result.status ?? 1);
 }
 const workflowPathIndex = args.indexOf('--workflow-path');
@@ -1930,7 +1931,7 @@ fs.cpSync(workflowDir, tmpWorkflowDir, { recursive: true });
 const tmpPath = path.join(tmpWorkflowDir, path.basename(workflowPath) + '.mjs');
 fs.copyFileSync(workflowPath, tmpPath);
 args[workflowPathIndex + 1] = tmpPath;
-const result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });
+const result = spawnSync('node', [runner, ...args], { stdio: 'inherit' });
 process.exit(result.status ?? 1);
 "#,
         )

@@ -187,9 +187,12 @@ mod tests {
         }
     }
 
-    fn write_workflow_source(workflow_dir: &Path, source: &str) {
-        crate::api_contract::prepare_typescript_workflow_dir(workflow_dir);
+    fn write_workflow_source(workflow_dir: &Path, source: &str) -> bool {
+        if !crate::api_contract::prepare_typescript_workflow_dir(workflow_dir) {
+            return false;
+        }
         fs::write(workflow_dir.join("src/workflow.ts"), source).expect("workflow ts");
+        true
     }
 
     fn write_minimal_workflow_yaml(workflow_dir: &Path, id: &str, api: serde_json::Value) {
@@ -251,7 +254,9 @@ mod tests {
                 }
             }),
         );
-        write_workflow_source(&workflow_dir, "export const helper = 1;\n");
+        if !write_workflow_source(&workflow_dir, "export const helper = 1;\n") {
+            return;
+        }
 
         let workflow = workflow_summary(
             "global",
@@ -305,7 +310,7 @@ mod tests {
 
         let shared_workflow_dir = codex_home.path().join("workflows/review/shared");
         write_minimal_workflow_yaml(&shared_workflow_dir, "review/shared", json!({}));
-        write_workflow_source(
+        if !write_workflow_source(
             &shared_workflow_dir,
             r#"
 export interface WorkflowInput {
@@ -326,7 +331,9 @@ export default async function sharedReview(_ctx: unknown, input: WorkflowInput):
   return { status: input.value };
 }
 "#,
-        );
+        ) {
+            return;
+        }
 
         let shared_workflow = workflow_summary(
             "global",
