@@ -840,6 +840,7 @@ export default async function run(_ctx: WorkflowContext, input: WorkflowInput): 
         let Some(ClientResponsePayload::WorkflowRepair(response)) = processor
             .repair(WorkflowRepairParams {
                 id: "broken/fix".to_string(),
+                stage_session_id: None,
             })
             .await
             .unwrap()

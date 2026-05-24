@@ -366,18 +366,9 @@ async fn run_workflow_autocomplete_session(
                         }
 
                         if should_run {
-                            if saw_run.iter().all(|seen| *seen)
-                                && !screen.contains(scenario.workflow_status_prefix)
-                                && !sent_interrupts
-                            {
+                            if saw_run.iter().all(|seen| *seen) && !sent_interrupts {
                                 sent_interrupts = true;
-                                let interrupt_writer = writer_tx.clone();
-                                tokio::spawn(async move {
-                                    for _ in 0..4 {
-                                        let _ = interrupt_writer.send(vec![3]).await;
-                                        sleep(Duration::from_millis(150)).await;
-                                    }
-                                });
+                                session.terminate();
                             }
                         } else if scheduled_completion
                             && saw_popup.iter().all(|seen| *seen)

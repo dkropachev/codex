@@ -9,6 +9,10 @@ use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
+use crate::hook_runtime::PostCompactHookOutcome;
+use crate::hook_runtime::PreCompactHookOutcome;
+use crate::hook_runtime::run_post_compact_hooks;
+use crate::hook_runtime::run_pre_compact_hooks;
 use crate::util::backoff;
 use codex_analytics::CodexCompactionEvent;
 use codex_analytics::CompactionImplementation;
@@ -134,6 +138,20 @@ async fn run_compact_task_inner(
         phase,
     )
     .await;
+    let pre_compact_outcome = run_pre_compact_hooks(&sess, &turn_context, trigger).await;
+    match pre_compact_outcome {
+        PreCompactHookOutcome::Continue => {}
+        PreCompactHookOutcome::Stopped { reason } => {
+            attempt
+                .track(
+                    sess.as_ref(),
+                    CompactionStatus::Interrupted,
+                    Some(reason.unwrap_or_else(|| "PreCompact hook stopped execution".to_string())),
+                )
+                .await;
+            return Err(CodexErr::TurnAborted);
+        }
+    }
     let result = run_compact_task_inner_impl(
         Arc::clone(&sess),
         Arc::clone(&turn_context),
@@ -141,6 +159,19 @@ async fn run_compact_task_inner(
         initial_context_injection,
     )
     .await;
+    if result.is_ok()
+        && let PostCompactHookOutcome::Stopped =
+            run_post_compact_hooks(&sess, &turn_context, trigger).await
+    {
+        attempt
+            .track(
+                sess.as_ref(),
+                CompactionStatus::Interrupted,
+                Some("PostCompact hook stopped execution".to_string()),
+            )
+            .await;
+        return Err(CodexErr::TurnAborted);
+    }
     attempt
         .track(
             sess.as_ref(),

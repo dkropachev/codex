@@ -139,6 +139,8 @@ pub(crate) struct PermissionRequestCommandOutputWire {
 pub(crate) struct PreCompactCommandOutputWire {
     #[serde(flatten)]
     pub universal: HookUniversalOutputWire,
+    pub decision: Option<BlockDecisionWire>,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -148,6 +150,8 @@ pub(crate) struct PreCompactCommandOutputWire {
 pub(crate) struct PostCompactCommandOutputWire {
     #[serde(flatten)]
     pub universal: HookUniversalOutputWire,
+    pub decision: Option<BlockDecisionWire>,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

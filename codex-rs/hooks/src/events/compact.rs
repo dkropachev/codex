@@ -480,7 +480,7 @@ mod tests {
             parsed.completed.run.entries,
             vec![HookOutputEntry {
                 kind: HookOutputEntryKind::Error,
-                text: "hook returned invalid PreCompact hook JSON output".to_string(),
+                text: "PreCompact hook returned unsupported decision:block".to_string(),
             }]
         );
     }

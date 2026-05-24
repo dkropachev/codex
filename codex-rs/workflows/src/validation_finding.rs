@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum WorkflowValidationFinding {
     WorkflowSpecReadFailed { path: PathBuf, error: String },
     WorkflowIdMismatch {

@@ -208,18 +208,28 @@ pub(crate) fn parse_post_tool_use(stdout: &str) -> Option<PostToolUseOutput> {
 pub(crate) fn parse_pre_compact(stdout: &str) -> Option<PreCompactOutput> {
     let wire: PreCompactCommandOutputWire = parse_json(stdout)?;
     let universal = UniversalOutput::from(wire.universal);
+    let invalid_reason = if matches!(wire.decision, Some(BlockDecisionWire::Block)) {
+        Some("PreCompact hook returned unsupported decision:block".to_string())
+    } else {
+        None
+    };
     Some(PreCompactOutput {
         universal,
-        invalid_reason: None,
+        invalid_reason,
     })
 }
 
 pub(crate) fn parse_post_compact(stdout: &str) -> Option<StatelessHookOutput> {
     let wire: PostCompactCommandOutputWire = parse_json(stdout)?;
     let universal = UniversalOutput::from(wire.universal);
+    let invalid_reason = if matches!(wire.decision, Some(BlockDecisionWire::Block)) {
+        Some("PostCompact hook returned unsupported decision:block".to_string())
+    } else {
+        None
+    };
     Some(StatelessHookOutput {
         universal,
-        invalid_reason: None,
+        invalid_reason,
     })
 }
 

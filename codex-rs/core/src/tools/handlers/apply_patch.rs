@@ -102,10 +102,15 @@ impl ApplyPatchArgumentDiffConsumer {
             } else {
                 (prefix, "")
             };
-            let event = self.push_delta_fragment(call_id.clone(), prefix);
+            let event = if prefix.is_empty() {
+                None
+            } else {
+                self.push_delta_fragment(call_id.clone(), prefix)
+            };
+            let pending = event.is_none().then(|| self.pending.take()).flatten();
             let tail = format!("{separator}*** End Patch{suffix}");
-            let _ = self.push_delta_fragment(call_id, &tail);
-            return event;
+            let tail_event = self.push_delta_fragment(call_id, &tail);
+            return event.or(pending).or(tail_event);
         }
 
         self.push_delta_fragment(call_id, delta)

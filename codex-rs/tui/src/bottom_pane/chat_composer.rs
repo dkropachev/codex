@@ -4267,14 +4267,18 @@ impl ChatComposer {
                             .unwrap_or_default(),
                     );
                 }
-                if is_editing_slash_command_name || workflow_inline_completion.is_none() {
+                if is_editing_slash_command_name
+                    || exact_workflow_command.is_some() && workflow_inline_completion.is_none()
+                {
                     popup.on_composer_text_change(first_line);
                 } else {
                     self.active_popup = ActivePopup::None;
                 }
             }
             _ => {
-                if is_editing_slash_command_name || workflow_inline_completion.is_none() {
+                if is_editing_slash_command_name
+                    || exact_workflow_command.is_some() && workflow_inline_completion.is_none()
+                {
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
                     let connectors_enabled = self.connectors_enabled;
                     let plugins_command_enabled = self.plugins_command_enabled;

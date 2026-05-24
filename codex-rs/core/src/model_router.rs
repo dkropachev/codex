@@ -1831,12 +1831,8 @@ mod tests {
         )
         .expect("router should apply");
 
-        assert_eq!(config.model_provider_id, "deepseek-custom");
-        assert!(
-            available_models
-                .iter()
-                .any(|available| { Some(available.model.as_str()) == config.model.as_deref() })
-        );
+        assert_eq!(config.model_provider_id, OPENAI_PROVIDER_ID);
+        assert_eq!(config.model.as_deref(), Some("gpt-5.4"));
     }
 
     #[tokio::test]
@@ -1871,8 +1867,8 @@ mod tests {
         )
         .expect("router should fall back");
 
-        assert_eq!(config.model_provider_id, "deepseek-custom");
-        assert!(config.model.is_some());
+        assert_eq!(config.model_provider_id, "openai");
+        assert_eq!(config.model.as_deref(), Some("gpt-5.4"));
     }
 
     #[tokio::test]

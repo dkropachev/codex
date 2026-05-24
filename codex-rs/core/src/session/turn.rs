@@ -2127,7 +2127,19 @@ async fn try_run_sampling_request(
             otel.name = field::Empty,
             tool_name = field::Empty,
             from = field::Empty,
+            codex.request.reasoning_effort = field::Empty,
+            gen_ai.usage.input_tokens = field::Empty,
+            gen_ai.usage.cache_read.input_tokens = field::Empty,
+            gen_ai.usage.output_tokens = field::Empty,
+            codex.usage.reasoning_output_tokens = field::Empty,
+            codex.usage.total_tokens = field::Empty,
         );
+        if let Some(reasoning_effort) = turn_context.reasoning_effort.as_ref() {
+            handle_responses.record(
+                "codex.request.reasoning_effort",
+                field::display(reasoning_effort),
+            );
+        }
 
         let event = match stream
             .next()

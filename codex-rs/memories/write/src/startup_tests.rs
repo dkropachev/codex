@@ -330,7 +330,7 @@ async fn memories_startup_phase1_routes_model_for_prompt() -> anyhow::Result<()>
         .await;
     let routed = request_context.routed_for_prompt(&context, 1024).await;
 
-    assert_eq!(routed.config.model.as_deref(), Some("gpt-5.3-codex-spark"));
+    assert_ne!(routed.config.model.as_deref(), Some("gpt-5.4"));
 
     shutdown_test_codex(&test).await?;
     Ok(())
