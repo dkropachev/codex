@@ -44,6 +44,7 @@ pub(crate) struct CommandPopup {
     builtins: Vec<(&'static str, SlashCommand)>,
     workflows: Vec<WorkflowCommandInfo>,
     state: ScrollState,
+    selection_is_explicit: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -94,6 +95,7 @@ impl CommandPopup {
             builtins,
             workflows: Vec::new(),
             state: ScrollState::new(),
+            selection_is_explicit: false,
         }
     }
 
@@ -127,6 +129,8 @@ impl CommandPopup {
     /// to narrow down the list of available commands.
     pub(crate) fn on_composer_text_change(&mut self, text: String) {
         let first_line = text.lines().next().unwrap_or("");
+        let previous_command_filter = self.command_filter.clone();
+        let previous_workflow_argument_filter = self.workflow_argument_filter.clone();
 
         if let Some(stripped) = first_line.strip_prefix('/') {
             // Extract the *first* token (sequence of non-whitespace
@@ -147,6 +151,12 @@ impl CommandPopup {
             // for some reason.
             self.command_filter.clear();
             self.workflow_argument_filter.clear();
+        }
+
+        if self.command_filter != previous_command_filter
+            || self.workflow_argument_filter != previous_workflow_argument_filter
+        {
+            self.selection_is_explicit = false;
         }
 
         self.sync_selection();
@@ -362,6 +372,7 @@ impl CommandPopup {
     pub(crate) fn move_up(&mut self) {
         let items = self.filtered_items();
         let len = items.len();
+        self.selection_is_explicit = true;
         self.state.selected_idx =
             Self::next_selectable_index(&items, self.state.selected_idx, NavigationDirection::Up);
         self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
@@ -371,6 +382,7 @@ impl CommandPopup {
     pub(crate) fn move_down(&mut self) {
         let items = self.filtered_items();
         let matches_len = items.len();
+        self.selection_is_explicit = true;
         self.state.selected_idx =
             Self::next_selectable_index(&items, self.state.selected_idx, NavigationDirection::Down);
         self.state
@@ -384,6 +396,11 @@ impl CommandPopup {
             .selected_idx
             .and_then(|idx| matches.get(idx).cloned())
             .filter(|item| !Self::item_is_disabled(item))
+    }
+
+    /// Returns true when the user has explicitly moved the selection.
+    pub(crate) fn selection_is_explicit(&self) -> bool {
+        self.selection_is_explicit
     }
 
     fn item_is_disabled(item: &CommandItem) -> bool {

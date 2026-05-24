@@ -57,6 +57,9 @@
 //!
 //! The numeric auto-submit path used by the slash popup performs the same pending-paste expansion
 //! and attachment pruning, and clears pending paste state on success.
+//! Slash-popup Enter only auto-dispatches a builtin/workflow row when the typed name exactly
+//! matches the command or the user has explicitly moved the selection; otherwise Enter falls back
+//! to the normal submit path and the popup is dismissed instead of launching the default row.
 //! Slash commands with arguments (like `/plan` and `/review`) reuse the same preparation path so
 //! pasted content and text elements are preserved when extracting args.
 //! Workflow aliases use the same shared parser as the CLI and `/workflow` command engine, so the
@@ -1963,42 +1966,56 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
+                let first_line = self
+                    .textarea
+                    .text()
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let exact_command_name = parse_slash_name(&first_line)
+                    .and_then(|(name, rest, _)| rest.is_empty().then_some(name.to_string()));
                 let selected_command = selected_command_for_popup(&*popup);
                 if let Some(selected_command) = selected_command {
                     match selected_command {
                         SelectedSlashPopupCommand::Builtin(cmd) => {
-                            self.stage_selected_slash_command_history(cmd);
-                            self.textarea.set_text_clearing_elements("");
-                            self.is_bash_mode = false;
-                            return (InputResult::Command(cmd), true);
+                            if popup.selection_is_explicit()
+                                || exact_command_name
+                                    .as_deref()
+                                    .is_some_and(|name| name.eq_ignore_ascii_case(cmd.command()))
+                            {
+                                self.stage_selected_slash_command_history(cmd);
+                                self.textarea.set_text_clearing_elements("");
+                                self.is_bash_mode = false;
+                                return (InputResult::Command(cmd), true);
+                            }
                         }
                         SelectedSlashPopupCommand::Workflow(command) => {
-                            let first_line = self
-                                .textarea
-                                .text()
-                                .lines()
-                                .next()
-                                .unwrap_or("")
-                                .to_string();
-                            let trimmed_rest = parse_slash_name(&first_line)
-                                .map(|(_, rest, _)| rest.trim().to_string())
-                                .unwrap_or_default();
-                            let history_text = if trimmed_rest.is_empty() {
-                                format!("/{command}")
-                            } else {
-                                format!("/{command} {trimmed_rest}")
-                            };
-                            self.stage_slash_command_history_text(history_text);
-                            self.textarea.set_text_clearing_elements("");
-                            self.is_bash_mode = false;
-                            return if trimmed_rest.is_empty() {
-                                (InputResult::WorkflowCommand(command), true)
-                            } else {
-                                (
-                                    InputResult::WorkflowCommandWithArgs(command, trimmed_rest),
-                                    true,
-                                )
-                            };
+                            if popup.selection_is_explicit()
+                                || exact_command_name
+                                    .as_deref()
+                                    .is_some_and(|name| name.eq_ignore_ascii_case(&command))
+                            {
+                                let trimmed_rest = parse_slash_name(&first_line)
+                                    .map(|(_, rest, _)| rest.trim().to_string())
+                                    .unwrap_or_default();
+                                let history_text = if trimmed_rest.is_empty() {
+                                    format!("/{command}")
+                                } else {
+                                    format!("/{command} {trimmed_rest}")
+                                };
+                                self.stage_slash_command_history_text(history_text);
+                                self.textarea.set_text_clearing_elements("");
+                                self.is_bash_mode = false;
+                                return if trimmed_rest.is_empty() {
+                                    (InputResult::WorkflowCommand(command), true)
+                                } else {
+                                    (
+                                        InputResult::WorkflowCommandWithArgs(command, trimmed_rest),
+                                        true,
+                                    )
+                                };
+                            }
                         }
                         SelectedSlashPopupCommand::WorkflowSuggestion {
                             command,
@@ -2014,7 +2031,11 @@ impl ChatComposer {
                         }
                     }
                 }
-                // Fallback to default newline handling if no command selected.
+                if let Some(first_line) = self.textarea.text().lines().next() {
+                    self.dismissed_command_popup_token = Some(first_line.to_string());
+                }
+                // Fall back to the normal submit path when the popup row was only the default
+                // suggestion instead of an exact or explicitly chosen command.
                 self.handle_key_event_without_popup(key_event)
             }
             input => self.handle_input_basic(input),
@@ -11023,7 +11044,7 @@ mod tests {
     }
 
     #[test]
-    fn popup_selected_slash_command_records_canonical_command_history() {
+    fn popup_selected_slash_command_does_not_dispatch_default_prefix_selection() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
@@ -11038,13 +11059,31 @@ mod tests {
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        assert_eq!(result, InputResult::Command(SlashCommand::Diff));
-        composer.record_pending_slash_command_history();
-
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(result, InputResult::None);
-        assert_eq!(composer.current_text(), "/diff");
+        assert_eq!(composer.current_text(), "/di");
+        assert!(!composer.popup_active());
+    }
+
+    #[test]
+    fn popup_selected_slash_command_dispatches_after_explicit_navigation() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        composer.set_text_content("/re".to_string(), Vec::new(), Vec::new());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::Command(_)));
+        assert_eq!(composer.current_text(), "");
+        assert!(!composer.popup_active());
     }
 
     #[test]
