@@ -690,7 +690,7 @@ mod tests {
                 namespace: "workflow-tools".to_string(),
                 scope_key: "afterAgent".to_string(),
                 source_key: registration.source_digest.clone(),
-                state_dir: state_dir,
+                state_dir,
                 sources: vec![ArtifactSource::new(
                     PathBuf::from("workflow.yaml"),
                     "workflow_yaml",
