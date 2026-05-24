@@ -11,6 +11,7 @@ use crate::registry::workflow_git_status;
 use crate::validation_runner::WorkflowValidationCommandResult;
 use crate::validation_runner::WorkflowValidationReport;
 use crate::validation_runner::run_validation_command;
+use crate::validation_runner::validate_workflow;
 use crate::validation_runner::validation_report_message;
 use crate::workflow_api::validate_and_publish_workflow_api;
 
