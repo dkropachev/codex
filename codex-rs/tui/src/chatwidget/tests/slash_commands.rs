@@ -1601,6 +1601,41 @@ async fn unrecognized_slash_command_is_not_added_to_local_recall() {
 }
 
 #[tokio::test]
+async fn slash_popup_enter_does_not_auto_execute_the_default_suggestion() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.bottom_pane
+        .set_composer_text("/di".to_string(), Vec::new(), Vec::new());
+
+    let popup_before = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        popup_before.contains("/diff"),
+        "expected the slash popup to offer /diff before Enter, got:\n{popup_before}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Unrecognized command '/di'"),
+        "expected the unresolved prefix to fall back to normal slash handling, got: {rendered:?}"
+    );
+    assert_eq!(chat.bottom_pane.composer_text(), "/di");
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    let popup_after = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        !popup_after.contains("/diff"),
+        "expected Enter to dismiss the popup instead of running /diff, got:\n{popup_after}"
+    );
+}
+
+#[tokio::test]
 async fn unavailable_slash_command_is_available_from_local_recall() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_task_running(/*running*/ true);

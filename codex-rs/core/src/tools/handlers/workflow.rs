@@ -30,6 +30,7 @@ impl ToolHandler for WorkflowHandler {
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
+            session,
             turn,
             tool_name,
             payload,
@@ -42,7 +43,13 @@ impl ToolHandler for WorkflowHandler {
         };
 
         let workflow = resolve_workflow_tool(turn.as_ref(), &tool_name.name).await?;
-        let output = run_workflow(turn.as_ref(), workflow.workflow.id.clone(), arguments).await?;
+        let output = run_workflow(
+            turn.as_ref(),
+            session.conversation_id.to_string(),
+            workflow.workflow.id.clone(),
+            arguments,
+        )
+        .await?;
         let output = to_string_pretty(&output).map_err(|err| {
             FunctionCallError::RespondToModel(format!(
                 "failed to serialize workflow `{}` output: {err}",
@@ -77,6 +84,7 @@ async fn resolve_workflow_tool(
 
 async fn run_workflow(
     turn: &TurnContext,
+    session_id: String,
     workflow_id: String,
     arguments: String,
 ) -> Result<codex_workflows::WorkflowCommandOutput, FunctionCallError> {
@@ -90,6 +98,7 @@ async fn run_workflow(
                 codex_home: codex_home.as_path(),
                 cwd: cwd.as_path(),
                 config: &config,
+                stage_session_id: Some(session_id),
             },
             WorkflowCommand::Run {
                 id: workflow_id,

@@ -2,7 +2,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use anyhow::anyhow;
 use codex_config::types::WorkflowsConfigToml;
 
 use crate::registry::WorkflowSummary;
@@ -83,6 +82,34 @@ pub fn workflow_quality_block_reason(
     Ok(workflow_quality_feedback(codex_home, cwd, config)?.map(|feedback| feedback.reason))
 }
 
+pub(crate) fn workflow_quality_feedback_for_workflow(
+    workflow: &WorkflowSummary,
+) -> Result<Option<WorkflowQualityHookFeedback>> {
+    Ok(
+        workflow_quality_failure_for_workflow(workflow)?.map(|failure| {
+            WorkflowQualityHookFeedback {
+                reason: render_findings(
+                    std::slice::from_ref(&failure),
+                    /*include_guidance*/ false,
+                ),
+                additional_context: render_findings(
+                    std::slice::from_ref(&failure),
+                    /*include_guidance*/ true,
+                ),
+            }
+        }),
+    )
+}
+
+pub(crate) fn workflow_quality_block_reason_for_workflow(
+    workflow: &WorkflowSummary,
+) -> Result<Option<String>> {
+    Ok(workflow_quality_feedback_for_workflow(workflow)?.map(|feedback| feedback.reason))
+}
+
+#[cfg(test)]
+use anyhow::anyhow;
+#[cfg(test)]
 pub(crate) fn workflow_quality_block_reason_for_path(
     codex_home: &Path,
     cwd: &Path,
@@ -94,14 +121,7 @@ pub(crate) fn workflow_quality_block_reason_for_path(
         .find(|workflow| workflow.path == workflow_path)
         .ok_or_else(|| anyhow!("workflow at {} was not found", workflow_path.display()))?;
 
-    Ok(
-        workflow_quality_failure_for_workflow(&workflow)?.map(|failure| {
-            render_findings(
-                std::slice::from_ref(&failure),
-                /*include_guidance*/ false,
-            )
-        }),
-    )
+    workflow_quality_block_reason_for_workflow(&workflow)
 }
 
 fn workflow_quality_failure_for_workflow(

@@ -351,6 +351,9 @@ async fn run_model_tune_turn(
         config.features.enabled(Feature::EnableRequestCompression),
         config.features.enabled(Feature::RuntimeMetrics),
         crate::session::session::Session::build_model_client_beta_features_header(config),
+        config
+            .features
+            .enabled(Feature::ResponsesWebsocketResponseProcessed),
     );
     let telemetry = codex_otel::SessionTelemetry::new(
         conversation_id,

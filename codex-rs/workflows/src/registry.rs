@@ -455,7 +455,7 @@ fn relative_workflow_id(relative: &Path) -> Option<String> {
 fn should_skip_dir(path: &Path) -> bool {
     matches!(
         path.file_name().and_then(|name| name.to_str()),
-        Some(".git" | "node_modules" | "target")
+        Some(".git" | ".workflow-staging" | "node_modules" | "target")
     )
 }
 

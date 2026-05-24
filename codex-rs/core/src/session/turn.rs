@@ -1000,21 +1000,7 @@ pub(crate) async fn build_prompt(
     {
         input.insert(0, router_prompt_item);
     }
-    let deferred_dynamic_tools = turn_context
-        .dynamic_tools
-        .iter()
-        .filter(|tool| tool.defer_loading)
-        .map(|tool| ToolName::new(tool.namespace.clone(), tool.name.clone()))
-        .collect::<HashSet<_>>();
-    let tools = if deferred_dynamic_tools.is_empty() {
-        router.model_visible_specs()
-    } else {
-        router
-            .model_visible_specs()
-            .into_iter()
-            .filter_map(|spec| filter_deferred_dynamic_tool_spec(spec, &deferred_dynamic_tools))
-            .collect()
-    };
+    let tools = model_visible_tools_for_turn(router, turn_context);
 
     let base_instructions = crate::tools::router_prompt::base_instructions_for_router_prompt(
         base_instructions,
@@ -1034,6 +1020,27 @@ pub(crate) async fn build_prompt(
         output_schema_strict: !crate::guardian::is_guardian_reviewer_source(
             &turn_context.session_source,
         ),
+    }
+}
+
+pub(crate) fn model_visible_tools_for_turn(
+    router: &ToolRouter,
+    turn_context: &TurnContext,
+) -> Vec<ToolSpec> {
+    let deferred_dynamic_tools = turn_context
+        .dynamic_tools
+        .iter()
+        .filter(|tool| tool.defer_loading)
+        .map(|tool| ToolName::new(tool.namespace.clone(), tool.name.clone()))
+        .collect::<HashSet<_>>();
+    if deferred_dynamic_tools.is_empty() {
+        router.model_visible_specs()
+    } else {
+        router
+            .model_visible_specs()
+            .into_iter()
+            .filter_map(|spec| filter_deferred_dynamic_tool_spec(spec, &deferred_dynamic_tools))
+            .collect()
     }
 }
 
@@ -2120,7 +2127,19 @@ async fn try_run_sampling_request(
             otel.name = field::Empty,
             tool_name = field::Empty,
             from = field::Empty,
+            codex.request.reasoning_effort = field::Empty,
+            gen_ai.usage.input_tokens = field::Empty,
+            gen_ai.usage.cache_read.input_tokens = field::Empty,
+            gen_ai.usage.output_tokens = field::Empty,
+            codex.usage.reasoning_output_tokens = field::Empty,
+            codex.usage.total_tokens = field::Empty,
         );
+        if let Some(reasoning_effort) = turn_context.reasoning_effort.as_ref() {
+            handle_responses.record(
+                "codex.request.reasoning_effort",
+                field::display(reasoning_effort),
+            );
+        }
 
         let event = match stream
             .next()
@@ -2520,6 +2539,12 @@ async fn try_run_sampling_request(
             let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
             sess.clone().send_event(&turn_context, msg).await;
         }
+    }
+
+    if outcome.is_ok()
+        && let Err(err) = client_session.send_response_processed_if_enabled().await
+    {
+        tracing::warn!("failed to send websocket response.processed: {err}");
     }
 
     outcome.map_err(|err| SamplingRequestFailure {

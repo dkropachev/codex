@@ -181,6 +181,10 @@ async fn tool_router_mode_without_deferred_tools_only_exposes_router() -> anyhow
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test builds a router from session-owned MCP manager state"
+)]
 async fn tool_router_mode_with_deferred_tools_exposes_tool_search() -> anyhow::Result<()> {
     let (session, turn) = make_session_and_context().await;
     let listed_mcp_tools = session
@@ -498,7 +502,7 @@ async fn published_workflow_tools_are_added_to_router_specs() -> anyhow::Result<
                 status: WorkflowValidationStatus::Valid,
                 findings: Vec::new(),
             },
-            repair_mode: "threshold:3".to_string(),
+            repair_mode: codex_workflows::DEFAULT_REPAIR_MODE.to_string(),
         },
         tool: WorkflowToolSpec {
             description: "Run the Jira summary workflow".to_string(),

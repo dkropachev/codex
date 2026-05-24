@@ -1098,6 +1098,8 @@ impl CodexMessageProcessor {
             | ClientRequest::WorkflowRun { request_id, .. }
             | ClientRequest::WorkflowValidate { request_id, .. }
             | ClientRequest::WorkflowRepair { request_id, .. }
+            | ClientRequest::WorkflowPublish { request_id, .. }
+            | ClientRequest::WorkflowDiscard { request_id, .. }
             | ClientRequest::WorkflowConfigRead { request_id, .. }
             | ClientRequest::WorkflowConfigWrite { request_id, .. }
             | ClientRequest::WorkflowCommandExecute { request_id, .. }

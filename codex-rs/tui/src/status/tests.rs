@@ -124,6 +124,9 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
     lines
         .into_iter()
         .map(|line| {
+            let line = normalize_codex_banner_padding(
+                line.replace("OpenAI Codex (v0.0.0)", "OpenAI Codex (v0.129.0)"),
+            );
             if let (Some(dir_pos), Some(pipe_idx)) = (line.find("Directory: "), line.rfind('│')) {
                 let prefix = &line[..dir_pos + "Directory: ".len()];
                 let suffix = &line[pipe_idx..];
@@ -141,6 +144,17 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
             }
         })
         .collect()
+}
+
+fn normalize_codex_banner_padding(line: String) -> String {
+    if line.contains("OpenAI Codex (")
+        && line.starts_with('│')
+        && line.ends_with('│')
+        && let Some(pipe_idx) = line.rfind('│')
+    {
+        return format!("{} │", line[..pipe_idx].trim_end());
+    }
+    line
 }
 
 fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) -> i64 {

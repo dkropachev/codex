@@ -15,6 +15,8 @@ use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
+use crate::tools::network_approval::DeferredNetworkApproval;
+use crate::tools::network_approval::take_deferred_network_denial_message;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
@@ -112,6 +114,7 @@ pub(crate) fn spawn_exit_watcher(
     command: Vec<String>,
     cwd: AbsolutePathBuf,
     process_id: i32,
+    deferred_network_approval: Option<DeferredNetworkApproval>,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     started_at: Instant,
 ) {
@@ -123,6 +126,15 @@ pub(crate) fn spawn_exit_watcher(
         output_drained.notified().await;
 
         let duration = Instant::now().saturating_duration_since(started_at);
+        if process.failure_message().is_none()
+            && let Some(message) = take_deferred_network_denial_message(
+                session_ref.as_ref(),
+                deferred_network_approval.as_ref(),
+            )
+            .await
+        {
+            process.fail_and_terminate(message);
+        }
         if let Some(message) = process.failure_message() {
             emit_failed_exec_end_for_unified_exec(
                 session_ref,

@@ -5116,6 +5116,12 @@
             "string",
             "null"
           ]
+        },
+        "stageSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -5127,6 +5133,12 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "stageSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -5153,6 +5165,12 @@
       "properties": {
         "description": {
           "type": "string"
+        },
+        "stageSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -5167,6 +5185,12 @@
         },
         "instruction": {
           "type": "string"
+        },
+        "stageSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -5179,6 +5203,12 @@
       "properties": {
         "id": {
           "type": "string"
+        },
+        "stageSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -5187,12 +5217,26 @@
       "type": "object"
     },
     "WorkflowListParams": {
+      "properties": {
+        "stageSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "WorkflowReadParams": {
       "properties": {
         "id": {
           "type": "string"
+        },
+        "stageSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "target": {
           "type": [
@@ -5210,6 +5254,12 @@
       "properties": {
         "id": {
           "type": "string"
+        },
+        "stageSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -5222,10 +5272,27 @@
         "id": {
           "type": "string"
         },
-        "input": true
+        "input": true,
+        "stageSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       },
       "required": [
         "id"
+      ],
+      "type": "object"
+    },
+    "WorkflowStageSessionActionParams": {
+      "properties": {
+        "stageSessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "stageSessionId"
       ],
       "type": "object"
     },
@@ -5233,6 +5300,12 @@
       "properties": {
         "id": {
           "type": "string"
+        },
+        "stageSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -6227,6 +6300,54 @@
         "params"
       ],
       "title": "Workflow/repairRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "workflow/publish"
+          ],
+          "title": "Workflow/publishRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowStageSessionActionParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Workflow/publishRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "workflow/discard"
+          ],
+          "title": "Workflow/discardRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowStageSessionActionParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Workflow/discardRequest",
       "type": "object"
     },
     {

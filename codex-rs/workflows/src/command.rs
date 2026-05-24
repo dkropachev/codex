@@ -49,6 +49,8 @@ pub enum WorkflowCommand {
         id: String,
     },
     Config(WorkflowConfigCommand),
+    Publish,
+    Discard,
     Done,
 }
 
@@ -151,6 +153,8 @@ pub fn parse_workflow_command(
             id: single_id(args, "where")?,
         }),
         "config" => parse_config(args),
+        "publish" => expect_no_extra(args, WorkflowCommand::Publish),
+        "discard" => expect_no_extra(args, WorkflowCommand::Discard),
         "done" => expect_no_extra(args, WorkflowCommand::Done),
         other => Err(WorkflowCommandParseError::UnknownCommand(other.to_string())),
     }
@@ -389,6 +393,14 @@ mod tests {
                 )),
                 input_fields: BTreeMap::new(),
             }
+        );
+        assert_eq!(
+            parse_workflow_command_line("publish").unwrap(),
+            WorkflowCommand::Publish
+        );
+        assert_eq!(
+            parse_workflow_command_line("discard").unwrap(),
+            WorkflowCommand::Discard
         );
         assert_eq!(
             parse_workflow_command_line("config set repair_mode threshold:2").unwrap(),

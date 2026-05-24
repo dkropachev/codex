@@ -28,6 +28,9 @@ use codex_hooks::HookResult;
 use codex_hooks::HookToolInput;
 use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
 use codex_state::ToolRouterRememberedToolKey;
@@ -140,6 +143,114 @@ impl AnyToolResult {
         } = self;
         result.code_mode_result(&payload)
     }
+}
+
+struct ToolOutputWithFeedback {
+    inner: Box<dyn ToolOutput>,
+    feedback_text: String,
+}
+
+impl ToolOutputWithFeedback {
+    fn new(inner: Box<dyn ToolOutput>, feedback_text: String) -> Self {
+        Self {
+            inner,
+            feedback_text,
+        }
+    }
+}
+
+impl ToolOutput for ToolOutputWithFeedback {
+    fn log_preview(&self) -> String {
+        let preview = self.inner.log_preview();
+        let feedback_text = self.feedback_text.trim();
+        if feedback_text.is_empty() {
+            preview
+        } else if preview.is_empty() {
+            feedback_text.to_string()
+        } else {
+            format!("{preview}\n{feedback_text}")
+        }
+    }
+
+    fn success_for_logging(&self) -> bool {
+        self.inner.success_for_logging()
+    }
+
+    fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+        append_feedback_to_response_item(
+            self.inner.to_response_item(call_id, payload),
+            &self.feedback_text,
+        )
+    }
+
+    fn post_tool_use_response(&self, call_id: &str, payload: &ToolPayload) -> Option<Value> {
+        self.inner.post_tool_use_response(call_id, payload)
+    }
+}
+
+fn append_feedback_to_response_item(
+    response: ResponseInputItem,
+    feedback_text: &str,
+) -> ResponseInputItem {
+    let feedback_text = feedback_text.trim();
+    if feedback_text.is_empty() {
+        return response;
+    }
+
+    match response {
+        ResponseInputItem::FunctionCallOutput { call_id, output } => {
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: append_feedback_to_function_output(output, feedback_text),
+            }
+        }
+        ResponseInputItem::CustomToolCallOutput {
+            call_id,
+            name,
+            output,
+        } => ResponseInputItem::CustomToolCallOutput {
+            call_id,
+            name,
+            output: append_feedback_to_function_output(output, feedback_text),
+        },
+        other => other,
+    }
+}
+
+fn append_feedback_to_function_output(
+    mut output: FunctionCallOutputPayload,
+    feedback_text: &str,
+) -> FunctionCallOutputPayload {
+    let feedback_item = FunctionCallOutputContentItem::InputText {
+        text: feedback_text.to_string(),
+    };
+
+    output.body = match output.body {
+        FunctionCallOutputBody::Text(text) => FunctionCallOutputBody::ContentItems(vec![
+            FunctionCallOutputContentItem::InputText { text },
+            feedback_item,
+        ]),
+        FunctionCallOutputBody::ContentItems(mut items) => {
+            items.push(feedback_item);
+            FunctionCallOutputBody::ContentItems(items)
+        }
+    };
+
+    output
+}
+
+fn should_replace_shell_output_with_feedback(
+    invocation: &ToolInvocation,
+    outcome: &codex_hooks::PostToolUseOutcome,
+) -> bool {
+    if !outcome.additional_contexts.is_empty() {
+        return false;
+    }
+
+    matches!(
+        invocation.tool_name.name.as_str(),
+        "shell" | "shell_command" | "exec_command" | "write_stdin"
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -500,24 +611,29 @@ impl ToolRegistry {
             )
             .await;
 
-            let replacement_text = if outcome.should_stop {
-                Some(
-                    outcome
-                        .feedback_message
-                        .clone()
-                        .or_else(|| outcome.stop_reason.clone())
-                        .unwrap_or_else(|| "PostToolUse hook stopped execution".to_string()),
-                )
-            } else {
-                outcome.feedback_message.clone()
-            };
-            if let Some(replacement_text) = replacement_text {
+            if outcome.should_stop {
+                let replacement_text = outcome
+                    .feedback_message
+                    .clone()
+                    .or_else(|| outcome.stop_reason.clone())
+                    .unwrap_or_else(|| "PostToolUse hook stopped execution".to_string());
                 let mut guard = response_cell.lock().await;
                 if let Some(result) = guard.as_mut() {
-                    result.result = Box::new(FunctionToolOutput::from_text(
-                        replacement_text,
-                        /*success*/ None,
-                    ));
+                    result.result = Box::new(FunctionToolOutput::from_text(replacement_text, None));
+                }
+            } else if let Some(feedback_text) = outcome.feedback_message.clone() {
+                let mut guard = response_cell.lock().await;
+                if let Some(result) = guard.as_mut() {
+                    if should_replace_shell_output_with_feedback(&invocation, outcome) {
+                        result.result =
+                            Box::new(FunctionToolOutput::from_text(feedback_text, None));
+                    } else {
+                        let inner = std::mem::replace(
+                            &mut result.result,
+                            Box::new(FunctionToolOutput::from_text(String::new(), None)),
+                        );
+                        result.result = Box::new(ToolOutputWithFeedback::new(inner, feedback_text));
+                    }
                 }
             }
         }

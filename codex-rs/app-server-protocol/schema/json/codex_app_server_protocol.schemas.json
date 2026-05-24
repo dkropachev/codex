@@ -1217,6 +1217,54 @@
             },
             "method": {
               "enum": [
+                "workflow/publish"
+              ],
+              "title": "Workflow/publishRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/WorkflowStageSessionActionParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/publishRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/discard"
+              ],
+              "title": "Workflow/discardRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/WorkflowStageSessionActionParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/discardRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "workflow/config/read"
               ],
               "title": "Workflow/config/readRequestMethod",
@@ -20688,6 +20736,12 @@
               "string",
               "null"
             ]
+          },
+          "stageSessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "title": "WorkflowAuthoringContextPrepareParams",
@@ -20750,6 +20804,12 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "stageSessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -20880,6 +20940,12 @@
         "properties": {
           "description": {
             "type": "string"
+          },
+          "stageSessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -20903,6 +20969,21 @@
         "title": "WorkflowDevelopResponse",
         "type": "object"
       },
+      "WorkflowDiscardResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "data": true,
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "message"
+        ],
+        "title": "WorkflowDiscardResponse",
+        "type": "object"
+      },
       "WorkflowEditParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -20911,6 +20992,12 @@
           },
           "instruction": {
             "type": "string"
+          },
+          "stageSessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -20976,6 +21063,12 @@
         "properties": {
           "id": {
             "type": "string"
+          },
+          "stageSessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -20999,6 +21092,14 @@
       },
       "WorkflowListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "stageSessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "title": "WorkflowListParams",
         "type": "object"
       },
@@ -21082,11 +21183,32 @@
         "title": "WorkflowProgressNotification",
         "type": "object"
       },
+      "WorkflowPublishResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "data": true,
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "message"
+        ],
+        "title": "WorkflowPublishResponse",
+        "type": "object"
+      },
       "WorkflowReadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "id": {
             "type": "string"
+          },
+          "stageSessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "target": {
             "type": [
@@ -21162,6 +21284,12 @@
         "properties": {
           "id": {
             "type": "string"
+          },
+          "stageSessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -21304,7 +21432,13 @@
           "id": {
             "type": "string"
           },
-          "input": true
+          "input": true,
+          "stageSessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         },
         "required": [
           "id"
@@ -21325,6 +21459,19 @@
           "message"
         ],
         "title": "WorkflowRunResponse",
+        "type": "object"
+      },
+      "WorkflowStageSessionActionParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "stageSessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stageSessionId"
+        ],
+        "title": "WorkflowStageSessionActionParams",
         "type": "object"
       },
       "WorkflowStatusUpdate": {
@@ -21451,6 +21598,12 @@
         "properties": {
           "id": {
             "type": "string"
+          },
+          "stageSessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

@@ -3,6 +3,12 @@
   "properties": {
     "id": {
       "type": "string"
+    },
+    "stageSessionId": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

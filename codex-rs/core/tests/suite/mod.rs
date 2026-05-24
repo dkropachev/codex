@@ -7,6 +7,13 @@ use codex_test_binary_support::TestBinaryDispatchMode;
 use codex_test_binary_support::configure_test_binary_dispatch;
 use ctor::ctor;
 
+#[ctor]
+fn raise_integration_test_thread_stack_limit() {
+    unsafe {
+        std::env::set_var("RUST_MIN_STACK", (32 * 1024 * 1024).to_string());
+    }
+}
+
 // This code runs before any other tests are run.
 // It allows the test binary to behave like codex and dispatch to apply_patch and codex-linux-sandbox
 // based on the arg0.

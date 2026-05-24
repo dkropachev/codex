@@ -85,6 +85,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::user_input::TextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
+#[cfg(unix)]
 use codex_workflows::WORKFLOW_RUNTIME_EVENT_PREFIX;
 use crossterm::event::KeyModifiers;
 use futures::SinkExt;
@@ -92,6 +93,7 @@ use futures::StreamExt;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::Line;
+#[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -423,6 +425,7 @@ async fn handle_mcp_inventory_result_clears_committed_loading_cell() {
     assert_eq!(app.transcript_cells.len(), 0);
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn workflow_command_end_to_end_updates_status_and_queues_markdown_handoff_e2e() -> Result<()>
 {
@@ -596,6 +599,7 @@ sleep 0.2
     Ok(())
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn workflow_command_end_to_end_without_markdown_renders_stdout_json_result_cell() -> Result<()>
 {
@@ -709,6 +713,7 @@ sleep 0.2
     Ok(())
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn workflow_command_end_to_end_failure_surfaces_stderr_and_clears_status() -> Result<()> {
     let temp = tempdir()?;

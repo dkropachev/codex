@@ -747,8 +747,8 @@ async fn run_review_on_session(
         })),
     )
     .await;
-    match submit_result {
-        Ok(Ok(_)) => {}
+    let submitted_turn_id = match submit_result {
+        Ok(Ok(turn_id)) => turn_id,
         Ok(Err(err)) => {
             return (
                 GuardianReviewSessionOutcome::SessionFailed(err.into()),
@@ -757,11 +757,12 @@ async fn run_review_on_session(
             );
         }
         Err(outcome) => return (outcome, false, analytics_result),
-    }
+    };
     analytics_result.reviewed_action_truncated = reviewed_action_truncated;
 
     let outcome = wait_for_guardian_review(
         review_session,
+        &submitted_turn_id,
         deadline,
         params.external_cancel.as_ref(),
         &mut analytics_result,
@@ -806,6 +807,7 @@ async fn load_rollout_items_for_fork(
 
 async fn wait_for_guardian_review(
     review_session: &GuardianReviewSession,
+    expected_turn_id: &str,
     deadline: tokio::time::Instant,
     external_cancel: Option<&CancellationToken>,
     analytics_result: &mut GuardianReviewAnalyticsResult,
@@ -834,6 +836,9 @@ async fn wait_for_guardian_review(
                 match event {
                     Ok(event) => match event.msg {
                         EventMsg::TurnComplete(turn_complete) => {
+                            if turn_complete.turn_id != expected_turn_id {
+                                continue;
+                            }
                             analytics_result.time_to_first_token_ms = turn_complete
                                 .time_to_first_token_ms
                                 .and_then(|ms| u64::try_from(ms).ok());
@@ -855,7 +860,10 @@ async fn wait_for_guardian_review(
                         EventMsg::Error(error) => {
                             last_error_message = Some(error.message);
                         }
-                        EventMsg::TurnAborted(_) => {
+                        EventMsg::TurnAborted(turn_aborted) => {
+                            if turn_aborted.turn_id.as_deref() != Some(expected_turn_id) {
+                                continue;
+                            }
                             return (GuardianReviewSessionOutcome::Aborted, true, false);
                         }
                         _ => {}

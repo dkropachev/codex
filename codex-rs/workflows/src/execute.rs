@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::Context as _;
@@ -21,27 +22,43 @@ use crate::command::WorkflowCommand;
 use crate::command::WorkflowConfigCommand;
 use crate::command::WorkflowInputSource;
 use crate::id::normalize_workflow_id;
+#[cfg(test)]
 use crate::quality_hook::workflow_quality_block_reason_for_path;
+use crate::quality_hook::workflow_quality_block_reason_for_workflow;
 use crate::registry::DEFAULT_MAX_REPAIR_CYCLES;
+use crate::registry::WorkflowRoot;
+use crate::registry::WorkflowSummary;
 use crate::registry::default_workflow_root;
 use crate::registry::discover_workflows;
 use crate::registry::find_workflow;
+use crate::registry::summarize_workflow;
+#[cfg(test)]
+use crate::registry::validate_workflow_dir;
 use crate::registry::workflow_impact;
+use crate::registry::workflow_roots;
 use crate::repair::repair_workflow_command;
-use crate::repair_mode::WorkflowRepairMode;
 use crate::spec::WORKFLOW_YAML;
 use crate::spec::read_workflow_spec;
 use crate::spec::scaffold_workflow_spec;
 use crate::spec::write_workflow_spec;
+use crate::staging::StageRootGuard;
+use crate::staging::copy_dir_recursive;
+use crate::staging::create_session_stage_root;
+use crate::staging::create_stage_root;
+use crate::staging::publish_staged_workflow;
+use crate::staging::session_stage_root_path;
 use crate::validation_runner::run_validation_command;
+use crate::validation_runner::validate_workflow;
 use crate::validation_runner::validation_report_message;
 use crate::workflow_api::validate_and_publish_workflow_api;
 use crate::workflow_runtime;
 
+#[derive(Clone)]
 pub struct WorkflowCommandContext<'a> {
     pub codex_home: &'a Path,
     pub cwd: &'a Path,
     pub config: &'a WorkflowsConfigToml,
+    pub stage_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -49,6 +66,13 @@ pub struct WorkflowCommandContext<'a> {
 pub struct WorkflowCommandOutput {
     pub message: String,
     pub data: JsonValue,
+}
+
+struct StagedWorkflow {
+    _guard: Option<StageRootGuard>,
+    root: WorkflowRoot,
+    path: PathBuf,
+    live_path: PathBuf,
 }
 
 pub fn execute_workflow_command(
@@ -97,15 +121,70 @@ async fn execute_workflow_command_async(
         WorkflowCommand::Show { id } => show(ctx, &id),
         WorkflowCommand::Where { id } => where_workflow(ctx, &id),
         WorkflowCommand::Config(config_command) => config(ctx, config_command),
-        WorkflowCommand::Done => Ok(WorkflowCommandOutput {
-            message: "Workflow Mode is done.".to_string(),
-            data: json!({ "done": true }),
-        }),
+        WorkflowCommand::Publish => publish(ctx),
+        WorkflowCommand::Discard => discard(ctx),
+        WorkflowCommand::Done => {
+            if let Some(session_id) = ctx.stage_session_id.as_deref() {
+                publish_session_staged_workflows(&ctx, session_id)?;
+            }
+            Ok(WorkflowCommandOutput {
+                message: "Workflow Mode is done.".to_string(),
+                data: json!({ "done": true }),
+            })
+        }
     }
 }
 
+fn publish(ctx: WorkflowCommandContext<'_>) -> Result<WorkflowCommandOutput> {
+    let session_id = ctx
+        .stage_session_id
+        .as_deref()
+        .ok_or_else(|| anyhow!("workflow publish requires a stage session id"))?;
+    let published_workflows = discover_session_staged_workflows(&ctx, session_id)?;
+    publish_session_staged_workflows(&ctx, session_id)?;
+    Ok(WorkflowCommandOutput {
+        message: if published_workflows.is_empty() {
+            "No staged workflow changes to publish.".to_string()
+        } else {
+            format!(
+                "Published {} staged workflow(s).",
+                published_workflows.len()
+            )
+        },
+        data: json!({
+            "published": true,
+            "workflowCount": published_workflows.len(),
+            "workflows": published_workflows,
+        }),
+    })
+}
+
+fn discard(ctx: WorkflowCommandContext<'_>) -> Result<WorkflowCommandOutput> {
+    let session_id = ctx
+        .stage_session_id
+        .as_deref()
+        .ok_or_else(|| anyhow!("workflow discard requires a stage session id"))?;
+    let discarded_workflows = discover_session_staged_workflows(&ctx, session_id)?;
+    discard_session_staged_workflows(&ctx, session_id)?;
+    Ok(WorkflowCommandOutput {
+        message: if discarded_workflows.is_empty() {
+            "No staged workflow changes to discard.".to_string()
+        } else {
+            format!(
+                "Discarded {} staged workflow(s).",
+                discarded_workflows.len()
+            )
+        },
+        data: json!({
+            "discarded": true,
+            "workflowCount": discarded_workflows.len(),
+            "workflows": discarded_workflows,
+        }),
+    })
+}
+
 fn show_mode(ctx: WorkflowCommandContext<'_>) -> Result<WorkflowCommandOutput> {
-    let workflows = discover_workflows(ctx.codex_home, ctx.cwd, ctx.config)?;
+    let workflows = discover_workflows_for_context(&ctx)?;
     Ok(WorkflowCommandOutput {
         message: format!(
             "Workflow Mode ready. {} workflow(s) discovered. Use `codex workflow list` or `/workflow list`.",
@@ -119,7 +198,7 @@ fn show_mode(ctx: WorkflowCommandContext<'_>) -> Result<WorkflowCommandOutput> {
 }
 
 fn list(ctx: WorkflowCommandContext<'_>) -> Result<WorkflowCommandOutput> {
-    let workflows = discover_workflows(ctx.codex_home, ctx.cwd, ctx.config)?;
+    let workflows = discover_workflows_for_context(&ctx)?;
     let message = if workflows.is_empty() {
         "No workflows found.".to_string()
     } else {
@@ -139,7 +218,7 @@ fn list(ctx: WorkflowCommandContext<'_>) -> Result<WorkflowCommandOutput> {
 }
 
 fn show(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommandOutput> {
-    let workflow = find_workflow(ctx.codex_home, ctx.cwd, ctx.config, id)?;
+    let workflow = resolve_workflow_for_context(&ctx, id)?;
     let spec = read_workflow_spec(&workflow.workflow_yaml_path)?;
     Ok(WorkflowCommandOutput {
         message: serde_yaml::to_string(&spec)?,
@@ -148,7 +227,7 @@ fn show(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommandOutp
 }
 
 fn where_workflow(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommandOutput> {
-    let workflow = find_workflow(ctx.codex_home, ctx.cwd, ctx.config, id)?;
+    let workflow = resolve_workflow_for_context(&ctx, id)?;
     Ok(WorkflowCommandOutput {
         message: workflow.path.display().to_string(),
         data: json!({ "workflow": workflow }),
@@ -156,14 +235,18 @@ fn where_workflow(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowC
 }
 
 fn validate(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommandOutput> {
-    let workflow = find_workflow(ctx.codex_home, ctx.cwd, ctx.config, id)?;
-    let report = validate_and_publish_workflow_api(
-        ctx.codex_home,
-        ctx.cwd,
-        ctx.config,
-        &workflow,
-        run_validation_command,
-    )?;
+    let workflow = resolve_workflow_for_context(&ctx, id)?;
+    let report = if ctx.stage_session_id.is_some() {
+        validate_workflow(&workflow, run_validation_command)?
+    } else {
+        validate_and_publish_workflow_api(
+            ctx.codex_home,
+            ctx.cwd,
+            ctx.config,
+            &workflow,
+            run_validation_command,
+        )?
+    };
     Ok(WorkflowCommandOutput {
         message: validation_report_message(&report),
         data: json!({ "workflow": workflow, "validation": report }),
@@ -171,7 +254,7 @@ fn validate(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommand
 }
 
 fn impact(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommandOutput> {
-    let workflow = find_workflow(ctx.codex_home, ctx.cwd, ctx.config, id)?;
+    let workflow = resolve_workflow_for_context(&ctx, id)?;
     let impact = workflow_impact(&workflow)?;
     Ok(WorkflowCommandOutput {
         message: serde_json::to_string_pretty(&impact)?,
@@ -181,7 +264,7 @@ fn impact(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommandOu
 
 fn status(ctx: WorkflowCommandContext<'_>, id: Option<&str>) -> Result<WorkflowCommandOutput> {
     if let Some(id) = id {
-        let workflow = find_workflow(ctx.codex_home, ctx.cwd, ctx.config, id)?;
+        let workflow = resolve_workflow_for_context(&ctx, id)?;
         let impact = workflow_impact(&workflow)?;
         let message = if impact.git_status.is_empty() {
             format!("{} is clean", workflow.id)
@@ -194,7 +277,7 @@ fn status(ctx: WorkflowCommandContext<'_>, id: Option<&str>) -> Result<WorkflowC
         });
     }
 
-    let workflows = discover_workflows(ctx.codex_home, ctx.cwd, ctx.config)?;
+    let workflows = discover_workflows_for_context(&ctx)?;
     Ok(WorkflowCommandOutput {
         message: format!("{} workflow(s) discovered", workflows.len()),
         data: json!({ "workflows": workflows, "defaults": effective_config(ctx.config) }),
@@ -202,12 +285,30 @@ fn status(ctx: WorkflowCommandContext<'_>, id: Option<&str>) -> Result<WorkflowC
 }
 
 fn develop(ctx: WorkflowCommandContext<'_>, description: &str) -> Result<WorkflowCommandOutput> {
-    let root = default_workflow_root(ctx.codex_home, ctx.cwd, ctx.config);
-    fs::create_dir_all(&root.path)
-        .with_context(|| format!("failed to create workflow root {}", root.path.display()))?;
-    let slug = unique_slug(&root.path, &slugify(description))?;
+    let live_root = default_workflow_root(ctx.codex_home, ctx.cwd, ctx.config);
+    fs::create_dir_all(&live_root.path).with_context(|| {
+        format!(
+            "failed to create workflow root {}",
+            live_root.path.display()
+        )
+    })?;
+    let stage_root_path = match ctx.stage_session_id.as_deref() {
+        Some(session_id) => create_session_stage_root(&live_root.path, session_id)?,
+        None => create_stage_root(&live_root.path)?,
+    };
+    let stage_root = WorkflowRoot {
+        kind: live_root.kind,
+        label: live_root.label.clone(),
+        path: stage_root_path.clone(),
+    };
+    let slug_roots = if ctx.stage_session_id.is_some() {
+        vec![live_root.path.as_path(), stage_root.path.as_path()]
+    } else {
+        vec![live_root.path.as_path()]
+    };
+    let slug = unique_slug_in_roots(&slug_roots, &slugify(description))?;
     let id = normalize_workflow_id(&slug)?;
-    let path = root.path.join(&id);
+    let path = stage_root.path.join(&id);
     fs::create_dir_all(path.join("src"))?;
     fs::create_dir_all(path.join("src/tests"))?;
     fs::create_dir_all(path.join("state"))?;
@@ -221,11 +322,28 @@ fn develop(ctx: WorkflowCommandContext<'_>, description: &str) -> Result<Workflo
     );
     write_workflow_spec(&path.join(WORKFLOW_YAML), &spec)?;
     write_scaffold_files(&path, &id, &title, description)?;
-    commit_workflow_changes(&ctx, &path, "Create workflow scaffold")?;
+    fs::write(path.join(".gitignore"), "node_modules/\n")?;
+    let live_path = live_root.path.join(&id);
+    let staged = StagedWorkflow {
+        _guard: ctx
+            .stage_session_id
+            .is_none()
+            .then(|| StageRootGuard::new(stage_root_path)),
+        root: stage_root,
+        path,
+        live_path,
+    };
+    let had_changes = finalize_staged_workflow_changes(&ctx, &staged, "Create workflow scaffold")?;
+    if had_changes && ctx.stage_session_id.is_none() {
+        publish_staged_workflow(&staged.root.path, &staged.path, &staged.live_path)?;
+    }
+    let workflow = resolve_workflow_for_context(&ctx, &id)?;
+    let workflow_id = workflow.id.clone();
+    let workflow_path = workflow.path.clone();
 
     Ok(WorkflowCommandOutput {
-        message: format!("Created workflow {id} at {}", path.display()),
-        data: json!({ "id": id, "path": path }),
+        message: format!("Created workflow {id} at {}", workflow_path.display()),
+        data: json!({ "id": workflow_id, "path": workflow_path, "workflow": workflow }),
     })
 }
 
@@ -234,11 +352,17 @@ fn describe(
     id: &str,
     description: &str,
 ) -> Result<WorkflowCommandOutput> {
-    let workflow = find_workflow(ctx.codex_home, ctx.cwd, ctx.config, id)?;
+    let workflow = resolve_workflow_for_context(&ctx, id)?;
+    let staged = stage_existing_workflow(&ctx, &workflow)?;
     let mut spec = read_workflow_spec(&workflow.workflow_yaml_path)?;
     spec.user_description = Some(description.to_string());
-    write_workflow_spec(&workflow.workflow_yaml_path, &spec)?;
-    commit_workflow_changes(&ctx, &workflow.path, "Update workflow description")?;
+    write_workflow_spec(&staged.path.join(WORKFLOW_YAML), &spec)?;
+    let had_changes =
+        finalize_staged_workflow_changes(&ctx, &staged, "Update workflow description")?;
+    if had_changes && ctx.stage_session_id.is_none() {
+        publish_staged_workflow(&staged.root.path, &staged.path, &staged.live_path)?;
+    }
+    let workflow = resolve_workflow_for_context(&ctx, id)?;
     Ok(WorkflowCommandOutput {
         message: format!("Updated description for {}", workflow.id),
         data: json!({ "workflow": workflow, "spec": spec }),
@@ -250,9 +374,15 @@ fn docs(
     id: &str,
     instruction: &str,
 ) -> Result<WorkflowCommandOutput> {
-    let workflow = find_workflow(ctx.codex_home, ctx.cwd, ctx.config, id)?;
-    append_readme_note(&workflow.path, "Documentation", instruction)?;
-    commit_workflow_changes(&ctx, &workflow.path, "Update workflow documentation")?;
+    let workflow = resolve_workflow_for_context(&ctx, id)?;
+    let staged = stage_existing_workflow(&ctx, &workflow)?;
+    append_readme_note(&staged.path, "Documentation", instruction)?;
+    let had_changes =
+        finalize_staged_workflow_changes(&ctx, &staged, "Update workflow documentation")?;
+    if had_changes && ctx.stage_session_id.is_none() {
+        publish_staged_workflow(&staged.root.path, &staged.path, &staged.live_path)?;
+    }
+    let workflow = resolve_workflow_for_context(&ctx, id)?;
     Ok(WorkflowCommandOutput {
         message: format!("Updated docs for {}", workflow.id),
         data: json!({ "workflow": workflow }),
@@ -264,9 +394,15 @@ fn edit(
     id: &str,
     instruction: &str,
 ) -> Result<WorkflowCommandOutput> {
-    let workflow = find_workflow(ctx.codex_home, ctx.cwd, ctx.config, id)?;
-    append_readme_note(&workflow.path, "Edit request", instruction)?;
-    commit_workflow_changes(&ctx, &workflow.path, "Record workflow edit request")?;
+    let workflow = resolve_workflow_for_context(&ctx, id)?;
+    let staged = stage_existing_workflow(&ctx, &workflow)?;
+    append_readme_note(&staged.path, "Edit request", instruction)?;
+    let had_changes =
+        finalize_staged_workflow_changes(&ctx, &staged, "Record workflow edit request")?;
+    if had_changes && ctx.stage_session_id.is_none() {
+        publish_staged_workflow(&staged.root.path, &staged.path, &staged.live_path)?;
+    }
+    let workflow = resolve_workflow_for_context(&ctx, id)?;
     Ok(WorkflowCommandOutput {
         message: format!("Recorded edit request for {}", workflow.id),
         data: json!({ "workflow": workflow }),
@@ -283,27 +419,9 @@ async fn run(
     input: Option<WorkflowInputSource>,
     input_fields: BTreeMap<String, String>,
 ) -> Result<WorkflowCommandOutput> {
-    let workflows = discover_workflows(ctx.codex_home, ctx.cwd, ctx.config)?;
+    let workflows = discover_workflows_for_context(&ctx)?;
     let normalized_id = normalize_workflow_id(id)?;
-    let matching_workflows: Vec<_> = workflows
-        .iter()
-        .filter(|workflow| workflow.id == normalized_id)
-        .cloned()
-        .collect();
-    let workflow = match matching_workflows.as_slice() {
-        [] => return Err(anyhow!("workflow id '{normalized_id}' was not found")),
-        [workflow] => workflow.clone(),
-        workflows => {
-            return Err(anyhow!(
-                "workflow id '{}' exists in multiple roots: {:?}",
-                normalized_id,
-                workflows
-                    .iter()
-                    .map(|workflow| workflow.path.clone())
-                    .collect::<Vec<_>>()
-            ));
-        }
-    };
+    let workflow = resolve_workflow_for_context(&ctx, &normalized_id)?;
     let input = read_input(input, input_fields)?;
     let output = workflow_runtime::run_workflow(
         ctx.codex_home,
@@ -367,15 +485,212 @@ fn effective_config(config: &WorkflowsConfigToml) -> JsonValue {
     json!({
         "search_paths": config.search_paths.clone().unwrap_or_default(),
         "default_location": config.default_location.unwrap_or_default(),
-        "repair_mode": config
-            .repair_mode
-            .clone()
-            .unwrap_or_else(|| crate::DEFAULT_REPAIR_MODE.to_string()),
+        "repair_mode": config.repair_mode.clone().unwrap_or_else(|| "threshold:3".to_string()),
         "max_repair_cycles": config.max_repair_cycles.unwrap_or(DEFAULT_MAX_REPAIR_CYCLES),
         "dependency_update_policy": config.dependency_update_policy.clone().unwrap_or_else(|| "locked".to_string()),
         "commit_policy": config.commit_policy.clone().unwrap_or_else(|| "auto".to_string()),
         "validation_profile": config.validation_profile.clone().unwrap_or_else(|| "default".to_string()),
     })
+}
+
+pub fn discover_workflows_for_context(
+    ctx: &WorkflowCommandContext<'_>,
+) -> Result<Vec<WorkflowSummary>> {
+    let mut workflows = discover_workflows(ctx.codex_home, ctx.cwd, ctx.config)?;
+    if let Some(session_id) = ctx.stage_session_id.as_deref() {
+        workflows.extend(discover_session_staged_workflows(ctx, session_id)?);
+    }
+    workflows.sort_by(|left, right| {
+        left.id
+            .cmp(&right.id)
+            .then_with(|| left.root_path.cmp(&right.root_path))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    Ok(workflows)
+}
+
+pub fn resolve_workflow_for_context(
+    ctx: &WorkflowCommandContext<'_>,
+    id: &str,
+) -> Result<WorkflowSummary> {
+    let normalized_id = normalize_workflow_id(id)?;
+    if let Some(workflow) = find_staged_workflow(ctx, &normalized_id)? {
+        return Ok(workflow);
+    }
+
+    find_workflow(ctx.codex_home, ctx.cwd, ctx.config, &normalized_id).map_err(Into::into)
+}
+
+fn find_staged_workflow(
+    ctx: &WorkflowCommandContext<'_>,
+    normalized_id: &str,
+) -> Result<Option<WorkflowSummary>> {
+    let Some(session_id) = ctx.stage_session_id.as_deref() else {
+        return Ok(None);
+    };
+
+    let workflows = discover_session_staged_workflows(ctx, session_id)?;
+    let matches = workflows
+        .into_iter()
+        .filter(|workflow| workflow.id == normalized_id)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [] => Ok(None),
+        [workflow] => Ok(Some(workflow.clone())),
+        workflows => Err(anyhow!(
+            "workflow id '{}' exists in multiple staged roots: {:?}",
+            normalized_id,
+            workflows
+                .iter()
+                .map(|workflow| workflow.path.clone())
+                .collect::<Vec<_>>()
+        )),
+    }
+}
+
+fn discover_session_staged_workflows(
+    ctx: &WorkflowCommandContext<'_>,
+    session_id: &str,
+) -> Result<Vec<WorkflowSummary>> {
+    let mut workflows = Vec::new();
+    for root in workflow_roots(ctx.codex_home, ctx.cwd, ctx.config) {
+        let session_root_path = session_stage_root_path(&root.path, session_id);
+        if !session_root_path.is_dir() {
+            continue;
+        }
+
+        let session_root = WorkflowRoot {
+            kind: root.kind,
+            label: root.label.clone(),
+            path: session_root_path,
+        };
+        collect_workflows_recursive(
+            ctx.codex_home,
+            &session_root,
+            &session_root.path,
+            ctx.config,
+            &mut workflows,
+        )?;
+    }
+    Ok(workflows)
+}
+
+fn collect_workflows_recursive(
+    codex_home: &Path,
+    root: &WorkflowRoot,
+    dir: &Path,
+    config: &WorkflowsConfigToml,
+    workflows: &mut Vec<WorkflowSummary>,
+) -> Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    if dir.join(WORKFLOW_YAML).is_file() {
+        if let Some(summary) = summarize_workflow(codex_home, root, dir, config) {
+            workflows.push(summary);
+        }
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() || should_skip_stage_dir(&path) {
+            continue;
+        }
+        collect_workflows_recursive(codex_home, root, &path, config, workflows)?;
+    }
+    Ok(())
+}
+
+fn should_skip_stage_dir(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some(".git" | ".workflow-staging" | "node_modules" | "target")
+    )
+}
+
+fn publish_session_staged_workflows(
+    ctx: &WorkflowCommandContext<'_>,
+    session_id: &str,
+) -> Result<()> {
+    for root in workflow_roots(ctx.codex_home, ctx.cwd, ctx.config) {
+        let session_root_path = session_stage_root_path(&root.path, session_id);
+        if !session_root_path.is_dir() {
+            continue;
+        }
+
+        let session_root = WorkflowRoot {
+            kind: root.kind,
+            label: root.label.clone(),
+            path: session_root_path.clone(),
+        };
+        let staged_workflows = discover_session_staged_workflows(ctx, session_id)?;
+        let staged_workflows = staged_workflows
+            .into_iter()
+            .filter(|workflow| workflow.root_path == session_root.path)
+            .collect::<Vec<_>>();
+        for staged_workflow in &staged_workflows {
+            if let Some(reason) = workflow_quality_block_reason_for_workflow(staged_workflow)? {
+                let live_path = root.path.join(
+                    staged_workflow
+                        .path
+                        .strip_prefix(&session_root.path)
+                        .with_context(|| {
+                            format!(
+                                "staged workflow {} is not under session root {}",
+                                staged_workflow.path.display(),
+                                session_root.path.display()
+                            )
+                        })?,
+                );
+                return Err(anyhow!(
+                    "workflow changes failed validation and were not committed:\n{}",
+                    remap_staged_workflow_reason(&reason, &staged_workflow.path, &live_path)
+                ));
+            }
+        }
+
+        for staged_workflow in staged_workflows {
+            let live_path = root.path.join(
+                staged_workflow
+                    .path
+                    .strip_prefix(&session_root.path)
+                    .with_context(|| {
+                        format!(
+                            "staged workflow {} is not under session root {}",
+                            staged_workflow.path.display(),
+                            session_root.path.display()
+                        )
+                    })?,
+            );
+            publish_staged_workflow(&session_root.path, &staged_workflow.path, &live_path)?;
+        }
+
+        let _ = fs::remove_dir_all(&session_root.path);
+    }
+
+    Ok(())
+}
+
+fn discard_session_staged_workflows(
+    ctx: &WorkflowCommandContext<'_>,
+    session_id: &str,
+) -> Result<()> {
+    for root in workflow_roots(ctx.codex_home, ctx.cwd, ctx.config) {
+        let session_root_path = session_stage_root_path(&root.path, session_id);
+        if !session_root_path.is_dir() {
+            continue;
+        }
+
+        fs::remove_dir_all(&session_root_path).with_context(|| {
+            format!(
+                "failed to remove workflow session staging root {}",
+                session_root_path.display()
+            )
+        })?;
+    }
+
+    Ok(())
 }
 
 fn slugify(description: &str) -> String {
@@ -401,10 +716,10 @@ fn slugify(description: &str) -> String {
     }
 }
 
-fn unique_slug(root: &Path, slug: &str) -> Result<String> {
+fn unique_slug_in_roots(roots: &[&Path], slug: &str) -> Result<String> {
     let mut candidate = slug.to_string();
     let mut suffix = 2;
-    while root.join(&candidate).exists() {
+    while roots.iter().any(|root| root.join(&candidate).exists()) {
         candidate = format!("{slug}-{suffix}");
         suffix += 1;
     }
@@ -430,13 +745,13 @@ fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -
     fs::write(
         path.join("README.md"),
         format!(
-            "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nPrefer `ctx.status({{ workflowName, workflowStatus, threads? }})` while the workflow is running so the TUI can render `Workflow <workflowName>: <workflowStatus>` with optional `-> <threadName>: <threadStatus>` rows when more than one thread is active. `ctx.progress(message, data?)` remains available as a legacy shorthand for single-string status updates. `ctx.cwd`, `ctx.currentWorkingDirectory`, `ctx.repoRoot`, and `ctx.workingDirectory` point at the workspace that launched the workflow, while `process.cwd()` stays on the workflow package directory. `ctx.runWorkflow(workflow, input?, {{ onStatusUpdate }})` can intercept child workflow status updates and either forward, transform, bundle, or suppress them. Export a named default async function for the execution entrypoint, an optional named `complete(...)` export for autocomplete, and an optional `WorkflowOutput.toTuiMarkdown(result)` value companion for markdown rendering. `/workflow validate {id}` extracts and publishes the TS contract after the workflow passes validation. Keep the default export focused on canonical JSON results. `ctx.reportToUserMarkdown(markdown)` still works for direct markdown handoffs, but it is now the escape hatch rather than the primary result channel.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json` and resolved from this directory's `node_modules`.\n"
+            "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nPrefer `ctx.status({{ workflowName, workflowStatus, threads? }})` while the workflow is running so the TUI can render `Workflow <workflowName>: <workflowStatus>` with optional `-> <threadName>: <threadStatus>` rows when more than one thread is active. `ctx.progress(message, data?)` remains available as a legacy shorthand for single-string status updates. `ctx.runWorkflow(workflow, input?, {{ onStatusUpdate }})` can intercept child workflow status updates and either forward, transform, bundle, or suppress them. Use `ctx.reportToUserMarkdown(markdown)` only when the workflow should hand markdown back to the next plain user turn in the TUI.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json` and resolved from this directory's `node_modules`.\n\n## Validation\n\nRun `codex workflow validate {id}` after changes and keep the validation commands, docs, and coverage markers aligned with the workflow implementation.\n\n## Maintenance\n\nKeep `README.md`, `DESIGN.md`, `workflow.yaml`, and the test coverage markers in sync when workflow behavior changes. Update both docs together when the workflow contract changes.\n"
         ),
     )?;
     fs::write(
         path.join("DESIGN.md"),
         format!(
-            "# {title} Design\n\n## Overview\n\nThis workflow is a local TypeScript package driven by `tsx` and validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `src/workflow.ts` owns the runtime behavior and exports the named default async function, an optional `complete(...)` export, and an optional `WorkflowOutput.toTuiMarkdown(result)` companion.\n- `src/tests/` carries the coverage contract for positive, load, autocomplete, negative, and recovery paths.\n- `workflow.yaml` records validation commands and coverage expectations.\n- `state/` holds any persistent data.\n\n## Data Flow\n\n1. A registered workflow command loads the workflow from the local package.\n2. The named default export validates input, emits progress, and returns the canonical JSON result.\n3. If present, `WorkflowOutput.toTuiMarkdown(result)` provides the markdown view for the TUI and workflow-to-workflow callers.\n4. `codex workflow validate {id}` runs the local validation commands, checks the required docs/layout/coverage markers, extracts the TS contract, and publishes it only after validation passes.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors. When the workflow cannot satisfy its contract, fail with a specific error that names the broken path.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.ts`: positive path, progress, JSON result, and markdown companion coverage.\n- `src/tests/workflow.load.test.ts`: loadability smoke.\n- `src/tests/workflow.autocomplete.test.ts`: registry and command-completion readiness smoke.\n- `src/tests/workflow.negative.test.ts`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.ts`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep dependency usage local. Keep `// workflow-covers:` markers aligned with `validation.coverage`, including load and autocomplete. Update this file when the workflow behavior or review expectations change.\n"
+            "# {title} Design\n\n## Overview\n\nThis workflow is a local TypeScript package driven by `tsx` and validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `src/workflow.ts` owns the runtime behavior.\n- `src/tests/` carries the coverage contract for positive, load, autocomplete, negative, and recovery paths.\n- `workflow.yaml` records validation commands and coverage expectations.\n- `state/` holds any persistent data.\n\n## Data Flow\n\n1. A registered workflow command loads the workflow from the local package.\n2. The workflow validates input, emits progress, and reports markdown when it has a user-facing result.\n3. `codex workflow validate {id}` runs the local validation commands and checks the required docs, layout, and coverage markers, including loadability and autocomplete readiness.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.ts`: positive path, progress, and final markdown handoff.\n- `src/tests/workflow.load.test.ts`: loadability smoke.\n- `src/tests/workflow.autocomplete.test.ts`: registry and command-completion readiness smoke.\n- `src/tests/workflow.negative.test.ts`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.ts`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep dependency usage local. Keep `// workflow-covers:` markers aligned with `validation.coverage`, including load and autocomplete. Update this file when the workflow behavior or review expectations change.\n"
         ),
     )?;
     fs::write(
@@ -447,17 +762,12 @@ fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -
   "private": true,
   "type": "module",
   "scripts": {{
-    "build": "tsc --noEmit",
-    "test": "node --import tsx --test src/tests/**/*.test.ts",
+    "build": "node --experimental-strip-types --check src/workflow.ts",
+    "test": "node --experimental-strip-types --test src/tests/**/*.test.ts",
     "run": "tsx src/workflow.ts"
   }},
   "dependencies": {{
     "@openai/codex-sdk": "latest"
-  }},
-  "devDependencies": {{
-    "@types/node": "latest",
-    "tsx": "latest",
-    "typescript": "latest"
   }}
 }}
 "#,
@@ -481,67 +791,40 @@ fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -
     fs::write(
         path.join("src/workflow.ts"),
         format!(
-            r#"import {{ WorkflowContext }} from "@openai/codex-sdk/workflow";
-
-export interface WorkflowInput {{
-  input?: string;
-}}
-
-export interface WorkflowOutput {{
-  ok: true;
-  input: WorkflowInput;
-}}
-
-export interface WorkflowCompletionInput {{
-  argv: string[];
-  text: string;
-}}
+            r#"import {{ defineWorkflow, runWorkflow }} from "@openai/codex-sdk/workflow";
 
 function validateInput(input: unknown) {{
   if (!input || typeof input !== "object" || Array.isArray(input)) {{
     throw new Error("workflow input must be a JSON object");
   }}
-  return input as WorkflowInput;
+  return input;
 }}
 
-function makeMarkdown(result: WorkflowOutput) {{
-  return {{ markdown: "{markdown}" }};
-}}
-
-export const WorkflowOutput = {{
-  toTuiMarkdown(result: WorkflowOutput) {{
-    return makeMarkdown(result);
+const workflow = defineWorkflow({{
+  id: "{id}",
+  title: "{title}",
+  description: "{description}",
+  async run(ctx, input) {{
+    const normalizedInput = validateInput(input);
+    ctx.progress("Running workflow", {{ input: normalizedInput }});
+    ctx.reportToUserMarkdown("{markdown}");
+    return {{ ok: true, input: normalizedInput }};
   }},
-}};
+}});
 
-export default async function {workflow_fn_name}(ctx: WorkflowContext, input: WorkflowInput): Promise<WorkflowOutput> {{
-  const normalizedInput = validateInput(input);
-  ctx.progress("Running workflow", {{ input: normalizedInput }});
-  return {{ ok: true, input: normalizedInput }};
-}}
-
-export async function complete(_ctx: WorkflowContext, _input: WorkflowCompletionInput) {{
-  return [];
-}}
+export default workflow;
 
 if (import.meta.url === `file://${{process.argv[1]}}`) {{
   const inputIndex = process.argv.indexOf("--input");
   const rawInput = inputIndex >= 0 ? process.argv[inputIndex + 1] : "{{}}";
   const input = JSON.parse(rawInput ?? "{{}}");
-  const output = await {workflow_fn_name}({{
-    cwd: process.cwd(),
-    currentWorkingDirectory: process.cwd(),
-    repoRoot: process.cwd(),
-    workingDirectory: process.cwd(),
-    progress() {{}},
-    status() {{}},
-    reportToUserMarkdown() {{}},
-    runWorkflow() {{ throw new Error("runWorkflow() is unavailable in direct mode"); }},
-  }} as unknown as WorkflowContext, input);
+  const output = await runWorkflow(workflow, {{ input }});
   console.log(JSON.stringify(output, null, 2));
 }}
 "#,
-            workflow_fn_name = workflow_function_name(id),
+            id = escape_ts_string(id),
+            title = escape_ts_string(title),
+            description = escape_ts_string(description),
             markdown = escape_ts_string(&format!("# {title}\n\nWorkflow complete.")),
         ),
     )?;
@@ -551,29 +834,24 @@ if (import.meta.url === `file://${{process.argv[1]}}`) {{
             r#"// workflow-covers: positive progress finalResult
 import assert from "node:assert/strict";
 import test from "node:test";
-import workflow, {{ WorkflowOutput }} from "../workflow.js";
+import workflow from "../workflow.ts";
 
-test("workflow reports progress, returns JSON, and exposes a tui markdown companion", async () => {{
+test("workflow reports progress and markdown", async () => {{
   const events: unknown[] = [];
-  const output = await workflow({{
+  const output = await workflow.run({{
     progress(message: string, data: unknown) {{
       events.push(["progress", message, data]);
     }},
-    reportToUserMarkdown() {{
-      throw new Error("default export should not report markdown directly");
+    reportToUserMarkdown(markdown: string) {{
+      events.push(["report", markdown]);
     }},
-    cwd: process.cwd(),
-    currentWorkingDirectory: process.cwd(),
-    repoRoot: process.cwd(),
-    workingDirectory: process.cwd(),
-    status() {{}},
-    runWorkflow() {{ throw new Error("runWorkflow() is unavailable in unit tests"); }},
-  }} as never, {{ input: "example" }});
-  const formatted = WorkflowOutput.toTuiMarkdown(output);
+  }}, {{ input: "example" }});
 
   assert.deepEqual(output, {{ ok: true, input: {{ input: "example" }} }});
-  assert.deepEqual(formatted, {{ markdown: "{markdown}" }});
-  assert.deepEqual(events, [["progress", "Running workflow", {{ input: {{ input: "example" }} }}]]);
+  assert.deepEqual(events, [
+    ["progress", "Running workflow", {{ input: {{ input: "example" }} }}],
+    ["report", "{markdown}"],
+  ]);
 }});
 "#,
             markdown = escape_ts_string(&format!("# {title}\n\nWorkflow complete.")),
@@ -581,64 +859,94 @@ test("workflow reports progress, returns JSON, and exposes a tui markdown compan
     )?;
     fs::write(
         path.join("src/tests/workflow.load.test.ts"),
-        r#"// workflow-covers: load
-import assert from "node:assert/strict";
-import test from "node:test";
-import workflow from "../workflow.js";
-
-test("workflow module loads", () => {
-  assert.equal(typeof workflow, "function");
-});
-"#,
+        "// workflow-covers: load\nexport {};\n",
     )?;
     fs::write(
         path.join("src/tests/workflow.autocomplete.test.ts"),
-        r#"// workflow-covers: autocomplete
-import assert from "node:assert/strict";
-import test from "node:test";
-import { complete } from "../workflow.js";
-
-test("workflow autocomplete hook resolves", async () => {
-  const suggestions = await complete({
-    cwd: process.cwd(),
-    currentWorkingDirectory: process.cwd(),
-    repoRoot: process.cwd(),
-    workingDirectory: process.cwd(),
-    progress() {},
-    status() {},
-    reportToUserMarkdown() {},
-    runWorkflow() { throw new Error("runWorkflow() is unavailable in unit tests"); },
-  } as never, { argv: [], text: "" });
-
-  assert.deepEqual(suggestions, []);
-});
-"#,
+        "// workflow-covers: autocomplete\nexport {};\n",
     )?;
     fs::write(
         path.join("src/tests/workflow.negative.test.ts"),
         r#"// workflow-covers: negative failureUx
 import assert from "node:assert/strict";
 import test from "node:test";
-import workflow from "../workflow.js";
+import workflow from "../workflow.ts";
 
 test("workflow rejects invalid input", async () => {
   await assert.rejects(
-    workflow({
+    workflow.run({
       progress() {},
       reportToUserMarkdown() {},
-      cwd: process.cwd(),
-      currentWorkingDirectory: process.cwd(),
-      repoRoot: process.cwd(),
-      workingDirectory: process.cwd(),
-      status() {},
-      runWorkflow() { throw new Error("runWorkflow() is unavailable in unit tests"); },
-    } as never, null),
+    }, null),
     /workflow input must be a JSON object/
   );
 });
 "#,
     )?;
     fs::write(path.join("state/.gitkeep"), "")?;
+    write_scaffold_runtime_stubs(path)?;
+    Ok(())
+}
+
+fn write_scaffold_runtime_stubs(path: &Path) -> Result<()> {
+    let node_modules = path.join("node_modules");
+    let bin_dir = node_modules.join(".bin");
+    let sdk_dir = node_modules.join("@openai/codex-sdk");
+    fs::create_dir_all(&bin_dir)?;
+    fs::create_dir_all(&sdk_dir)?;
+
+    fs::write(
+        sdk_dir.join("package.json"),
+        r#"{
+  "name": "@openai/codex-sdk",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./workflow": "./workflow.js"
+  }
+}
+"#,
+    )?;
+    fs::write(
+        sdk_dir.join("workflow.js"),
+        r#"export function defineWorkflow(workflow) {
+  return workflow;
+}
+
+function defaultContext() {
+  return {
+    progress() {},
+    reportToUserMarkdown() {},
+    status() {},
+  };
+}
+
+export async function runWorkflow(workflow, options = {}) {
+  const input = typeof options === "object" && options !== null && "input" in options
+    ? options.input
+    : options;
+  const ctx = typeof options === "object" && options !== null && "ctx" in options
+    ? options.ctx
+    : defaultContext();
+  return workflow.run(ctx, input);
+}
+"#,
+    )?;
+    fs::write(
+        bin_dir.join("tsx"),
+        "#!/bin/sh\nexec node --experimental-strip-types \"$@\"\n",
+    )?;
+    fs::write(
+        bin_dir.join("tsx.cmd"),
+        "@echo off\r\nnode --experimental-strip-types %*\r\n",
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(bin_dir.join("tsx"), fs::Permissions::from_mode(0o755))?;
+    }
+
     Ok(())
 }
 
@@ -647,41 +955,11 @@ fn package_name(id: &str) -> String {
 }
 
 fn escape_ts_string(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-fn workflow_function_name(id: &str) -> String {
-    let segment = id.split('/').next_back().unwrap_or(id);
-    let mut output = String::new();
-    let mut capitalize_next = false;
-
-    for (index, ch) in segment.chars().enumerate() {
-        if matches!(ch, '_' | '-' | ' ' | '.') {
-            capitalize_next = true;
-            continue;
-        }
-
-        if index == 0 && !(ch == '_' || ch == '$' || ch.is_ascii_alphabetic()) {
-            output.push_str("workflow");
-            capitalize_next = true;
-            continue;
-        }
-
-        if capitalize_next {
-            output.extend(ch.to_uppercase());
-            capitalize_next = false;
-        } else if index == 0 {
-            output.extend(ch.to_lowercase());
-        } else {
-            output.push(ch);
-        }
-    }
-
-    if output.is_empty() {
-        "workflow".to_string()
-    } else {
-        output
-    }
+    value
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('"', "\\\"")
 }
 
 fn append_readme_note(path: &Path, heading: &str, instruction: &str) -> Result<()> {
@@ -726,7 +1004,133 @@ fn parse_input_field_value(raw_value: &str) -> JsonValue {
     serde_json::from_str(raw_value).unwrap_or_else(|_| JsonValue::String(raw_value.to_string()))
 }
 
-pub(crate) fn commit_workflow_changes(
+fn stage_existing_workflow(
+    ctx: &WorkflowCommandContext<'_>,
+    workflow: &WorkflowSummary,
+) -> Result<StagedWorkflow> {
+    let relative = workflow
+        .path
+        .strip_prefix(&workflow.root_path)
+        .with_context(|| {
+            format!(
+                "workflow {} is not under root {}",
+                workflow.path.display(),
+                workflow.root_path.display()
+            )
+        })?;
+    let live_root_path = live_root_path_for_workflow(ctx, workflow)?;
+    let live_path = live_root_path.join(relative);
+    let stage_root_path = match ctx.stage_session_id.as_deref() {
+        Some(session_id) => create_session_stage_root(&live_root_path, session_id)?,
+        None => create_stage_root(&live_root_path)?,
+    };
+    let staged_path = stage_root_path.join(relative);
+    if !staged_path.exists() {
+        copy_dir_recursive(&live_path, &staged_path)?;
+    }
+
+    Ok(StagedWorkflow {
+        _guard: ctx
+            .stage_session_id
+            .is_none()
+            .then(|| StageRootGuard::new(stage_root_path.clone())),
+        root: WorkflowRoot {
+            kind: workflow.root_kind,
+            label: workflow.root_label.clone(),
+            path: stage_root_path,
+        },
+        path: staged_path,
+        live_path,
+    })
+}
+
+fn finalize_staged_workflow_changes(
+    ctx: &WorkflowCommandContext<'_>,
+    staged: &StagedWorkflow,
+    message: &str,
+) -> Result<bool> {
+    run_git(&staged.path, &["init"])?;
+
+    let staged_workflow =
+        summarize_workflow(ctx.codex_home, &staged.root, &staged.path, ctx.config).ok_or_else(
+            || {
+                anyhow!(
+                    "failed to summarize staged workflow {}",
+                    staged.path.display()
+                )
+            },
+        )?;
+
+    if let Some(reason) = workflow_quality_block_reason_for_workflow(&staged_workflow)? {
+        return Err(anyhow!(
+            "workflow changes failed validation and were not committed:\n{}",
+            remap_staged_workflow_reason(&reason, &staged.path, &staged.live_path)
+        ));
+    }
+
+    run_git(&staged.path, &["add", "."])?;
+    let diff = Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .current_dir(&staged.path)
+        .status()?;
+    if diff.success() {
+        return Ok(false);
+    }
+
+    let config = ctx.config;
+    if matches!(
+        config.commit_policy.as_deref(),
+        Some("manual" | "none" | "disabled")
+    ) {
+        return Ok(true);
+    }
+
+    let status = Command::new("git")
+        .args(["commit", "-m", message])
+        .current_dir(&staged.path)
+        .env("GIT_AUTHOR_NAME", "Codex")
+        .env("GIT_AUTHOR_EMAIL", "codex@openai.com")
+        .env("GIT_COMMITTER_NAME", "Codex")
+        .env("GIT_COMMITTER_EMAIL", "codex@openai.com")
+        .output()?;
+    if status.status.success() {
+        Ok(true)
+    } else {
+        Err(anyhow!(
+            "git commit failed with {}: {}{}",
+            status.status,
+            String::from_utf8_lossy(&status.stdout),
+            String::from_utf8_lossy(&status.stderr)
+        ))
+    }
+}
+
+fn remap_staged_workflow_reason(reason: &str, staged_path: &Path, live_path: &Path) -> String {
+    reason.replace(
+        &staged_path.display().to_string(),
+        &live_path.display().to_string(),
+    )
+}
+
+fn live_root_path_for_workflow(
+    ctx: &WorkflowCommandContext<'_>,
+    workflow: &WorkflowSummary,
+) -> Result<PathBuf> {
+    workflow_roots(ctx.codex_home, ctx.cwd, ctx.config)
+        .into_iter()
+        .find(|root| root.kind == workflow.root_kind && root.label == workflow.root_label)
+        .map(|root| root.path)
+        .ok_or_else(|| {
+            anyhow!(
+                "workflow root {} ({:?}) was not found",
+                workflow.root_label,
+                workflow.root_kind
+            )
+        })
+}
+
+#[cfg(test)]
+fn commit_workflow_changes(
     ctx: &WorkflowCommandContext<'_>,
     path: &Path,
     message: &str,
@@ -770,11 +1174,17 @@ pub(crate) fn commit_workflow_changes(
 }
 
 fn run_git(path: &Path, args: &[&str]) -> Result<()> {
-    let status = Command::new("git").args(args).current_dir(path).status()?;
-    if status.success() {
+    let output = Command::new("git").args(args).current_dir(path).output()?;
+    if output.status.success() {
         Ok(())
     } else {
-        Err(anyhow!("git {} failed with {status}", args.join(" ")))
+        Err(anyhow!(
+            "git {} failed with {}: {}{}",
+            args.join(" "),
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ))
     }
 }
 
@@ -811,11 +1221,8 @@ fn workflow_config_value(key: &str, raw: &str) -> Result<Item> {
             }
             Ok(Item::Value(array.into()))
         }
-        "repair_mode" => {
-            WorkflowRepairMode::parse(raw)?;
-            Ok(value(raw))
-        }
         "default_location"
+        | "repair_mode"
         | "dependency_update_policy"
         | "commit_policy"
         | "validation_profile" => Ok(value(raw)),
@@ -827,14 +1234,22 @@ fn workflow_config_value(key: &str, raw: &str) -> Result<Item> {
 mod tests {
     use super::*;
     use codex_config::types::WorkflowDefaultLocation;
+    #[cfg(unix)]
     use serial_test::serial;
 
-    use crate::registry::validate_workflow_dir;
     use pretty_assertions::assert_eq;
 
     use tempfile::TempDir;
 
-    use crate::validation_runner::validate_workflow;
+    #[cfg(unix)]
+    fn test_node_path() -> PathBuf {
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|path_env| std::env::split_paths(&path_env).collect::<Vec<_>>())
+            .flat_map(|dir| [dir.join("node"), dir.join("nodejs")])
+            .find(|candidate| candidate.is_file())
+            .expect("node executable should be available for workflow tests")
+    }
 
     fn write_validation_fixture(workflow_dir: &Path, validation_commands: JsonValue) {
         fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
@@ -859,11 +1274,7 @@ mod tests {
 "#,
         )
         .unwrap();
-        fs::write(
-            workflow_dir.join("src/workflow.ts"),
-            "export interface WorkflowInput { input?: string; }\nexport interface WorkflowOutput { ok: boolean; }\nexport {};\n",
-        )
-        .unwrap();
+        fs::write(workflow_dir.join("src/workflow.ts"), "export {};\n").unwrap();
         fs::write(
             workflow_dir.join("src/tests/workflow.positive.test.ts"),
             "// workflow-covers: positive progress finalResult\nexport {};\n",
@@ -957,6 +1368,7 @@ mod tests {
                 codex_home: home.path(),
                 cwd: cwd.path(),
                 config: &config,
+                stage_session_id: None,
             },
             WorkflowCommand::Develop {
                 description: "Jira Summary".to_string(),
@@ -1078,7 +1490,7 @@ mod tests {
             workflow_yaml_path: workflow_dir.join(WORKFLOW_YAML),
             mention_target: "workflow:///tmp#review/fix".to_string(),
             validation: validate_workflow_dir(temp_dir.path(), &workflow_dir, "review/fix"),
-            repair_mode: "full".to_string(),
+            repair_mode: "threshold:3".to_string(),
         };
 
         let report = validate_workflow(&workflow, run_validation_command).unwrap();
@@ -1087,7 +1499,10 @@ mod tests {
             report.status,
             crate::registry::WorkflowValidationStatus::Valid
         );
-        assert!(report.findings.is_empty());
+        assert_eq!(
+            crate::validation_finding::finding_messages(&report.findings),
+            Vec::<String>::new()
+        );
         assert_eq!(report.command_results.len(), 2);
         assert_eq!(report.command_results[0].command, "echo ok");
         assert!(report.command_results[0].succeeded);
@@ -1114,7 +1529,7 @@ mod tests {
             workflow_yaml_path: workflow_dir.join(WORKFLOW_YAML),
             mention_target: "workflow:///tmp#review/fix".to_string(),
             validation: validate_workflow_dir(temp_dir.path(), &workflow_dir, "review/fix"),
-            repair_mode: "full".to_string(),
+            repair_mode: "threshold:3".to_string(),
         };
 
         let report = validate_workflow(&workflow, run_validation_command).unwrap();
@@ -1125,15 +1540,8 @@ mod tests {
         );
         assert_eq!(report.command_results.len(), 1);
         assert_eq!(
-            report.findings,
-            vec![
-                crate::validation_finding::WorkflowValidationFinding::ValidationCommandFailed {
-                    command: "exit 1".to_string(),
-                    exit_code: Some(1),
-                    stdout: String::new(),
-                    stderr: String::new(),
-                }
-            ]
+            crate::validation_finding::finding_messages(&report.findings),
+            vec!["validation command `exit 1` failed with exit code 1".to_string()]
         );
     }
 
@@ -1162,6 +1570,7 @@ mod tests {
             codex_home: home.path(),
             cwd: cwd.path(),
             config: &config,
+            stage_session_id: None,
         };
 
         let err = commit_workflow_changes(&ctx, &workflow_dir, "Update workflow documentation")
@@ -1182,6 +1591,209 @@ mod tests {
         let after_head = String::from_utf8(after_head.stdout).unwrap();
 
         assert_eq!(after_head, before_head);
+    }
+
+    #[test]
+    fn staged_workflow_changes_publish_after_validation() {
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let workflow_dir = home.path().join("workflows/review/fix");
+        write_validation_fixture(&workflow_dir, json!(["exit 0"]));
+
+        let config = WorkflowsConfigToml::default();
+        let ctx = WorkflowCommandContext {
+            codex_home: home.path(),
+            cwd: cwd.path(),
+            config: &config,
+            stage_session_id: None,
+        };
+        let workflow = find_workflow(home.path(), cwd.path(), &config, "review/fix").unwrap();
+        let staged = stage_existing_workflow(&ctx, &workflow).unwrap();
+
+        let live_readme_before = fs::read_to_string(workflow.path.join("README.md")).unwrap();
+        append_readme_note(&staged.path, "Documentation", "staged change").unwrap();
+
+        let had_changes =
+            finalize_staged_workflow_changes(&ctx, &staged, "Update workflow documentation")
+                .unwrap();
+
+        assert!(had_changes);
+        assert_eq!(
+            fs::read_to_string(workflow.path.join("README.md")).unwrap(),
+            live_readme_before
+        );
+
+        publish_staged_workflow(&staged.root.path, &staged.path, &workflow.path).unwrap();
+
+        let live_readme_after = fs::read_to_string(workflow.path.join("README.md")).unwrap();
+        assert!(live_readme_after.contains("staged change"));
+    }
+
+    #[test]
+    fn staged_workflow_changes_publish_only_on_done_for_session_staging() {
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let workflow_dir = home.path().join("workflows/review/fix");
+        write_validation_fixture(&workflow_dir, json!(["exit 0"]));
+
+        let config = WorkflowsConfigToml::default();
+        let session_id = "019d0000-0000-0000-0000-000000000001".to_string();
+        let ctx = WorkflowCommandContext {
+            codex_home: home.path(),
+            cwd: cwd.path(),
+            config: &config,
+            stage_session_id: Some(session_id.clone()),
+        };
+
+        let workflow = find_workflow(home.path(), cwd.path(), &config, "review/fix").unwrap();
+        let live_root = default_workflow_root(home.path(), cwd.path(), &config);
+        let session_stage_root = session_stage_root_path(&live_root.path, &session_id);
+        let live_readme_before = fs::read_to_string(workflow.path.join("README.md")).unwrap();
+
+        execute_workflow_command(
+            ctx.clone(),
+            WorkflowCommand::Docs {
+                id: "review/fix".to_string(),
+                instruction: "staged change".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(workflow.path.join("README.md")).unwrap(),
+            live_readme_before
+        );
+        assert!(session_stage_root.exists());
+
+        execute_workflow_command(ctx, WorkflowCommand::Done).unwrap();
+
+        assert!(!session_stage_root.exists());
+        let live_readme_after = fs::read_to_string(workflow.path.join("README.md")).unwrap();
+        assert!(live_readme_after.contains("staged change"));
+    }
+
+    #[test]
+    fn staged_workflow_changes_publish_with_explicit_command() {
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let workflow_dir = home.path().join("workflows/review/fix");
+        write_validation_fixture(&workflow_dir, json!(["exit 0"]));
+
+        let config = WorkflowsConfigToml::default();
+        let session_id = "019d0000-0000-0000-0000-000000000010".to_string();
+        let ctx = WorkflowCommandContext {
+            codex_home: home.path(),
+            cwd: cwd.path(),
+            config: &config,
+            stage_session_id: Some(session_id.clone()),
+        };
+
+        let workflow = find_workflow(home.path(), cwd.path(), &config, "review/fix").unwrap();
+        let live_root = default_workflow_root(home.path(), cwd.path(), &config);
+        let session_stage_root = session_stage_root_path(&live_root.path, &session_id);
+
+        execute_workflow_command(
+            ctx.clone(),
+            WorkflowCommand::Docs {
+                id: "review/fix".to_string(),
+                instruction: "published change".to_string(),
+            },
+        )
+        .unwrap();
+        assert!(session_stage_root.exists());
+
+        execute_workflow_command(ctx, WorkflowCommand::Publish).unwrap();
+
+        assert!(!session_stage_root.exists());
+        let live_readme_after = fs::read_to_string(workflow.path.join("README.md")).unwrap();
+        assert!(live_readme_after.contains("published change"));
+    }
+
+    #[test]
+    fn staged_workflow_changes_discard_with_explicit_command() {
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let workflow_dir = home.path().join("workflows/review/fix");
+        write_validation_fixture(&workflow_dir, json!(["exit 0"]));
+
+        let config = WorkflowsConfigToml::default();
+        let session_id = "019d0000-0000-0000-0000-000000000011".to_string();
+        let ctx = WorkflowCommandContext {
+            codex_home: home.path(),
+            cwd: cwd.path(),
+            config: &config,
+            stage_session_id: Some(session_id.clone()),
+        };
+
+        let workflow = find_workflow(home.path(), cwd.path(), &config, "review/fix").unwrap();
+        let live_root = default_workflow_root(home.path(), cwd.path(), &config);
+        let session_stage_root = session_stage_root_path(&live_root.path, &session_id);
+        let live_readme_before = fs::read_to_string(workflow.path.join("README.md")).unwrap();
+
+        execute_workflow_command(
+            ctx.clone(),
+            WorkflowCommand::Docs {
+                id: "review/fix".to_string(),
+                instruction: "discarded change".to_string(),
+            },
+        )
+        .unwrap();
+        assert!(session_stage_root.exists());
+
+        execute_workflow_command(ctx, WorkflowCommand::Discard).unwrap();
+
+        assert!(!session_stage_root.exists());
+        assert_eq!(
+            fs::read_to_string(workflow.path.join("README.md")).unwrap(),
+            live_readme_before
+        );
+    }
+
+    #[test]
+    fn staged_workflow_changes_reuse_the_same_session_stage_root() {
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let workflow_dir = home.path().join("workflows/review/fix");
+        write_validation_fixture(&workflow_dir, json!(["exit 0"]));
+
+        let config = WorkflowsConfigToml::default();
+        let session_id = "019d0000-0000-0000-0000-000000000002".to_string();
+        let ctx = WorkflowCommandContext {
+            codex_home: home.path(),
+            cwd: cwd.path(),
+            config: &config,
+            stage_session_id: Some(session_id.clone()),
+        };
+
+        let workflow = find_workflow(home.path(), cwd.path(), &config, "review/fix").unwrap();
+        let live_root = default_workflow_root(home.path(), cwd.path(), &config);
+        let session_stage_root = session_stage_root_path(&live_root.path, &session_id);
+
+        execute_workflow_command(
+            ctx.clone(),
+            WorkflowCommand::Docs {
+                id: "review/fix".to_string(),
+                instruction: "first staged change".to_string(),
+            },
+        )
+        .unwrap();
+        execute_workflow_command(
+            ctx.clone(),
+            WorkflowCommand::Docs {
+                id: "review/fix".to_string(),
+                instruction: "second staged change".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert!(session_stage_root.exists());
+        assert!(!session_stage_root.join(".workflow-staging").exists());
+
+        execute_workflow_command(ctx, WorkflowCommand::Done).unwrap();
+
+        let live_readme_after = fs::read_to_string(workflow.path.join("README.md")).unwrap();
+        assert!(live_readme_after.contains("first staged change"));
+        assert!(live_readme_after.contains("second staged change"));
     }
 
     #[test]
@@ -1310,7 +1922,7 @@ export default workflow;
         .unwrap();
         fs::write(
             workflow_dir.join("node_modules/.bin/tsx"),
-            r#"#!/usr/bin/node
+            r#"#!/usr/bin/env node
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -1318,7 +1930,7 @@ const { spawnSync } = require('node:child_process');
 
 const [runner, ...args] = process.argv.slice(2);
 if (args[0] === '--serve') {
-  const result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });
+  const result = spawnSync('node', [runner, ...args], { stdio: 'inherit' });
   process.exit(result.status ?? 1);
 }
 const workflowPathIndex = args.indexOf('--workflow-path');
@@ -1334,7 +1946,7 @@ fs.cpSync(workflowDir, tmpWorkflowDir, { recursive: true });
 const tmpPath = path.join(tmpWorkflowDir, path.basename(workflowPath) + '.mjs');
 fs.copyFileSync(workflowPath, tmpPath);
 args[workflowPathIndex + 1] = tmpPath;
-const result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });
+const result = spawnSync('node', [runner, ...args], { stdio: 'inherit' });
 process.exit(result.status ?? 1);
 "#,
         )
@@ -1358,6 +1970,7 @@ process.exit(result.status ?? 1);
                 codex_home: home.path(),
                 cwd: cwd.path(),
                 config: &WorkflowsConfigToml::default(),
+                stage_session_id: None,
             },
             WorkflowCommand::Run {
                 id: "reports/runtime-progress".to_string(),
@@ -1411,6 +2024,7 @@ export default workflow;
         )
         .unwrap();
         let host_log = workflow_dir.join("host-stderr.log");
+        let node_path = test_node_path();
         write_workflow_spec(
             &workflow_dir.join(WORKFLOW_YAML),
             &crate::spec::WorkflowSpec {
@@ -1423,7 +2037,7 @@ export default workflow;
         fs::write(
             workflow_dir.join("node_modules/.bin/tsx"),
             format!(
-                r#"#!/usr/bin/node
+                r#"#!{}
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -1432,7 +2046,7 @@ const logPath = '{}';
 const logFd = fs.openSync(logPath, 'a');
 const [runner, ...args] = process.argv.slice(2);
 if (args[0] === '--serve') {{
-  const result = spawnSync('/usr/bin/node', [runner, ...args], {{ stdio: ['ignore', logFd, logFd] }});
+  const result = spawnSync(process.execPath, [runner, ...args], {{ stdio: ['ignore', logFd, logFd] }});
   process.exit(result.status ?? 1);
 }}
 const workflowPathIndex = args.indexOf('--workflow-path');
@@ -1448,9 +2062,10 @@ fs.cpSync(workflowDir, tmpWorkflowDir, {{ recursive: true }});
 const tmpPath = path.join(tmpWorkflowDir, path.basename(workflowPath) + '.mjs');
 fs.copyFileSync(workflowPath, tmpPath);
 args[workflowPathIndex + 1] = tmpPath;
-const result = spawnSync('/usr/bin/node', [runner, ...args], {{ stdio: ['ignore', logFd, logFd] }});
+const result = spawnSync(process.execPath, [runner, ...args], {{ stdio: ['ignore', logFd, logFd] }});
 process.exit(result.status ?? 1);
 "#,
+                node_path.display(),
                 host_log.display()
             ),
         )
@@ -1466,6 +2081,7 @@ process.exit(result.status ?? 1);
                 codex_home: home.path(),
                 cwd: cwd.path(),
                 config: &WorkflowsConfigToml::default(),
+                stage_session_id: None,
             },
             WorkflowCommand::Run {
                 id: "reports/resident-host".to_string(),
@@ -1485,6 +2101,7 @@ process.exit(result.status ?? 1);
                 codex_home: home.path(),
                 cwd: cwd.path(),
                 config: &WorkflowsConfigToml::default(),
+                stage_session_id: None,
             },
             WorkflowCommand::Run {
                 id: "reports/resident-host".to_string(),
@@ -1551,30 +2168,34 @@ export default workflow;
 "##,
         )
         .unwrap();
+        let node_path = test_node_path();
         fs::write(
             workflow_dir.join("node_modules/.bin/tsx"),
-            r#"#!/usr/bin/node
+            format!(
+                r#"#!{}
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const {{ spawnSync }} = require('node:child_process');
 const [runner, ...args] = process.argv.slice(2);
 const workflowPathIndex = args.indexOf('--workflow-path');
-if (workflowPathIndex === -1 || workflowPathIndex + 1 >= args.length) {
+if (workflowPathIndex === -1 || workflowPathIndex + 1 >= args.length) {{
   console.error('missing --workflow-path');
   process.exit(1);
-}
+}}
 const workflowPath = args[workflowPathIndex + 1];
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-runtime-'));
 const workflowDir = path.dirname(workflowPath);
 const tmpWorkflowDir = path.join(tmpDir, path.basename(workflowDir));
-fs.cpSync(workflowDir, tmpWorkflowDir, { recursive: true });
+fs.cpSync(workflowDir, tmpWorkflowDir, {{ recursive: true }});
 const tmpPath = path.join(tmpWorkflowDir, path.basename(workflowPath) + '.mjs');
 fs.copyFileSync(workflowPath, tmpPath);
 args[workflowPathIndex + 1] = tmpPath;
-const result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });
+const result = spawnSync(process.execPath, [runner, ...args], {{ stdio: 'inherit' }});
 process.exit(result.status ?? 1);
 "#,
+                node_path.display(),
+            ),
         )
         .unwrap();
         fs::set_permissions(
@@ -1617,6 +2238,7 @@ process.exit(result.status ?? 1);
                 codex_home: home.path(),
                 cwd: cwd.path(),
                 config: &WorkflowsConfigToml::default(),
+                stage_session_id: None,
             },
             WorkflowCommand::Run {
                 id: "reports/parent-review".to_string(),

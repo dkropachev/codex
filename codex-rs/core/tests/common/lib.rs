@@ -5,6 +5,13 @@ use anyhow::ensure;
 use codex_arg0::Arg0PathEntryGuard;
 use codex_utils_cargo_bin::CargoBinError;
 use ctor::ctor;
+
+#[ctor]
+fn raise_integration_test_thread_stack_limit() {
+    unsafe {
+        std::env::set_var("RUST_MIN_STACK", (32 * 1024 * 1024).to_string());
+    }
+}
 use std::sync::OnceLock;
 use tempfile::TempDir;
 

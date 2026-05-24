@@ -283,7 +283,8 @@ async fn collect_entries(
         dir_entries.sort_unstable_by(|a, b| a.3.name.cmp(&b.3.name));
 
         for (entry_path, relative_path, kind, dir_entry) in dir_entries {
-            if kind == DirEntryKind::Directory && remaining_depth > 1 {
+            let can_recurse = !dir_entry.display_name.contains(char::REPLACEMENT_CHARACTER);
+            if kind == DirEntryKind::Directory && remaining_depth > 1 && can_recurse {
                 queue.push_back((entry_path, relative_path, remaining_depth - 1));
             }
             entries.push(dir_entry);

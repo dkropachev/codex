@@ -306,7 +306,7 @@ mod tests {
     async fn review_provider_preflight_allows_reachable_ollama_server() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/models"))
+            .and(path("/models"))
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
@@ -326,7 +326,7 @@ mod tests {
     async fn review_provider_preflight_surfaces_friendly_ollama_error() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/models"))
+            .and(path("/models"))
             .respond_with(ResponseTemplate::new(503))
             .mount(&server)
             .await;

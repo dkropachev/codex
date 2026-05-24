@@ -16,6 +16,8 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
+use tracing::Span;
+use tracing::field;
 use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
@@ -378,7 +380,20 @@ impl Session {
             thread.id = %self.conversation_id,
             turn.id = %turn_context.sub_id,
             model = %turn_context.model_info.slug,
+            codex.turn.reasoning_effort = field::Empty,
+            codex.turn.token_usage.input_tokens = field::Empty,
+            codex.turn.token_usage.cached_input_tokens = field::Empty,
+            codex.turn.token_usage.non_cached_input_tokens = field::Empty,
+            codex.turn.token_usage.output_tokens = field::Empty,
+            codex.turn.token_usage.reasoning_output_tokens = field::Empty,
+            codex.turn.token_usage.total_tokens = field::Empty,
         );
+        if let Some(reasoning_effort) = turn_context.reasoning_effort.as_ref() {
+            task_span.record(
+                "codex.turn.reasoning_effort",
+                field::display(reasoning_effort),
+            );
+        }
         let handle = tokio::spawn(
             async move {
                 let ctx_for_finish = Arc::clone(&ctx);
@@ -562,15 +577,17 @@ impl Session {
 
         let mut pending_input = Vec::<ResponseInputItem>::new();
         let mut should_clear_active_turn = false;
+        let mut records_turn_token_usage_on_span = false;
         let mut token_usage_at_turn_start = None;
         let mut turn_had_memory_citation = false;
         let mut turn_tool_calls = 0_u64;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             if let Some(at) = active.as_mut()
-                && at.remove_task(&turn_context.sub_id).is_some()
+                && let Some(removed_task) = at.remove_task(&turn_context.sub_id)
             {
                 should_clear_active_turn = true;
+                records_turn_token_usage_on_span = removed_task.records_turn_token_usage_on_span;
                 let turn_state = Arc::clone(&at.turn_state);
                 Some(turn_state)
             } else {
@@ -683,6 +700,35 @@ impl Session {
                 turn_token_usage.reasoning_output_tokens,
                 &[("token_type", "reasoning_output"), tmp_mem],
             );
+            if records_turn_token_usage_on_span {
+                let span = Span::current();
+                span.record(
+                    "codex.turn.token_usage.input_tokens",
+                    turn_token_usage.input_tokens,
+                );
+                span.record(
+                    "codex.turn.token_usage.cached_input_tokens",
+                    turn_token_usage.cached_input(),
+                );
+                span.record(
+                    "codex.turn.token_usage.non_cached_input_tokens",
+                    turn_token_usage
+                        .input_tokens
+                        .saturating_sub(turn_token_usage.cached_input()),
+                );
+                span.record(
+                    "codex.turn.token_usage.output_tokens",
+                    turn_token_usage.output_tokens,
+                );
+                span.record(
+                    "codex.turn.token_usage.reasoning_output_tokens",
+                    turn_token_usage.reasoning_output_tokens,
+                );
+                span.record(
+                    "codex.turn.token_usage.total_tokens",
+                    turn_token_usage.total_tokens,
+                );
+            }
         }
         emit_turn_memory_metric(
             &self.services.session_telemetry,

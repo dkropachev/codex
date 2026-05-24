@@ -1,10 +1,14 @@
 use super::*;
 use crate::CodexThread;
 use crate::ThreadManager;
+use crate::agent::next_thread_spawn_depth;
 use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
 use crate::context::TurnAborted;
 use crate::function_tool::FunctionCallError;
+use crate::model_router::ModelRouterSource;
+use crate::model_router::apply_model_router_with_state;
+use crate::model_router::available_router_models;
 use crate::session::tests::make_session_and_context;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::state::TaskKind;
@@ -434,6 +438,37 @@ async fn spawn_agent_model_router_updates_thread_config_snapshot() {
         }],
         ..Default::default()
     });
+    let prompt = "inspect this repo";
+    let available_models = available_router_models(
+        &config,
+        &session.services.models_manager,
+        &session.services.model_router_discovery_cache,
+    )
+    .await;
+    let spawn_source = thread_spawn_source(
+        session.conversation_id,
+        &turn.session_source,
+        next_thread_spawn_depth(&turn.session_source),
+        /*agent_role*/ None,
+        /*task_name*/ None,
+    )
+    .expect("thread spawn source should be valid");
+    let SessionSource::SubAgent(source) = spawn_source else {
+        panic!("thread spawn source should produce a sub-agent source");
+    };
+    apply_model_router_with_state(
+        &mut config,
+        ModelRouterSource::SubAgent(source),
+        prompt.len(),
+        &available_models,
+        /*state_db*/ None,
+    )
+    .await
+    .expect("router should apply for spawn test");
+    let expected_model = config
+        .model
+        .clone()
+        .expect("routed config should have a model");
     turn.config = Arc::new(config);
 
     let output = SpawnAgentHandler
@@ -442,7 +477,7 @@ async fn spawn_agent_model_router_updates_thread_config_snapshot() {
             Arc::new(turn),
             "spawn_agent",
             function_payload(json!({
-                "message": "inspect this repo"
+                "message": prompt
             })),
         ))
         .await
@@ -458,7 +493,7 @@ async fn spawn_agent_model_router_updates_thread_config_snapshot() {
         .config_snapshot()
         .await;
 
-    assert_eq!(snapshot.model, "gpt-5.3-codex-spark");
+    assert_eq!(snapshot.model, expected_model);
 }
 
 #[tokio::test]

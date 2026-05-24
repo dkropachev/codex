@@ -311,6 +311,7 @@ fn repair_workflow_command_repairs_validation_findings_iteratively() {
         codex_home: home.path(),
         cwd: cwd.path(),
         config: &config,
+        stage_session_id: None,
     };
 
     let output: WorkflowCommandOutput = repair_workflow_command(ctx, "broken/fix").unwrap();
@@ -359,6 +360,7 @@ fn repair_workflow_command_reports_blocked_findings_when_mode_is_too_narrow() {
         codex_home: home.path(),
         cwd: cwd.path(),
         config: &config,
+        stage_session_id: None,
     };
 
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();
@@ -398,6 +400,7 @@ fn repair_workflow_command_reports_unsupported_validation_command_failures() {
         codex_home: home.path(),
         cwd: cwd.path(),
         config: &config,
+        stage_session_id: None,
     };
 
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();
@@ -446,6 +449,7 @@ fn repair_workflow_command_applies_known_build_command_fixers() {
         codex_home: home.path(),
         cwd: cwd.path(),
         config: &config,
+        stage_session_id: None,
     };
 
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();
@@ -507,6 +511,7 @@ fn repair_workflow_command_commits_successful_repairs_when_commit_policy_allows_
         codex_home: home.path(),
         cwd: cwd.path(),
         config: &config,
+        stage_session_id: None,
     };
 
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();

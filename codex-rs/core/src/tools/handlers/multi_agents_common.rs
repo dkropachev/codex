@@ -123,6 +123,12 @@ pub(crate) fn collab_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionC
         CodexErr::ThreadNotFound(id) => {
             FunctionCallError::RespondToModel(format!("agent with id {id} not found"))
         }
+        CodexErr::Fatal(message)
+            if message.contains("no rollout found for thread id")
+                || message.contains("thread not found") =>
+        {
+            FunctionCallError::RespondToModel(format!("agent with id {agent_id} not found"))
+        }
         CodexErr::InternalAgentDied => {
             FunctionCallError::RespondToModel(format!("agent with id {agent_id} is closed"))
         }

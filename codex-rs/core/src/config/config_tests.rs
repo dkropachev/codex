@@ -2399,7 +2399,7 @@ fn web_search_mode_for_turn_falls_back_when_live_is_disallowed() -> anyhow::Resu
 }
 
 #[tokio::test]
-async fn project_profile_overrides_user_profile() -> std::io::Result<()> {
+async fn project_config_profile_does_not_override_user_active_profile() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let workspace = TempDir::new()?;
     let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
@@ -2438,8 +2438,8 @@ profile = "project"
         .build()
         .await?;
 
-    assert_eq!(config.active_profile.as_deref(), Some("project"));
-    assert_eq!(config.model.as_deref(), Some("gpt-project"));
+    assert_eq!(config.active_profile.as_deref(), Some("global"));
+    assert_eq!(config.model.as_deref(), Some("gpt-global"));
 
     Ok(())
 }

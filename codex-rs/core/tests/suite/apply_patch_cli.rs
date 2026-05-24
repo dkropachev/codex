@@ -1125,11 +1125,11 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
         EventMsg::PatchApplyEnd(end) => {
             assert_eq!(end.call_id, call_id);
             patch_end_success = Some(end.success);
-            saw_turn_diff.is_some()
+            false
         }
         EventMsg::TurnDiff(ev) => {
             saw_turn_diff = Some(ev.unified_diff.clone());
-            patch_end_success.is_some()
+            false
         }
         EventMsg::TurnComplete(_) => patch_end_success.is_some() && saw_turn_diff.is_some(),
         _ => false,

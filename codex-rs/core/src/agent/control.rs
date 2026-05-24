@@ -332,7 +332,6 @@ impl AgentControl {
                 agent_metadata.agent_path.clone(),
             );
         }
-
         Ok(LiveAgent {
             thread_id: new_thread.thread_id,
             metadata: agent_metadata,

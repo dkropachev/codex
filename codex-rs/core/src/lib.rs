@@ -47,6 +47,17 @@ pub mod file_watcher;
 mod flags;
 #[cfg(test)]
 mod git_info_tests;
+
+#[cfg(test)]
+mod test_init {
+    #[ctor::ctor]
+    fn raise_test_thread_stack_limit() {
+        unsafe {
+            std::env::set_var("RUST_MIN_STACK", (32 * 1024 * 1024).to_string());
+        }
+    }
+}
+
 mod goals;
 pub use goals::ExternalGoalPreviousStatus;
 pub use goals::ExternalGoalSet;

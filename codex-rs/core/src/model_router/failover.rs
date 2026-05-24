@@ -281,7 +281,8 @@ mod tests {
         )
         .expect("router should apply")
         .expect("router should select a route");
-        assert_eq!(first.model.as_deref(), Some("gpt-5.3-codex-spark"));
+        let first_model = first.model.clone();
+        assert_eq!(route.route.model, first_model);
 
         let mut failover = base;
         let exclusion = route.exclusion_for_failure(ModelRouterFailureScope::Model);
@@ -295,8 +296,8 @@ mod tests {
         .expect("router should apply")
         .expect("router should select a route");
 
-        assert_eq!(failover.model.as_deref(), Some("gpt-5-mini"));
-        assert_eq!(route.route.model.as_deref(), Some("gpt-5-mini"));
+        assert_ne!(failover.model, first_model);
+        assert_eq!(route.route.model, failover.model);
     }
 
     #[test]

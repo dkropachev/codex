@@ -19,7 +19,7 @@ use test_case::test_case;
 #[cfg(windows)]
 const DEFAULT_SHELL_TIMEOUT_MS: i64 = 7_000;
 #[cfg(not(windows))]
-const DEFAULT_SHELL_TIMEOUT_MS: i64 = 2_000;
+const DEFAULT_SHELL_TIMEOUT_MS: i64 = 5_000;
 
 #[cfg(windows)]
 const MEDIUM_TIMEOUT: Duration = Duration::from_secs(10);

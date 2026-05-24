@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -9,7 +10,11 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::WorkflowDiscardResponse;
+use codex_app_server_protocol::WorkflowEditResponse;
 use codex_app_server_protocol::WorkflowListResponse;
+use codex_app_server_protocol::WorkflowPublishResponse;
+use codex_app_server_protocol::WorkflowReadResponse;
 use codex_app_server_protocol::WorkflowRepairResponse;
 use codex_app_server_protocol::WorkflowRepairStopReason;
 use codex_app_server_protocol::WorkflowValidationStatus;
@@ -28,7 +33,62 @@ fn append_workflows_config(codex_home: &TempDir, extra: &str) -> Result<()> {
     Ok(())
 }
 
-fn write_broken_repair_fixture(workflow_dir: &std::path::Path) -> Result<()> {
+fn write_valid_workflow(
+    workflow_dir: &Path,
+    id: &str,
+    title: &str,
+    description: &str,
+) -> Result<()> {
+    fs::create_dir_all(workflow_dir.join("src/tests"))?;
+    fs::create_dir_all(workflow_dir.join("state"))?;
+    fs::create_dir_all(workflow_dir.join(".git"))?;
+    fs::write(
+        workflow_dir.join("workflow.yaml"),
+        format!(
+            "id: {id}\ntitle: {title}\nuserDescription: {description}\nvalidation:\n  commands:\n    - exit 0\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
+        ),
+    )?;
+    fs::write(
+        workflow_dir.join("README.md"),
+        format!(
+            "# {title}\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
+        ),
+    )?;
+    fs::write(
+        workflow_dir.join("DESIGN.md"),
+        format!(
+            "# {title} Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
+        ),
+    )?;
+    fs::write(
+        workflow_dir.join("package.json"),
+        format!(
+            "{{\n  \"name\": \"codex-workflow-{}\",\n  \"private\": true,\n  \"type\": \"module\"\n}}\n",
+            id.replace('/', "-")
+        ),
+    )?;
+    fs::write(workflow_dir.join("src/workflow.ts"), "export {};\n")?;
+    fs::write(
+        workflow_dir.join("src/tests/workflow.positive.test.ts"),
+        "// workflow-covers: positive progress finalResult\nexport {};\n",
+    )?;
+    fs::write(
+        workflow_dir.join("src/tests/workflow.load.test.ts"),
+        "// workflow-covers: load\nexport {};\n",
+    )?;
+    fs::write(
+        workflow_dir.join("src/tests/workflow.autocomplete.test.ts"),
+        "// workflow-covers: autocomplete\nexport {};\n",
+    )?;
+    fs::write(
+        workflow_dir.join("src/tests/workflow.negative.test.ts"),
+        "// workflow-covers: negative failureUx\nexport {};\n",
+    )?;
+    fs::write(workflow_dir.join("state/.gitkeep"), "")?;
+    Ok(())
+}
+
+fn write_broken_repair_fixture(workflow_dir: &Path) -> Result<()> {
     fs::create_dir_all(workflow_dir.join(".git"))?;
     fs::write(
         workflow_dir.join("workflow.yaml"),
@@ -66,7 +126,7 @@ fn write_broken_repair_fixture(workflow_dir: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-fn write_unsupported_command_fixture(workflow_dir: &std::path::Path) -> Result<()> {
+fn write_unsupported_command_fixture(workflow_dir: &Path) -> Result<()> {
     fs::create_dir_all(workflow_dir.join("src/tests"))?;
     fs::create_dir_all(workflow_dir.join("state"))?;
     fs::create_dir_all(workflow_dir.join(".git"))?;
@@ -124,43 +184,12 @@ async fn workflow_list_returns_discovered_workflows() -> Result<()> {
         "compact",
     )?;
     let workflow_dir = codex_home.path().join("workflows/reports/jira-summary");
-    fs::create_dir_all(workflow_dir.join("src/tests"))?;
-    fs::create_dir_all(workflow_dir.join("state"))?;
-    fs::create_dir_all(workflow_dir.join(".git"))?;
-    fs::write(
-        workflow_dir.join("workflow.yaml"),
-        "id: reports/jira-summary\ntitle: Jira Summary\nuserDescription: Summarize Jira work\nvalidation:\n  commands:\n    - npm run build\n    - npm test\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
+    write_valid_workflow(
+        &workflow_dir,
+        "reports/jira-summary",
+        "Jira Summary",
+        "Summarize Jira work",
     )?;
-    fs::write(
-        workflow_dir.join("README.md"),
-        "# Jira Summary\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
-    )?;
-    fs::write(
-        workflow_dir.join("DESIGN.md"),
-        "# Jira Summary Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
-    )?;
-    fs::write(
-        workflow_dir.join("package.json"),
-        "{\n  \"name\": \"codex-workflow-reports-jira-summary\",\n  \"private\": true,\n  \"type\": \"module\"\n}\n",
-    )?;
-    fs::write(workflow_dir.join("src/workflow.ts"), "export {};\n")?;
-    fs::write(
-        workflow_dir.join("src/tests/workflow.positive.test.ts"),
-        "// workflow-covers: positive progress finalResult\nexport {};\n",
-    )?;
-    fs::write(
-        workflow_dir.join("src/tests/workflow.load.test.ts"),
-        "// workflow-covers: load\nexport {};\n",
-    )?;
-    fs::write(
-        workflow_dir.join("src/tests/workflow.autocomplete.test.ts"),
-        "// workflow-covers: autocomplete\nexport {};\n",
-    )?;
-    fs::write(
-        workflow_dir.join("src/tests/workflow.negative.test.ts"),
-        "// workflow-covers: negative failureUx\nexport {};\n",
-    )?;
-    fs::write(workflow_dir.join("state/.gitkeep"), "")?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -324,6 +353,204 @@ async fn workflow_repair_returns_unsupported_command_result() -> Result<()> {
         response.validation_command_results[0]
             .stderr
             .contains("err")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_stage_session_id_keeps_edits_private_until_done() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    let workflow_dir = codex_home.path().join("workflows/review/fix");
+    write_valid_workflow(
+        &workflow_dir,
+        "review/fix",
+        "Review Fix",
+        "Repair a workflow",
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request(
+            "workflow/edit",
+            Some(json!({
+                "id": "review/fix",
+                "instruction": "staged note",
+                "stageSessionId": "session-123"
+            })),
+        )
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: WorkflowEditResponse = to_response(response)?;
+
+    let request_id = mcp
+        .send_raw_request("workflow/read", Some(json!({ "id": "review/fix" })))
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let live_before_done: WorkflowReadResponse = to_response(response)?;
+    assert_eq!(
+        live_before_done
+            .readme
+            .as_deref()
+            .is_some_and(|readme| readme.contains("staged note")),
+        false
+    );
+
+    let request_id = mcp
+        .send_raw_request(
+            "workflow/read",
+            Some(json!({
+                "id": "review/fix",
+                "stageSessionId": "session-123"
+            })),
+        )
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let staged_read: WorkflowReadResponse = to_response(response)?;
+    assert_eq!(
+        staged_read
+            .readme
+            .as_deref()
+            .is_some_and(|readme| readme.contains("staged note")),
+        true
+    );
+
+    let request_id = mcp
+        .send_raw_request(
+            "workflow/publish",
+            Some(json!({
+                "stageSessionId": "session-123"
+            })),
+        )
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: WorkflowPublishResponse = to_response(response)?;
+
+    let request_id = mcp
+        .send_raw_request("workflow/read", Some(json!({ "id": "review/fix" })))
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let live_after_done: WorkflowReadResponse = to_response(response)?;
+    assert_eq!(
+        live_after_done
+            .readme
+            .as_deref()
+            .is_some_and(|readme| readme.contains("staged note")),
+        true
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_stage_session_id_discard_removes_staged_changes() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    let workflow_dir = codex_home.path().join("workflows/review/fix");
+    write_valid_workflow(
+        &workflow_dir,
+        "review/fix",
+        "Review Fix",
+        "Repair a workflow",
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request(
+            "workflow/edit",
+            Some(json!({
+                "id": "review/fix",
+                "instruction": "discarded note",
+                "stageSessionId": "session-456"
+            })),
+        )
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: WorkflowEditResponse = to_response(response)?;
+
+    let request_id = mcp
+        .send_raw_request(
+            "workflow/discard",
+            Some(json!({
+                "stageSessionId": "session-456"
+            })),
+        )
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: WorkflowDiscardResponse = to_response(response)?;
+
+    let request_id = mcp
+        .send_raw_request(
+            "workflow/read",
+            Some(json!({
+                "id": "review/fix",
+                "stageSessionId": "session-456"
+            })),
+        )
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let read_after_discard: WorkflowReadResponse = to_response(response)?;
+    assert_eq!(
+        read_after_discard
+            .readme
+            .as_deref()
+            .is_some_and(|readme| readme.contains("discarded note")),
+        false
     );
 
     Ok(())

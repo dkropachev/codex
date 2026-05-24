@@ -95,7 +95,10 @@ impl WorkflowValidationFinding {
     pub fn message(&self) -> String {
         match self {
             Self::WorkflowSpecReadFailed { path, error } => {
-                format!("failed to read workflow spec {}: {error}", path.display())
+                format!(
+                    "failed to read workflow metadata {}: {error}",
+                    path.display()
+                )
             }
             Self::WorkflowIdMismatch {
                 expected_id,
@@ -104,8 +107,16 @@ impl WorkflowValidationFinding {
             } => format!(
                 "workflow.yaml id '{actual_id}' does not match directory id '{expected_id}'"
             ),
-            Self::MissingFile { path } => format!("missing {}", path.display()),
-            Self::MissingDirectory { path } => format!("missing directory {}", path.display()),
+            Self::MissingFile { path } => format!(
+                "missing {}",
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| path.display().to_string())
+            ),
+            Self::MissingDirectory { path } => {
+                format!("missing directory {}", path.display())
+            }
             Self::MissingGitRepository { path } => {
                 format!("missing git repository at {}", path.display())
             }
@@ -118,10 +129,7 @@ impl WorkflowValidationFinding {
                 root_path.display()
             ),
             Self::MissingDocumentHeading { path, heading } => {
-                format!(
-                    "missing document heading `## {heading}` in {}",
-                    path.display()
-                )
+                format!("{} is missing required heading `{heading}`", path.display())
             }
             Self::PackageManifestParseFailed { path, error } => {
                 format!(
@@ -129,60 +137,52 @@ impl WorkflowValidationFinding {
                     path.display()
                 )
             }
-            Self::UndeclaredPackageImport {
-                path, package_name, ..
-            } => format!(
-                "{} imports undeclared package `{package_name}`",
-                path.display()
-            ),
-            Self::MissingValidationCommands { path } => {
-                format!("{} is missing validation commands", path.display())
+            Self::UndeclaredPackageImport { package_name, .. } => {
+                format!("imports undeclared package `{package_name}`")
             }
-            Self::EmptyValidationCommands { path } => {
-                format!("{} validation.commands must not be empty", path.display())
+            Self::MissingValidationCommands { .. } => "missing validation commands".to_string(),
+            Self::EmptyValidationCommands { .. } => "validation commands are empty".to_string(),
+            Self::InvalidValidationCommands { .. } => {
+                "validation commands must be a non-empty string array".to_string()
             }
-            Self::InvalidValidationCommands { path } => {
-                format!(
-                    "{} validation.commands must be an array of strings",
-                    path.display()
-                )
+            Self::MissingCoverageMetadata { .. } => {
+                "missing validation coverage metadata".to_string()
             }
-            Self::MissingCoverageMetadata { path } => {
-                format!("{} is missing validation.coverage metadata", path.display())
+            Self::MissingCoverageKey { key, .. } => {
+                format!("missing coverage key `{key}`")
             }
-            Self::MissingCoverageKey { path, key } => {
-                format!("{} coverage is missing key `{key}`", path.display())
+            Self::InvalidCoverageKeyType { key, .. } => {
+                format!("coverage key `{key}` must be a boolean")
             }
-            Self::InvalidCoverageKeyType { path, key } => {
-                format!("{} coverage key `{key}` must be a boolean", path.display())
+            Self::CoverageKeyMustBeTrue { key, .. } => {
+                format!("coverage key `{key}` must be true")
             }
-            Self::CoverageKeyMustBeTrue { path, key } => {
-                format!("{} coverage key `{key}` must be true", path.display())
+            Self::MissingCoverageMarker { key, .. } => {
+                format!("missing test coverage marker `// workflow-covers: {key}`")
             }
-            Self::MissingCoverageMarker { path, key } => format!(
-                "missing test coverage marker `// workflow-covers: {key}` in {}",
-                path.display()
-            ),
             Self::CodeOutsideSrc { paths } => {
-                format!("code files must live under src/: {}", join_paths(paths))
+                format!(
+                    "workflow source exists outside src/: {}",
+                    display_paths(paths)
+                )
             }
             Self::TestsOutsideSrcTests { paths } => {
                 format!(
                     "test files must live under src/tests/: {}",
-                    join_paths(paths)
+                    display_paths(paths)
                 )
             }
             Self::DatabasesOutsideState { paths } => {
                 format!(
                     "database files must live under state/: {}",
-                    join_paths(paths)
+                    display_paths(paths)
                 )
             }
             Self::ValidationCommandFailed {
                 command, exit_code, ..
             } => match exit_code {
-                Some(code) => {
-                    format!("validation command `{command}` failed with exit code {code}")
+                Some(exit_code) => {
+                    format!("validation command `{command}` failed with exit code {exit_code}")
                 }
                 None => format!("validation command `{command}` failed"),
             },
@@ -193,70 +193,71 @@ impl WorkflowValidationFinding {
         }
     }
 
-    pub(crate) fn rule_id(&self) -> &'static str {
+    pub fn rule_id(&self) -> &'static str {
         match self {
-            Self::WorkflowSpecReadFailed { .. } => "WF-001",
-            Self::MissingFile { .. } => "WF-002",
-            Self::MissingDirectory { .. } => "WF-003",
-            Self::MissingGitRepository { .. } => "WF-004",
-            Self::WorkflowPathEscapesRoot { .. } => "WF-005",
-            Self::MissingDocumentHeading { .. } => "WF-006",
-            Self::WorkflowIdMismatch { .. } => "WF-007",
-            Self::PackageManifestParseFailed { .. } => "WF-008",
-            Self::UndeclaredPackageImport { .. } => "WF-009",
-            Self::MissingValidationCommands { .. } => "WF-010",
-            Self::EmptyValidationCommands { .. } => "WF-010",
-            Self::InvalidValidationCommands { .. } => "WF-010",
-            Self::ValidationCommandFailed { .. } => "WF-011",
-            Self::MissingCoverageMetadata { .. } => "WF-012",
-            Self::MissingCoverageKey { .. } => "WF-013",
-            Self::InvalidCoverageKeyType { .. } => "WF-013",
-            Self::CoverageKeyMustBeTrue { .. } => "WF-013",
-            Self::MissingCoverageMarker { .. } => "WF-014",
-            Self::CodeOutsideSrc { .. } => "WF-016",
-            Self::TestsOutsideSrcTests { .. } => "WF-017",
-            Self::DatabasesOutsideState { .. } => "WF-018",
-            Self::WorkflowApiContractExtractionFailed { .. } => "WF-019",
-        }
-    }
-
-    pub(crate) fn title(&self) -> &'static str {
-        match self {
-            Self::WorkflowSpecReadFailed { .. } => "Workflow spec read failed",
-            Self::WorkflowIdMismatch { .. } => "Workflow ID mismatch",
-            Self::MissingFile { .. } => "Missing file",
-            Self::MissingDirectory { .. } => "Missing directory",
-            Self::MissingGitRepository { .. } => "Missing git repository",
-            Self::WorkflowPathEscapesRoot { .. } => "Workflow path escapes root",
-            Self::MissingDocumentHeading { .. } => "Missing document heading",
-            Self::PackageManifestParseFailed { .. } => "Package manifest parse failed",
-            Self::UndeclaredPackageImport { .. } => "Undeclared package import",
-            Self::MissingValidationCommands { .. } => "Missing validation commands",
-            Self::EmptyValidationCommands { .. } => "Empty validation commands",
-            Self::InvalidValidationCommands { .. } => "Invalid validation commands",
-            Self::MissingCoverageMetadata { .. } => "Missing coverage metadata",
-            Self::MissingCoverageKey { .. } => "Missing coverage key",
-            Self::InvalidCoverageKeyType { .. } => "Invalid coverage key type",
-            Self::CoverageKeyMustBeTrue { .. } => "Coverage key must be true",
-            Self::MissingCoverageMarker { .. } => "Missing coverage marker",
-            Self::CodeOutsideSrc { .. } => "Code outside src",
-            Self::TestsOutsideSrcTests { .. } => "Tests outside src/tests",
-            Self::DatabasesOutsideState { .. } => "Databases outside state",
-            Self::ValidationCommandFailed { .. } => "Validation command failed",
-            Self::WorkflowApiContractExtractionFailed { .. } => {
-                "Workflow API contract extraction failed"
+            Self::MissingFile { path } | Self::MissingDocumentHeading { path, .. }
+                if path.file_name().and_then(|name| name.to_str()) == Some("README.md") =>
+            {
+                "WF-001"
             }
+            Self::MissingFile { path } | Self::MissingDocumentHeading { path, .. }
+                if path.file_name().and_then(|name| name.to_str()) == Some("DESIGN.md") =>
+            {
+                "WF-002"
+            }
+            Self::MissingFile { .. } | Self::MissingDocumentHeading { .. } => "WF-011",
+            Self::PackageManifestParseFailed { .. } | Self::UndeclaredPackageImport { .. } => {
+                "WF-004"
+            }
+            Self::MissingCoverageMetadata { .. } => "WF-008",
+            Self::MissingCoverageKey { key, .. }
+            | Self::InvalidCoverageKeyType { key, .. }
+            | Self::CoverageKeyMustBeTrue { key, .. }
+            | Self::MissingCoverageMarker { key, .. } => match key.as_str() {
+                "negative" | "failureUx" => "WF-009",
+                "recovery" => "WF-010",
+                _ => "WF-008",
+            },
+            Self::MissingValidationCommands { .. }
+            | Self::EmptyValidationCommands { .. }
+            | Self::InvalidValidationCommands { .. }
+            | Self::ValidationCommandFailed { .. }
+            | Self::WorkflowApiContractExtractionFailed { .. } => "WF-007",
+            Self::MissingDirectory { .. }
+            | Self::MissingGitRepository { .. }
+            | Self::WorkflowPathEscapesRoot { .. }
+            | Self::CodeOutsideSrc { .. }
+            | Self::TestsOutsideSrcTests { .. }
+            | Self::DatabasesOutsideState { .. } => "WF-003",
+            Self::WorkflowIdMismatch { .. } => "WF-007",
+            Self::WorkflowSpecReadFailed { .. } => "WF-011",
         }
     }
 
-    pub(crate) fn resolved_primary_path(&self, workflow_path: &Path) -> PathBuf {
+    pub fn title(&self) -> &'static str {
+        match self.rule_id() {
+            "WF-001" => "README.md is incomplete or missing",
+            "WF-002" => "DESIGN.md is incomplete or missing",
+            "WF-003" => "Workflow layout is invalid",
+            "WF-004" => "Workflow dependencies are not self-contained",
+            "WF-007" => "Workflow validation metadata or commands are inaccurate",
+            "WF-008" => "Positive-path coverage is missing or inaccurate",
+            "WF-009" => "Negative and failure-path coverage is missing or inaccurate",
+            "WF-010" => "Recovery coverage is missing or inaccurate",
+            _ => "Workflow validation surfaced a stability or correctness issue",
+        }
+    }
+
+    pub fn resolved_primary_path(&self, workflow_path: &Path) -> PathBuf {
         match self {
             Self::WorkflowSpecReadFailed { path, .. }
+            | Self::WorkflowIdMismatch { path, .. }
             | Self::MissingFile { path }
             | Self::MissingDirectory { path }
             | Self::MissingGitRepository { path }
             | Self::MissingDocumentHeading { path, .. }
             | Self::PackageManifestParseFailed { path, .. }
+            | Self::UndeclaredPackageImport { path, .. }
             | Self::MissingValidationCommands { path }
             | Self::EmptyValidationCommands { path }
             | Self::InvalidValidationCommands { path }
@@ -265,18 +266,14 @@ impl WorkflowValidationFinding {
             | Self::InvalidCoverageKeyType { path, .. }
             | Self::CoverageKeyMustBeTrue { path, .. }
             | Self::MissingCoverageMarker { path, .. }
-            | Self::WorkflowApiContractExtractionFailed { path, .. } => {
-                resolve_path(workflow_path, path)
-            }
+            | Self::WorkflowApiContractExtractionFailed { path, .. } => path.clone(),
             Self::WorkflowPathEscapesRoot { workflow_path, .. } => workflow_path.clone(),
-            Self::WorkflowIdMismatch { path, .. } => resolve_path(workflow_path, path),
-            Self::UndeclaredPackageImport { path, .. } => resolve_path(workflow_path, path),
             Self::CodeOutsideSrc { paths }
             | Self::TestsOutsideSrcTests { paths }
-            | Self::DatabasesOutsideState { paths } => paths.first().map_or_else(
-                || workflow_path.to_path_buf(),
-                |path| resolve_path(workflow_path, path),
-            ),
+            | Self::DatabasesOutsideState { paths } => paths
+                .first()
+                .cloned()
+                .unwrap_or_else(|| workflow_path.to_path_buf()),
             Self::ValidationCommandFailed { .. } => workflow_path.to_path_buf(),
         }
     }
@@ -289,15 +286,7 @@ pub fn finding_messages(findings: &[WorkflowValidationFinding]) -> Vec<String> {
         .collect()
 }
 
-fn resolve_path(workflow_path: &Path, path: &Path) -> PathBuf {
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        workflow_path.join(path)
-    }
-}
-
-fn join_paths(paths: &[PathBuf]) -> String {
+fn display_paths(paths: &[PathBuf]) -> String {
     paths
         .iter()
         .map(|path| path.display().to_string())

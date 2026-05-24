@@ -750,6 +750,14 @@ client_request_definitions! {
         params: v2::WorkflowRepairParams,
         response: v2::WorkflowRepairResponse,
     },
+    WorkflowPublish => "workflow/publish" {
+        params: v2::WorkflowStageSessionActionParams,
+        response: v2::WorkflowPublishResponse,
+    },
+    WorkflowDiscard => "workflow/discard" {
+        params: v2::WorkflowStageSessionActionParams,
+        response: v2::WorkflowDiscardResponse,
+    },
     WorkflowConfigRead => "workflow/config/read" {
         params: v2::WorkflowConfigReadParams,
         response: v2::WorkflowConfigReadResponse,

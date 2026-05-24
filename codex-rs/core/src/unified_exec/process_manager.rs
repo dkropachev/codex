@@ -22,6 +22,7 @@ use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::finish_deferred_network_approval;
+use crate::tools::network_approval::take_deferred_network_denial_message;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
@@ -217,10 +218,30 @@ impl UnifiedExecProcessManager {
         }
     }
 
+    async fn apply_deferred_network_denial_if_any(
+        process: &UnifiedExecProcess,
+        session: &crate::session::session::Session,
+        deferred: Option<&DeferredNetworkApproval>,
+    ) {
+        if process.failure_message().is_some() {
+            return;
+        }
+
+        if let Some(message) = take_deferred_network_denial_message(session, deferred).await {
+            process.fail_and_terminate(message);
+        }
+    }
+
     async fn unregister_network_approval_for_entry(entry: &ProcessEntry) {
         if let Some(network_approval) = entry.network_approval.as_ref()
             && let Some(session) = entry.session.upgrade()
         {
+            Self::apply_deferred_network_denial_if_any(
+                entry.process.as_ref(),
+                session.as_ref(),
+                Some(network_approval),
+            )
+            .await;
             session
                 .services
                 .network_approval
@@ -322,6 +343,12 @@ impl UnifiedExecProcessManager {
 
         let text = String::from_utf8_lossy(&collected).to_string();
         let chunk_id = generate_chunk_id();
+        Self::apply_deferred_network_denial_if_any(
+            process.as_ref(),
+            context.session.as_ref(),
+            deferred_network_approval.as_ref(),
+        )
+        .await;
         if let Some(message) = process.failure_message() {
             if !process_started_alive {
                 emit_failed_exec_end_for_unified_exec(
@@ -650,7 +677,7 @@ impl UnifiedExecProcessManager {
             process_id,
             hook_command,
             tty,
-            network_approval,
+            network_approval: network_approval.clone(),
             session: Arc::downgrade(&context.session),
             last_used: started_at,
         };
@@ -685,6 +712,7 @@ impl UnifiedExecProcessManager {
             command.to_vec(),
             cwd,
             process_id,
+            network_approval,
             transcript,
             started_at,
         );

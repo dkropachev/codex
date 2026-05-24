@@ -295,7 +295,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         elicitation_request.request.params,
         Some(create_expected_patch_approval_elicitation_request_params(
             expected_changes,
-            /*grant_root*/ None, // No grant_root expected
+            Some(cwd.path().to_path_buf()),
             /*reason*/ None, // No reason expected
             codex_request_id.to_string(),
             params.codex_event_id.clone(),

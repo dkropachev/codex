@@ -92,7 +92,10 @@ fn promote_workflow_alias_from_prompt(
     let first_token = prompt.first()?;
     codex_workflows::find_workflow_by_command(workflows, first_token).map(|_| {
         let args = std::mem::take(prompt);
-        Subcommand::Workflow(WorkflowCli { args })
+        Subcommand::Workflow(WorkflowCli {
+            stage_session_id: None,
+            args,
+        })
     })
 }
 
@@ -148,6 +151,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             root_config_overrides.clone(),
             interactive.config_profile.clone(),
             arg0_paths.clone(),
+            None,
         )
         .await?;
         if let Some(workflow_subcommand) =
@@ -5027,6 +5031,27 @@ mod tests {
             Some(Subcommand::WorkflowQualityHook)
         ));
         assert!(cli.interactive.prompt.is_empty());
+    }
+
+    #[test]
+    fn workflow_hidden_stage_session_id_parses() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "workflow",
+            "--stage-session-id",
+            "session-123",
+            "list",
+        ])
+        .expect("parse should succeed");
+        let Some(Subcommand::Workflow(workflow_cli)) = cli.subcommand else {
+            panic!("expected workflow subcommand");
+        };
+
+        assert_eq!(
+            workflow_cli.stage_session_id,
+            Some("session-123".to_string())
+        );
+        assert_eq!(workflow_cli.args, vec!["list".to_string()]);
     }
 
     #[test]

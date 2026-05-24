@@ -13,10 +13,9 @@ use serde_json::json;
 use self::message::repair_output_message;
 use crate::execute::WorkflowCommandContext;
 use crate::execute::WorkflowCommandOutput;
+use crate::execute::resolve_workflow_for_context;
 use crate::registry::DEFAULT_MAX_REPAIR_CYCLES;
 use crate::registry::WorkflowSummary;
-use crate::registry::discover_workflows;
-use crate::registry::find_workflow;
 use crate::repair::types::WorkflowRepairAction;
 use crate::repair::types::WorkflowRepairActionKind;
 use crate::repair::types::WorkflowRepairResult;
@@ -71,19 +70,18 @@ pub(crate) fn repair_workflow_command(
     ctx: WorkflowCommandContext<'_>,
     id: &str,
 ) -> Result<WorkflowCommandOutput> {
-    let repair_mode = WorkflowRepairMode::parse(
-        ctx.config
-            .repair_mode
-            .as_deref()
-            .unwrap_or(crate::DEFAULT_REPAIR_MODE),
-    )?;
+    let initial_workflow = resolve_workflow_for_context(&ctx, id)
+        .with_context(|| format!("failed to resolve workflow `{id}` for repair"))?;
+    let repair_mode = WorkflowRepairMode::parse(&initial_workflow.repair_mode).with_context(|| {
+        format!(
+            "failed to parse repair mode `{}` for workflow `{id}`",
+            initial_workflow.repair_mode
+        )
+    })?;
     let max_repair_cycles = ctx
         .config
         .max_repair_cycles
         .unwrap_or(DEFAULT_MAX_REPAIR_CYCLES);
-
-    let initial_workflow = find_workflow(ctx.codex_home, ctx.cwd, ctx.config, id)
-        .with_context(|| format!("failed to resolve workflow `{id}` for repair"))?;
     let mut workflow = initial_workflow;
     let mut applied_fixes = Vec::new();
     let mut repair_cycles_run = 0;
@@ -232,13 +230,12 @@ pub(crate) fn repair_workflow_command(
         repair_cycles_run += 1;
         applied_fixes.extend(cycle_actions);
 
-        workflow = refresh_workflow_summary(ctx.codex_home, ctx.cwd, ctx.config, &workflow.path)
-            .with_context(|| {
-                format!(
-                    "failed to refresh workflow summary for `{}` after applying fixes",
-                    workflow.id
-                )
-            })?;
+        workflow = resolve_workflow_for_context(&ctx, id).with_context(|| {
+            format!(
+                "failed to refresh workflow summary for `{}` after applying fixes",
+                workflow.id
+            )
+        })?;
         last_report = validate_workflow(&workflow, run_validation_command).with_context(|| {
             format!(
                 "failed to validate workflow `{}` after repair cycle {}",
@@ -309,24 +306,6 @@ fn build_output(
             "repair": repair,
         }),
     }
-}
-
-fn refresh_workflow_summary(
-    codex_home: &Path,
-    cwd: &Path,
-    config: &codex_config::types::WorkflowsConfigToml,
-    workflow_path: &Path,
-) -> Result<WorkflowSummary> {
-    let workflows = discover_workflows(codex_home, cwd, config)?;
-    workflows
-        .into_iter()
-        .find(|workflow| workflow.path == workflow_path)
-        .ok_or_else(|| {
-            anyhow!(
-                "failed to refresh workflow summary at {}",
-                workflow_path.display()
-            )
-        })
 }
 
 struct Assessment {

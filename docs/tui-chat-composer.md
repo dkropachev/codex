@@ -20,6 +20,9 @@ and `codex-rs/tui/src/bottom_pane/paste_burst.rs`.
   workflow `complete(ctx, input)` hook. It filters those hints and suggestions by the typed
   argument prefix, and when exactly one completion remains the composer shows the untyped suffix
   inline in dimmed text instead of keeping the popup open.
+- Enter only commits a popup row when the typed command name is exact or the user has explicitly
+  moved the selection. Otherwise it falls back to normal submit handling and closes the popup,
+  so the top suggestion does not run just because the popup is visible.
 - Press `Tab` to accept the inline preview before submitting.
 - The same alias is accepted by the shared workflow parser used by `codex workflow`, `codex <cmd>`, and `/<cmd>`.
 - Built-in slash commands still win on name collisions.
