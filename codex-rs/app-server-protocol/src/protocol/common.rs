@@ -1354,6 +1354,7 @@ macro_rules! client_notification_definitions {
             }
         }
 
+        #[allow(clippy::vec_init_then_push)]
         pub fn export_client_notification_schemas(
             _out_dir: &::std::path::Path,
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {

@@ -836,9 +836,9 @@ mod tests {
             mention_target: "workflow:///tmp#review/fix".to_string(),
             validation: WorkflowValidation {
                 status: WorkflowValidationStatus::Valid,
-                messages: Vec::new(),
+                findings: Vec::new(),
             },
-            repair_mode: "threshold:3".to_string(),
+            repair_mode: "full".to_string(),
         };
         let source_contract = WorkflowSourceContract {
             callable_name: Some("fixReview".to_string()),

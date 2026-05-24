@@ -790,17 +790,7 @@ fn api_catalog_workflow_to_info(
         path: workflow.path,
         workflow_yaml_path: workflow.workflow_yaml_path,
         mention_target: workflow.mention_target,
-        validation: codex_app_server_protocol::WorkflowValidationInfo {
-            status: match workflow.validation.status {
-                codex_workflows::WorkflowValidationStatus::Valid => {
-                    codex_app_server_protocol::WorkflowValidationStatus::Valid
-                }
-                codex_workflows::WorkflowValidationStatus::Invalid => {
-                    codex_app_server_protocol::WorkflowValidationStatus::Invalid
-                }
-            },
-            messages: workflow.validation.messages,
-        },
+        validation: workflow_processor::validation_to_api(workflow.validation),
         repair_mode: workflow.repair_mode,
     }
 }

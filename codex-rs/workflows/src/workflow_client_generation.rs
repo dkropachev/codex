@@ -102,12 +102,11 @@ fn render_generated_workflow_module(
             .format_schemas
             .contains_key("tui.markdown.v1")
         {
-            let callable_name = callable.contract.callable_name.as_deref().ok_or_else(|| {
-                anyhow!(
-                    "callable workflow {} is missing callable_name",
-                    callable.workflow.id
-                )
-            })?;
+            let callable_name = callable
+                .contract
+                .callable_name
+                .as_deref()
+                .ok_or_else(|| anyhow!("callable workflows always have callable names"))?;
             let companion_name = format!("{}WorkflowOutput", pascal_case(callable_name));
             let import_path = relative_import_path(
                 &module_path,
@@ -131,12 +130,11 @@ fn render_generated_workflow_module(
     output.push('\n');
 
     for callable in callables {
-        let callable_name = callable.contract.callable_name.as_deref().ok_or_else(|| {
-            anyhow!(
-                "callable workflow {} is missing callable_name",
-                callable.workflow.id
-            )
-        })?;
+        let callable_name = callable
+            .contract
+            .callable_name
+            .as_deref()
+            .ok_or_else(|| anyhow!("callable workflows always have callable names"))?;
         let pascal_name = pascal_case(callable_name);
         let input_type_name = format!("{pascal_name}Input");
         let output_type_name = format!("{pascal_name}Output");
@@ -580,9 +578,7 @@ fn render_object_type(schema: &JsonValue) -> Result<String> {
     names.sort();
     for name in names {
         let Some(property_schema) = properties.get(&name) else {
-            return Err(anyhow!(
-                "property {name} was missing from schema properties"
-            ));
+            return Err(anyhow!("property `{name}` must exist in schema object"));
         };
         let optional = !required.contains(name.as_str());
         fields.push(format!(
@@ -714,9 +710,9 @@ mod tests {
             mention_target: format!("workflow:///tmp#{id}"),
             validation: WorkflowValidation {
                 status: WorkflowValidationStatus::Valid,
-                messages: Vec::new(),
+                findings: Vec::new(),
             },
-            repair_mode: "threshold:3".to_string(),
+            repair_mode: "full".to_string(),
         }
     }
 

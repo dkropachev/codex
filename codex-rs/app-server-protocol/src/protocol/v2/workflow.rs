@@ -24,11 +24,99 @@ pub enum WorkflowValidationStatus {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", export_to = "v2/")]
+pub enum WorkflowValidationFindingInfo {
+    WorkflowSpecReadFailed {
+        path: PathBuf,
+        error: String,
+    },
+    WorkflowIdMismatch {
+        path: PathBuf,
+        expected_id: String,
+        actual_id: String,
+    },
+    MissingFile {
+        path: PathBuf,
+    },
+    MissingDirectory {
+        path: PathBuf,
+    },
+    MissingGitRepository {
+        path: PathBuf,
+    },
+    WorkflowPathEscapesRoot {
+        workflow_path: PathBuf,
+        root_path: PathBuf,
+    },
+    MissingDocumentHeading {
+        path: PathBuf,
+        heading: String,
+    },
+    PackageManifestParseFailed {
+        path: PathBuf,
+        error: String,
+    },
+    UndeclaredPackageImport {
+        path: PathBuf,
+        specifier: String,
+        package_name: String,
+    },
+    MissingValidationCommands {
+        path: PathBuf,
+    },
+    EmptyValidationCommands {
+        path: PathBuf,
+    },
+    InvalidValidationCommands {
+        path: PathBuf,
+    },
+    MissingCoverageMetadata {
+        path: PathBuf,
+    },
+    MissingCoverageKey {
+        path: PathBuf,
+        key: String,
+    },
+    InvalidCoverageKeyType {
+        path: PathBuf,
+        key: String,
+    },
+    CoverageKeyMustBeTrue {
+        path: PathBuf,
+        key: String,
+    },
+    MissingCoverageMarker {
+        path: PathBuf,
+        key: String,
+    },
+    CodeOutsideSrc {
+        paths: Vec<PathBuf>,
+    },
+    TestsOutsideSrcTests {
+        paths: Vec<PathBuf>,
+    },
+    DatabasesOutsideState {
+        paths: Vec<PathBuf>,
+    },
+    ValidationCommandFailed {
+        command: String,
+        exit_code: Option<i32>,
+        stdout: String,
+        stderr: String,
+    },
+    WorkflowApiContractExtractionFailed {
+        path: PathBuf,
+        error: String,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct WorkflowValidationInfo {
     pub status: WorkflowValidationStatus,
-    pub messages: Vec<String>,
+    pub findings: Vec<WorkflowValidationFindingInfo>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -230,6 +318,56 @@ pub struct WorkflowMarkdownResultNotification {
     pub markdown: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum WorkflowRepairActionKind {
+    NormalizeValidationMetadata,
+    RepairReadme,
+    RepairDesign,
+    RepairLayout,
+    RepairPackageManifest,
+    RepairTsconfig,
+    ScaffoldWorkflowSource,
+    ScaffoldWorkflowTests,
+    AddCoverageMarkers,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowRepairAction {
+    pub kind: WorkflowRepairActionKind,
+    pub path: PathBuf,
+    pub detail: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum WorkflowRepairStopReason {
+    Valid,
+    BlockedByRepairMode,
+    UnsupportedFindings,
+    RepairBudgetExhausted,
+    NoChangesApplied,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowRepairResult {
+    pub mode: String,
+    pub max_repair_cycles: u32,
+    pub repair_cycles_run: u32,
+    pub changed: bool,
+    pub stop_reason: WorkflowRepairStopReason,
+    pub applied_fixes: Vec<WorkflowRepairAction>,
+    pub remaining_findings: Vec<WorkflowValidationFindingInfo>,
+    pub blocked_findings: Vec<WorkflowValidationFindingInfo>,
+    pub unsupported_findings: Vec<WorkflowValidationFindingInfo>,
+}
+
 macro_rules! workflow_command_response_type {
     ($name:ident) => {
         #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -255,8 +393,17 @@ workflow_command_response_type!(WorkflowDevelopResponse);
 workflow_command_response_type!(WorkflowEditResponse);
 workflow_command_response_type!(WorkflowRunResponse);
 workflow_command_response_type!(WorkflowValidateResponse);
-workflow_command_response_type!(WorkflowRepairResponse);
 workflow_command_response_type!(WorkflowCommandExecuteResponse);
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowRepairResponse {
+    pub message: String,
+    pub workflow: WorkflowSummary,
+    pub validation: WorkflowValidationInfo,
+    pub repair: WorkflowRepairResult,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

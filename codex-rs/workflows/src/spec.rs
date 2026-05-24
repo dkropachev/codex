@@ -115,7 +115,7 @@ pub fn scaffold_workflow_spec(
     let repair_mode = config
         .repair_mode
         .clone()
-        .unwrap_or_else(|| "threshold:3".to_string());
+        .unwrap_or_else(|| "full".to_string());
     WorkflowSpec {
         id,
         title: Some(title),

@@ -26,8 +26,9 @@ use crate::registry::DEFAULT_MAX_REPAIR_CYCLES;
 use crate::registry::default_workflow_root;
 use crate::registry::discover_workflows;
 use crate::registry::find_workflow;
-use crate::registry::validate_workflow_dir;
 use crate::registry::workflow_impact;
+use crate::repair::repair_workflow_command;
+use crate::repair_mode::WorkflowRepairMode;
 use crate::spec::WORKFLOW_YAML;
 use crate::spec::read_workflow_spec;
 use crate::spec::scaffold_workflow_spec;
@@ -273,23 +274,7 @@ fn edit(
 }
 
 fn fix(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommandOutput> {
-    let workflow = find_workflow(ctx.codex_home, ctx.cwd, ctx.config, id)?;
-    let mut spec = read_workflow_spec(&workflow.workflow_yaml_path)?;
-    let expected_id = workflow.id.clone();
-    let mut changed = false;
-    if spec.id != expected_id {
-        spec.id = expected_id;
-        changed = true;
-    }
-    if changed {
-        write_workflow_spec(&workflow.workflow_yaml_path, &spec)?;
-        commit_workflow_changes(&ctx, &workflow.path, "Repair workflow metadata")?;
-    }
-    let validation = validate_workflow_dir(&workflow.root_path, &workflow.path, &workflow.id);
-    Ok(WorkflowCommandOutput {
-        message: validation_message(&validation),
-        data: json!({ "workflow": workflow, "validation": validation, "changed": changed }),
-    })
+    repair_workflow_command(ctx, id)
 }
 
 async fn run(
@@ -382,20 +367,15 @@ fn effective_config(config: &WorkflowsConfigToml) -> JsonValue {
     json!({
         "search_paths": config.search_paths.clone().unwrap_or_default(),
         "default_location": config.default_location.unwrap_or_default(),
-        "repair_mode": config.repair_mode.clone().unwrap_or_else(|| "threshold:3".to_string()),
+        "repair_mode": config
+            .repair_mode
+            .clone()
+            .unwrap_or_else(|| crate::DEFAULT_REPAIR_MODE.to_string()),
         "max_repair_cycles": config.max_repair_cycles.unwrap_or(DEFAULT_MAX_REPAIR_CYCLES),
         "dependency_update_policy": config.dependency_update_policy.clone().unwrap_or_else(|| "locked".to_string()),
         "commit_policy": config.commit_policy.clone().unwrap_or_else(|| "auto".to_string()),
         "validation_profile": config.validation_profile.clone().unwrap_or_else(|| "default".to_string()),
     })
-}
-
-fn validation_message(validation: &crate::registry::WorkflowValidation) -> String {
-    if validation.messages.is_empty() {
-        "valid".to_string()
-    } else {
-        validation.messages.join("\n")
-    }
 }
 
 fn slugify(description: &str) -> String {
@@ -746,7 +726,7 @@ fn parse_input_field_value(raw_value: &str) -> JsonValue {
     serde_json::from_str(raw_value).unwrap_or_else(|_| JsonValue::String(raw_value.to_string()))
 }
 
-fn commit_workflow_changes(
+pub(crate) fn commit_workflow_changes(
     ctx: &WorkflowCommandContext<'_>,
     path: &Path,
     message: &str,
@@ -831,8 +811,11 @@ fn workflow_config_value(key: &str, raw: &str) -> Result<Item> {
             }
             Ok(Item::Value(array.into()))
         }
+        "repair_mode" => {
+            WorkflowRepairMode::parse(raw)?;
+            Ok(value(raw))
+        }
         "default_location"
-        | "repair_mode"
         | "dependency_update_policy"
         | "commit_policy"
         | "validation_profile" => Ok(value(raw)),
@@ -846,6 +829,7 @@ mod tests {
     use codex_config::types::WorkflowDefaultLocation;
     use serial_test::serial;
 
+    use crate::registry::validate_workflow_dir;
     use pretty_assertions::assert_eq;
 
     use tempfile::TempDir;
@@ -1094,7 +1078,7 @@ mod tests {
             workflow_yaml_path: workflow_dir.join(WORKFLOW_YAML),
             mention_target: "workflow:///tmp#review/fix".to_string(),
             validation: validate_workflow_dir(temp_dir.path(), &workflow_dir, "review/fix"),
-            repair_mode: "threshold:3".to_string(),
+            repair_mode: "full".to_string(),
         };
 
         let report = validate_workflow(&workflow, run_validation_command).unwrap();
@@ -1103,7 +1087,7 @@ mod tests {
             report.status,
             crate::registry::WorkflowValidationStatus::Valid
         );
-        assert_eq!(report.messages, Vec::<String>::new());
+        assert!(report.findings.is_empty());
         assert_eq!(report.command_results.len(), 2);
         assert_eq!(report.command_results[0].command, "echo ok");
         assert!(report.command_results[0].succeeded);
@@ -1130,7 +1114,7 @@ mod tests {
             workflow_yaml_path: workflow_dir.join(WORKFLOW_YAML),
             mention_target: "workflow:///tmp#review/fix".to_string(),
             validation: validate_workflow_dir(temp_dir.path(), &workflow_dir, "review/fix"),
-            repair_mode: "threshold:3".to_string(),
+            repair_mode: "full".to_string(),
         };
 
         let report = validate_workflow(&workflow, run_validation_command).unwrap();
@@ -1141,8 +1125,15 @@ mod tests {
         );
         assert_eq!(report.command_results.len(), 1);
         assert_eq!(
-            report.messages,
-            vec!["validation command `exit 1` failed with exit code 1".to_string()]
+            report.findings,
+            vec![
+                crate::validation_finding::WorkflowValidationFinding::ValidationCommandFailed {
+                    command: "exit 1".to_string(),
+                    exit_code: Some(1),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                }
+            ]
         );
     }
 

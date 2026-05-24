@@ -383,11 +383,531 @@
       ],
       "type": "object"
     },
+    "WorkflowValidationFindingInfo": {
+      "oneOf": [
+        {
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "workflowSpecReadFailed"
+              ],
+              "title": "WorkflowSpecReadFailedWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "error",
+            "path",
+            "type"
+          ],
+          "title": "WorkflowSpecReadFailedWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "actual_id": {
+              "type": "string"
+            },
+            "expected_id": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "workflowIdMismatch"
+              ],
+              "title": "WorkflowIdMismatchWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "actual_id",
+            "expected_id",
+            "path",
+            "type"
+          ],
+          "title": "WorkflowIdMismatchWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "missingFile"
+              ],
+              "title": "MissingFileWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "MissingFileWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "missingDirectory"
+              ],
+              "title": "MissingDirectoryWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "MissingDirectoryWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "missingGitRepository"
+              ],
+              "title": "MissingGitRepositoryWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "MissingGitRepositoryWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "root_path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "workflowPathEscapesRoot"
+              ],
+              "title": "WorkflowPathEscapesRootWorkflowValidationFindingInfoType",
+              "type": "string"
+            },
+            "workflow_path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "root_path",
+            "type",
+            "workflow_path"
+          ],
+          "title": "WorkflowPathEscapesRootWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "heading": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "missingDocumentHeading"
+              ],
+              "title": "MissingDocumentHeadingWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "heading",
+            "path",
+            "type"
+          ],
+          "title": "MissingDocumentHeadingWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "packageManifestParseFailed"
+              ],
+              "title": "PackageManifestParseFailedWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "error",
+            "path",
+            "type"
+          ],
+          "title": "PackageManifestParseFailedWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "package_name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "specifier": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "undeclaredPackageImport"
+              ],
+              "title": "UndeclaredPackageImportWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "package_name",
+            "path",
+            "specifier",
+            "type"
+          ],
+          "title": "UndeclaredPackageImportWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "missingValidationCommands"
+              ],
+              "title": "MissingValidationCommandsWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "MissingValidationCommandsWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "emptyValidationCommands"
+              ],
+              "title": "EmptyValidationCommandsWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "EmptyValidationCommandsWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "invalidValidationCommands"
+              ],
+              "title": "InvalidValidationCommandsWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "InvalidValidationCommandsWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "missingCoverageMetadata"
+              ],
+              "title": "MissingCoverageMetadataWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "MissingCoverageMetadataWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "missingCoverageKey"
+              ],
+              "title": "MissingCoverageKeyWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "path",
+            "type"
+          ],
+          "title": "MissingCoverageKeyWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "invalidCoverageKeyType"
+              ],
+              "title": "InvalidCoverageKeyTypeWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "path",
+            "type"
+          ],
+          "title": "InvalidCoverageKeyTypeWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "coverageKeyMustBeTrue"
+              ],
+              "title": "CoverageKeyMustBeTrueWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "path",
+            "type"
+          ],
+          "title": "CoverageKeyMustBeTrueWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "missingCoverageMarker"
+              ],
+              "title": "MissingCoverageMarkerWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "path",
+            "type"
+          ],
+          "title": "MissingCoverageMarkerWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "paths": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "codeOutsideSrc"
+              ],
+              "title": "CodeOutsideSrcWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "paths",
+            "type"
+          ],
+          "title": "CodeOutsideSrcWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "paths": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "testsOutsideSrcTests"
+              ],
+              "title": "TestsOutsideSrcTestsWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "paths",
+            "type"
+          ],
+          "title": "TestsOutsideSrcTestsWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "paths": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "databasesOutsideState"
+              ],
+              "title": "DatabasesOutsideStateWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "paths",
+            "type"
+          ],
+          "title": "DatabasesOutsideStateWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "exit_code": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "stderr": {
+              "type": "string"
+            },
+            "stdout": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "validationCommandFailed"
+              ],
+              "title": "ValidationCommandFailedWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "command",
+            "stderr",
+            "stdout",
+            "type"
+          ],
+          "title": "ValidationCommandFailedWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "workflowApiContractExtractionFailed"
+              ],
+              "title": "WorkflowApiContractExtractionFailedWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "error",
+            "path",
+            "type"
+          ],
+          "title": "WorkflowApiContractExtractionFailedWorkflowValidationFindingInfo",
+          "type": "object"
+        }
+      ]
+    },
     "WorkflowValidationInfo": {
       "properties": {
-        "messages": {
+        "findings": {
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/WorkflowValidationFindingInfo"
           },
           "type": "array"
         },
@@ -396,7 +916,7 @@
         }
       },
       "required": [
-        "messages",
+        "findings",
         "status"
       ],
       "type": "object"

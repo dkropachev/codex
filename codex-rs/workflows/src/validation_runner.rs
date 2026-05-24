@@ -6,6 +6,9 @@ use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
+use crate::validation_finding::WorkflowValidationFinding;
+use crate::validation_finding::finding_messages;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WorkflowValidationCommandResult {
@@ -20,8 +23,31 @@ pub(crate) struct WorkflowValidationCommandResult {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WorkflowValidationReport {
     pub(crate) status: crate::registry::WorkflowValidationStatus,
-    pub(crate) messages: Vec<String>,
+    pub(crate) findings: Vec<WorkflowValidationFinding>,
     pub(crate) command_results: Vec<WorkflowValidationCommandResult>,
+}
+
+impl WorkflowValidationReport {
+    pub(crate) fn from_findings(
+        findings: Vec<WorkflowValidationFinding>,
+        command_results: Vec<WorkflowValidationCommandResult>,
+    ) -> Self {
+        let status = if findings.is_empty() {
+            crate::registry::WorkflowValidationStatus::Valid
+        } else {
+            crate::registry::WorkflowValidationStatus::Invalid
+        };
+        Self {
+            status,
+            findings,
+            command_results,
+        }
+    }
+
+    pub(crate) fn push_finding(&mut self, finding: WorkflowValidationFinding) {
+        self.findings.push(finding);
+        self.status = crate::registry::WorkflowValidationStatus::Invalid;
+    }
 }
 
 pub(crate) fn validate_workflow<F>(
@@ -31,7 +57,7 @@ pub(crate) fn validate_workflow<F>(
 where
     F: FnMut(&str, &Path) -> Result<WorkflowValidationCommandResult>,
 {
-    let mut messages = workflow.validation.messages.clone();
+    let mut findings = workflow.validation.findings.clone();
     let mut command_results = Vec::new();
 
     if let Ok(spec) = crate::spec::read_workflow_spec(&workflow.workflow_yaml_path) {
@@ -39,10 +65,12 @@ where
             let result = command_runner(&command, &workflow.path)?;
             let command_failed = !result.succeeded;
             if command_failed {
-                messages.push(format!(
-                    "validation command `{command}` failed with {}",
-                    exit_status_label(result.exit_code)
-                ));
+                findings.push(WorkflowValidationFinding::ValidationCommandFailed {
+                    command: command.clone(),
+                    exit_code: result.exit_code,
+                    stdout: result.stdout.clone(),
+                    stderr: result.stderr.clone(),
+                });
             }
             command_results.push(result);
             if command_failed {
@@ -51,23 +79,18 @@ where
         }
     }
 
-    let status = if messages.is_empty() {
-        crate::registry::WorkflowValidationStatus::Valid
-    } else {
-        crate::registry::WorkflowValidationStatus::Invalid
-    };
-    Ok(WorkflowValidationReport {
-        status,
-        messages,
+    Ok(WorkflowValidationReport::from_findings(
+        findings,
         command_results,
-    })
+    ))
 }
 
 pub(crate) fn validation_report_message(report: &WorkflowValidationReport) -> String {
-    if report.messages.is_empty() {
+    let messages = finding_messages(&report.findings);
+    if messages.is_empty() {
         "valid".to_string()
     } else {
-        report.messages.join("\n")
+        messages.join("\n")
     }
 }
 
@@ -118,10 +141,4 @@ fn validation_shell_command(command: &str) -> Command {
         process.args(["-lc", command]);
         process
     }
-}
-
-fn exit_status_label(exit_code: Option<i32>) -> String {
-    exit_code
-        .map(|code| format!("exit code {code}"))
-        .unwrap_or_else(|| "a non-zero status".to_string())
 }

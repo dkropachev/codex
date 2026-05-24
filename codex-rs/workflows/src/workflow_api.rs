@@ -14,6 +14,7 @@ use crate::api_contract::workflow_api_contract_from_spec_api;
 use crate::registry::WorkflowSummary;
 use crate::registry::WorkflowValidationStatus;
 use crate::registry::discover_workflows;
+use crate::validation_finding::WorkflowValidationFinding;
 use crate::validation_runner::WorkflowValidationCommandResult;
 use crate::validation_runner::WorkflowValidationReport;
 use crate::validation_runner::validate_workflow;
@@ -41,10 +42,12 @@ where
                 publish_validated_workflow_api_contract(codex_home, workflow, source_contract)?;
             }
             Err(err) => {
-                report.status = WorkflowValidationStatus::Invalid;
-                report
-                    .messages
-                    .push(format!("workflow API contract extraction failed: {err}"));
+                report.push_finding(
+                    WorkflowValidationFinding::WorkflowApiContractExtractionFailed {
+                        path: workflow.path.join("src/workflow.ts"),
+                        error: err.to_string(),
+                    },
+                );
             }
         }
     }
@@ -178,9 +181,9 @@ mod tests {
             mention_target: format!("workflow:///tmp#{id}"),
             validation: WorkflowValidation {
                 status: WorkflowValidationStatus::Valid,
-                messages: Vec::new(),
+                findings: Vec::new(),
             },
-            repair_mode: "threshold:3".to_string(),
+            repair_mode: "full".to_string(),
         }
     }
 

@@ -65,9 +65,9 @@ fn workflow_summary(id: &str, command: &str) -> codex_workflows::WorkflowSummary
         mention_target: codex_workflows::mention_target(&root, id).unwrap(),
         validation: codex_workflows::WorkflowValidation {
             status: codex_workflows::WorkflowValidationStatus::Valid,
-            messages: Vec::new(),
+            findings: Vec::new(),
         },
-        repair_mode: "threshold:3".to_string(),
+        repair_mode: "full".to_string(),
     }
 }
 

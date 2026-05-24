@@ -185,7 +185,7 @@ enum InProcessClientMessage {
 
 enum ProcessorCommand {
     Request(Box<ClientRequest>),
-    Notification(ClientNotification),
+    Notification(Box<ClientNotification>),
 }
 
 #[derive(Clone)]
@@ -470,7 +470,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                                 }
                             }
                             Some(ProcessorCommand::Notification(notification)) => {
-                                processor.process_client_notification(notification).await;
+                                processor.process_client_notification(*notification).await;
                             }
                             None => {
                                 break;
@@ -559,7 +559,9 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                             }
                         }
                         Some(InProcessClientMessage::Notification { notification }) => {
-                            match processor_tx.try_send(ProcessorCommand::Notification(notification)) {
+                            match processor_tx
+                                .try_send(ProcessorCommand::Notification(Box::new(notification)))
+                            {
                                 Ok(()) => {}
                                 Err(mpsc::error::TrySendError::Full(_)) => {
                                     warn!("dropping in-process client notification (queue full)");

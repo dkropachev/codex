@@ -8,7 +8,7 @@ use codex_config::types::WorkflowsConfigToml;
 use crate::registry::WorkflowSummary;
 use crate::registry::discover_workflows;
 use crate::registry::workflow_git_status;
-use crate::validation_runner::WorkflowValidationCommandResult;
+use crate::validation_finding::WorkflowValidationFinding;
 use crate::validation_runner::WorkflowValidationReport;
 use crate::validation_runner::run_validation_command;
 use crate::validation_runner::validate_workflow;
@@ -126,15 +126,10 @@ fn findings_for_report(
     workflow: &WorkflowSummary,
     report: &WorkflowValidationReport,
 ) -> Vec<WorkflowQualityFinding> {
-    let failed_command_result = report
-        .command_results
-        .iter()
-        .rev()
-        .find(|result| !result.succeeded);
     let mut findings = report
-        .messages
+        .findings
         .iter()
-        .map(|message| finding_for_message(workflow, message, failed_command_result))
+        .map(|finding| finding_for_validation_finding(workflow, finding))
         .collect::<Vec<_>>();
     if findings.is_empty() {
         findings.push(WorkflowQualityFinding {
@@ -147,199 +142,47 @@ fn findings_for_report(
     findings
 }
 
-fn finding_for_message(
+fn finding_for_validation_finding(
     workflow: &WorkflowSummary,
-    message: &str,
-    failed_command_result: Option<&WorkflowValidationCommandResult>,
+    finding: &WorkflowValidationFinding,
 ) -> WorkflowQualityFinding {
-    let (rule_id, title, path) = classify_finding(workflow, message);
-    let body = if message.starts_with("validation command `") {
-        render_command_failure_body(message, failed_command_result)
+    let body = if matches!(
+        finding,
+        WorkflowValidationFinding::ValidationCommandFailed { .. }
+    ) {
+        render_command_failure_body(finding)
     } else {
-        message.to_string()
+        finding.message()
     };
     WorkflowQualityFinding {
-        rule_id,
-        title,
-        path,
+        rule_id: finding.rule_id(),
+        title: finding.title(),
+        path: finding.resolved_primary_path(&workflow.path),
         body,
     }
 }
 
-fn classify_finding(
-    workflow: &WorkflowSummary,
-    message: &str,
-) -> (&'static str, &'static str, PathBuf) {
-    if message.starts_with("missing README.md")
-        || message.contains("README.md is missing required heading")
-    {
-        (
-            "WF-001",
-            "README.md is incomplete or missing",
-            workflow.path.join("README.md"),
-        )
-    } else if message.starts_with("missing DESIGN.md")
-        || message.contains("DESIGN.md is missing required heading")
-    {
-        (
-            "WF-002",
-            "DESIGN.md is incomplete or missing",
-            workflow.path.join("DESIGN.md"),
-        )
-    } else if message.contains("imports undeclared package")
-        || message.contains("package manifest")
-        || message.starts_with("missing package.json")
-    {
-        (
-            "WF-004",
-            "Workflow dependencies are not self-contained",
-            package_related_path(workflow, message),
-        )
-    } else if is_positive_coverage_finding(message) {
-        (
-            "WF-008",
-            "Positive-path coverage is missing or inaccurate",
-            coverage_related_path(workflow, message),
-        )
-    } else if is_negative_coverage_finding(message) {
-        (
-            "WF-009",
-            "Negative and failure-path coverage is missing or inaccurate",
-            coverage_related_path(workflow, message),
-        )
-    } else if is_recovery_coverage_finding(message) {
-        (
-            "WF-010",
-            "Recovery coverage is missing or inaccurate",
-            coverage_related_path(workflow, message),
-        )
-    } else if is_validation_contract_finding(message) {
-        (
-            "WF-007",
-            "Workflow validation metadata or commands are inaccurate",
-            validation_related_path(workflow, message),
-        )
-    } else if is_layout_finding(message) {
-        (
-            "WF-003",
-            "Workflow layout is invalid",
-            layout_related_path(workflow, message),
-        )
-    } else {
-        (
-            "WF-011",
-            "Workflow validation surfaced a stability or correctness issue",
-            workflow.path.clone(),
-        )
-    }
-}
-
-fn is_positive_coverage_finding(message: &str) -> bool {
-    coverage_message_mentions(message, "positive")
-        || coverage_message_mentions(message, "progress")
-        || coverage_message_mentions(message, "finalResult")
-}
-
-fn is_negative_coverage_finding(message: &str) -> bool {
-    coverage_message_mentions(message, "negative")
-        || coverage_message_mentions(message, "failureUx")
-}
-
-fn is_recovery_coverage_finding(message: &str) -> bool {
-    coverage_message_mentions(message, "recovery")
-}
-
-fn coverage_message_mentions(message: &str, key: &str) -> bool {
-    message.contains(&format!("validation.coverage.{key}"))
-        || message.contains(&format!("workflow-covers: {key}"))
-}
-
-fn is_validation_contract_finding(message: &str) -> bool {
-    message.contains("workflow.yaml")
-        || message.contains("validation.commands")
-        || message.contains("validation.coverage")
-        || message.starts_with("validation command `")
-}
-
-fn is_layout_finding(message: &str) -> bool {
-    message.starts_with("missing src/")
-        || message.starts_with("missing src/tests/")
-        || message.starts_with("missing state/")
-        || message.starts_with("missing src/workflow.ts")
-        || message.contains("workflow directory is not a git repository")
-        || message.contains("workflow path ")
-        || message.contains("code files must live under src/")
-        || message.contains("test files must live under src/tests/")
-        || message.contains("database files must live under state/")
-}
-
-fn package_related_path(workflow: &WorkflowSummary, message: &str) -> PathBuf {
-    if let Some(relative) =
-        extract_relative_path(message, "source file ", " imports undeclared package")
-    {
-        workflow.path.join(relative)
-    } else {
-        workflow.path.join("package.json")
-    }
-}
-
-fn coverage_related_path(workflow: &WorkflowSummary, message: &str) -> PathBuf {
-    if message.contains("validation.coverage") {
-        workflow.workflow_yaml_path.clone()
-    } else {
-        workflow.path.join("src/tests")
-    }
-}
-
-fn validation_related_path(workflow: &WorkflowSummary, message: &str) -> PathBuf {
-    if message.starts_with("validation command `") {
-        workflow.path.clone()
-    } else {
-        workflow.workflow_yaml_path.clone()
-    }
-}
-
-fn layout_related_path(workflow: &WorkflowSummary, message: &str) -> PathBuf {
-    if message.contains("src/tests/") {
-        workflow.path.join("src/tests")
-    } else if message.contains("src/") {
-        workflow.path.join("src")
-    } else if message.contains("state/") {
-        workflow.path.join("state")
-    } else if message.contains("git repository") {
-        workflow.path.join(".git")
-    } else {
-        workflow.path.clone()
-    }
-}
-
-fn extract_relative_path<'a>(message: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
-    let rest = message.strip_prefix(prefix)?;
-    rest.strip_suffix(suffix)
-}
-
-fn render_command_failure_body(
-    message: &str,
-    failed_command_result: Option<&WorkflowValidationCommandResult>,
-) -> String {
-    let Some(result) = failed_command_result else {
-        return message.to_string();
+fn render_command_failure_body(finding: &WorkflowValidationFinding) -> String {
+    let WorkflowValidationFinding::ValidationCommandFailed {
+        command,
+        exit_code,
+        stdout,
+        stderr,
+    } = finding
+    else {
+        return finding.message();
     };
 
-    let mut lines = vec![
-        message.to_string(),
-        format!("Command: `{}`", result.command),
-    ];
-    let exit_label = result
-        .exit_code
+    let mut lines = vec![finding.message(), format!("Command: `{command}`")];
+    let exit_label = exit_code
         .map(|code| format!("Exit status: {code}"))
         .unwrap_or_else(|| "Exit status: non-zero".to_string());
     lines.push(exit_label);
 
-    if let Some(stderr) = trimmed_output_snippet(&result.stderr) {
+    if let Some(stderr) = trimmed_output_snippet(stderr) {
         lines.push("stderr:".to_string());
         lines.extend(stderr.lines().map(ToString::to_string));
-    } else if let Some(stdout) = trimmed_output_snippet(&result.stdout) {
+    } else if let Some(stdout) = trimmed_output_snippet(stdout) {
         lines.push("stdout:".to_string());
         lines.extend(stdout.lines().map(ToString::to_string));
     }

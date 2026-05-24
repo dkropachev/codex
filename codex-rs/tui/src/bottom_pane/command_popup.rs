@@ -497,9 +497,9 @@ mod tests {
             mention_target: codex_workflows::mention_target(&root, id).unwrap(),
             validation: codex_workflows::WorkflowValidation {
                 status: codex_workflows::WorkflowValidationStatus::Valid,
-                messages: Vec::new(),
+                findings: Vec::new(),
             },
-            repair_mode: "threshold:3".to_string(),
+            repair_mode: "full".to_string(),
         }
     }
 
@@ -565,9 +565,9 @@ mod tests {
             mention_target: codex_workflows::mention_target(&root, "reports/jira-summary").unwrap(),
             validation: codex_workflows::WorkflowValidation {
                 status: codex_workflows::WorkflowValidationStatus::Valid,
-                messages: Vec::new(),
+                findings: Vec::new(),
             },
-            repair_mode: "threshold:3".to_string(),
+            repair_mode: "full".to_string(),
         };
         popup.set_workflows(Some(std::slice::from_ref(&workflow)));
         popup.on_composer_text_change("/jira-summary".to_string());
@@ -603,9 +603,9 @@ mod tests {
             mention_target: codex_workflows::mention_target(&root, "reports/jira-summary").unwrap(),
             validation: codex_workflows::WorkflowValidation {
                 status: codex_workflows::WorkflowValidationStatus::Valid,
-                messages: Vec::new(),
+                findings: Vec::new(),
             },
-            repair_mode: "threshold:3".to_string(),
+            repair_mode: "full".to_string(),
         };
         popup.set_workflows(Some(std::slice::from_ref(&workflow)));
         popup.on_composer_text_change("/jira".to_string());
@@ -683,9 +683,9 @@ api:
             mention_target: codex_workflows::mention_target(&root, "code-review").unwrap(),
             validation: codex_workflows::WorkflowValidation {
                 status: codex_workflows::WorkflowValidationStatus::Valid,
-                messages: Vec::new(),
+                findings: Vec::new(),
             },
-            repair_mode: "threshold:3".to_string(),
+            repair_mode: "full".to_string(),
         };
 
         let mut popup = CommandPopup::new(CommandPopupFlags {

@@ -27,8 +27,10 @@ use crate::spec::WorkflowHookKind;
 use crate::spec::WorkflowToolSpec;
 use crate::spec::read_workflow_spec;
 use crate::spec::workflow_tool_name;
+use crate::validation_finding::WorkflowValidationFinding;
+use crate::validation_finding::finding_messages;
 
-pub const DEFAULT_REPAIR_MODE: &str = "threshold:3";
+pub const DEFAULT_REPAIR_MODE: &str = "full";
 pub const DEFAULT_MAX_REPAIR_CYCLES: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,7 +60,24 @@ pub enum WorkflowValidationStatus {
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowValidation {
     pub status: WorkflowValidationStatus,
-    pub messages: Vec<String>,
+    #[serde(default)]
+    pub findings: Vec<WorkflowValidationFinding>,
+}
+
+impl WorkflowValidation {
+    pub fn from_findings(findings: Vec<WorkflowValidationFinding>) -> Self {
+        let status = if findings.is_empty() {
+            WorkflowValidationStatus::Valid
+        } else {
+            WorkflowValidationStatus::Invalid
+        };
+        let _ = finding_messages(&findings);
+        Self { status, findings }
+    }
+
+    pub fn valid() -> Self {
+        Self::from_findings(Vec::new())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -638,7 +657,7 @@ mod tests {
 
         assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
         assert_eq!(
-            validation.messages,
+            crate::validation_finding::finding_messages(&validation.findings),
             vec![
                 "test files must live under src/tests/: tests/workflow.test.ts".to_string(),
                 "database files must live under state/: cache.db".to_string(),

@@ -467,7 +467,8 @@ pub struct WorkflowsConfigToml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_location: Option<WorkflowDefaultLocation>,
 
-    /// Repair policy. The built-in default is `threshold:3`.
+    /// Repair mode. Supported values are `none`, `metadata`, `structural`, `full`, and the
+    /// legacy alias `threshold:<n>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repair_mode: Option<String>,
 

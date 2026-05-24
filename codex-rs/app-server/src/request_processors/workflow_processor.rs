@@ -28,6 +28,7 @@ use codex_app_server_protocol::WorkflowReadParams;
 use codex_app_server_protocol::WorkflowReadResponse;
 use codex_app_server_protocol::WorkflowRepairParams;
 use codex_app_server_protocol::WorkflowRepairResponse;
+use codex_app_server_protocol::WorkflowRepairResult;
 use codex_app_server_protocol::WorkflowRootInfo;
 use codex_app_server_protocol::WorkflowRootKind;
 use codex_app_server_protocol::WorkflowRunParams;
@@ -35,6 +36,7 @@ use codex_app_server_protocol::WorkflowRunResponse;
 use codex_app_server_protocol::WorkflowSummary;
 use codex_app_server_protocol::WorkflowValidateParams;
 use codex_app_server_protocol::WorkflowValidateResponse;
+use codex_app_server_protocol::WorkflowValidationFindingInfo;
 use codex_app_server_protocol::WorkflowValidationInfo;
 use codex_app_server_protocol::WorkflowValidationStatus;
 use codex_config::types::WorkflowDefaultLocation;
@@ -50,6 +52,7 @@ use codex_workflows::find_workflow;
 use codex_workflows::parse_mention_target;
 use codex_workflows::parse_workflow_command;
 use codex_workflows::workflow_impact;
+use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use crate::config_manager::ConfigManager;
@@ -171,8 +174,21 @@ impl WorkflowRequestProcessor {
         &self,
         params: WorkflowRepairParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.execute(WorkflowCommand::Fix { id: params.id })
-            .map(|response: WorkflowRepairResponse| Some(response.into()))
+        let response: WorkflowCommandResponse =
+            self.execute(WorkflowCommand::Fix { id: params.id })?;
+        let payload: WorkflowRepairPayload =
+            serde_json::from_value(response.data).map_err(|err| {
+                internal_error(format!("failed to decode workflow repair payload: {err}"))
+            })?;
+        Ok(Some(
+            WorkflowRepairResponse {
+                message: response.message,
+                workflow: payload.workflow,
+                validation: payload.validation,
+                repair: payload.repair,
+            }
+            .into(),
+        ))
     }
 
     pub(crate) async fn config_read(
@@ -350,15 +366,15 @@ fn workflow_to_core(summary: &WorkflowSummary) -> codex_workflows::WorkflowSumma
         path: summary.path.clone(),
         workflow_yaml_path: summary.workflow_yaml_path.clone(),
         mention_target: summary.mention_target.clone(),
-        validation: codex_workflows::WorkflowValidation {
-            status: match summary.validation.status {
-                WorkflowValidationStatus::Valid => codex_workflows::WorkflowValidationStatus::Valid,
-                WorkflowValidationStatus::Invalid => {
-                    codex_workflows::WorkflowValidationStatus::Invalid
-                }
-            },
-            messages: summary.validation.messages.clone(),
-        },
+        validation: codex_workflows::WorkflowValidation::from_findings(
+            summary
+                .validation
+                .findings
+                .iter()
+                .cloned()
+                .map(validation_finding_from_api)
+                .collect(),
+        ),
         repair_mode: summary.repair_mode.clone(),
     }
 }
@@ -371,13 +387,217 @@ fn root_to_api(root: codex_workflows::WorkflowRoot) -> WorkflowRootInfo {
     }
 }
 
-fn validation_to_api(validation: codex_workflows::WorkflowValidation) -> WorkflowValidationInfo {
+pub(crate) fn validation_to_api(
+    validation: codex_workflows::WorkflowValidation,
+) -> WorkflowValidationInfo {
     WorkflowValidationInfo {
         status: match validation.status {
             codex_workflows::WorkflowValidationStatus::Valid => WorkflowValidationStatus::Valid,
             codex_workflows::WorkflowValidationStatus::Invalid => WorkflowValidationStatus::Invalid,
         },
-        messages: validation.messages,
+        findings: validation
+            .findings
+            .into_iter()
+            .map(validation_finding_to_api)
+            .collect(),
+    }
+}
+
+pub(crate) fn validation_finding_to_api(
+    finding: codex_workflows::WorkflowValidationFinding,
+) -> WorkflowValidationFindingInfo {
+    match finding {
+        codex_workflows::WorkflowValidationFinding::WorkflowSpecReadFailed { path, error } => {
+            WorkflowValidationFindingInfo::WorkflowSpecReadFailed { path, error }
+        }
+        codex_workflows::WorkflowValidationFinding::WorkflowIdMismatch {
+            path,
+            expected_id,
+            actual_id,
+        } => WorkflowValidationFindingInfo::WorkflowIdMismatch {
+            path,
+            expected_id,
+            actual_id,
+        },
+        codex_workflows::WorkflowValidationFinding::MissingFile { path } => {
+            WorkflowValidationFindingInfo::MissingFile { path }
+        }
+        codex_workflows::WorkflowValidationFinding::MissingDirectory { path } => {
+            WorkflowValidationFindingInfo::MissingDirectory { path }
+        }
+        codex_workflows::WorkflowValidationFinding::MissingGitRepository { path } => {
+            WorkflowValidationFindingInfo::MissingGitRepository { path }
+        }
+        codex_workflows::WorkflowValidationFinding::WorkflowPathEscapesRoot {
+            workflow_path,
+            root_path,
+        } => WorkflowValidationFindingInfo::WorkflowPathEscapesRoot {
+            workflow_path,
+            root_path,
+        },
+        codex_workflows::WorkflowValidationFinding::MissingDocumentHeading { path, heading } => {
+            WorkflowValidationFindingInfo::MissingDocumentHeading { path, heading }
+        }
+        codex_workflows::WorkflowValidationFinding::PackageManifestParseFailed { path, error } => {
+            WorkflowValidationFindingInfo::PackageManifestParseFailed { path, error }
+        }
+        codex_workflows::WorkflowValidationFinding::UndeclaredPackageImport {
+            path,
+            specifier,
+            package_name,
+        } => WorkflowValidationFindingInfo::UndeclaredPackageImport {
+            path,
+            specifier,
+            package_name,
+        },
+        codex_workflows::WorkflowValidationFinding::MissingValidationCommands { path } => {
+            WorkflowValidationFindingInfo::MissingValidationCommands { path }
+        }
+        codex_workflows::WorkflowValidationFinding::EmptyValidationCommands { path } => {
+            WorkflowValidationFindingInfo::EmptyValidationCommands { path }
+        }
+        codex_workflows::WorkflowValidationFinding::InvalidValidationCommands { path } => {
+            WorkflowValidationFindingInfo::InvalidValidationCommands { path }
+        }
+        codex_workflows::WorkflowValidationFinding::MissingCoverageMetadata { path } => {
+            WorkflowValidationFindingInfo::MissingCoverageMetadata { path }
+        }
+        codex_workflows::WorkflowValidationFinding::MissingCoverageKey { path, key } => {
+            WorkflowValidationFindingInfo::MissingCoverageKey { path, key }
+        }
+        codex_workflows::WorkflowValidationFinding::InvalidCoverageKeyType { path, key } => {
+            WorkflowValidationFindingInfo::InvalidCoverageKeyType { path, key }
+        }
+        codex_workflows::WorkflowValidationFinding::CoverageKeyMustBeTrue { path, key } => {
+            WorkflowValidationFindingInfo::CoverageKeyMustBeTrue { path, key }
+        }
+        codex_workflows::WorkflowValidationFinding::MissingCoverageMarker { path, key } => {
+            WorkflowValidationFindingInfo::MissingCoverageMarker { path, key }
+        }
+        codex_workflows::WorkflowValidationFinding::CodeOutsideSrc { paths } => {
+            WorkflowValidationFindingInfo::CodeOutsideSrc { paths }
+        }
+        codex_workflows::WorkflowValidationFinding::TestsOutsideSrcTests { paths } => {
+            WorkflowValidationFindingInfo::TestsOutsideSrcTests { paths }
+        }
+        codex_workflows::WorkflowValidationFinding::DatabasesOutsideState { paths } => {
+            WorkflowValidationFindingInfo::DatabasesOutsideState { paths }
+        }
+        codex_workflows::WorkflowValidationFinding::ValidationCommandFailed {
+            command,
+            exit_code,
+            stdout,
+            stderr,
+        } => WorkflowValidationFindingInfo::ValidationCommandFailed {
+            command,
+            exit_code,
+            stdout,
+            stderr,
+        },
+        codex_workflows::WorkflowValidationFinding::WorkflowApiContractExtractionFailed {
+            path,
+            error,
+        } => WorkflowValidationFindingInfo::WorkflowApiContractExtractionFailed { path, error },
+    }
+}
+
+fn validation_finding_from_api(
+    finding: WorkflowValidationFindingInfo,
+) -> codex_workflows::WorkflowValidationFinding {
+    match finding {
+        WorkflowValidationFindingInfo::WorkflowSpecReadFailed { path, error } => {
+            codex_workflows::WorkflowValidationFinding::WorkflowSpecReadFailed { path, error }
+        }
+        WorkflowValidationFindingInfo::WorkflowIdMismatch {
+            path,
+            expected_id,
+            actual_id,
+        } => codex_workflows::WorkflowValidationFinding::WorkflowIdMismatch {
+            path,
+            expected_id,
+            actual_id,
+        },
+        WorkflowValidationFindingInfo::MissingFile { path } => {
+            codex_workflows::WorkflowValidationFinding::MissingFile { path }
+        }
+        WorkflowValidationFindingInfo::MissingDirectory { path } => {
+            codex_workflows::WorkflowValidationFinding::MissingDirectory { path }
+        }
+        WorkflowValidationFindingInfo::MissingGitRepository { path } => {
+            codex_workflows::WorkflowValidationFinding::MissingGitRepository { path }
+        }
+        WorkflowValidationFindingInfo::WorkflowPathEscapesRoot {
+            workflow_path,
+            root_path,
+        } => codex_workflows::WorkflowValidationFinding::WorkflowPathEscapesRoot {
+            workflow_path,
+            root_path,
+        },
+        WorkflowValidationFindingInfo::MissingDocumentHeading { path, heading } => {
+            codex_workflows::WorkflowValidationFinding::MissingDocumentHeading { path, heading }
+        }
+        WorkflowValidationFindingInfo::PackageManifestParseFailed { path, error } => {
+            codex_workflows::WorkflowValidationFinding::PackageManifestParseFailed { path, error }
+        }
+        WorkflowValidationFindingInfo::UndeclaredPackageImport {
+            path,
+            specifier,
+            package_name,
+        } => codex_workflows::WorkflowValidationFinding::UndeclaredPackageImport {
+            path,
+            specifier,
+            package_name,
+        },
+        WorkflowValidationFindingInfo::MissingValidationCommands { path } => {
+            codex_workflows::WorkflowValidationFinding::MissingValidationCommands { path }
+        }
+        WorkflowValidationFindingInfo::EmptyValidationCommands { path } => {
+            codex_workflows::WorkflowValidationFinding::EmptyValidationCommands { path }
+        }
+        WorkflowValidationFindingInfo::InvalidValidationCommands { path } => {
+            codex_workflows::WorkflowValidationFinding::InvalidValidationCommands { path }
+        }
+        WorkflowValidationFindingInfo::MissingCoverageMetadata { path } => {
+            codex_workflows::WorkflowValidationFinding::MissingCoverageMetadata { path }
+        }
+        WorkflowValidationFindingInfo::MissingCoverageKey { path, key } => {
+            codex_workflows::WorkflowValidationFinding::MissingCoverageKey { path, key }
+        }
+        WorkflowValidationFindingInfo::InvalidCoverageKeyType { path, key } => {
+            codex_workflows::WorkflowValidationFinding::InvalidCoverageKeyType { path, key }
+        }
+        WorkflowValidationFindingInfo::CoverageKeyMustBeTrue { path, key } => {
+            codex_workflows::WorkflowValidationFinding::CoverageKeyMustBeTrue { path, key }
+        }
+        WorkflowValidationFindingInfo::MissingCoverageMarker { path, key } => {
+            codex_workflows::WorkflowValidationFinding::MissingCoverageMarker { path, key }
+        }
+        WorkflowValidationFindingInfo::CodeOutsideSrc { paths } => {
+            codex_workflows::WorkflowValidationFinding::CodeOutsideSrc { paths }
+        }
+        WorkflowValidationFindingInfo::TestsOutsideSrcTests { paths } => {
+            codex_workflows::WorkflowValidationFinding::TestsOutsideSrcTests { paths }
+        }
+        WorkflowValidationFindingInfo::DatabasesOutsideState { paths } => {
+            codex_workflows::WorkflowValidationFinding::DatabasesOutsideState { paths }
+        }
+        WorkflowValidationFindingInfo::ValidationCommandFailed {
+            command,
+            exit_code,
+            stdout,
+            stderr,
+        } => codex_workflows::WorkflowValidationFinding::ValidationCommandFailed {
+            command,
+            exit_code,
+            stdout,
+            stderr,
+        },
+        WorkflowValidationFindingInfo::WorkflowApiContractExtractionFailed { path, error } => {
+            codex_workflows::WorkflowValidationFinding::WorkflowApiContractExtractionFailed {
+                path,
+                error,
+            }
+        }
     }
 }
 
@@ -448,5 +668,150 @@ fn config_value_to_command_string(value: JsonValue) -> String {
             .collect::<Vec<_>>()
             .join(","),
         other => other.to_string(),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkflowRepairPayload {
+    workflow: WorkflowSummary,
+    validation: WorkflowValidationInfo,
+    repair: WorkflowRepairResult,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config_manager::ConfigManager;
+    use codex_app_server_protocol::ClientResponsePayload;
+    use codex_arg0::Arg0DispatchPaths;
+    use codex_config::CloudRequirementsLoader;
+    use codex_config::LoaderOverrides;
+    use codex_config::StaticThreadConfigLoader;
+    use codex_core::config::ConfigBuilder;
+    use codex_core::config::ConfigOverrides;
+    use pretty_assertions::assert_eq;
+    use std::fs;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    fn write_broken_workflow_fixture(workflow_dir: &std::path::Path) {
+        fs::write(
+            workflow_dir.join("README.md"),
+            "# Broken\n\n## Usage\n\n## Workflow Runtime\n",
+        )
+        .unwrap();
+        fs::write(workflow_dir.join("DESIGN.md"), "# Broken Design\n").unwrap();
+        fs::write(
+            workflow_dir.join("package.json"),
+            r#"{
+  "name": "broken",
+  "private": true,
+  "type": "module"
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("workflow.ts"),
+            r#"import leftPad from "left-pad";
+import { WorkflowContext } from "@openai/codex-sdk/workflow";
+
+export interface WorkflowInput { input?: string; }
+export interface WorkflowOutput { ok: boolean; input: WorkflowInput; }
+export const WorkflowOutput = { toTuiMarkdown() { return { markdown: "done" }; } };
+export default async function run(_ctx: WorkflowContext, input: WorkflowInput): Promise<WorkflowOutput> { return { ok: true, input: { input: leftPad(input.input ?? "", 2) } }; }
+"#,
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("workflow.positive.test.ts"),
+            "// workflow-covers: positive progress finalResult\nexport {};\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("workflow.load.test.ts"),
+            "// workflow-covers: load\nexport {};\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("workflow.autocomplete.test.ts"),
+            "// workflow-covers: autocomplete\nexport {};\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("workflow.negative.test.ts"),
+            "// workflow-covers: negative failureUx\nexport {};\n",
+        )
+        .unwrap();
+        codex_workflows::write_workflow_spec(
+            &workflow_dir.join("workflow.yaml"),
+            &codex_workflows::WorkflowSpec {
+                id: "broken/other".to_string(),
+                validation: serde_json::json!({
+                    "commands": ["exit 0"],
+                    "coverage": {
+                        "positive": true,
+                        "negative": true,
+                        "progress": true,
+                        "finalResult": true,
+                        "failureUx": true,
+                        "load": true,
+                        "autocomplete": true,
+                        "recovery": false,
+                    }
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn workflow_repair_rpc_returns_structured_repair_results() {
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let workflow_dir = home.path().join("workflows/broken/fix");
+        fs::create_dir_all(&workflow_dir).unwrap();
+        write_broken_workflow_fixture(&workflow_dir);
+
+        let mut config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                ..Default::default()
+            })
+            .build()
+            .await
+            .unwrap();
+        config.workflows.commit_policy = Some("manual".to_string());
+
+        let config_manager = ConfigManager::new(
+            home.path().to_path_buf(),
+            Vec::new(),
+            LoaderOverrides::default(),
+            CloudRequirementsLoader::default(),
+            Arg0DispatchPaths::default(),
+            Arc::new(StaticThreadConfigLoader::new(Vec::new())),
+        );
+        let processor = WorkflowRequestProcessor::new(Arc::new(config), config_manager);
+
+        let Some(ClientResponsePayload::WorkflowRepair(response)) = processor
+            .repair(WorkflowRepairParams {
+                id: "broken/fix".to_string(),
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("expected workflow repair response");
+        };
+
+        assert_eq!(response.message, "valid");
+        assert_eq!(
+            response.repair.stop_reason,
+            codex_app_server_protocol::WorkflowRepairStopReason::Valid
+        );
+        assert_eq!(response.repair.changed, true);
+        assert!(!response.repair.applied_fixes.is_empty());
     }
 }

@@ -370,9 +370,9 @@ mod tests {
                 .to_string(),
             validation: crate::registry::WorkflowValidation {
                 status: crate::registry::WorkflowValidationStatus::Valid,
-                messages: Vec::new(),
+                findings: Vec::new(),
             },
-            repair_mode: "threshold:3".to_string(),
+            repair_mode: "full".to_string(),
         }
     }
 

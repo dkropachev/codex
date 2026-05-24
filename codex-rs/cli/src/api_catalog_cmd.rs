@@ -213,8 +213,22 @@ fn api_catalog_workflow_to_info(
                     codex_app_server_protocol::WorkflowValidationStatus::Invalid
                 }
             },
-            messages: workflow.validation.messages,
+            findings: workflow
+                .validation
+                .findings
+                .into_iter()
+                .map(validation_finding_to_api)
+                .collect(),
         },
         repair_mode: workflow.repair_mode,
     }
+}
+
+fn validation_finding_to_api(
+    finding: codex_workflows::WorkflowValidationFinding,
+) -> codex_app_server_protocol::WorkflowValidationFindingInfo {
+    let value = serde_json::to_value(finding)
+        .unwrap_or_else(|err| panic!("failed to serialize workflow validation finding: {err}"));
+    serde_json::from_value::<codex_app_server_protocol::WorkflowValidationFindingInfo>(value)
+        .unwrap_or_else(|err| panic!("failed to convert workflow validation finding: {err}"))
 }

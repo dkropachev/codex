@@ -775,6 +775,7 @@ mod tests {
     use std::path::Path;
 
     use pretty_assertions::assert_eq;
+    use tempfile::NamedTempFile;
     use tempfile::TempDir;
 
     use crate::WorkflowCommandInput;
@@ -939,17 +940,26 @@ export default workflow;
         use std::os::unix::fs::PermissionsExt;
 
         fs::create_dir_all(workflow_dir.join("node_modules/.bin")).expect("workflow dir");
-        fs::write(workflow_path, source).expect("workflow source");
-        fs::write(
-            workflow_tsx_path(workflow_dir),
-            "#!/bin/sh\nexec /usr/bin/node \"$@\"\n",
+        let mut workflow_file =
+            NamedTempFile::new_in(workflow_dir).expect("temporary workflow source");
+        std::io::Write::write_all(&mut workflow_file, source.as_bytes()).expect("workflow source");
+        workflow_file
+            .persist(workflow_path)
+            .unwrap_or_else(|err| panic!("persist workflow source: {err}"));
+
+        let tsx_path = workflow_tsx_path(workflow_dir);
+        let mut tsx_file = NamedTempFile::new_in(
+            tsx_path
+                .parent()
+                .expect("tsx wrapper should have a parent directory"),
         )
-        .expect("tsx wrapper");
+        .expect("temporary tsx wrapper");
+        std::io::Write::write_all(&mut tsx_file, b"#!/bin/sh\nexec /usr/bin/node \"$@\"\n")
+            .expect("tsx wrapper");
+        tsx_file
+            .persist(&tsx_path)
+            .unwrap_or_else(|err| panic!("persist tsx wrapper: {err}"));
         #[cfg(unix)]
-        fs::set_permissions(
-            workflow_tsx_path(workflow_dir),
-            fs::Permissions::from_mode(0o755),
-        )
-        .expect("tsx permissions");
+        fs::set_permissions(&tsx_path, fs::Permissions::from_mode(0o755)).expect("tsx permissions");
     }
 }

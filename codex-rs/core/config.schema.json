@@ -4308,7 +4308,7 @@
           "type": "integer"
         },
         "repair_mode": {
-          "description": "Repair policy. The built-in default is `threshold:3`.",
+          "description": "Repair mode. Supported values are `none`, `metadata`, `structural`, `full`, and the legacy alias `threshold:<n>`.",
           "type": "string"
         },
         "search_paths": {
