@@ -181,6 +181,10 @@ async fn tool_router_mode_without_deferred_tools_only_exposes_router() -> anyhow
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test builds a router from session-owned MCP manager state"
+)]
 async fn tool_router_mode_with_deferred_tools_exposes_tool_search() -> anyhow::Result<()> {
     let (session, turn) = make_session_and_context().await;
     let listed_mcp_tools = session

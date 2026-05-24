@@ -152,8 +152,7 @@ print({hook_output:?})
             script_path.display().to_string().replace('\'', "'\\''")
         )
     };
-    let plugin_root = AbsolutePathBuf::try_from(turn_context.config.codex_home.clone())
-        .expect("plugin root should be absolute");
+    let plugin_root = turn_context.config.codex_home.clone();
     let source_path = plugin_root.join("hooks/permission_request_hook.json");
     let plugin_hook_sources = vec![PluginHookSource {
         plugin_id: PluginId::parse("test-hooks@test-marketplace").expect("plugin id"),
@@ -197,8 +196,7 @@ print({hook_output:?})
         },
     }))
     .expect("hook state config should deserialize");
-    let config_path = AbsolutePathBuf::try_from(turn_context.config.codex_home.join("config.toml"))
-        .expect("config path should be absolute");
+    let config_path = turn_context.config.codex_home.join("config.toml");
     let config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
             ConfigLayerSource::User { file: config_path },

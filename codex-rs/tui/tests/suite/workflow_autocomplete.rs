@@ -24,7 +24,6 @@ struct WorkflowAutocompleteScenario<'a> {
     typed_prefix: &'a str,
     popup_snippets: &'a [&'a str],
     run_snippets: &'a [&'a str],
-    workflow_status_prefix: &'a str,
     popup_keys: &'a [WorkflowAutocompletePopupKey],
 }
 
@@ -55,7 +54,6 @@ async fn slash_workflow_autocomplete_completes_title_prefix_and_runs_workflow_en
                 "Workflow summary: reviewing",
                 "Workflow Result",
             ],
-            workflow_status_prefix: "Workflow summary:",
             popup_keys: &[
                 WorkflowAutocompletePopupKey::Tab,
                 WorkflowAutocompletePopupKey::Enter,
@@ -92,7 +90,6 @@ async fn slash_workflow_autocomplete_completes_search_term_and_runs_workflow_end
                 "Workflow summary: reviewing",
                 "Workflow Result",
             ],
-            workflow_status_prefix: "Workflow summary:",
             popup_keys: &[
                 WorkflowAutocompletePopupKey::Tab,
                 WorkflowAutocompletePopupKey::Enter,
@@ -136,7 +133,6 @@ async fn slash_workflow_exact_command_shows_option_hints_and_runs_workflow_end_t
                 "Workflow Result",
                 "review-123",
             ],
-            workflow_status_prefix: "Workflow code-review:",
             popup_keys: &[
                 WorkflowAutocompletePopupKey::Down,
                 WorkflowAutocompletePopupKey::Enter,
@@ -169,7 +165,6 @@ async fn slash_workflow_autocomplete_shows_static_option_popup_for_argument_pref
             typed_prefix: "/code-review --a",
             popup_snippets: &["--all-comments", "--archive", "--assignee <string>"],
             run_snippets: &[],
-            workflow_status_prefix: "Workflow code-review:",
             popup_keys: &[],
         },
     )
@@ -199,7 +194,6 @@ async fn slash_workflow_autocomplete_completes_dynamic_argument_prefix_and_runs_
             typed_prefix: "/code-review --reportId ",
             popup_snippets: &["--reportId 1034", "--reportId 1035"],
             run_snippets: &["Input argv: --reportId 1034", "Workflow Result"],
-            workflow_status_prefix: "Workflow code-review:",
             popup_keys: &[
                 WorkflowAutocompletePopupKey::Down,
                 WorkflowAutocompletePopupKey::Enter,
@@ -237,7 +231,6 @@ async fn slash_workflow_autocomplete_commits_unique_dynamic_preview_and_runs_wor
                 "Input argv: --reportId 1034 --format summary",
                 "Workflow Result",
             ],
-            workflow_status_prefix: "Workflow code-review:",
             popup_keys: &[
                 WorkflowAutocompletePopupKey::Tab,
                 WorkflowAutocompletePopupKey::Enter,
