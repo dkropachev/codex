@@ -3665,6 +3665,23 @@ mod tests {
         render_lines(&cell.transcript_lines(u16::MAX))
     }
 
+    fn normalize_codex_banner_padding(rendered: String) -> String {
+        rendered
+            .lines()
+            .map(|line| {
+                if line.contains("OpenAI Codex (")
+                    && line.starts_with('│')
+                    && line.ends_with('│')
+                    && let Some(pipe_idx) = line.rfind('│')
+                {
+                    return format!("{} │", line[..pipe_idx].trim_end());
+                }
+                line.to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     fn assert_unstyled_lines(lines: &[Line<'static>]) {
         for line in lines {
             assert_eq!(line.style, Style::default());
@@ -4052,6 +4069,7 @@ mod tests {
         let rendered = render_transcript(&cell)
             .join("\n")
             .replace("OpenAI Codex (v0.0.0)", "OpenAI Codex (v0.129.0)");
+        let rendered = normalize_codex_banner_padding(rendered);
         insta::assert_snapshot!(rendered);
     }
 
@@ -5806,9 +5824,11 @@ mod tests {
         insta::with_settings!({snapshot_path => "../snapshots"}, {
             insta::assert_snapshot!(
                 "workflow_markdown_cell",
-                lines_80
+                normalize_codex_banner_padding(
+                    lines_80
                     .join("\n")
-                    .replace("OpenAI Codex (v0.0.0)", "OpenAI Codex (v0.129.0)")
+                    .replace("OpenAI Codex (v0.0.0)", "OpenAI Codex (v0.129.0)"),
+                )
             );
         });
     }

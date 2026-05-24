@@ -15,10 +15,10 @@ use tokio::select;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
-use tracing::field;
 use tracing::Instrument;
-use tracing::info_span;
 use tracing::Span;
+use tracing::field;
+use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
 
@@ -702,7 +702,10 @@ impl Session {
             );
             if records_turn_token_usage_on_span {
                 let span = Span::current();
-                span.record("codex.turn.token_usage.input_tokens", turn_token_usage.input_tokens);
+                span.record(
+                    "codex.turn.token_usage.input_tokens",
+                    turn_token_usage.input_tokens,
+                );
                 span.record(
                     "codex.turn.token_usage.cached_input_tokens",
                     turn_token_usage.cached_input(),
@@ -721,7 +724,10 @@ impl Session {
                     "codex.turn.token_usage.reasoning_output_tokens",
                     turn_token_usage.reasoning_output_tokens,
                 );
-                span.record("codex.turn.token_usage.total_tokens", turn_token_usage.total_tokens);
+                span.record(
+                    "codex.turn.token_usage.total_tokens",
+                    turn_token_usage.total_tokens,
+                );
             }
         }
         emit_turn_memory_metric(

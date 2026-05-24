@@ -423,6 +423,7 @@ async fn handle_mcp_inventory_result_clears_committed_loading_cell() {
     assert_eq!(app.transcript_cells.len(), 0);
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn workflow_command_end_to_end_updates_status_and_queues_markdown_handoff_e2e() -> Result<()>
 {
@@ -596,6 +597,7 @@ sleep 0.2
     Ok(())
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn workflow_command_end_to_end_without_markdown_renders_stdout_json_result_cell() -> Result<()>
 {
@@ -709,6 +711,7 @@ sleep 0.2
     Ok(())
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn workflow_command_end_to_end_failure_surfaces_stderr_and_clears_status() -> Result<()> {
     let temp = tempdir()?;

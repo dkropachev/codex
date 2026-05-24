@@ -190,8 +190,10 @@ impl WorkflowRequestProcessor {
         &self,
         params: WorkflowRepairParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let response: WorkflowCommandResponse =
-            self.execute(WorkflowCommand::Fix { id: params.id }, params.stage_session_id)?;
+        let response: WorkflowCommandResponse = self.execute(
+            WorkflowCommand::Fix { id: params.id },
+            params.stage_session_id,
+        )?;
         let payload: WorkflowRepairPayload =
             serde_json::from_value(response.data).map_err(|err| {
                 internal_error(format!("failed to decode workflow repair payload: {err}"))

@@ -7,8 +7,8 @@ use anyhow::Result;
 use anyhow::anyhow;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::json;
 use serde_json::Value as JsonValue;
+use serde_json::json;
 
 use crate::execute::WorkflowCommandContext;
 use crate::execute::WorkflowCommandOutput;
@@ -18,9 +18,9 @@ use crate::registry::WorkflowValidation;
 use crate::registry::WorkflowValidationStatus;
 use crate::spec::read_workflow_spec;
 use crate::spec::write_workflow_spec;
+use crate::validation_finding::WorkflowValidationFinding;
 use crate::validation_runner::run_validation_command;
 use crate::validation_runner::validate_workflow;
-use crate::validation_finding::WorkflowValidationFinding;
 
 pub mod types {
     pub use super::WorkflowRepairAction;
@@ -261,7 +261,10 @@ fn apply_known_fix(
             ensure_coverage_marker(workflow_dir, key)
         }
         WorkflowValidationFinding::ValidationCommandFailed { command, .. }
-            if command == "npm run build" => ensure_build_support(workflow_dir),
+            if command == "npm run build" =>
+        {
+            ensure_build_support(workflow_dir)
+        }
         WorkflowValidationFinding::WorkflowSpecReadFailed { .. }
         | WorkflowValidationFinding::WorkflowPathEscapesRoot { .. }
         | WorkflowValidationFinding::PackageManifestParseFailed { .. }
@@ -277,10 +280,7 @@ fn apply_known_fix(
     }
 }
 
-fn repair_missing_file(
-    workflow_dir: &Path,
-    path: &Path,
-) -> Result<Option<WorkflowRepairAction>> {
+fn repair_missing_file(workflow_dir: &Path, path: &Path) -> Result<Option<WorkflowRepairAction>> {
     let path = workflow_path(workflow_dir, path);
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return Ok(None);
@@ -447,14 +447,20 @@ fn add_dependency(workflow_dir: &Path, package_name: &str) -> Result<Option<Work
     let mut added = false;
     for dependency in [package_name, "@openai/codex-sdk"] {
         if !dependencies.contains_key(dependency) {
-            dependencies.insert(dependency.to_string(), JsonValue::String("latest".to_string()));
+            dependencies.insert(
+                dependency.to_string(),
+                JsonValue::String("latest".to_string()),
+            );
             added = true;
         }
     }
     if !added {
         return Ok(None);
     }
-    fs::write(&package_json_path, format!("{}\n", serde_json::to_string_pretty(&package)?))?;
+    fs::write(
+        &package_json_path,
+        format!("{}\n", serde_json::to_string_pretty(&package)?),
+    )?;
     Ok(Some(WorkflowRepairAction {
         kind: WorkflowRepairActionKind::RepairPackageManifest,
         path: package_json_path,
@@ -509,11 +515,17 @@ fn ensure_build_support(workflow_dir: &Path) -> Result<Option<WorkflowRepairActi
         .as_object_mut()
         .ok_or_else(|| anyhow!("scripts must be an object"))?;
     if scripts.get("build") != Some(&JsonValue::String("tsc --noEmit".to_string())) {
-        scripts.insert("build".to_string(), JsonValue::String("tsc --noEmit".to_string()));
+        scripts.insert(
+            "build".to_string(),
+            JsonValue::String("tsc --noEmit".to_string()),
+        );
         changed = true;
     }
     if changed {
-        fs::write(&package_json_path, format!("{}\n", serde_json::to_string_pretty(&package)?))?;
+        fs::write(
+            &package_json_path,
+            format!("{}\n", serde_json::to_string_pretty(&package)?),
+        )?;
         return Ok(Some(WorkflowRepairAction {
             kind: WorkflowRepairActionKind::RepairTsconfig,
             path: tsconfig_path,
@@ -524,7 +536,11 @@ fn ensure_build_support(workflow_dir: &Path) -> Result<Option<WorkflowRepairActi
 }
 
 fn coverage_key_for_test_path(path: &Path) -> &'static str {
-    match path.file_name().and_then(|name| name.to_str()).unwrap_or_default() {
+    match path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+    {
         "workflow.load.test.ts" => "load",
         "workflow.autocomplete.test.ts" => "autocomplete",
         "workflow.recovery.test.ts" => "recovery",

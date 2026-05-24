@@ -5,10 +5,10 @@ use crate::agent::next_thread_spawn_depth;
 use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
 use crate::context::TurnAborted;
+use crate::function_tool::FunctionCallError;
+use crate::model_router::ModelRouterSource;
 use crate::model_router::apply_model_router_with_state;
 use crate::model_router::available_router_models;
-use crate::model_router::ModelRouterSource;
-use crate::function_tool::FunctionCallError;
 use crate::session::tests::make_session_and_context;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::state::TaskKind;
@@ -465,7 +465,10 @@ async fn spawn_agent_model_router_updates_thread_config_snapshot() {
     )
     .await
     .expect("router should apply for spawn test");
-    let expected_model = config.model.clone().expect("routed config should have a model");
+    let expected_model = config
+        .model
+        .clone()
+        .expect("routed config should have a model");
     turn.config = Arc::new(config);
 
     let output = SpawnAgentHandler

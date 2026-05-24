@@ -7,48 +7,98 @@ use serde::Serialize;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum WorkflowValidationFinding {
-    WorkflowSpecReadFailed { path: PathBuf, error: String },
+    WorkflowSpecReadFailed {
+        path: PathBuf,
+        error: String,
+    },
     WorkflowIdMismatch {
         path: PathBuf,
         expected_id: String,
         actual_id: String,
     },
-    MissingFile { path: PathBuf },
-    MissingDirectory { path: PathBuf },
-    MissingGitRepository { path: PathBuf },
-    WorkflowPathEscapesRoot { workflow_path: PathBuf, root_path: PathBuf },
-    MissingDocumentHeading { path: PathBuf, heading: String },
-    PackageManifestParseFailed { path: PathBuf, error: String },
+    MissingFile {
+        path: PathBuf,
+    },
+    MissingDirectory {
+        path: PathBuf,
+    },
+    MissingGitRepository {
+        path: PathBuf,
+    },
+    WorkflowPathEscapesRoot {
+        workflow_path: PathBuf,
+        root_path: PathBuf,
+    },
+    MissingDocumentHeading {
+        path: PathBuf,
+        heading: String,
+    },
+    PackageManifestParseFailed {
+        path: PathBuf,
+        error: String,
+    },
     UndeclaredPackageImport {
         path: PathBuf,
         specifier: String,
         package_name: String,
     },
-    MissingValidationCommands { path: PathBuf },
-    EmptyValidationCommands { path: PathBuf },
-    InvalidValidationCommands { path: PathBuf },
-    MissingCoverageMetadata { path: PathBuf },
-    MissingCoverageKey { path: PathBuf, key: String },
-    InvalidCoverageKeyType { path: PathBuf, key: String },
-    CoverageKeyMustBeTrue { path: PathBuf, key: String },
-    MissingCoverageMarker { path: PathBuf, key: String },
-    CodeOutsideSrc { paths: Vec<PathBuf> },
-    TestsOutsideSrcTests { paths: Vec<PathBuf> },
-    DatabasesOutsideState { paths: Vec<PathBuf> },
+    MissingValidationCommands {
+        path: PathBuf,
+    },
+    EmptyValidationCommands {
+        path: PathBuf,
+    },
+    InvalidValidationCommands {
+        path: PathBuf,
+    },
+    MissingCoverageMetadata {
+        path: PathBuf,
+    },
+    MissingCoverageKey {
+        path: PathBuf,
+        key: String,
+    },
+    InvalidCoverageKeyType {
+        path: PathBuf,
+        key: String,
+    },
+    CoverageKeyMustBeTrue {
+        path: PathBuf,
+        key: String,
+    },
+    MissingCoverageMarker {
+        path: PathBuf,
+        key: String,
+    },
+    CodeOutsideSrc {
+        paths: Vec<PathBuf>,
+    },
+    TestsOutsideSrcTests {
+        paths: Vec<PathBuf>,
+    },
+    DatabasesOutsideState {
+        paths: Vec<PathBuf>,
+    },
     ValidationCommandFailed {
         command: String,
         exit_code: Option<i32>,
         stdout: String,
         stderr: String,
     },
-    WorkflowApiContractExtractionFailed { path: PathBuf, error: String },
+    WorkflowApiContractExtractionFailed {
+        path: PathBuf,
+        error: String,
+    },
 }
 
 impl WorkflowValidationFinding {
     pub fn message(&self) -> String {
         match self {
             Self::WorkflowSpecReadFailed { path, error } => {
-                format!("failed to read workflow metadata {}: {error}", path.display())
+                format!(
+                    "failed to read workflow metadata {}: {error}",
+                    path.display()
+                )
             }
             Self::WorkflowIdMismatch {
                 expected_id,
@@ -82,7 +132,10 @@ impl WorkflowValidationFinding {
                 format!("{} is missing required heading `{heading}`", path.display())
             }
             Self::PackageManifestParseFailed { path, error } => {
-                format!("failed to parse package manifest {}: {error}", path.display())
+                format!(
+                    "failed to parse package manifest {}: {error}",
+                    path.display()
+                )
             }
             Self::UndeclaredPackageImport { package_name, .. } => {
                 format!("imports undeclared package `{package_name}`")
@@ -108,18 +161,25 @@ impl WorkflowValidationFinding {
                 format!("missing test coverage marker `// workflow-covers: {key}`")
             }
             Self::CodeOutsideSrc { paths } => {
-                format!("workflow source exists outside src/: {}", display_paths(paths))
+                format!(
+                    "workflow source exists outside src/: {}",
+                    display_paths(paths)
+                )
             }
             Self::TestsOutsideSrcTests { paths } => {
-                format!("test files must live under src/tests/: {}", display_paths(paths))
+                format!(
+                    "test files must live under src/tests/: {}",
+                    display_paths(paths)
+                )
             }
             Self::DatabasesOutsideState { paths } => {
-                format!("database files must live under state/: {}", display_paths(paths))
+                format!(
+                    "database files must live under state/: {}",
+                    display_paths(paths)
+                )
             }
             Self::ValidationCommandFailed {
-                command,
-                exit_code,
-                ..
+                command, exit_code, ..
             } => match exit_code {
                 Some(exit_code) => {
                     format!("validation command `{command}` failed with exit code {exit_code}")
@@ -227,7 +287,8 @@ pub fn finding_messages(findings: &[WorkflowValidationFinding]) -> Vec<String> {
 }
 
 fn display_paths(paths: &[PathBuf]) -> String {
-    paths.iter()
+    paths
+        .iter()
         .map(|path| path.display().to_string())
         .collect::<Vec<_>>()
         .join(", ")

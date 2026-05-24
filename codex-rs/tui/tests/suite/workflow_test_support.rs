@@ -4,6 +4,15 @@ use std::process::Command;
 
 use anyhow::Result;
 
+fn test_node_path() -> Result<PathBuf> {
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path_env| std::env::split_paths(&path_env).collect::<Vec<_>>())
+        .flat_map(|dir| [dir.join("node"), dir.join("nodejs")])
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| anyhow::anyhow!("node executable should be available for workflow tests"))
+}
+
 pub(super) fn write_trusted_workspace_config(codex_home: &Path, workspace: &Path) -> Result<()> {
     std::fs::create_dir_all(workspace.join(".git"))?;
     let config_contents = format!(
@@ -45,6 +54,7 @@ pub(super) fn write_workflow_fixture_with_metadata(
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
+    let node_path = test_node_path()?;
     std::fs::create_dir_all(workflow_dir.join("src"))?;
     std::fs::create_dir_all(workflow_dir.join("state"))?;
     std::fs::create_dir_all(workflow_dir.join("node_modules/.bin"))?;
@@ -69,29 +79,32 @@ pub(super) fn write_workflow_fixture_with_metadata(
     std::fs::write(workflow_dir.join("src/workflow.ts"), workflow_source)?;
     std::fs::write(
         workflow_dir.join("node_modules/.bin/tsx"),
-        r#"#!/usr/bin/node
+        format!(
+            r#"#!{}
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const {{ spawnSync }} = require('node:child_process');
 
 const [runner, ...args] = process.argv.slice(2);
 const workflowPathIndex = args.indexOf('--workflow-path');
-if (workflowPathIndex === -1 || workflowPathIndex + 1 >= args.length) {
+if (workflowPathIndex === -1 || workflowPathIndex + 1 >= args.length) {{
   console.error('missing --workflow-path');
   process.exit(1);
-}
+}}
 const workflowPath = args[workflowPathIndex + 1];
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-runtime-'));
 const workflowDir = path.dirname(workflowPath);
 const tmpWorkflowDir = path.join(tmpDir, path.basename(workflowDir));
-fs.cpSync(workflowDir, tmpWorkflowDir, { recursive: true });
+fs.cpSync(workflowDir, tmpWorkflowDir, {{ recursive: true }});
 const tmpPath = path.join(tmpWorkflowDir, path.basename(workflowPath) + '.mjs');
 fs.copyFileSync(workflowPath, tmpPath);
 args[workflowPathIndex + 1] = tmpPath;
-const result = spawnSync('/usr/bin/node', [runner, ...args], { stdio: 'inherit' });
+const result = spawnSync(process.execPath, [runner, ...args], {{ stdio: 'inherit' }});
 process.exit(result.status ?? 1);
 "#,
+            node_path.display(),
+        ),
     )?;
     #[cfg(unix)]
     std::fs::set_permissions(
