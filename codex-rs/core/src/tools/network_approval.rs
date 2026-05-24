@@ -704,6 +704,25 @@ pub(crate) async fn finish_deferred_network_approval(
         .await;
 }
 
+pub(crate) async fn take_deferred_network_denial_message(
+    session: &Session,
+    deferred: Option<&DeferredNetworkApproval>,
+) -> Option<String> {
+    let registration_id = deferred?.registration_id();
+    match session
+        .services
+        .network_approval
+        .take_call_outcome(registration_id)
+        .await
+    {
+        Some(NetworkApprovalOutcome::DeniedByUser) => {
+            Some("network access rejected by user".to_string())
+        }
+        Some(NetworkApprovalOutcome::DeniedByPolicy(message)) => Some(message),
+        None => None,
+    }
+}
+
 #[cfg(test)]
 #[path = "network_approval_tests.rs"]
 mod tests;

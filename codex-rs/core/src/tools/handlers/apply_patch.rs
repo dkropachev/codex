@@ -58,6 +58,7 @@ pub struct ApplyPatchHandler;
 #[derive(Default)]
 struct ApplyPatchArgumentDiffConsumer {
     parser: StreamingPatchParser,
+    last_call_id: Option<String>,
     last_sent_at: Option<Instant>,
     pending: Option<PatchApplyUpdatedEvent>,
 }
@@ -77,6 +78,13 @@ impl ToolArgumentDiffConsumer for ApplyPatchArgumentDiffConsumer {
             .map(EventMsg::PatchApplyUpdated)
     }
 
+    fn flush_on_complete(&mut self) -> Option<EventMsg> {
+        self.finish_update_on_complete()
+            .ok()
+            .flatten()
+            .map(EventMsg::PatchApplyUpdated)
+    }
+
     fn finish(&mut self) -> Result<Option<EventMsg>, FunctionCallError> {
         self.finish_update_on_complete()
             .map(|event| event.map(EventMsg::PatchApplyUpdated))
@@ -85,6 +93,29 @@ impl ToolArgumentDiffConsumer for ApplyPatchArgumentDiffConsumer {
 
 impl ApplyPatchArgumentDiffConsumer {
     fn push_delta(&mut self, call_id: String, delta: &str) -> Option<PatchApplyUpdatedEvent> {
+        self.last_call_id = Some(call_id.clone());
+        if let Some((prefix, suffix)) = delta.split_once("*** End Patch")
+            && !prefix.is_empty()
+        {
+            let (prefix, separator) = if let Some(prefix) = prefix.strip_suffix('\n') {
+                (prefix, "\n")
+            } else {
+                (prefix, "")
+            };
+            let event = self.push_delta_fragment(call_id.clone(), prefix);
+            let tail = format!("{separator}*** End Patch{suffix}");
+            let _ = self.push_delta_fragment(call_id, &tail);
+            return event;
+        }
+
+        self.push_delta_fragment(call_id, delta)
+    }
+
+    fn push_delta_fragment(
+        &mut self,
+        call_id: String,
+        delta: &str,
+    ) -> Option<PatchApplyUpdatedEvent> {
         let hunks = self.parser.push_delta(delta).ok()?;
         if hunks.is_empty() {
             return None;
@@ -116,15 +147,24 @@ impl ApplyPatchArgumentDiffConsumer {
     fn finish_update_on_complete(
         &mut self,
     ) -> Result<Option<PatchApplyUpdatedEvent>, FunctionCallError> {
-        self.parser.finish().map_err(|err| {
+        let hunks = self.parser.finish().map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to parse apply_patch: {err}"))
         })?;
 
-        let event = self.pending.take();
+        let event = self.last_call_id.clone().and_then(|call_id| {
+            let changes = convert_apply_patch_hunks_to_protocol(&hunks);
+            if changes
+                .values()
+                .all(|change| !file_change_is_meaningful(change))
+            {
+                return None;
+            }
+            Some(PatchApplyUpdatedEvent { call_id, changes })
+        });
         if event.is_some() {
             self.last_sent_at = Some(Instant::now());
         }
-        Ok(event)
+        Ok(event.or_else(|| self.pending.take()))
     }
 }
 

@@ -173,6 +173,7 @@ struct ModelClientState {
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
+    responses_websocket_response_processed_enabled: bool,
     disable_websockets: AtomicBool,
     cached_websocket_session: StdMutex<WebsocketSession>,
 }
@@ -255,6 +256,7 @@ struct WebsocketSession {
     connection: Option<ApiWebSocketConnection>,
     last_request: Option<ResponsesApiRequest>,
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
+    last_response: Option<LastResponse>,
     connection_reused: StdMutex<bool>,
 }
 
@@ -319,6 +321,7 @@ impl ModelClient {
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
+        responses_websocket_response_processed_enabled: bool,
     ) -> Self {
         let model_provider = create_model_provider(provider_id, provider_info, auth_manager);
         let codex_api_key_env_enabled = model_provider
@@ -340,6 +343,7 @@ impl ModelClient {
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
+                responses_websocket_response_processed_enabled,
                 disable_websockets: AtomicBool::new(false),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
             }),
@@ -364,6 +368,7 @@ impl ModelClient {
             self.state.enable_request_compression,
             self.state.include_timing_metrics,
             self.state.beta_features_header.clone(),
+            self.state.responses_websocket_response_processed_enabled,
         );
         client.state.window_generation.store(
             self.state.window_generation.load(Ordering::Relaxed),
@@ -791,6 +796,10 @@ impl ModelClient {
         true
     }
 
+    fn responses_websocket_response_processed_enabled(&self) -> bool {
+        self.state.responses_websocket_response_processed_enabled
+    }
+
     /// Returns auth + provider configuration resolved from the current session auth state.
     ///
     /// This centralizes setup used by both prewarm and normal request paths so they stay in
@@ -1077,13 +1086,46 @@ impl ModelClientSession {
     }
 
     fn get_last_response(&mut self) -> Option<LastResponse> {
-        self.websocket_session
-            .last_response_rx
-            .take()
-            .and_then(|mut receiver| match receiver.try_recv() {
+        if let Some(last_response) = self.websocket_session.last_response.clone() {
+            return Some(last_response);
+        }
+
+        let last_response = self.websocket_session.last_response_rx.take().and_then(
+            |mut receiver| match receiver.try_recv() {
                 Ok(last_response) => Some(last_response),
                 Err(TryRecvError::Closed) | Err(TryRecvError::Empty) => None,
-            })
+            },
+        )?;
+        self.websocket_session.last_response = Some(last_response.clone());
+        Some(last_response)
+    }
+
+    async fn resolve_last_response(&mut self) -> Option<LastResponse> {
+        if let Some(last_response) = self.websocket_session.last_response.clone() {
+            return Some(last_response);
+        }
+
+        let last_response = self.websocket_session.last_response_rx.take()?.await.ok()?;
+        self.websocket_session.last_response = Some(last_response.clone());
+        Some(last_response)
+    }
+
+    pub async fn send_response_processed_if_enabled(&mut self) -> Result<()> {
+        if !self.client.responses_websocket_response_processed_enabled() {
+            return Ok(());
+        }
+
+        let Some(last_response) = self.resolve_last_response().await else {
+            return Ok(());
+        };
+        let Some(connection) = self.websocket_session.connection.as_ref() else {
+            return Ok(());
+        };
+
+        connection
+            .send_response_processed(last_response.response_id)
+            .await
+            .map_err(map_api_error)
     }
 
     fn prepare_websocket_request(
@@ -1635,6 +1677,7 @@ impl ModelClientSession {
                 session_telemetry.clone(),
                 inference_trace_attempt,
             );
+            self.websocket_session.last_response = None;
             self.websocket_session.last_response_rx = Some(last_request_rx);
             return Ok(WebsocketStreamOutcome::Stream(stream));
         }

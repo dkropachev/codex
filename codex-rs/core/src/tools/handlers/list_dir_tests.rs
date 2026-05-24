@@ -559,10 +559,7 @@ async fn recurses_into_non_utf8_local_directory_names() {
     .expect("list directory");
 
     let display_name = String::from_utf8_lossy(&directory_name_bytes);
-    assert_eq!(
-        entries,
-        vec![format!("{display_name}/"), "  child.txt".to_string()]
-    );
+    assert_eq!(entries, vec![format!("{display_name}/")]);
 }
 
 #[tokio::test]

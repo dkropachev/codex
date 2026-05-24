@@ -6,6 +6,12 @@
     },
     "instruction": {
       "type": "string"
+    },
+    "stageSessionId": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

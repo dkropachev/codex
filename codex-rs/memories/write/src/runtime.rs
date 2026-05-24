@@ -258,6 +258,9 @@ impl MemoryStartupContext {
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             /*beta_features_header*/ None,
+            config
+                .features
+                .enabled(Feature::ResponsesWebsocketResponseProcessed),
         );
 
         let mut client_session = model_client.new_session();

@@ -10,12 +10,22 @@ use crate::config::Constrained;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::tests::make_session_and_context;
 use anyhow::Context;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerSource;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigRequirements;
+use codex_config::ConfigRequirementsToml;
+use codex_config::HookEventsToml;
+use codex_config::HookHandlerConfig;
+use codex_config::MatcherGroup;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
+use codex_plugin::PluginHookSource;
+use codex_plugin::PluginId;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -323,7 +333,7 @@ fn shell_request_escalation_execution_is_explicit() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Result<()> {
+async fn execve_permission_request_hook_returns_allow_decision() -> anyhow::Result<()> {
     let (session, mut turn_context) = make_session_and_context().await;
     std::fs::create_dir_all(&turn_context.config.codex_home)
         .context("recreate codex home for hook fixtures")?;
@@ -338,52 +348,87 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
     std::fs::write(
         &script_path,
         format!(
-            "#!/bin/sh\ncat > {log_path}\nprintf '%s\\n' '{response}'\n",
-            log_path = shlex::try_quote(log_path.to_string_lossy().as_ref())?,
+            r#"import pathlib
+import sys
+
+pathlib.Path({log_path:?}).write_text(sys.stdin.read(), encoding="utf-8")
+print({response:?})
+"#,
+            log_path = log_path.display().to_string(),
             response = "{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"allow\"}}}",
         ),
     )
     .with_context(|| format!("write hook script to {}", script_path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mut permissions = std::fs::metadata(&script_path)
-            .with_context(|| format!("read hook script metadata from {}", script_path.display()))?
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&script_path, permissions)
-            .with_context(|| format!("set hook script permissions on {}", script_path.display()))?;
-    }
-    std::fs::write(
-        turn_context.config.codex_home.join("hooks.json"),
-        serde_json::json!({
-            "hooks": {
-                "PermissionRequest": [{
-                    "hooks": [{
-                        "type": "command",
-                        "command": script_path.display().to_string(),
-                    }]
-                }]
-            }
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    let script_path_arg = if cfg!(windows) {
+        script_path.display().to_string()
+    } else {
+        format!(
+            "'{}'",
+            script_path.display().to_string().replace('\'', "'\\''")
+        )
+    };
+    let plugin_root = AbsolutePathBuf::try_from(turn_context.config.codex_home.clone())?;
+    let source_path = plugin_root.join("hooks/permission_request_hook.json");
+    let plugin_hook_sources = vec![PluginHookSource {
+        plugin_id: PluginId::parse("test-hooks@test-marketplace")?,
+        plugin_root: plugin_root.clone(),
+        plugin_data_root: plugin_root.clone(),
+        source_path,
+        source_relative_path: "hooks/permission_request_hook.json".to_string(),
+        hooks: HookEventsToml {
+            permission_request: vec![MatcherGroup {
+                matcher: Some("*".to_string()),
+                hooks: vec![HookHandlerConfig::Command {
+                    command: format!("{python} {script_path_arg}"),
+                    timeout_sec: Some(5),
+                    r#async: false,
+                    status_message: None,
+                }],
+            }],
+            ..Default::default()
+        },
+    }];
+    let discovered = codex_hooks::list_hooks(HooksConfig {
+        feature_enabled: true,
+        plugin_hook_sources: plugin_hook_sources.clone(),
+        ..HooksConfig::default()
+    });
+    let state = discovered
+        .hooks
+        .into_iter()
+        .map(|entry| {
+            (
+                entry.key,
+                serde_json::json!({
+                    "trusted_hash": entry.current_hash,
+                }),
+            )
         })
-        .to_string(),
-    )
-    .context("write hooks.json")?;
+        .collect::<serde_json::Map<_, _>>();
+    let hook_state_config: toml::Value = serde_json::from_value(serde_json::json!({
+        "hooks": {
+            "state": state,
+        },
+    }))?;
+    let config_path =
+        AbsolutePathBuf::try_from(turn_context.config.codex_home.join("config.toml"))?;
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::User { file: config_path },
+            hook_state_config,
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )?;
 
-    let mut hook_shell_argv = session
-        .user_shell()
-        .derive_exec_args("", /*use_login_shell*/ false);
-    let hook_shell_program = hook_shell_argv.remove(0);
-    let _ = hook_shell_argv.pop();
     session
         .services
         .hooks
         .store(std::sync::Arc::new(Hooks::new(HooksConfig {
             feature_enabled: true,
-            config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
-            shell_program: Some(hook_shell_program),
-            shell_args: hook_shell_argv,
+            config_layer_stack: Some(config_layer_stack),
+            plugin_hook_sources,
             ..HooksConfig::default()
         })));
 
@@ -395,7 +440,6 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
     let workdir = AbsolutePathBuf::try_from(std::env::current_dir()?)?;
     let target = std::env::temp_dir().join("execve-hook-short-circuit.txt");
     let target_str = target.display().to_string();
-    let command = vec!["touch".to_string(), target_str.clone()];
     let expected_hook_command =
         codex_shell_command::parse_command::shlex_join(&["/usr/bin/touch".to_string(), target_str]);
     let provider = CoreShellActionProvider {
@@ -416,24 +460,24 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
     };
 
-    let action = tokio::time::timeout(
+    let decision = tokio::time::timeout(
         Duration::from_secs(5),
-        codex_shell_escalation::EscalationPolicy::determine_action(
-            &provider,
-            &AbsolutePathBuf::from_absolute_path("/usr/bin/touch")
-                .context("build touch absolute path")?,
-            &command,
-            &workdir,
+        crate::hook_runtime::run_permission_request_hooks(
+            &provider.session,
+            &provider.turn,
+            "execve-hook-call",
+            crate::tools::sandboxing::PermissionRequestPayload::bash(
+                expected_hook_command.clone(),
+                /*description*/ None,
+            ),
         ),
     )
     .await
-    .context("timed out waiting for execve permission hook decision")??;
-    assert!(matches!(
-        action,
-        codex_shell_escalation::EscalationDecision::Escalate(
-            codex_shell_escalation::EscalationExecution::Unsandboxed
-        )
-    ));
+    .context("timed out waiting for execve permission hook decision")?;
+    assert_eq!(
+        decision,
+        Some(codex_hooks::PermissionRequestDecision::Allow)
+    );
 
     let hook_inputs: Vec<Value> = std::fs::read_to_string(&log_path)
         .with_context(|| format!("read hook log at {}", log_path.display()))?

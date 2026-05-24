@@ -2,12 +2,12 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "properties": {
     "stageSessionId": {
-      "type": [
-        "string",
-        "null"
-      ]
+      "type": "string"
     }
   },
-  "title": "WorkflowListParams",
+  "required": [
+    "stageSessionId"
+  ],
+  "title": "WorkflowStageSessionActionParams",
   "type": "object"
 }

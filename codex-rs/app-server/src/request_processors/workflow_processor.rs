@@ -17,6 +17,7 @@ use codex_app_server_protocol::WorkflowConfigWriteParams;
 use codex_app_server_protocol::WorkflowConfigWriteResponse;
 use codex_app_server_protocol::WorkflowDevelopParams;
 use codex_app_server_protocol::WorkflowDevelopResponse;
+use codex_app_server_protocol::WorkflowDiscardResponse;
 use codex_app_server_protocol::WorkflowEditParams;
 use codex_app_server_protocol::WorkflowEditResponse;
 use codex_app_server_protocol::WorkflowImpactInfo;
@@ -24,15 +25,16 @@ use codex_app_server_protocol::WorkflowImpactParams;
 use codex_app_server_protocol::WorkflowImpactResponse;
 use codex_app_server_protocol::WorkflowListParams;
 use codex_app_server_protocol::WorkflowListResponse;
+use codex_app_server_protocol::WorkflowPublishResponse;
 use codex_app_server_protocol::WorkflowReadParams;
 use codex_app_server_protocol::WorkflowReadResponse;
 use codex_app_server_protocol::WorkflowRepairParams;
 use codex_app_server_protocol::WorkflowRepairResponse;
-use codex_app_server_protocol::WorkflowRepairResult;
 use codex_app_server_protocol::WorkflowRootInfo;
 use codex_app_server_protocol::WorkflowRootKind;
 use codex_app_server_protocol::WorkflowRunParams;
 use codex_app_server_protocol::WorkflowRunResponse;
+use codex_app_server_protocol::WorkflowStageSessionActionParams;
 use codex_app_server_protocol::WorkflowSummary;
 use codex_app_server_protocol::WorkflowValidateParams;
 use codex_app_server_protocol::WorkflowValidateResponse;
@@ -46,11 +48,11 @@ use codex_workflows::WorkflowCommand;
 use codex_workflows::WorkflowCommandContext;
 use codex_workflows::WorkflowConfigCommand;
 use codex_workflows::WorkflowInputSource;
-use codex_workflows::discover_workflows;
+use codex_workflows::discover_workflows_for_context;
 use codex_workflows::execute_workflow_command;
-use codex_workflows::find_workflow;
 use codex_workflows::parse_mention_target;
 use codex_workflows::parse_workflow_command;
+use codex_workflows::resolve_workflow_for_context;
 use codex_workflows::workflow_impact;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -75,7 +77,7 @@ impl WorkflowRequestProcessor {
 
     pub(crate) async fn list(
         &self,
-        _params: WorkflowListParams,
+        params: WorkflowListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let roots = codex_workflows::workflow_roots(
             self.config.codex_home.as_path(),
@@ -85,7 +87,7 @@ impl WorkflowRequestProcessor {
         .into_iter()
         .map(root_to_api)
         .collect();
-        let workflows = self.discover_api_workflows()?;
+        let workflows = self.discover_api_workflows(params.stage_session_id.as_deref())?;
         Ok(Some(WorkflowListResponse { roots, workflows }.into()))
     }
 
@@ -93,7 +95,8 @@ impl WorkflowRequestProcessor {
         &self,
         params: WorkflowReadParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let workflow = self.resolve_workflow(params.id, params.target)?;
+        let workflow =
+            self.resolve_workflow(params.id, params.target, params.stage_session_id.as_deref())?;
         let workflow_yaml = fs::read_to_string(&workflow.workflow_yaml_path).map_err(|err| {
             internal_error(format!(
                 "failed to read workflow metadata {}: {err}",
@@ -115,7 +118,8 @@ impl WorkflowRequestProcessor {
         &self,
         params: WorkflowImpactParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let workflow = self.resolve_workflow(params.id, None)?;
+        let workflow =
+            self.resolve_workflow(params.id, None, params.stage_session_id.as_deref())?;
         let impact = workflow_impact(&workflow_to_core(&workflow))
             .map_err(|err| internal_error(format!("failed to inspect workflow impact: {err}")))?;
         Ok(Some(
@@ -130,9 +134,12 @@ impl WorkflowRequestProcessor {
         &self,
         params: WorkflowDevelopParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.execute(WorkflowCommand::Develop {
-            description: params.description,
-        })
+        self.execute(
+            WorkflowCommand::Develop {
+                description: params.description,
+            },
+            params.stage_session_id,
+        )
         .map(|response: WorkflowDevelopResponse| Some(response.into()))
     }
 
@@ -140,10 +147,13 @@ impl WorkflowRequestProcessor {
         &self,
         params: WorkflowEditParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.execute(WorkflowCommand::Edit {
-            id: params.id,
-            instruction: params.instruction,
-        })
+        self.execute(
+            WorkflowCommand::Edit {
+                id: params.id,
+                instruction: params.instruction,
+            },
+            params.stage_session_id,
+        )
         .map(|response: WorkflowEditResponse| Some(response.into()))
     }
 
@@ -154,11 +164,14 @@ impl WorkflowRequestProcessor {
         let input = params
             .input
             .map(|value| WorkflowInputSource::Inline(value.to_string()));
-        self.execute(WorkflowCommand::Run {
-            id: params.id,
-            input,
-            input_fields: BTreeMap::new(),
-        })
+        self.execute(
+            WorkflowCommand::Run {
+                id: params.id,
+                input,
+                input_fields: BTreeMap::new(),
+            },
+            params.stage_session_id,
+        )
         .map(|response: WorkflowRunResponse| Some(response.into()))
     }
 
@@ -166,8 +179,11 @@ impl WorkflowRequestProcessor {
         &self,
         params: WorkflowValidateParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.execute(WorkflowCommand::Validate { id: params.id })
-            .map(|response: WorkflowValidateResponse| Some(response.into()))
+        self.execute(
+            WorkflowCommand::Validate { id: params.id },
+            params.stage_session_id,
+        )
+        .map(|response: WorkflowValidateResponse| Some(response.into()))
     }
 
     pub(crate) async fn repair(
@@ -175,7 +191,7 @@ impl WorkflowRequestProcessor {
         params: WorkflowRepairParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let response: WorkflowCommandResponse =
-            self.execute(WorkflowCommand::Fix { id: params.id })?;
+            self.execute(WorkflowCommand::Fix { id: params.id }, params.stage_session_id)?;
         let payload: WorkflowRepairPayload =
             serde_json::from_value(response.data).map_err(|err| {
                 internal_error(format!("failed to decode workflow repair payload: {err}"))
@@ -189,6 +205,22 @@ impl WorkflowRequestProcessor {
             }
             .into(),
         ))
+    }
+
+    pub(crate) async fn publish(
+        &self,
+        params: WorkflowStageSessionActionParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.execute(WorkflowCommand::Publish, Some(params.stage_session_id))
+            .map(|response: WorkflowPublishResponse| Some(response.into()))
+    }
+
+    pub(crate) async fn discard(
+        &self,
+        params: WorkflowStageSessionActionParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.execute(WorkflowCommand::Discard, Some(params.stage_session_id))
+            .map(|response: WorkflowDiscardResponse| Some(response.into()))
     }
 
     pub(crate) async fn config_read(
@@ -214,7 +246,7 @@ impl WorkflowRequestProcessor {
             }),
             None => WorkflowCommand::Config(WorkflowConfigCommand::Clear { key: params.key }),
         };
-        let _response = self.execute::<WorkflowCommandResponse>(command)?;
+        let _response = self.execute::<WorkflowCommandResponse>(command, None)?;
         let config = self.load_latest_config().await?;
         Ok(Some(
             WorkflowConfigWriteResponse {
@@ -230,13 +262,13 @@ impl WorkflowRequestProcessor {
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let command = parse_workflow_command(&params.args)
             .map_err(|err| invalid_params(format!("invalid workflow command: {err}")))?;
-        self.execute(command)
+        self.execute(command, params.stage_session_id)
             .map(|response: WorkflowCommandExecuteResponse| Some(response.into()))
     }
 
     pub(crate) async fn authoring_context_prepare(
         &self,
-        _params: WorkflowAuthoringContextPrepareParams,
+        params: WorkflowAuthoringContextPrepareParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let roots = codex_workflows::workflow_roots(
             self.config.codex_home.as_path(),
@@ -249,18 +281,19 @@ impl WorkflowRequestProcessor {
         Ok(Some(
             WorkflowAuthoringContextPrepareResponse {
                 roots,
-                workflows: self.discover_api_workflows()?,
+                workflows: self.discover_api_workflows(params.stage_session_id.as_deref())?,
                 config: config_values(&self.config.workflows),
             }
             .into(),
         ))
     }
 
-    fn discover_api_workflows(&self) -> Result<Vec<WorkflowSummary>, JSONRPCErrorError> {
-        discover_workflows(
-            self.config.codex_home.as_path(),
-            self.config.cwd.as_path(),
-            &self.config.workflows,
+    fn discover_api_workflows(
+        &self,
+        stage_session_id: Option<&str>,
+    ) -> Result<Vec<WorkflowSummary>, JSONRPCErrorError> {
+        discover_workflows_for_context(
+            &self.workflow_command_context(stage_session_id.map(ToString::to_string)),
         )
         .map(|workflows| workflows.into_iter().map(summary_to_api).collect())
         .map_err(|err| internal_error(format!("failed to discover workflows: {err}")))
@@ -270,45 +303,53 @@ impl WorkflowRequestProcessor {
         &self,
         id: String,
         target: Option<String>,
+        stage_session_id: Option<&str>,
     ) -> Result<WorkflowSummary, JSONRPCErrorError> {
         if let Some(target) = target {
             let parsed = parse_mention_target(&target)
                 .map_err(|err| invalid_params(format!("invalid workflow target: {err}")))?;
             return self
-                .discover_api_workflows()?
+                .discover_api_workflows(stage_session_id)?
                 .into_iter()
                 .find(|workflow| workflow.id == parsed.id && workflow.root_path == parsed.root_path)
                 .ok_or_else(|| invalid_params("workflow target was not found"));
         }
 
-        find_workflow(
-            self.config.codex_home.as_path(),
-            self.config.cwd.as_path(),
-            &self.config.workflows,
+        resolve_workflow_for_context(
+            &self.workflow_command_context(stage_session_id.map(ToString::to_string)),
             &id,
         )
         .map(summary_to_api)
         .map_err(|err| invalid_params(format!("failed to resolve workflow: {err}")))
     }
 
-    fn execute<T>(&self, command: WorkflowCommand) -> Result<T, JSONRPCErrorError>
+    fn execute<T>(
+        &self,
+        command: WorkflowCommand,
+        stage_session_id: Option<String>,
+    ) -> Result<T, JSONRPCErrorError>
     where
         T: From<WorkflowCommandResponse>,
     {
-        execute_workflow_command(
-            WorkflowCommandContext {
-                codex_home: self.config.codex_home.as_path(),
-                cwd: self.config.cwd.as_path(),
-                config: &self.config.workflows,
-            },
-            command,
-        )
-        .map(|output| WorkflowCommandResponse {
-            message: output.message,
-            data: output.data,
-        })
-        .map(T::from)
-        .map_err(|err| internal_error(format!("workflow command failed: {err}")))
+        execute_workflow_command(self.workflow_command_context(stage_session_id), command)
+            .map(|output| WorkflowCommandResponse {
+                message: output.message,
+                data: output.data,
+            })
+            .map(T::from)
+            .map_err(|err| internal_error(format!("workflow command failed: {err}")))
+    }
+
+    fn workflow_command_context(
+        &self,
+        stage_session_id: Option<String>,
+    ) -> WorkflowCommandContext<'_> {
+        WorkflowCommandContext {
+            codex_home: self.config.codex_home.as_path(),
+            cwd: self.config.cwd.as_path(),
+            config: &self.config.workflows,
+            stage_session_id,
+        }
     }
 
     async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
@@ -676,7 +717,7 @@ fn config_value_to_command_string(value: JsonValue) -> String {
 struct WorkflowRepairPayload {
     workflow: WorkflowSummary,
     validation: WorkflowValidationInfo,
-    repair: WorkflowRepairResult,
+    repair: codex_app_server_protocol::WorkflowRepairResult,
 }
 
 #[cfg(test)]

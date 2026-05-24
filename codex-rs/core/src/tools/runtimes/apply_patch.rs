@@ -140,6 +140,15 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                 return decision;
             }
             if let Some(reason) = retry_reason {
+                let already_approved = {
+                    let store = session.services.tool_approvals.lock().await;
+                    approval_keys.iter().all(|key| {
+                        matches!(store.get(key), Some(ReviewDecision::ApprovedForSession))
+                    })
+                };
+                if already_approved {
+                    return ReviewDecision::ApprovedForSession;
+                }
                 let rx_approve = session
                     .request_patch_approval(
                         turn,
@@ -167,6 +176,12 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                         | ReviewDecision::Abort
                         | ReviewDecision::Denied
                         | ReviewDecision::TimedOut => {}
+                    }
+                }
+                if matches!(decision, ReviewDecision::ApprovedForSession) {
+                    let mut store = session.services.tool_approvals.lock().await;
+                    for key in approval_keys {
+                        store.put(key, ReviewDecision::ApprovedForSession);
                     }
                 }
                 return decision;

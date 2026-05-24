@@ -64,6 +64,7 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*responses_websocket_response_processed_enabled*/ false,
     )
 }
 

@@ -12,6 +12,12 @@
         "string",
         "null"
       ]
+    },
+    "stageSessionId": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "title": "WorkflowAuthoringContextPrepareParams",

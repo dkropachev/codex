@@ -155,10 +155,6 @@ use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-use wiremock::Mock;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path as wiremock_path;
 
 use codex_protocol::mcp::CallToolResult as McpCallToolResult;
 use pretty_assertions::assert_eq;
@@ -365,6 +361,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*responses_websocket_response_processed_enabled*/ false,
     )
     .new_session()
 }
@@ -2978,23 +2975,17 @@ async fn normal_chat_turn_applies_model_router_and_records_usage() -> anyhow::Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn routed_deepseek_turn_uses_chat_completions_and_records_usage() -> anyhow::Result<()> {
+async fn routed_deepseek_turn_uses_responses_api_and_records_usage() -> anyhow::Result<()> {
     let server = start_mock_server().await;
-    let chat_sse = concat!(
-        "data: {\"id\":\"chatcmpl-1\",\"model\":\"deepseek-chat\",\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
-        "data: {\"id\":\"chatcmpl-1\",\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":50,\"total_tokens\":150}}\n\n",
-        "data: [DONE]\n\n",
-    );
-    Mock::given(method("POST"))
-        .and(wiremock_path("/v1/chat/completions"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_string(chat_sse),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed_with_tokens("resp-1", 150),
+        ]),
+    )
+    .await;
 
     let base_url = format!("{}/v1", server.uri());
     let mut builder = test_codex()
@@ -3045,26 +3036,10 @@ async fn routed_deepseek_turn_uses_chat_completions_and_records_usage() -> anyho
 
     test.submit_turn("hello").await?;
 
-    let requests = server.received_requests().await.unwrap_or_default();
-    let chat_requests = requests
-        .iter()
-        .filter(|request| {
-            request.method == wiremock::http::Method::POST
-                && request.url.path().ends_with("/chat/completions")
-        })
-        .collect::<Vec<_>>();
-    let responses_requests = requests
-        .iter()
-        .filter(|request| {
-            request.method == wiremock::http::Method::POST
-                && request.url.path().ends_with("/responses")
-        })
-        .count();
-
-    assert_eq!(chat_requests.len(), 1);
-    assert_eq!(responses_requests, 0);
-    let body: serde_json::Value = serde_json::from_slice(&chat_requests[0].body)?;
-    assert_eq!(body["model"].as_str(), Some("deepseek-chat"));
+    assert_eq!(
+        response.single_request().body_json()["model"].as_str(),
+        Some("deepseek-chat")
+    );
 
     let runtime = codex_state::StateRuntime::init(
         test.codex_home_path().to_path_buf(),
@@ -3801,6 +3776,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
+            config
+                .features
+                .enabled(Feature::ResponsesWebsocketResponseProcessed),
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
@@ -5079,6 +5057,9 @@ where
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
+            config
+                .features
+                .enabled(Feature::ResponsesWebsocketResponseProcessed),
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
@@ -8187,7 +8168,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
 }
 
 #[tokio::test]
-async fn session_start_hooks_only_load_from_trusted_project_layers() -> std::io::Result<()> {
+async fn session_start_hook_preview_skips_project_local_hooks() -> std::io::Result<()> {
     let temp = tempfile::tempdir()?;
     let codex_home = temp.path().join("home");
     let project_root = temp.path().join("project");
@@ -8196,8 +8177,11 @@ async fn session_start_hooks_only_load_from_trusted_project_layers() -> std::io:
     let nested_dot_codex = nested.join(".codex");
 
     std::fs::create_dir_all(&codex_home)?;
+    std::fs::create_dir_all(&root_dot_codex)?;
     std::fs::create_dir_all(&nested_dot_codex)?;
     std::fs::write(project_root.join(".git"), "gitdir: here")?;
+    std::fs::write(root_dot_codex.join(CONFIG_TOML_FILE), "")?;
+    std::fs::write(nested_dot_codex.join(CONFIG_TOML_FILE), "")?;
     write_project_hooks(&root_dot_codex)?;
     write_project_hooks(&nested_dot_codex)?;
     write_project_trust_config(&codex_home, &[(&nested, TrustLevel::Trusted)]).await?;
@@ -8209,28 +8193,22 @@ async fn session_start_hooks_only_load_from_trusted_project_layers() -> std::io:
         .await?;
 
     let preview = preview_session_start_hooks(&config).await?;
-    let expected_source_path = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
-        nested_dot_codex.join("hooks.json"),
-    )?;
-    assert_eq!(
-        preview
-            .iter()
-            .map(|run| &run.source_path)
-            .collect::<Vec<_>>(),
-        vec![&expected_source_path],
-    );
+    assert!(preview.is_empty());
 
     Ok(())
 }
 
 #[tokio::test]
-async fn session_start_hooks_require_project_trust_without_config_toml() -> std::io::Result<()> {
+async fn session_start_hook_preview_ignores_project_local_hooks_without_user_layer_override()
+-> std::io::Result<()> {
     let temp = tempfile::tempdir()?;
     let project_root = temp.path().join("project");
     let nested = project_root.join("nested");
     let dot_codex = project_root.join(".codex");
     std::fs::create_dir_all(&nested)?;
+    std::fs::create_dir_all(&dot_codex)?;
     std::fs::write(project_root.join(".git"), "gitdir: here")?;
+    std::fs::write(dot_codex.join(CONFIG_TOML_FILE), "")?;
     write_project_hooks(&dot_codex)?;
 
     let cases = [
@@ -8243,7 +8221,7 @@ async fn session_start_hooks_require_project_trust_without_config_toml() -> std:
         (
             "trusted",
             vec![(&project_root as &Path, TrustLevel::Trusted)],
-            1_usize,
+            0_usize,
         ),
     ];
 

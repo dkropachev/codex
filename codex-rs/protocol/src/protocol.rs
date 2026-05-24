@@ -1984,6 +1984,10 @@ impl HasLegacyEvent for ItemStartedEvent {
                     call_id: item.id.clone(),
                 })]
             }
+            TurnItem::FileChange(item) => {
+                vec![item.as_legacy_begin_event(self.turn_id.clone())]
+            }
+            TurnItem::McpToolCall(item) => vec![item.as_legacy_begin_event()],
             _ => Vec::new(),
         }
     }
@@ -4138,6 +4142,7 @@ pub struct CollabResumeEndEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::items::FileChangeItem;
     use crate::items::ImageGenerationItem;
     use crate::items::UserMessageItem;
     use crate::items::WebSearchItem;
@@ -4796,6 +4801,38 @@ mod tests {
         match &legacy_events[0] {
             EventMsg::ImageGenerationBegin(event) => assert_eq!(event.call_id, "ig-1"),
             _ => panic!("expected ImageGenerationBegin event"),
+        }
+    }
+
+    #[test]
+    fn item_started_event_from_file_change_emits_begin_event() {
+        let event = ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            item: TurnItem::FileChange(FileChangeItem {
+                id: "patch-1".into(),
+                changes: HashMap::from([(
+                    test_path_buf("/tmp/example.txt"),
+                    FileChange::Add {
+                        content: "hello".into(),
+                    },
+                )]),
+                status: None,
+                auto_approved: Some(true),
+                stdout: None,
+                stderr: None,
+            }),
+        };
+
+        let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
+        assert_eq!(legacy_events.len(), 1);
+        match &legacy_events[0] {
+            EventMsg::PatchApplyBegin(event) => {
+                assert_eq!(event.call_id, "patch-1");
+                assert_eq!(event.turn_id, "turn-1");
+                assert!(event.auto_approved);
+            }
+            _ => panic!("expected PatchApplyBegin event"),
         }
     }
 

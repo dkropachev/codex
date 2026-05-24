@@ -6,6 +6,12 @@
         "type": "string"
       },
       "type": "array"
+    },
+    "stageSessionId": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

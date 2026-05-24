@@ -179,11 +179,6 @@ pub(crate) async fn handle_mcp_tool_call(
         .as_ref()
         .and_then(|metadata| metadata.connector_name.clone());
 
-    let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
-        call_id: call_id.clone(),
-        invocation: invocation.clone(),
-        mcp_app_resource_uri: mcp_app_resource_uri.clone(),
-    });
     let tool_call_started_item = build_mcp_tool_call_item(
         &call_id,
         &invocation,
@@ -195,7 +190,6 @@ pub(crate) async fn handle_mcp_tool_call(
     );
     sess.emit_turn_item_started(turn_context, &tool_call_started_item)
         .await;
-    notify_mcp_tool_call_event(sess.as_ref(), turn_context.as_ref(), tool_call_begin_event).await;
 
     if let Some(decision) = maybe_request_mcp_tool_approval(
         &sess,
@@ -366,13 +360,6 @@ async fn handle_approved_mcp_tool_call(
     let duration = start.elapsed();
     let completed_invocation = invocation.clone();
     let completed_mcp_app_resource_uri = mcp_app_resource_uri.clone();
-    let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
-        call_id: call_id.to_string(),
-        invocation,
-        mcp_app_resource_uri,
-        duration,
-        result: result.clone(),
-    });
     let (status, item_result, error) = match &result {
         Ok(result) if result.is_error.unwrap_or(false) => {
             (McpToolCallStatus::Failed, Some(result.clone()), None)
@@ -397,7 +384,6 @@ async fn handle_approved_mcp_tool_call(
     );
     sess.emit_turn_item_completed(turn_context, tool_call_completed_item)
         .await;
-    notify_mcp_tool_call_event(sess, turn_context, tool_call_end_event.clone()).await;
     maybe_track_codex_app_used(sess, turn_context, &server, &tool_name).await;
 
     let status = if result.is_ok() { "ok" } else { "error" };

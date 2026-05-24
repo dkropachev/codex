@@ -183,7 +183,10 @@ pub struct WorkflowConfigValues {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct WorkflowListParams {}
+pub struct WorkflowListParams {
+    #[ts(optional = nullable)]
+    pub stage_session_id: Option<String>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -200,6 +203,8 @@ pub struct WorkflowReadParams {
     pub id: String,
     #[ts(optional = nullable)]
     pub target: Option<String>,
+    #[ts(optional = nullable)]
+    pub stage_session_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -216,6 +221,8 @@ pub struct WorkflowReadResponse {
 #[ts(export_to = "v2/")]
 pub struct WorkflowImpactParams {
     pub id: String,
+    #[ts(optional = nullable)]
+    pub stage_session_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -230,6 +237,8 @@ pub struct WorkflowImpactResponse {
 #[ts(export_to = "v2/")]
 pub struct WorkflowDevelopParams {
     pub description: String,
+    #[ts(optional = nullable)]
+    pub stage_session_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -238,6 +247,8 @@ pub struct WorkflowDevelopParams {
 pub struct WorkflowEditParams {
     pub id: String,
     pub instruction: String,
+    #[ts(optional = nullable)]
+    pub stage_session_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -247,6 +258,8 @@ pub struct WorkflowRunParams {
     pub id: String,
     #[ts(optional = nullable)]
     pub input: Option<JsonValue>,
+    #[ts(optional = nullable)]
+    pub stage_session_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -254,6 +267,8 @@ pub struct WorkflowRunParams {
 #[ts(export_to = "v2/")]
 pub struct WorkflowValidateParams {
     pub id: String,
+    #[ts(optional = nullable)]
+    pub stage_session_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -261,6 +276,15 @@ pub struct WorkflowValidateParams {
 #[ts(export_to = "v2/")]
 pub struct WorkflowRepairParams {
     pub id: String,
+    #[ts(optional = nullable)]
+    pub stage_session_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowStageSessionActionParams {
+    pub stage_session_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -391,6 +415,8 @@ macro_rules! workflow_command_response_type {
 
 workflow_command_response_type!(WorkflowDevelopResponse);
 workflow_command_response_type!(WorkflowEditResponse);
+workflow_command_response_type!(WorkflowPublishResponse);
+workflow_command_response_type!(WorkflowDiscardResponse);
 workflow_command_response_type!(WorkflowRunResponse);
 workflow_command_response_type!(WorkflowValidateResponse);
 workflow_command_response_type!(WorkflowCommandExecuteResponse);
@@ -438,6 +464,8 @@ pub struct WorkflowConfigWriteResponse {
 #[ts(export_to = "v2/")]
 pub struct WorkflowCommandExecuteParams {
     pub args: Vec<String>,
+    #[ts(optional = nullable)]
+    pub stage_session_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -448,6 +476,8 @@ pub struct WorkflowAuthoringContextPrepareParams {
     pub id: Option<String>,
     #[ts(optional = nullable)]
     pub description: Option<String>,
+    #[ts(optional = nullable)]
+    pub stage_session_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

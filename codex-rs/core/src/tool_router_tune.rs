@@ -167,6 +167,9 @@ impl ToolRouterIntrospectionProvider for ToolRouterModelIntrospectionProvider {
                 .features
                 .enabled(codex_features::Feature::RuntimeMetrics),
             /*beta_features_header*/ None,
+            routed_config
+                .features
+                .enabled(codex_features::Feature::ResponsesWebsocketResponseProcessed),
         );
         let session_telemetry = SessionTelemetry::new(
             thread_id,
@@ -1195,7 +1198,12 @@ mod tests {
             window: "all".to_string(),
             model_slug: Some("gpt-test".to_string()),
             max_guidance_tokens,
-            introspection_provider: None,
+            introspection_provider: Some(Arc::new(StaticIntrospectionProvider {
+                selected_model: "gpt-test".to_string(),
+                output_text: valid_introspection_output(
+                    "Fallbacks most often selected list_dir. Prefer exact routes for repeated workspace reads.",
+                ),
+            })),
             apply,
         }
     }

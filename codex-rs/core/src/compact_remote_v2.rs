@@ -14,6 +14,7 @@ use crate::compact_remote::process_compacted_history;
 use crate::compact_remote::trim_function_call_history_to_fit_context_window;
 use crate::session::session::Session;
 use crate::session::turn::built_tools;
+use crate::session::turn::model_visible_tools_for_turn;
 use crate::session::turn_context::TurnContext;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
@@ -169,7 +170,7 @@ async fn run_remote_compact_task_inner_impl(
     });
     let prompt = Prompt {
         input,
-        tools: tool_router.model_visible_specs(),
+        tools: model_visible_tools_for_turn(&tool_router, turn_context.as_ref()),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         base_instructions,
         personality: turn_context.personality,

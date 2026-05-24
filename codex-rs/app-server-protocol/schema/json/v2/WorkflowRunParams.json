@@ -4,7 +4,13 @@
     "id": {
       "type": "string"
     },
-    "input": true
+    "input": true,
+    "stageSessionId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
   },
   "required": [
     "id"

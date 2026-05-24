@@ -304,7 +304,7 @@ mod tests {
 
         assert!(instructions.contains("/model-router: tune model router metrics"));
         assert!(instructions.contains("Plan Mode"));
-        assert!(instructions.contains("do not mutate files"));
+        assert!(instructions.contains("never modify the target workspace/repository"));
         assert!(instructions.contains("you may write only under the Codex config directory"));
         assert!(instructions.contains("<proposed_plan>"));
         assert!(!instructions.contains("User request:"));

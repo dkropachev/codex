@@ -498,7 +498,7 @@ async fn published_workflow_tools_are_added_to_router_specs() -> anyhow::Result<
                 status: WorkflowValidationStatus::Valid,
                 findings: Vec::new(),
             },
-            repair_mode: "threshold:3".to_string(),
+            repair_mode: codex_workflows::DEFAULT_REPAIR_MODE.to_string(),
         },
         tool: WorkflowToolSpec {
             description: "Run the Jira summary workflow".to_string(),

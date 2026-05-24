@@ -1130,6 +1130,12 @@ impl MessageProcessor {
             ClientRequest::WorkflowRepair { params, .. } => {
                 self.workflow_processor.repair(params).await
             }
+            ClientRequest::WorkflowPublish { params, .. } => {
+                self.workflow_processor.publish(params).await
+            }
+            ClientRequest::WorkflowDiscard { params, .. } => {
+                self.workflow_processor.discard(params).await
+            }
             ClientRequest::WorkflowConfigRead { params, .. } => {
                 self.workflow_processor.config_read(params).await
             }

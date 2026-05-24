@@ -1576,7 +1576,7 @@ mod tests {
     }
 
     #[test]
-    fn continuation_prompt_only_tells_model_to_update_goal_when_complete() {
+    fn continuation_prompt_includes_completion_and_blocker_guidance() {
         let prompt = continuation_prompt(&ThreadGoal {
             thread_id: ThreadId::new(),
             objective: "finish the stack".to_string(),
@@ -1593,7 +1593,7 @@ mod tests {
         assert!(prompt.contains("<untrusted_objective>\nfinish the stack\n</untrusted_objective>"));
         assert!(prompt.contains("Token budget: 10000"));
         assert!(prompt.contains("call update_goal with status \"complete\""));
-        assert!(!prompt.contains(
+        assert!(prompt.contains(
             "explain the blocker or next required input to the user and wait for new input"
         ));
         assert!(!prompt.contains("budgetLimited"));

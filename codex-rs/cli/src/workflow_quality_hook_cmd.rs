@@ -5,7 +5,6 @@ use anyhow::Context as _;
 use anyhow::Result;
 use codex_config::types::WorkflowsConfigToml;
 use serde::Deserialize;
-use serde_json::json;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,27 +21,17 @@ struct WorkflowQualityHookContext {
 pub(crate) fn run_workflow_quality_hook() -> Result<()> {
     match workflow_quality_feedback() {
         Ok(Some(feedback)) => {
-            println!(
-                "{}",
-                json!({
-                    "decision": "block",
-                    "reason": feedback.reason,
-                    "hookSpecificOutput": {
-                        "hookEventName": "PostToolUse",
-                        "additionalContext": feedback.additional_context,
-                    }
-                })
-            );
+            eprintln!("{}", feedback.reason);
+            if !feedback.additional_context.is_empty() {
+                eprintln!();
+                eprintln!("{}", feedback.additional_context);
+            }
+            std::process::exit(2);
         }
         Ok(None) => {}
         Err(err) => {
-            println!(
-                "{}",
-                json!({
-                    "decision": "block",
-                    "reason": format!("workflow quality hook failed: {err}")
-                })
-            );
+            eprintln!("workflow quality hook failed: {err}");
+            std::process::exit(2);
         }
     }
     Ok(())

@@ -4,6 +4,12 @@
     "id": {
       "type": "string"
     },
+    "stageSessionId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "target": {
       "type": [
         "string",

@@ -62,3 +62,49 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
             .is_some_and(|handler| Arc::ptr_eq(handler, &namespaced_handler))
     );
 }
+
+#[test]
+fn tool_output_feedback_appends_without_replacing_original_output() {
+    let output = ToolOutputWithFeedback::new(
+        Box::new(FunctionToolOutput::from_text("ok".to_string(), Some(true))),
+        "workflow validation failed".to_string(),
+    );
+
+    let response = output.to_response_item(
+        "call-1",
+        &ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+    );
+
+    assert_eq!(
+        response,
+        ResponseInputItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::ContentItems(vec![
+                    FunctionCallOutputContentItem::InputText {
+                        text: "ok".to_string(),
+                    },
+                    FunctionCallOutputContentItem::InputText {
+                        text: "workflow validation failed".to_string(),
+                    },
+                ]),
+                success: Some(true),
+            },
+        }
+    );
+}
+
+#[test]
+fn tool_output_feedback_ignores_empty_feedback() {
+    let original = ResponseInputItem::FunctionCallOutput {
+        call_id: "call-2".to_string(),
+        output: FunctionCallOutputPayload::from_text("ok".to_string()),
+    };
+
+    assert_eq!(
+        append_feedback_to_response_item(original.clone(), "   "),
+        original
+    );
+}
