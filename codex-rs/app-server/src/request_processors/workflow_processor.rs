@@ -350,6 +350,7 @@ impl WorkflowRequestProcessor {
             codex_home: self.config.codex_home.as_path(),
             cwd: self.config.cwd.as_path(),
             config: &self.config.workflows,
+            codex_self_exe: self.config.codex_self_exe.clone(),
             stage_session_id,
         }
     }

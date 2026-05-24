@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Stdio;
 
 use anyhow::Result;
 use anyhow::anyhow;
@@ -41,6 +42,7 @@ pub enum WorkflowRepairActionKind {
     ScaffoldWorkflowSource,
     ScaffoldWorkflowTests,
     AddCoverageMarkers,
+    AiRepair,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,6 +183,10 @@ pub(crate) fn repair_workflow_command(
         if !cycle_changed {
             let stop_reason = if unsupported_findings.is_empty() {
                 WorkflowRepairStopReason::NoChangesApplied
+            } else if let Some(action) = try_ai_repair(&ctx, &workflow, &unsupported_findings)? {
+                applied_fixes.push(action);
+                changed = true;
+                continue;
             } else {
                 WorkflowRepairStopReason::UnsupportedFindings
             };
@@ -204,6 +210,72 @@ pub(crate) fn repair_workflow_command(
             });
         }
     }
+}
+
+fn try_ai_repair(
+    ctx: &WorkflowCommandContext<'_>,
+    workflow: &crate::registry::WorkflowSummary,
+    unsupported_findings: &[WorkflowValidationFinding],
+) -> Result<Option<WorkflowRepairAction>> {
+    let Some(codex_self_exe) = ctx.codex_self_exe.as_ref() else {
+        return Ok(None);
+    };
+    if !codex_self_exe_supports_exec(codex_self_exe) {
+        return Ok(None);
+    }
+
+    let prompt = build_ai_repair_prompt(workflow, unsupported_findings)?;
+    let Ok(output) = Command::new(codex_self_exe)
+        .current_dir(&workflow.path)
+        .arg("exec")
+        .arg("-C")
+        .arg(&workflow.path)
+        .arg("--skip-git-repo-check")
+        .arg("--ephemeral")
+        .arg("--sandbox")
+        .arg("workspace-write")
+        .arg("--json")
+        .arg(prompt)
+        .output()
+    else {
+        return Ok(None);
+    };
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    Ok(Some(WorkflowRepairAction {
+        kind: WorkflowRepairActionKind::AiRepair,
+        path: workflow.path.clone(),
+        detail: format!(
+            "applied AI repair fallback after {} unsupported findings",
+            unsupported_findings.len()
+        ),
+    }))
+}
+
+fn codex_self_exe_supports_exec(codex_self_exe: &Path) -> bool {
+    Command::new(codex_self_exe)
+        .arg("exec")
+        .arg("--help")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn build_ai_repair_prompt(
+    workflow: &crate::registry::WorkflowSummary,
+    unsupported_findings: &[WorkflowValidationFinding],
+) -> Result<String> {
+    let findings_json = serde_json::to_string_pretty(unsupported_findings)?;
+    Ok(format!(
+        "You are the workflow-coder for a Codex workflow repair pass.\n\nOnly modify files inside this workflow directory: `{workflow_dir}`. Do not edit files outside it. Keep writes inside this workflow root. Do not edit `DESIGN.md`. Use only dependencies declared in the workflow's local `package.json`. Keep code in `src/`, tests in `src/tests/`, and state in `state/`.\n\nThe deterministic repair pass already handled known cases and stopped on these unsupported findings:\n{findings_json}\n\nFix the workflow until validation passes. If the right fix requires a design change, do not edit `DESIGN.md`; write a `DESIGN.md request` for the parent instead. Keep iterating until the workflow is clean or a design change is required.\n",
+        workflow_dir = workflow.path.display(),
+        findings_json = findings_json,
+    ))
 }
 
 fn apply_known_fix(
