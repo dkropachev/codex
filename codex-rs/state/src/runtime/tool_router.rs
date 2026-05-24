@@ -5,6 +5,39 @@ use std::collections::BTreeSet;
 
 const TOOL_ROUTER_RULE_MATCH_KEY_MAX_LEN: usize = 1024;
 const TOOL_ROUTER_TOOL_NAME: &str = "tool_router";
+pub const TOOL_ROUTER_REMEMBERED_TOOL_MAX_AGE_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+pub const TOOL_ROUTER_REMEMBERED_TOOL_NAMESPACE_SENTINEL: &str = "";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolRouterRememberedToolKey {
+    pub repo_key: String,
+    pub task_key: String,
+    pub tool_namespace: String,
+    pub tool_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolRouterRememberedToolRecord {
+    pub key: ToolRouterRememberedToolKey,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub request_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ToolRouterRememberedToolSelector {
+    pub tool_namespace: String,
+    pub tool_name: String,
+}
+
+impl ToolRouterRememberedToolRecord {
+    pub fn selector(&self) -> ToolRouterRememberedToolSelector {
+        ToolRouterRememberedToolSelector {
+            tool_namespace: self.key.tool_namespace.clone(),
+            tool_name: self.key.tool_name.clone(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolRouterLedgerEntry {
@@ -102,6 +135,80 @@ pub struct ToolRouterRulePruneResult {
 }
 
 impl StateRuntime {
+    pub async fn upsert_tool_router_remembered_tool(
+        &self,
+        key: ToolRouterRememberedToolKey,
+    ) -> anyhow::Result<()> {
+        let now_ms = Utc::now().timestamp_millis();
+        sqlx::query(
+            r#"
+            INSERT INTO tool_router_remembered_tools (
+                created_at_ms,
+                updated_at_ms,
+                repo_key,
+                task_key,
+                tool_namespace,
+                tool_name,
+                request_count
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 1)
+            ON CONFLICT(repo_key, task_key, tool_namespace, tool_name) DO UPDATE SET
+                updated_at_ms = excluded.updated_at_ms,
+                request_count = tool_router_remembered_tools.request_count + 1
+            "#,
+        )
+        .bind(now_ms)
+        .bind(now_ms)
+        .bind(key.repo_key)
+        .bind(key.task_key)
+        .bind(key.tool_namespace)
+        .bind(key.tool_name)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_tool_router_remembered_tools(
+        &self,
+        repo_key: &str,
+        task_key: &str,
+        updated_at_ms_cutoff: i64,
+    ) -> anyhow::Result<Vec<ToolRouterRememberedToolRecord>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT repo_key, task_key, tool_namespace, tool_name, created_at_ms, updated_at_ms, request_count
+            FROM tool_router_remembered_tools
+            WHERE repo_key = ?
+              AND task_key = ?
+              AND updated_at_ms >= ?
+            ORDER BY updated_at_ms DESC, request_count DESC, tool_namespace, tool_name
+            LIMIT 8
+            "#,
+        )
+        .bind(repo_key)
+        .bind(task_key)
+        .bind(updated_at_ms_cutoff)
+        .fetch_all(self.pool.as_ref())
+        .await?;
+
+        let mut records = Vec::with_capacity(rows.len());
+        for row in rows {
+            records.push(ToolRouterRememberedToolRecord {
+                key: ToolRouterRememberedToolKey {
+                    repo_key: row.try_get("repo_key")?,
+                    task_key: row.try_get("task_key")?,
+                    tool_namespace: row.try_get("tool_namespace")?,
+                    tool_name: row.try_get("tool_name")?,
+                },
+                created_at_ms: row.try_get("created_at_ms")?,
+                updated_at_ms: row.try_get("updated_at_ms")?,
+                request_count: row.try_get("request_count")?,
+            });
+        }
+
+        Ok(records)
+    }
+
     pub async fn record_tool_router_ledger_entry(
         &self,
         entry: ToolRouterLedgerEntry,
@@ -483,6 +590,330 @@ impl StateRuntime {
         .execute(self.pool.as_ref())
         .await?;
         Ok(rows_affected_i64(result.rows_affected()))
+    }
+}
+
+#[cfg(test)]
+mod ledger_tests {
+    use super::TOOL_ROUTER_REMEMBERED_TOOL_MAX_AGE_MS;
+    use super::TOOL_ROUTER_REMEMBERED_TOOL_NAMESPACE_SENTINEL;
+    use super::ToolRouterRememberedToolKey;
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    async fn insert_row(
+        runtime: &StateRuntime,
+        key: ToolRouterRememberedToolKey,
+        created_at_ms: i64,
+        updated_at_ms: i64,
+        request_count: i64,
+    ) {
+        sqlx::query(
+            r#"
+            INSERT INTO tool_router_remembered_tools (
+                created_at_ms,
+                updated_at_ms,
+                repo_key,
+                task_key,
+                tool_namespace,
+                tool_name,
+                request_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(created_at_ms)
+        .bind(updated_at_ms)
+        .bind(key.repo_key)
+        .bind(key.task_key)
+        .bind(key.tool_namespace)
+        .bind(key.tool_name)
+        .bind(request_count)
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("insert remembered tool row");
+    }
+
+    #[tokio::test]
+    async fn upsert_remembered_tool_increments_request_count_and_keeps_created_at() {
+        let tempdir = TempDir::new().expect("temp dir");
+        let runtime = StateRuntime::init(tempdir.path().to_path_buf(), "test".to_string())
+            .await
+            .expect("state runtime");
+
+        let key = ToolRouterRememberedToolKey {
+            repo_key: "/repo".to_string(),
+            task_key: "chat.default".to_string(),
+            tool_namespace: TOOL_ROUTER_REMEMBERED_TOOL_NAMESPACE_SENTINEL.to_string(),
+            tool_name: "apply_patch".to_string(),
+        };
+
+        runtime
+            .upsert_tool_router_remembered_tool(key.clone())
+            .await
+            .expect("first upsert");
+        let first = runtime
+            .list_tool_router_remembered_tools("/repo", "chat.default", i64::MIN)
+            .await
+            .expect("first lookup");
+        assert_eq!(first.len(), 1);
+        assert_eq!(
+            first[0].key.tool_namespace,
+            TOOL_ROUTER_REMEMBERED_TOOL_NAMESPACE_SENTINEL
+        );
+        assert_eq!(first[0].key.tool_name, "apply_patch");
+        assert_eq!(first[0].request_count, 1);
+
+        runtime
+            .upsert_tool_router_remembered_tool(key)
+            .await
+            .expect("second upsert");
+        let second = runtime
+            .list_tool_router_remembered_tools("/repo", "chat.default", i64::MIN)
+            .await
+            .expect("second lookup");
+
+        assert_eq!(second.len(), 1);
+        assert_eq!(
+            second[0].key.tool_namespace,
+            TOOL_ROUTER_REMEMBERED_TOOL_NAMESPACE_SENTINEL
+        );
+        assert_eq!(second[0].key.tool_name, "apply_patch");
+        assert_eq!(second[0].created_at_ms, first[0].created_at_ms);
+        assert_eq!(second[0].request_count, 2);
+        assert!(second[0].updated_at_ms >= first[0].updated_at_ms);
+    }
+
+    #[tokio::test]
+    async fn upsert_remembered_tools_keeps_plain_and_namespaced_rows_distinct() {
+        let tempdir = TempDir::new().expect("temp dir");
+        let runtime = StateRuntime::init(tempdir.path().to_path_buf(), "test".to_string())
+            .await
+            .expect("state runtime");
+
+        let plain_key = ToolRouterRememberedToolKey {
+            repo_key: "/repo".to_string(),
+            task_key: "chat.default".to_string(),
+            tool_namespace: TOOL_ROUTER_REMEMBERED_TOOL_NAMESPACE_SENTINEL.to_string(),
+            tool_name: "apply_patch".to_string(),
+        };
+        let namespaced_key = ToolRouterRememberedToolKey {
+            repo_key: "/repo".to_string(),
+            task_key: "chat.default".to_string(),
+            tool_namespace: "mcp__test_server__tools".to_string(),
+            tool_name: "apply_patch".to_string(),
+        };
+
+        runtime
+            .upsert_tool_router_remembered_tool(plain_key.clone())
+            .await
+            .expect("plain upsert");
+        runtime
+            .upsert_tool_router_remembered_tool(namespaced_key.clone())
+            .await
+            .expect("namespaced upsert");
+
+        let records = runtime
+            .list_tool_router_remembered_tools("/repo", "chat.default", i64::MIN)
+            .await
+            .expect("lookup");
+
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().any(|record| record.key == plain_key));
+        assert!(records.iter().any(|record| record.key == namespaced_key));
+    }
+
+    #[tokio::test]
+    async fn list_remembered_tools_orders_by_recency_count_namespace_and_name_and_caps_at_eight() {
+        let tempdir = TempDir::new().expect("temp dir");
+        let runtime = StateRuntime::init(tempdir.path().to_path_buf(), "test".to_string())
+            .await
+            .expect("state runtime");
+
+        let repo_key = "/repo".to_string();
+        let task_key = "module.review.triage".to_string();
+        let rows = [
+            (
+                ToolRouterRememberedToolKey {
+                    repo_key: repo_key.clone(),
+                    task_key: task_key.clone(),
+                    tool_namespace: "ns_z".to_string(),
+                    tool_name: "gamma".to_string(),
+                },
+                100,
+                300,
+                1,
+            ),
+            (
+                ToolRouterRememberedToolKey {
+                    repo_key: repo_key.clone(),
+                    task_key: task_key.clone(),
+                    tool_namespace: TOOL_ROUTER_REMEMBERED_TOOL_NAMESPACE_SENTINEL.to_string(),
+                    tool_name: "plain_high".to_string(),
+                },
+                200,
+                200,
+                7,
+            ),
+            (
+                ToolRouterRememberedToolKey {
+                    repo_key: repo_key.clone(),
+                    task_key: task_key.clone(),
+                    tool_namespace: "ns_a".to_string(),
+                    tool_name: "alpha".to_string(),
+                },
+                200,
+                200,
+                5,
+            ),
+            (
+                ToolRouterRememberedToolKey {
+                    repo_key: repo_key.clone(),
+                    task_key: task_key.clone(),
+                    tool_namespace: "ns_a".to_string(),
+                    tool_name: "beta".to_string(),
+                },
+                200,
+                200,
+                5,
+            ),
+            (
+                ToolRouterRememberedToolKey {
+                    repo_key: repo_key.clone(),
+                    task_key: task_key.clone(),
+                    tool_namespace: "ns_a".to_string(),
+                    tool_name: "delta".to_string(),
+                },
+                200,
+                200,
+                5,
+            ),
+            (
+                ToolRouterRememberedToolKey {
+                    repo_key: repo_key.clone(),
+                    task_key: task_key.clone(),
+                    tool_namespace: "ns_b".to_string(),
+                    tool_name: "aardvark".to_string(),
+                },
+                200,
+                200,
+                5,
+            ),
+            (
+                ToolRouterRememberedToolKey {
+                    repo_key: repo_key.clone(),
+                    task_key: task_key.clone(),
+                    tool_namespace: "ns_b".to_string(),
+                    tool_name: "zebra".to_string(),
+                },
+                200,
+                200,
+                5,
+            ),
+            (
+                ToolRouterRememberedToolKey {
+                    repo_key: repo_key.clone(),
+                    task_key: task_key.clone(),
+                    tool_namespace: TOOL_ROUTER_REMEMBERED_TOOL_NAMESPACE_SENTINEL.to_string(),
+                    tool_name: "plain_low".to_string(),
+                },
+                200,
+                200,
+                4,
+            ),
+            (
+                ToolRouterRememberedToolKey {
+                    repo_key,
+                    task_key,
+                    tool_namespace: TOOL_ROUTER_REMEMBERED_TOOL_NAMESPACE_SENTINEL.to_string(),
+                    tool_name: "plain_old".to_string(),
+                },
+                1,
+                1,
+                99,
+            ),
+        ];
+
+        for (key, created_at_ms, updated_at_ms, request_count) in rows {
+            insert_row(&runtime, key, created_at_ms, updated_at_ms, request_count).await;
+        }
+
+        let records = runtime
+            .list_tool_router_remembered_tools("/repo", "module.review.triage", 0)
+            .await
+            .expect("ordered lookup");
+
+        assert_eq!(records.len(), 8);
+        assert_eq!(records[0].key.tool_namespace, "ns_z");
+        assert_eq!(records[0].key.tool_name, "gamma");
+        assert_eq!(
+            records[1].key.tool_namespace,
+            TOOL_ROUTER_REMEMBERED_TOOL_NAMESPACE_SENTINEL
+        );
+        assert_eq!(records[1].key.tool_name, "plain_high");
+        assert_eq!(records[2].key.tool_namespace, "ns_a");
+        assert_eq!(records[2].key.tool_name, "alpha");
+        assert_eq!(records[3].key.tool_namespace, "ns_a");
+        assert_eq!(records[3].key.tool_name, "beta");
+        assert_eq!(records[4].key.tool_namespace, "ns_a");
+        assert_eq!(records[4].key.tool_name, "delta");
+        assert_eq!(records[5].key.tool_namespace, "ns_b");
+        assert_eq!(records[5].key.tool_name, "aardvark");
+        assert_eq!(records[6].key.tool_namespace, "ns_b");
+        assert_eq!(records[6].key.tool_name, "zebra");
+        assert_eq!(
+            records[7].key.tool_namespace,
+            TOOL_ROUTER_REMEMBERED_TOOL_NAMESPACE_SENTINEL
+        );
+        assert_eq!(records[7].key.tool_name, "plain_low");
+    }
+
+    #[tokio::test]
+    async fn list_remembered_tools_filters_out_stale_rows() {
+        let tempdir = TempDir::new().expect("temp dir");
+        let runtime = StateRuntime::init(tempdir.path().to_path_buf(), "test".to_string())
+            .await
+            .expect("state runtime");
+
+        let now_ms = Utc::now().timestamp_millis();
+        let fresh_key = ToolRouterRememberedToolKey {
+            repo_key: "/repo".to_string(),
+            task_key: "chat.plan".to_string(),
+            tool_namespace: TOOL_ROUTER_REMEMBERED_TOOL_NAMESPACE_SENTINEL.to_string(),
+            tool_name: "fresh_tool".to_string(),
+        };
+        let stale_key = ToolRouterRememberedToolKey {
+            repo_key: "/repo".to_string(),
+            task_key: "chat.plan".to_string(),
+            tool_namespace: TOOL_ROUTER_REMEMBERED_TOOL_NAMESPACE_SENTINEL.to_string(),
+            tool_name: "stale_tool".to_string(),
+        };
+
+        insert_row(
+            &runtime,
+            fresh_key.clone(),
+            now_ms - 1_000,
+            now_ms - 1_000,
+            1,
+        )
+        .await;
+        insert_row(
+            &runtime,
+            stale_key,
+            now_ms - TOOL_ROUTER_REMEMBERED_TOOL_MAX_AGE_MS - 10_000,
+            now_ms - TOOL_ROUTER_REMEMBERED_TOOL_MAX_AGE_MS - 10_000,
+            1,
+        )
+        .await;
+
+        let cutoff = now_ms - TOOL_ROUTER_REMEMBERED_TOOL_MAX_AGE_MS;
+        let records = runtime
+            .list_tool_router_remembered_tools("/repo", "chat.plan", cutoff)
+            .await
+            .expect("fresh lookup");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].key, fresh_key);
     }
 }
 

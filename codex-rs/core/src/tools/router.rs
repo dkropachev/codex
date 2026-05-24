@@ -14,6 +14,7 @@ use crate::tools::router_index::ToolRouterIndex;
 use crate::tools::routing_tool;
 use crate::tools::routing_tool::RouterResolution;
 use crate::tools::spec::build_specs_with_discoverable_tools;
+use crate::tools::tool_search_entry::build_tool_search_entries;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -23,9 +24,11 @@ use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_state::ToolRouterGuidanceKey;
 use codex_state::ToolRouterLedgerEntry;
+use codex_state::ToolRouterRememberedToolSelector;
 use codex_state::ToolRouterRulePruneOptions;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
+use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::TOOL_ROUTER_DEFAULT_GUIDANCE_TOKEN_CAP;
 use codex_tools::TOOL_ROUTER_DEFAULT_GUIDANCE_VERSION;
@@ -75,6 +78,7 @@ pub(crate) struct ToolRouterParams<'a> {
     pub(crate) unavailable_called_tools: Vec<ToolName>,
     pub(crate) parallel_mcp_server_names: HashSet<String>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
+    pub(crate) remembered_tool_selectors: Vec<ToolRouterRememberedToolSelector>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
     pub(crate) workflow_tools: Option<Vec<WorkflowPublishedTool>>,
 }
@@ -116,9 +120,21 @@ impl ToolRouter {
             unavailable_called_tools,
             parallel_mcp_server_names,
             discoverable_tools,
+            remembered_tool_selectors,
             dynamic_tools,
             workflow_tools,
         } = params;
+        let deferred_routed_specs: Vec<ToolSpec> = build_tool_search_entries(
+            deferred_mcp_tools.as_ref(),
+            &dynamic_tools
+                .iter()
+                .filter(|tool| tool.defer_loading)
+                .cloned()
+                .collect::<Vec<_>>(),
+        )
+        .into_iter()
+        .map(|entry| entry.output.into())
+        .collect();
         let builder = build_specs_with_discoverable_tools(
             config,
             mcp_tools,
@@ -147,32 +163,44 @@ impl ToolRouter {
                 .map(|configured_tool| configured_tool.spec.clone())
                 .collect()
         };
-        let (model_visible_specs, tool_router_token_estimates, tool_router_prompt_info) =
-            if config.tool_router {
-                let router_spec = create_tool_router_tool();
-                let format_description =
-                    tool_router_format_description(&router_spec, &unwrapped_model_visible_specs);
-                let token_estimates = ToolRouterTokenEstimates {
-                    visible_router_schema_tokens: estimate_tool_schema_tokens(
-                        std::slice::from_ref(&router_spec),
-                    ),
-                    hidden_tool_schema_tokens: estimate_tool_schema_tokens(
-                        &unwrapped_model_visible_specs,
-                    ),
-                };
-                let prompt_info = ToolRouterPromptInfo {
-                    format_description_tokens: i64::try_from(estimate_router_text_tokens(
-                        &format_description,
-                    ))
-                    .unwrap_or(i64::MAX),
-                    format_description,
-                    toolset_hash: toolset_hash_from_specs(&unwrapped_model_visible_specs),
-                    router_schema_version: TOOL_ROUTER_SCHEMA_VERSION,
-                };
-                (vec![router_spec], Some(token_estimates), Some(prompt_info))
-            } else {
-                (unwrapped_model_visible_specs, None, None)
+        let mut full_routed_specs = unwrapped_model_visible_specs.clone();
+        full_routed_specs.extend(deferred_routed_specs);
+        let (model_visible_specs, tool_router_token_estimates, tool_router_prompt_info) = if config
+            .tool_router
+        {
+            let router_spec = create_tool_router_tool();
+            let mut model_visible_specs = Vec::new();
+            model_visible_specs.push(router_spec.clone());
+            if let Some(tool_search_spec) = find_tool_search_spec(&unwrapped_model_visible_specs) {
+                model_visible_specs.push(tool_search_spec);
+            }
+            model_visible_specs.extend(build_remembered_model_visible_specs(
+                &full_routed_specs,
+                &remembered_tool_selectors,
+            ));
+            let format_description =
+                tool_router_format_description(&router_spec, &full_routed_specs);
+            let token_estimates = ToolRouterTokenEstimates {
+                visible_router_schema_tokens: estimate_tool_schema_tokens(&model_visible_specs),
+                hidden_tool_schema_tokens: estimate_tool_schema_tokens(&full_routed_specs),
             };
+            let prompt_info = ToolRouterPromptInfo {
+                format_description_tokens: i64::try_from(estimate_router_text_tokens(
+                    &format_description,
+                ))
+                .unwrap_or(i64::MAX),
+                format_description,
+                toolset_hash: toolset_hash_from_specs(&full_routed_specs),
+                router_schema_version: TOOL_ROUTER_SCHEMA_VERSION,
+            };
+            (
+                model_visible_specs,
+                Some(token_estimates),
+                Some(prompt_info),
+            )
+        } else {
+            (unwrapped_model_visible_specs, None, None)
+        };
 
         Self {
             registry,
@@ -813,4 +841,89 @@ fn default_tool_router_guidance_telemetry() -> ToolRouterGuidanceTelemetry {
 
 fn estimate_text_tokens(text: &str) -> i64 {
     i64::try_from(text.len().div_ceil(4)).unwrap_or(i64::MAX)
+}
+
+fn find_tool_search_spec(specs: &[ToolSpec]) -> Option<ToolSpec> {
+    specs.iter().find_map(|spec| match spec {
+        ToolSpec::ToolSearch { .. } => Some(spec.clone()),
+        ToolSpec::Function(_)
+        | ToolSpec::Namespace(_)
+        | ToolSpec::LocalShell {}
+        | ToolSpec::ImageGeneration { .. }
+        | ToolSpec::WebSearch { .. }
+        | ToolSpec::Freeform(_) => None,
+    })
+}
+
+fn build_remembered_model_visible_specs(
+    routed_specs: &[ToolSpec],
+    remembered_tool_selectors: &[ToolRouterRememberedToolSelector],
+) -> Vec<ToolSpec> {
+    let mut model_visible_specs = Vec::new();
+    let mut seen_selectors = HashSet::new();
+    let mut namespace_positions = HashMap::<String, usize>::new();
+
+    for selector in remembered_tool_selectors {
+        if !seen_selectors.insert(selector.clone()) {
+            continue;
+        }
+
+        if selector.tool_namespace.is_empty() {
+            if let Some(spec) = routed_specs.iter().find(|spec| {
+                !matches!(spec, ToolSpec::Namespace(_)) && spec.name() == selector.tool_name
+            }) {
+                model_visible_specs.push(spec.clone());
+            }
+            continue;
+        }
+
+        let Some((namespace_name, namespace_description, tool)) =
+            routed_specs.iter().find_map(|spec| match spec {
+                ToolSpec::Namespace(namespace) if namespace.name == selector.tool_namespace => {
+                    namespace.tools.iter().find_map(|tool| match tool {
+                        ResponsesApiNamespaceTool::Function(tool)
+                            if tool.name == selector.tool_name =>
+                        {
+                            Some((
+                                namespace.name.clone(),
+                                namespace.description.clone(),
+                                tool.clone(),
+                            ))
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+        else {
+            continue;
+        };
+
+        if let Some(index) = namespace_positions.get(&namespace_name).copied() {
+            if let Some(ToolSpec::Namespace(existing_namespace)) =
+                model_visible_specs.get_mut(index)
+                && !existing_namespace
+                    .tools
+                    .iter()
+                    .any(|existing_tool| match existing_tool {
+                        ResponsesApiNamespaceTool::Function(existing_tool) => {
+                            existing_tool.name == tool.name
+                        }
+                    })
+            {
+                existing_namespace
+                    .tools
+                    .push(ResponsesApiNamespaceTool::Function(tool));
+            }
+        } else {
+            namespace_positions.insert(namespace_name.clone(), model_visible_specs.len());
+            model_visible_specs.push(ToolSpec::Namespace(ResponsesApiNamespace {
+                name: namespace_name,
+                description: namespace_description,
+                tools: vec![ResponsesApiNamespaceTool::Function(tool)],
+            }));
+        }
+    }
+
+    model_visible_specs
 }

@@ -59,6 +59,7 @@ use crate::turn_timing::record_turn_ttft_metric;
 use crate::unavailable_tool::collect_unavailable_called_tools;
 use crate::util::backoff;
 use crate::util::error_or_panic;
+use chrono::Utc;
 use codex_analytics::AppInvocation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
@@ -66,7 +67,9 @@ use codex_analytics::InvocationType;
 use codex_analytics::TurnResolvedConfigFact;
 use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
+use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
+use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -96,6 +99,9 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_state::TOOL_ROUTER_REMEMBERED_TOOL_MAX_AGE_MS;
+use codex_state::ToolRouterRememberedToolRecord;
+use codex_state::ToolRouterRememberedToolSelector;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -1378,6 +1384,37 @@ pub(crate) async fn built_tools(
     .ok()
     .filter(|tools| !tools.is_empty());
 
+    let remembered_tool_selectors: Vec<ToolRouterRememberedToolSelector> = if let Some(task_key) =
+        turn_context.tool_router_task_key.as_deref()
+    {
+        if let Some(state_db) = sess.services.state_db.as_deref() {
+            let repo_key = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &turn_context.cwd)
+                .await
+                .map(|repo_root| repo_root.as_path().display().to_string())
+                .unwrap_or_else(|| turn_context.cwd.as_path().display().to_string());
+            let fresh_after_ms =
+                Utc::now().timestamp_millis() - TOOL_ROUTER_REMEMBERED_TOOL_MAX_AGE_MS;
+            let records: Vec<ToolRouterRememberedToolRecord> = match state_db
+                .list_tool_router_remembered_tools(&repo_key, task_key, fresh_after_ms)
+                .await
+            {
+                Ok(records) => records,
+                Err(err) => {
+                    warn!(error = %err, repo_key = %repo_key, task_key = task_key, "failed to load remembered tool selectors");
+                    Vec::new()
+                }
+            };
+            records
+                .into_iter()
+                .map(|record| record.selector())
+                .collect()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         ToolRouterParams {
@@ -1386,6 +1423,7 @@ pub(crate) async fn built_tools(
             unavailable_called_tools,
             parallel_mcp_server_names,
             discoverable_tools,
+            remembered_tool_selectors,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
             workflow_tools,
         },

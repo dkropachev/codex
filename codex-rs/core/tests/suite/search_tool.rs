@@ -2,12 +2,16 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
+use codex_config::config_toml::ModelRouterToml;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -17,7 +21,9 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
+use core_test_support::PathBufExt;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI;
 use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_RESOURCE_URI;
@@ -33,14 +39,22 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
+use std::sync::Arc;
 use std::time::Duration;
+use tempfile::TempDir;
 
 const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 2] = [
     "You have access to tools from the following sources",
@@ -136,6 +150,83 @@ fn configured_builder(apps_base_url: String) -> TestCodexBuilder {
     test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| configure_apps(config, apps_base_url.as_str()))
+}
+
+fn configured_builder_with_cwd(
+    apps_base_url: String,
+    home: Arc<TempDir>,
+    cwd: PathBuf,
+) -> TestCodexBuilder {
+    test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_home(home)
+        .with_config(move |config| {
+            configure_apps(config, apps_base_url.as_str());
+            config.cwd = cwd.abs();
+            config
+                .features
+                .enable(Feature::ToolRouter)
+                .expect("test config should allow feature update");
+            config.model_router = Some(ModelRouterToml {
+                enabled: true,
+                candidates: Vec::new(),
+                ..Default::default()
+            });
+        })
+}
+
+fn init_git_repo(path: &Path) {
+    let status = Command::new("git")
+        .arg("init")
+        .current_dir(path)
+        .status()
+        .expect("git init should run");
+    assert!(status.success(), "git init failed for {}", path.display());
+}
+
+async fn submit_turn_with_collaboration_mode(
+    test: &TestCodex,
+    prompt: &str,
+    collaboration_mode: CollaborationMode,
+) -> anyhow::Result<()> {
+    let session_model = test.session_configured.model.clone();
+    test.codex
+        .submit(Op::UserTurn {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: prompt.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.config.cwd.to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: Some(collaboration_mode),
+            personality: None,
+        })
+        .await?;
+
+    let turn_id = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| match event {
+            EventMsg::TurnComplete(event) => event.turn_id == turn_id,
+            _ => false,
+        },
+        Duration::from_secs(30),
+    )
+    .await;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -738,6 +829,259 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
             .iter()
             .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
         "post-tool follow-up should still rely on tool_search_output history, not namespace injection: {third_request_tools:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remembered_tools_are_reexposed_for_matching_repo_and_task() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    let home = Arc::new(TempDir::new()?);
+    let workspace_root = TempDir::new()?;
+    let git_workspace = workspace_root.path().join("git-workspace");
+    std::fs::create_dir_all(&git_workspace)?;
+    init_git_repo(&git_workspace);
+
+    let call_id = "tool-search-1";
+    let session_a_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-a-1"),
+                ev_tool_search_call(
+                    call_id,
+                    &json!({
+                        "query": "create calendar event",
+                        "limit": 1,
+                    }),
+                ),
+                ev_completed("resp-a-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-a-2"),
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "function_call",
+                        "call_id": "calendar-call-1",
+                        "name": SEARCH_CALENDAR_CREATE_TOOL,
+                        "namespace": SEARCH_CALENDAR_NAMESPACE,
+                        "arguments": serde_json::to_string(&json!({
+                            "title": "Lunch",
+                            "starts_at": "2026-03-10T12:00:00Z"
+                        })).expect("serialize calendar args")
+                    }
+                }),
+                ev_completed("resp-a-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-a-3"),
+                ev_assistant_message("msg-a", "done"),
+                ev_completed("resp-a-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder_a = configured_builder_with_cwd(
+        apps_server.chatgpt_base_url.clone(),
+        home.clone(),
+        git_workspace.clone(),
+    );
+    let test_a = builder_a.build(&server).await?;
+    test_a.submit_turn("Find the calendar create tool").await?;
+
+    let session_a_requests = session_a_mock.requests();
+    assert_eq!(session_a_requests.len(), 3);
+    let session_a_tools = tool_names(&session_a_requests[0].body_json());
+    assert!(
+        session_a_tools
+            .iter()
+            .any(|name| name == TOOL_SEARCH_TOOL_NAME),
+        "session A should advertise tool_search: {session_a_tools:?}"
+    );
+    assert!(
+        !session_a_tools
+            .iter()
+            .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
+        "session A should not advertise the remembered tool before it has been recorded: {session_a_tools:?}"
+    );
+
+    let session_b_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-b-1"),
+            ev_assistant_message("msg-b", "done"),
+            ev_completed("resp-b-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder_b = configured_builder_with_cwd(
+        apps_server.chatgpt_base_url.clone(),
+        home.clone(),
+        git_workspace.clone(),
+    );
+    let test_b = builder_b.build(&server).await?;
+    test_b.submit_turn("Find the calendar create tool").await?;
+
+    let session_b_tools = tool_names(&session_b_mock.requests()[0].body_json());
+    assert!(
+        session_b_tools
+            .iter()
+            .any(|name| name == TOOL_SEARCH_TOOL_NAME),
+        "session B should still advertise tool_search: {session_b_tools:?}"
+    );
+    assert!(
+        session_b_tools
+            .iter()
+            .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
+        "session B should directly advertise the remembered namespace: {session_b_tools:?}"
+    );
+    assert!(
+        !session_b_tools
+            .iter()
+            .any(|name| name == CALENDAR_CREATE_TOOL),
+        "session B should not expose the remembered leaf function directly: {session_b_tools:?}"
+    );
+
+    let session_c_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-c-1"),
+            ev_assistant_message("msg-c", "done"),
+            ev_completed("resp-c-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder_c =
+        configured_builder_with_cwd(apps_server.chatgpt_base_url.clone(), home, git_workspace);
+    let test_c = builder_c.build(&server).await?;
+    submit_turn_with_collaboration_mode(
+        &test_c,
+        "Find the calendar create tool",
+        CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: Settings {
+                model: test_c.session_configured.model.clone(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        },
+    )
+    .await?;
+
+    let session_c_tools = tool_names(&session_c_mock.requests()[0].body_json());
+    assert!(
+        session_c_tools
+            .iter()
+            .any(|name| name == TOOL_SEARCH_TOOL_NAME),
+        "session C should still advertise tool_search: {session_c_tools:?}"
+    );
+    assert!(
+        !session_c_tools
+            .iter()
+            .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
+        "session C should not advertise the remembered tool for a different task key: {session_c_tools:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remembered_tools_fall_back_to_cwd_outside_git_repos() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    let home = Arc::new(TempDir::new()?);
+    let workspace_root = TempDir::new()?;
+    let plain_workspace = workspace_root.path().join("plain-workspace");
+    std::fs::create_dir_all(&plain_workspace)?;
+
+    let call_id = "tool-search-1";
+    let session_a_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-d-1"),
+                ev_tool_search_call(
+                    call_id,
+                    &json!({
+                        "query": "create calendar event",
+                        "limit": 1,
+                    }),
+                ),
+                ev_completed("resp-d-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-d-2"),
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "function_call",
+                        "call_id": "calendar-call-1",
+                        "name": SEARCH_CALENDAR_CREATE_TOOL,
+                        "namespace": SEARCH_CALENDAR_NAMESPACE,
+                        "arguments": serde_json::to_string(&json!({
+                            "title": "Lunch",
+                            "starts_at": "2026-03-10T12:00:00Z"
+                        })).expect("serialize calendar args")
+                    }
+                }),
+                ev_completed("resp-d-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-d-3"),
+                ev_assistant_message("msg-d", "done"),
+                ev_completed("resp-d-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder_a = configured_builder_with_cwd(
+        apps_server.chatgpt_base_url.clone(),
+        home.clone(),
+        plain_workspace.clone(),
+    );
+    let test_a = builder_a.build(&server).await?;
+    test_a.submit_turn("Find the calendar create tool").await?;
+
+    let session_a_tools = tool_names(&session_a_mock.requests()[0].body_json());
+    assert!(
+        !session_a_tools
+            .iter()
+            .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
+        "session A should not advertise the remembered tool before it has been recorded: {session_a_tools:?}"
+    );
+
+    let session_b_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-d-4"),
+            ev_assistant_message("msg-d-2", "done"),
+            ev_completed("resp-d-4"),
+        ]),
+    )
+    .await;
+
+    let mut builder_b =
+        configured_builder_with_cwd(apps_server.chatgpt_base_url.clone(), home, plain_workspace);
+    let test_b = builder_b.build(&server).await?;
+    test_b.submit_turn("Find the calendar create tool").await?;
+
+    let session_b_tools = tool_names(&session_b_mock.requests()[0].body_json());
+    assert!(
+        session_b_tools
+            .iter()
+            .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
+        "session B should directly advertise the remembered namespace via cwd fallback: {session_b_tools:?}"
     );
 
     Ok(())

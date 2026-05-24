@@ -229,6 +229,7 @@ pub(super) async fn spawn_review_thread(
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
         model_router_route_changed: false,
+        tool_router_task_key: None,
         reasoning_effort,
         reasoning_summary,
         session_source,

@@ -379,6 +379,7 @@ async fn assert_model_tools(
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: std::collections::HashSet::new(),
             discoverable_tools: None,
+            remembered_tool_selectors: Vec::new(),
             dynamic_tools: &[],
             workflow_tools: None,
         },

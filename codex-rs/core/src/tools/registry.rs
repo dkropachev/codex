@@ -17,7 +17,10 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::hook_names::HookToolName;
+use crate::tools::router::ToolCallSource;
 use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
+use codex_exec_server::LOCAL_FS;
+use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterToolUse;
 use codex_hooks::HookPayload;
@@ -27,6 +30,7 @@ use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
+use codex_state::ToolRouterRememberedToolKey;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -363,6 +367,32 @@ impl ToolRegistry {
             let err = FunctionCallError::Fatal(message);
             dispatch_trace.record_failed(&err);
             return Err(err);
+        }
+
+        if matches!(
+            invocation.source,
+            ToolCallSource::Direct | ToolCallSource::Routed { .. }
+        ) && let Some(task_key) = invocation.turn.tool_router_task_key.as_deref()
+            && let Some(state_db) = invocation.session.services.state_db.as_deref()
+            && display_name != "tool_search"
+            && display_name != "tool_router"
+        {
+            let repo_key =
+                resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &invocation.turn.cwd)
+                    .await
+                    .map(|repo_root| repo_root.as_path().display().to_string())
+                    .unwrap_or_else(|| invocation.turn.cwd.as_path().display().to_string());
+            if let Err(err) = state_db
+                .upsert_tool_router_remembered_tool(ToolRouterRememberedToolKey {
+                    repo_key,
+                    task_key: task_key.to_string(),
+                    tool_namespace: invocation.tool_name.namespace.clone().unwrap_or_default(),
+                    tool_name: invocation.tool_name.name.clone(),
+                })
+                .await
+            {
+                tracing::warn!(error = %err, tool = %display_name, "failed to record remembered tool use");
+            }
         }
 
         if let Some(pre_tool_use_payload) = handler.pre_tool_use_payload(&invocation)

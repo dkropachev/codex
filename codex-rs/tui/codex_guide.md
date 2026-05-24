@@ -247,7 +247,7 @@ The temporary marketplace snapshot under `$CODEX_HOME/.tmp/plugins/plugins/` con
 
 ## Tool Router
 
-- Description: tool-router is the internal structured-tool surface. The model calls one `tool_router` function with intent, target metadata, a domain, and an action; Codex then routes to shell, filesystem, git, MCP, app, image, agent, memory, config, or direct internal tools.
+- Description: tool-router is the internal structured-tool surface. The model calls one `tool_router` function with intent, target metadata, a domain, and an action; Codex then routes to shell, filesystem, git, MCP, app, image, agent, memory, config, or direct internal tools. Remembered tool selectors are persisted in `tool_router_remembered_tools`, re-advertised only for a matching `(repo_key, task_key)` within the 30-day freshness window, and keyed by git trust root when available or absolute `cwd` otherwise.
 - User surfaces: there is no TUI slash command. `features.tool_router` controls model visibility, `codex tool-router tune --introspect` analyzes telemetry with a model-router-selected introspection model, and the raw `tool_router` call/result is the main runtime debugging surface.
 - Configuration: the router schema requires `request`, `where.kind`, `targets`, and `action.kind`. `verbosity` can be `auto`, `brief`, `normal`, or `full`. Default guidance version is 2, schema version is 1, default guidance cap is 600 tokens, and the hard cap is 1200 tokens.
 - Tuning: prefer exact `action.tool` or deterministic `action.kind`, typed targets, concrete payload keys, and `batch` for independent read-only reads. Dynamic guidance should stay small, sanitized, and keyed to repeated routing failures rather than request-specific paths. The optional introspection pass uses model-router for its model choice.
@@ -331,6 +331,23 @@ FROM tool_router_ledger
 ORDER BY created_at_ms DESC
 LIMIT 20;
 ```
+
+- Tool-router remembered-tools recipe:
+
+```sql
+SELECT repo_key, task_key, tool_namespace, tool_name,
+       datetime(created_at_ms / 1000, 'unixepoch') AS created,
+       datetime(updated_at_ms / 1000, 'unixepoch') AS updated,
+       request_count
+FROM tool_router_remembered_tools
+WHERE repo_key = '<repo-key>'
+  AND task_key = '<task-key>'
+  AND updated_at_ms >= (strftime('%s', 'now') * 1000) - 2592000000
+ORDER BY updated_at_ms DESC, request_count DESC, tool_namespace, tool_name
+LIMIT 8;
+```
+
+- `tool_namespace = ''` is the plain-tool sentinel; namespace-prefixed rows represent MCP or dynamic tool namespaces.
 
 - Plugin activity recipe: there is no dedicated plugin activity table. Prove plugin influence by combining `thread_dynamic_tools`, `logs_2.sqlite`, rollout items, and plugin files under `CODEX_HOME/plugins`. `thread_dynamic_tools` shows tool schemas captured at thread start; logs can show plugin list/read/install/uninstall paths when tracing captured them.
 

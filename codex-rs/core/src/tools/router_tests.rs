@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -11,11 +12,14 @@ use crate::tools::registry::ToolKind;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::router_index::ToolRouterIndex;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_mcp::ToolInfo;
 use codex_protocol::models::ResponseItem;
 use codex_state::ToolRouterDiagnosticsWindow;
+use codex_state::ToolRouterRememberedToolSelector;
 use codex_state::ToolRouterRequestShape;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -26,6 +30,7 @@ use codex_workflows::WorkflowSummary;
 use codex_workflows::WorkflowToolSpec;
 use codex_workflows::WorkflowValidation;
 use codex_workflows::WorkflowValidationStatus;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
@@ -59,6 +64,7 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
+            remembered_tool_selectors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
             workflow_tools: None,
         },
@@ -110,6 +116,7 @@ async fn tool_router_fanout_does_not_use_general_parallel_support() -> anyhow::R
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
+            remembered_tool_selectors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
             workflow_tools: None,
         },
@@ -142,6 +149,335 @@ async fn tool_router_fanout_does_not_use_general_parallel_support() -> anyhow::R
 }
 
 #[tokio::test]
+async fn tool_router_mode_without_deferred_tools_only_exposes_router() -> anyhow::Result<()> {
+    let (_, turn) = make_session_and_context().await;
+    let mut tools_config = turn.tools_config.clone();
+    tools_config.tool_router = true;
+    tools_config.search_tool = false;
+    let router = ToolRouter::from_config(
+        &tools_config,
+        ToolRouterParams {
+            deferred_mcp_tools: None,
+            mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
+            discoverable_tools: None,
+            remembered_tool_selectors: Vec::new(),
+            dynamic_tools: turn.dynamic_tools.as_slice(),
+            workflow_tools: None,
+        },
+    );
+
+    assert_eq!(
+        router
+            .model_visible_specs()
+            .iter()
+            .map(ToolSpec::name)
+            .collect::<Vec<_>>(),
+        vec!["tool_router"]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_router_mode_with_deferred_tools_exposes_tool_search() -> anyhow::Result<()> {
+    let (session, turn) = make_session_and_context().await;
+    let listed_mcp_tools = session
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .list_all_tools()
+        .await;
+    let mut tools_config = turn.tools_config.clone();
+    tools_config.tool_router = true;
+    tools_config.search_tool = true;
+    let router = ToolRouter::from_config(
+        &tools_config,
+        ToolRouterParams {
+            deferred_mcp_tools: Some(listed_mcp_tools),
+            mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
+            discoverable_tools: None,
+            remembered_tool_selectors: Vec::new(),
+            dynamic_tools: turn.dynamic_tools.as_slice(),
+            workflow_tools: None,
+        },
+    );
+
+    assert_eq!(
+        router
+            .model_visible_specs()
+            .iter()
+            .map(ToolSpec::name)
+            .collect::<Vec<_>>(),
+        vec!["tool_router", "tool_search"]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_router_mode_coalesces_remembered_namespace_children() -> anyhow::Result<()> {
+    let (_, turn) = make_session_and_context().await;
+    let mut tools_config = turn.tools_config.clone();
+    tools_config.tool_router = true;
+
+    let mcp_tools = HashMap::from([
+        (
+            "calendar_create_event".to_string(),
+            mcp_tool_info(
+                "mcp__test_server__calendar",
+                "create_event",
+                mcp_tool("create_event", "Create calendar event"),
+            ),
+        ),
+        (
+            "calendar_list_events".to_string(),
+            mcp_tool_info(
+                "mcp__test_server__calendar",
+                "list_events",
+                mcp_tool("list_events", "List calendar events"),
+            ),
+        ),
+    ]);
+
+    let base_router = ToolRouter::from_config(
+        &tools_config,
+        ToolRouterParams {
+            deferred_mcp_tools: None,
+            mcp_tools: Some(mcp_tools.clone()),
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
+            discoverable_tools: None,
+            remembered_tool_selectors: Vec::new(),
+            dynamic_tools: turn.dynamic_tools.as_slice(),
+            workflow_tools: None,
+        },
+    );
+    let plain_tool_name = ["shell", "local_shell", "exec_command", "shell_command"]
+        .into_iter()
+        .find(|name| base_router.specs().iter().any(|spec| spec.name() == *name))
+        .expect("test session should expose a plain shell-like tool")
+        .to_string();
+
+    let router = ToolRouter::from_config(
+        &tools_config,
+        ToolRouterParams {
+            deferred_mcp_tools: None,
+            mcp_tools: Some(mcp_tools),
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
+            discoverable_tools: None,
+            remembered_tool_selectors: vec![
+                ToolRouterRememberedToolSelector {
+                    tool_namespace: String::new(),
+                    tool_name: plain_tool_name.clone(),
+                },
+                ToolRouterRememberedToolSelector {
+                    tool_namespace: "mcp__test_server__calendar".to_string(),
+                    tool_name: "create_event".to_string(),
+                },
+                ToolRouterRememberedToolSelector {
+                    tool_namespace: "mcp__test_server__calendar".to_string(),
+                    tool_name: "list_events".to_string(),
+                },
+            ],
+            dynamic_tools: turn.dynamic_tools.as_slice(),
+            workflow_tools: None,
+        },
+    );
+
+    let visible_specs = router.model_visible_specs();
+    assert_eq!(
+        visible_specs.iter().map(ToolSpec::name).collect::<Vec<_>>(),
+        vec![
+            "tool_router",
+            plain_tool_name.as_str(),
+            "mcp__test_server__calendar"
+        ]
+    );
+
+    let ToolSpec::Namespace(namespace) = &visible_specs[2] else {
+        panic!("expected remembered namespace spec");
+    };
+    assert_eq!(namespace.name, "mcp__test_server__calendar");
+    assert_eq!(
+        namespace
+            .tools
+            .iter()
+            .map(|tool| match tool {
+                ResponsesApiNamespaceTool::Function(tool) => tool.name.as_str(),
+            })
+            .collect::<Vec<_>>(),
+        vec!["create_event", "list_events"]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_router_mode_reexposes_remembered_deferred_namespace_children() -> anyhow::Result<()> {
+    let (_, turn) = make_session_and_context().await;
+    let mut tools_config = turn.tools_config.clone();
+    tools_config.tool_router = true;
+    tools_config.search_tool = true;
+
+    let deferred_mcp_tools = HashMap::from([
+        (
+            "calendar_create_event".to_string(),
+            mcp_tool_info(
+                "mcp__test_server__calendar",
+                "create_event",
+                mcp_tool("create_event", "Create calendar event"),
+            ),
+        ),
+        (
+            "calendar_list_events".to_string(),
+            mcp_tool_info(
+                "mcp__test_server__calendar",
+                "list_events",
+                mcp_tool("list_events", "List calendar events"),
+            ),
+        ),
+    ]);
+
+    let router = ToolRouter::from_config(
+        &tools_config,
+        ToolRouterParams {
+            deferred_mcp_tools: Some(deferred_mcp_tools),
+            mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
+            discoverable_tools: None,
+            remembered_tool_selectors: vec![
+                ToolRouterRememberedToolSelector {
+                    tool_namespace: "mcp__test_server__calendar".to_string(),
+                    tool_name: "create_event".to_string(),
+                },
+                ToolRouterRememberedToolSelector {
+                    tool_namespace: "mcp__test_server__calendar".to_string(),
+                    tool_name: "list_events".to_string(),
+                },
+            ],
+            dynamic_tools: turn.dynamic_tools.as_slice(),
+            workflow_tools: None,
+        },
+    );
+
+    let visible_specs = router.model_visible_specs();
+    assert_eq!(
+        visible_specs.iter().map(ToolSpec::name).collect::<Vec<_>>(),
+        vec!["tool_router", "tool_search", "mcp__test_server__calendar"]
+    );
+
+    let ToolSpec::Namespace(namespace) = &visible_specs[2] else {
+        panic!("expected remembered namespace spec");
+    };
+    assert_eq!(namespace.name, "mcp__test_server__calendar");
+    assert_eq!(
+        namespace
+            .tools
+            .iter()
+            .map(|tool| match tool {
+                ResponsesApiNamespaceTool::Function(tool) => tool.name.as_str(),
+            })
+            .collect::<Vec<_>>(),
+        vec!["create_event", "list_events"]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_router_mode_keeps_prompt_info_stable_when_remembered_tools_change()
+-> anyhow::Result<()> {
+    let (_, turn) = make_session_and_context().await;
+    let mut tools_config = turn.tools_config.clone();
+    tools_config.tool_router = true;
+
+    let mcp_tools = HashMap::from([(
+        "calendar_create_event".to_string(),
+        mcp_tool_info(
+            "mcp__test_server__calendar",
+            "create_event",
+            mcp_tool("create_event", "Create calendar event"),
+        ),
+    )]);
+
+    let base_router = ToolRouter::from_config(
+        &tools_config,
+        ToolRouterParams {
+            deferred_mcp_tools: None,
+            mcp_tools: Some(mcp_tools.clone()),
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
+            discoverable_tools: None,
+            remembered_tool_selectors: Vec::new(),
+            dynamic_tools: turn.dynamic_tools.as_slice(),
+            workflow_tools: None,
+        },
+    );
+    let remembered_router = ToolRouter::from_config(
+        &tools_config,
+        ToolRouterParams {
+            deferred_mcp_tools: None,
+            mcp_tools: Some(mcp_tools),
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
+            discoverable_tools: None,
+            remembered_tool_selectors: vec![ToolRouterRememberedToolSelector {
+                tool_namespace: "mcp__test_server__calendar".to_string(),
+                tool_name: "create_event".to_string(),
+            }],
+            dynamic_tools: turn.dynamic_tools.as_slice(),
+            workflow_tools: None,
+        },
+    );
+
+    assert_ne!(
+        base_router
+            .model_visible_specs()
+            .iter()
+            .map(ToolSpec::name)
+            .collect::<Vec<_>>(),
+        remembered_router
+            .model_visible_specs()
+            .iter()
+            .map(ToolSpec::name)
+            .collect::<Vec<_>>()
+    );
+
+    let base_prompt_info = base_router
+        .tool_router_prompt_info()
+        .expect("base router prompt info should exist");
+    let remembered_prompt_info = remembered_router
+        .tool_router_prompt_info()
+        .expect("remembered router prompt info should exist");
+
+    assert_eq!(
+        base_prompt_info.format_description,
+        remembered_prompt_info.format_description
+    );
+    assert_eq!(
+        base_prompt_info.format_description_tokens,
+        remembered_prompt_info.format_description_tokens
+    );
+    assert_eq!(
+        base_prompt_info.toolset_hash,
+        remembered_prompt_info.toolset_hash
+    );
+    assert_eq!(
+        base_prompt_info.router_schema_version,
+        remembered_prompt_info.router_schema_version
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn published_workflow_tools_are_added_to_router_specs() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
     let published_tool = WorkflowPublishedTool {
@@ -160,7 +496,7 @@ async fn published_workflow_tools_are_added_to_router_specs() -> anyhow::Result<
             command_option_hints: Vec::new(),
             validation: WorkflowValidation {
                 status: WorkflowValidationStatus::Valid,
-                messages: Vec::new(),
+                findings: Vec::new(),
             },
             repair_mode: "threshold:3".to_string(),
         },
@@ -179,6 +515,7 @@ async fn published_workflow_tools_are_added_to_router_specs() -> anyhow::Result<
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
+            remembered_tool_selectors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
             workflow_tools: Some(vec![published_tool]),
         },
@@ -244,6 +581,7 @@ async fn mcp_parallel_support_uses_exact_payload_server() -> anyhow::Result<()> 
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::from(["echo".to_string()]),
             discoverable_tools: None,
+            remembered_tool_selectors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
             workflow_tools: None,
         },
@@ -446,4 +784,36 @@ fn function_tool(name: &str) -> ToolSpec {
         parameters: JsonSchema::object(Default::default(), None, Some(false.into())),
         output_schema: None,
     })
+}
+
+fn mcp_tool(name: &str, description: &str) -> rmcp::model::Tool {
+    rmcp::model::Tool {
+        name: name.to_string().into(),
+        title: None,
+        description: Some(description.to_string().into()),
+        input_schema: std::sync::Arc::new(rmcp::model::object(json!({"type": "object"}))),
+        output_schema: None,
+        annotations: None,
+        execution: None,
+        icons: None,
+        meta: None,
+    }
+}
+
+fn mcp_tool_info(
+    callable_namespace: &str,
+    callable_name: &str,
+    tool: rmcp::model::Tool,
+) -> ToolInfo {
+    ToolInfo {
+        server_name: "test_server".to_string(),
+        callable_name: callable_name.to_string(),
+        callable_namespace: callable_namespace.to_string(),
+        server_instructions: Some("Calendar tools".to_string()),
+        tool,
+        connector_id: None,
+        connector_name: None,
+        plugin_display_names: Vec::new(),
+        connector_description: None,
+    }
 }

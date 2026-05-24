@@ -88,6 +88,18 @@ impl Session {
                             turn_context.as_ref(),
                             routed_config,
                             /*model_router_route_changed*/ false,
+                            Some(task_key),
+                        )
+                        .await,
+                    );
+                }
+                if turn_context.tool_router_task_key.is_none() {
+                    return Arc::new(
+                        self.rebuild_turn_context_from_config(
+                            turn_context.as_ref(),
+                            routed_config,
+                            /*model_router_route_changed*/ false,
+                            Some(task_key),
                         )
                         .await,
                     );
@@ -99,7 +111,19 @@ impl Session {
         let accounting_cleared = had_accounting && routed_config.model_router_accounting.is_none();
         if route.is_none() && routed_config.model_router_accounting.is_none() && !accounting_cleared
         {
-            return turn_context;
+            if turn_context.tool_router_task_key.is_some() {
+                return turn_context;
+            }
+
+            return Arc::new(
+                self.rebuild_turn_context_from_config(
+                    turn_context.as_ref(),
+                    routed_config,
+                    /*model_router_route_changed*/ false,
+                    Some(task_key),
+                )
+                .await,
+            );
         }
 
         let model_router_route_changed = routed_config.model != previous_model
@@ -112,6 +136,7 @@ impl Session {
                 turn_context.as_ref(),
                 routed_config,
                 model_router_route_changed,
+                Some(task_key),
             )
             .await,
         )
@@ -122,6 +147,7 @@ impl Session {
         previous: &TurnContext,
         per_turn_config: Config,
         model_router_route_changed: bool,
+        tool_router_task_key: Option<String>,
     ) -> TurnContext {
         let mut session_configuration: SessionConfiguration = {
             let state = self.state.lock().await;
@@ -197,6 +223,7 @@ impl Session {
         rebuilt.model_verification_emitted =
             AtomicBool::new(previous.model_verification_emitted.load(Ordering::Relaxed));
         rebuilt.model_router_route_changed = model_router_route_changed;
+        rebuilt.tool_router_task_key = tool_router_task_key;
         rebuilt
     }
 }
