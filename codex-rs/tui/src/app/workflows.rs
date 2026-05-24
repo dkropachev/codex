@@ -175,6 +175,14 @@ impl App {
                     self.chat_widget
                         .add_to_history(crate::history_cell::WorkflowJsonCell::new(json));
                 }
+                Err(_) if command.first().is_some_and(|arg| arg == "workflow") => {
+                    self.chat_widget.add_to_history(
+                        crate::history_cell::WorkflowMarkdownCell::new(
+                            stdout.trim_end().to_string(),
+                            self.config.cwd.as_path(),
+                        ),
+                    );
+                }
                 Err(err) => {
                     self.chat_widget.add_error_message(format!(
                         "Workflow result for {display_command} was not valid JSON: {err}"

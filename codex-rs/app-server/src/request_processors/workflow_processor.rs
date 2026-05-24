@@ -25,6 +25,7 @@ use codex_app_server_protocol::WorkflowImpactParams;
 use codex_app_server_protocol::WorkflowImpactResponse;
 use codex_app_server_protocol::WorkflowListParams;
 use codex_app_server_protocol::WorkflowListResponse;
+use codex_app_server_protocol::WorkflowProgressNotification;
 use codex_app_server_protocol::WorkflowPublishResponse;
 use codex_app_server_protocol::WorkflowReadParams;
 use codex_app_server_protocol::WorkflowReadResponse;
@@ -47,6 +48,8 @@ use codex_config::types::WorkflowsConfigToml;
 use codex_core::config::Config;
 use codex_workflows::WorkflowCommand;
 use codex_workflows::WorkflowCommandContext;
+use codex_workflows::WorkflowCommandProgress;
+use codex_workflows::WorkflowCommandProgressHandler;
 use codex_workflows::WorkflowConfigCommand;
 use codex_workflows::WorkflowInputSource;
 use codex_workflows::discover_workflows_for_context;
@@ -57,22 +60,31 @@ use codex_workflows::resolve_workflow_for_context;
 use codex_workflows::workflow_impact;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
+use uuid::Uuid;
 
 use crate::config_manager::ConfigManager;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_params;
+use crate::outgoing_message::OutgoingMessageSender;
+use codex_app_server_protocol::ServerNotification;
 
 #[derive(Clone)]
 pub(crate) struct WorkflowRequestProcessor {
     config: Arc<Config>,
     config_manager: ConfigManager,
+    outgoing: Arc<OutgoingMessageSender>,
 }
 
 impl WorkflowRequestProcessor {
-    pub(crate) fn new(config: Arc<Config>, config_manager: ConfigManager) -> Self {
+    pub(crate) fn new(
+        config: Arc<Config>,
+        config_manager: ConfigManager,
+        outgoing: Arc<OutgoingMessageSender>,
+    ) -> Self {
         Self {
             config,
             config_manager,
+            outgoing,
         }
     }
 
@@ -191,9 +203,23 @@ impl WorkflowRequestProcessor {
         &self,
         params: WorkflowRepairParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let response: WorkflowCommandResponse = self.execute(
+        let run_id = Uuid::new_v4().to_string();
+        let outgoing = Arc::clone(&self.outgoing);
+        let progress = |event: WorkflowCommandProgress| {
+            outgoing.try_send_server_notification(ServerNotification::WorkflowProgress(
+                WorkflowProgressNotification {
+                    run_id: run_id.clone(),
+                    thread_id: None,
+                    message: event.message,
+                    data: event.data,
+                    status: None,
+                },
+            ));
+        };
+        let response: WorkflowCommandResponse = self.execute_with_progress(
             WorkflowCommand::Fix { id: params.id },
             params.stage_session_id,
+            Some(&progress),
         )?;
         let payload: WorkflowRepairPayload =
             serde_json::from_value(response.data).map_err(|err| {
@@ -297,7 +323,7 @@ impl WorkflowRequestProcessor {
         stage_session_id: Option<&str>,
     ) -> Result<Vec<WorkflowSummary>, JSONRPCErrorError> {
         discover_workflows_for_context(
-            &self.workflow_command_context(stage_session_id.map(ToString::to_string)),
+            &self.workflow_command_context(stage_session_id.map(ToString::to_string), None),
         )
         .map(|workflows| workflows.into_iter().map(summary_to_api).collect())
         .map_err(|err| internal_error(format!("failed to discover workflows: {err}")))
@@ -320,7 +346,7 @@ impl WorkflowRequestProcessor {
         }
 
         resolve_workflow_for_context(
-            &self.workflow_command_context(stage_session_id.map(ToString::to_string)),
+            &self.workflow_command_context(stage_session_id.map(ToString::to_string), None),
             &id,
         )
         .map(summary_to_api)
@@ -335,25 +361,42 @@ impl WorkflowRequestProcessor {
     where
         T: From<WorkflowCommandResponse>,
     {
-        execute_workflow_command(self.workflow_command_context(stage_session_id), command)
-            .map(|output| WorkflowCommandResponse {
-                message: output.message,
-                data: output.data,
-            })
-            .map(T::from)
-            .map_err(|err| internal_error(format!("workflow command failed: {err}")))
+        self.execute_with_progress(command, stage_session_id, None)
     }
 
-    fn workflow_command_context(
-        &self,
+    fn execute_with_progress<'a, T>(
+        &'a self,
+        command: WorkflowCommand,
         stage_session_id: Option<String>,
-    ) -> WorkflowCommandContext<'_> {
+        progress: Option<&'a WorkflowCommandProgressHandler<'a>>,
+    ) -> Result<T, JSONRPCErrorError>
+    where
+        T: From<WorkflowCommandResponse>,
+    {
+        execute_workflow_command(
+            self.workflow_command_context(stage_session_id, progress),
+            command,
+        )
+        .map(|output| WorkflowCommandResponse {
+            message: output.message,
+            data: output.data,
+        })
+        .map(T::from)
+        .map_err(|err| internal_error(format!("workflow command failed: {err}")))
+    }
+
+    fn workflow_command_context<'a>(
+        &'a self,
+        stage_session_id: Option<String>,
+        progress: Option<&'a WorkflowCommandProgressHandler<'a>>,
+    ) -> WorkflowCommandContext<'a> {
         WorkflowCommandContext {
             codex_home: self.config.codex_home.as_path(),
             cwd: self.config.cwd.as_path(),
             config: &self.config.workflows,
             codex_self_exe: self.config.codex_self_exe.clone(),
             stage_session_id,
+            progress,
         }
     }
 
@@ -741,6 +784,7 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
     use tempfile::TempDir;
+    use tokio::sync::mpsc;
 
     fn write_broken_workflow_fixture(workflow_dir: &std::path::Path) {
         fs::write(
@@ -841,7 +885,13 @@ export default async function run(_ctx: WorkflowContext, input: WorkflowInput): 
             Arg0DispatchPaths::default(),
             Arc::new(StaticThreadConfigLoader::new(Vec::new())),
         );
-        let processor = WorkflowRequestProcessor::new(Arc::new(config), config_manager);
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(16);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            outgoing_tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+        let processor =
+            WorkflowRequestProcessor::new(Arc::new(config), config_manager, Arc::clone(&outgoing));
 
         let Some(ClientResponsePayload::WorkflowRepair(response)) = processor
             .repair(WorkflowRepairParams {
@@ -864,5 +914,34 @@ export default async function run(_ctx: WorkflowContext, input: WorkflowInput): 
         assert!(!response.repair.applied_fixes.is_empty());
         assert_eq!(response.validation_command_results.len(), 1);
         assert!(response.validation_command_results[0].succeeded);
+
+        let mut progress_messages = Vec::new();
+        while let Ok(envelope) = outgoing_rx.try_recv() {
+            let crate::outgoing_message::OutgoingEnvelope::Broadcast { message } = envelope else {
+                continue;
+            };
+            let crate::outgoing_message::OutgoingMessage::AppServerNotification(
+                codex_app_server_protocol::ServerNotification::WorkflowProgress(notification),
+            ) = message
+            else {
+                continue;
+            };
+            progress_messages.push(notification.message);
+        }
+        assert!(
+            progress_messages
+                .iter()
+                .any(|message| message == "Validating workflow")
+        );
+        assert!(
+            progress_messages
+                .iter()
+                .any(|message| message == "Repair cycle started")
+        );
+        assert!(
+            progress_messages
+                .iter()
+                .any(|message| message == "Workflow repair complete")
+        );
     }
 }

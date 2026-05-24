@@ -136,7 +136,7 @@ fn format_workflow_progress_data(data: &serde_json::Value) -> Option<String> {
             }
 
             for (key, value) in object {
-                if matches!(key.as_str(), "stage" | "step" | "total") {
+                if matches!(key.as_str(), "stage" | "step" | "total" | "workflowId") {
                     continue;
                 }
                 if let Some(part) = named_workflow_value(key, value) {

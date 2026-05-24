@@ -101,6 +101,7 @@ async fn run_workflow(
                 config: &config,
                 codex_self_exe,
                 stage_session_id: Some(session_id),
+                progress: None,
             },
             WorkflowCommand::Run {
                 id: workflow_id,

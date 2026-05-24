@@ -2,6 +2,8 @@ use super::repair_workflow_command;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::execute::WorkflowCommandContext;
 use crate::execute::WorkflowCommandOutput;
@@ -319,12 +321,21 @@ fn repair_workflow_command_repairs_validation_findings_iteratively() {
         commit_policy: Some("manual".to_string()),
         ..Default::default()
     };
+    let progress_events = Arc::new(Mutex::new(Vec::new()));
+    let progress_events_for_callback = Arc::clone(&progress_events);
+    let progress = move |event: crate::execute::WorkflowCommandProgress| {
+        progress_events_for_callback
+            .lock()
+            .unwrap()
+            .push(event.message);
+    };
     let ctx = WorkflowCommandContext {
         codex_home: home.path(),
         cwd: cwd.path(),
         config: &config,
         codex_self_exe: None,
         stage_session_id: None,
+        progress: Some(&progress),
     };
 
     let output: WorkflowCommandOutput = repair_workflow_command(ctx, "broken/fix").unwrap();
@@ -354,6 +365,32 @@ fn repair_workflow_command_repairs_validation_findings_iteratively() {
             .as_array()
             .is_some_and(|fixes| !fixes.is_empty())
     );
+    let progress_events = progress_events.lock().unwrap();
+    assert!(
+        progress_events
+            .iter()
+            .any(|message| message == "Resolving workflow")
+    );
+    assert!(
+        progress_events
+            .iter()
+            .any(|message| message == "Validating workflow")
+    );
+    assert!(
+        progress_events
+            .iter()
+            .any(|message| message == "Repair cycle started")
+    );
+    assert!(
+        progress_events
+            .iter()
+            .any(|message| message == "Applied deterministic fixes")
+    );
+    assert!(
+        progress_events
+            .iter()
+            .any(|message| message == "Workflow repair complete")
+    );
 }
 
 #[test]
@@ -375,6 +412,7 @@ fn repair_workflow_command_reports_blocked_findings_when_mode_is_too_narrow() {
         config: &config,
         codex_self_exe: None,
         stage_session_id: None,
+        progress: None,
     };
 
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();
@@ -416,6 +454,7 @@ fn repair_workflow_command_reports_unsupported_validation_command_failures() {
         config: &config,
         codex_self_exe: None,
         stage_session_id: None,
+        progress: None,
     };
 
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();
@@ -470,6 +509,7 @@ fn repair_workflow_command_uses_ai_fallback_until_validation_passes() {
         config: &config,
         codex_self_exe: Some(codex_self_exe),
         stage_session_id: None,
+        progress: None,
     };
 
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();
@@ -513,6 +553,7 @@ fn repair_workflow_command_applies_known_build_command_fixers() {
         config: &config,
         codex_self_exe: None,
         stage_session_id: None,
+        progress: None,
     };
 
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();
@@ -545,6 +586,7 @@ fn repair_workflow_command_reports_created_layout_directories() {
         config: &config,
         codex_self_exe: None,
         stage_session_id: None,
+        progress: None,
     };
 
     let output = repair_workflow_command(ctx, "broken/layout").unwrap();
@@ -578,6 +620,7 @@ fn repair_workflow_command_commits_successful_repairs_when_commit_policy_allows_
         config: &config,
         codex_self_exe: None,
         stage_session_id: None,
+        progress: None,
     };
 
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();

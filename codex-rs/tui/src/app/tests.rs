@@ -715,6 +715,105 @@ sleep 0.2
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
+async fn builtin_workflow_command_plain_stdout_renders_markdown_result_cell() -> Result<()> {
+    let temp = tempdir()?;
+    let env_capture_path = temp.path().join("workflow-env-plain.txt");
+    let fake_codex_path = temp.path().join("fake-codex-plain.sh");
+    write_fake_workflow_executable(
+        &fake_codex_path,
+        &env_capture_path,
+        &format!(
+            r#"cat <<'EOF' 1>&2
+{WORKFLOW_RUNTIME_EVENT_PREFIX}{{"type":"progress","message":"Validating workflow","data":{{"stage":"validating","workflowId":"broken/fix"}}}}
+EOF
+cat <<'EOF'
+Repairing workflow `fix` with `all` mode.
+Validation passed.
+EOF
+sleep 0.2
+"#,
+        ),
+    )?;
+
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.cwd = AbsolutePathBuf::try_from(temp.path().to_path_buf())
+        .expect("temp workflow cwd should be absolute");
+    while app_event_rx.try_recv().is_ok() {}
+
+    let thread_id = ThreadId::new();
+    let session = test_thread_session(thread_id, test_path_buf("/tmp/project"));
+    app.chat_widget.handle_thread_session(session);
+    app.config.codex_self_exe = Some(fake_codex_path);
+
+    app.run_workflow_command(vec![
+        "workflow".to_string(),
+        "repair".to_string(),
+        "broken/fix".to_string(),
+    ]);
+
+    let progress_notification = time::timeout(Duration::from_secs(1), async {
+        loop {
+            let event = app_event_rx
+                .recv()
+                .await
+                .expect("workflow event channel closed unexpectedly");
+            if let AppEvent::WorkflowProgress { notification } = event {
+                return notification;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for workflow progress event");
+    assert_eq!(progress_notification.message, "Validating workflow");
+    app.handle_workflow_progress_notification(progress_notification);
+
+    let live_status = app
+        .chat_widget
+        .status_widget_for_test()
+        .expect("workflow progress should be visible before completion");
+    assert_eq!(
+        live_status.header(),
+        "Workflow broken/fix: Validating workflow (validating)"
+    );
+
+    let (finished_run_id, command, stdout, result) = time::timeout(Duration::from_secs(1), async {
+        loop {
+            let event = app_event_rx
+                .recv()
+                .await
+                .expect("workflow event channel closed unexpectedly");
+            if let AppEvent::WorkflowProcessFinished {
+                run_id,
+                command,
+                stdout,
+                result,
+            } = event
+            {
+                return (run_id, command, stdout, result);
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for workflow finish event");
+    app.handle_workflow_process_finished(finished_run_id, command, stdout, result);
+
+    let cell = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => Some(cell),
+            _ => None,
+        })
+        .expect("expected workflow markdown history cell");
+    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 120));
+    insta::assert_snapshot!(
+        rendered,
+        @"\n• Workflow Result\n \n  Repairing workflow fix with all mode.\n  Validation passed.\n"
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
 async fn workflow_command_end_to_end_failure_surfaces_stderr_and_clears_status() -> Result<()> {
     let temp = tempdir()?;
     let env_capture_path = temp.path().join("workflow-env-failure.txt");

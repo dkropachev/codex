@@ -60,6 +60,27 @@ pub struct WorkflowCommandContext<'a> {
     pub config: &'a WorkflowsConfigToml,
     pub codex_self_exe: Option<PathBuf>,
     pub stage_session_id: Option<String>,
+    pub progress: Option<&'a WorkflowCommandProgressHandler<'a>>,
+}
+
+pub type WorkflowCommandProgressHandler<'a> = dyn Fn(WorkflowCommandProgress) + Send + Sync + 'a;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowCommandProgress {
+    pub message: String,
+    pub data: Option<JsonValue>,
+}
+
+impl WorkflowCommandContext<'_> {
+    pub(crate) fn report_progress(&self, message: impl Into<String>, data: JsonValue) {
+        if let Some(progress) = self.progress {
+            progress(WorkflowCommandProgress {
+                message: message.into(),
+                data: Some(data),
+            });
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1371,6 +1392,7 @@ mod tests {
                 config: &config,
                 codex_self_exe: None,
                 stage_session_id: None,
+                progress: None,
             },
             WorkflowCommand::Develop {
                 description: "Jira Summary".to_string(),
@@ -1574,6 +1596,7 @@ mod tests {
             config: &config,
             codex_self_exe: None,
             stage_session_id: None,
+            progress: None,
         };
 
         let err = commit_workflow_changes(&ctx, &workflow_dir, "Update workflow documentation")
@@ -1610,6 +1633,7 @@ mod tests {
             config: &config,
             codex_self_exe: None,
             stage_session_id: None,
+            progress: None,
         };
         let workflow = find_workflow(home.path(), cwd.path(), &config, "review/fix").unwrap();
         let staged = stage_existing_workflow(&ctx, &workflow).unwrap();
@@ -1648,6 +1672,7 @@ mod tests {
             config: &config,
             codex_self_exe: None,
             stage_session_id: Some(session_id.clone()),
+            progress: None,
         };
 
         let workflow = find_workflow(home.path(), cwd.path(), &config, "review/fix").unwrap();
@@ -1692,6 +1717,7 @@ mod tests {
             config: &config,
             codex_self_exe: None,
             stage_session_id: Some(session_id.clone()),
+            progress: None,
         };
 
         let workflow = find_workflow(home.path(), cwd.path(), &config, "review/fix").unwrap();
@@ -1730,6 +1756,7 @@ mod tests {
             config: &config,
             codex_self_exe: None,
             stage_session_id: Some(session_id.clone()),
+            progress: None,
         };
 
         let workflow = find_workflow(home.path(), cwd.path(), &config, "review/fix").unwrap();
@@ -1771,6 +1798,7 @@ mod tests {
             config: &config,
             codex_self_exe: None,
             stage_session_id: Some(session_id.clone()),
+            progress: None,
         };
 
         let workflow = find_workflow(home.path(), cwd.path(), &config, "review/fix").unwrap();
@@ -1980,6 +2008,7 @@ process.exit(result.status ?? 1);
                 config: &WorkflowsConfigToml::default(),
                 codex_self_exe: None,
                 stage_session_id: None,
+                progress: None,
             },
             WorkflowCommand::Run {
                 id: "reports/runtime-progress".to_string(),
@@ -2092,6 +2121,7 @@ process.exit(result.status ?? 1);
                 config: &WorkflowsConfigToml::default(),
                 codex_self_exe: None,
                 stage_session_id: None,
+                progress: None,
             },
             WorkflowCommand::Run {
                 id: "reports/resident-host".to_string(),
@@ -2113,6 +2143,7 @@ process.exit(result.status ?? 1);
                 config: &WorkflowsConfigToml::default(),
                 codex_self_exe: None,
                 stage_session_id: None,
+                progress: None,
             },
             WorkflowCommand::Run {
                 id: "reports/resident-host".to_string(),
@@ -2251,6 +2282,7 @@ process.exit(result.status ?? 1);
                 config: &WorkflowsConfigToml::default(),
                 codex_self_exe: None,
                 stage_session_id: None,
+                progress: None,
             },
             WorkflowCommand::Run {
                 id: "reports/parent-review".to_string(),

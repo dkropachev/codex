@@ -71,6 +71,13 @@ pub(crate) fn repair_workflow_command(
     ctx: WorkflowCommandContext<'_>,
     id: &str,
 ) -> Result<WorkflowCommandOutput> {
+    ctx.report_progress(
+        "Resolving workflow",
+        json!({
+            "stage": "resolving",
+            "workflowId": id,
+        }),
+    );
     let initial_workflow = resolve_workflow_for_context(&ctx, id)
         .with_context(|| format!("failed to resolve workflow `{id}` for repair"))?;
     let repair_mode =
@@ -88,6 +95,22 @@ pub(crate) fn repair_workflow_command(
     let mut applied_fixes = Vec::new();
     let mut repair_cycles_run = 0;
     let mut changed = false;
+    ctx.report_progress(
+        "Starting workflow repair",
+        json!({
+            "stage": "starting",
+            "workflowId": workflow.id.as_str(),
+            "mode": repair_mode.to_string(),
+            "maxRepairCycles": max_repair_cycles,
+        }),
+    );
+    ctx.report_progress(
+        "Validating workflow",
+        json!({
+            "stage": "validating",
+            "workflowId": workflow.id.as_str(),
+        }),
+    );
     let mut last_report =
         validate_workflow(&workflow, run_validation_command).with_context(|| {
             format!(
@@ -95,6 +118,14 @@ pub(crate) fn repair_workflow_command(
                 workflow.id
             )
         })?;
+    ctx.report_progress(
+        "Validation completed",
+        json!({
+            "stage": "validating",
+            "workflowId": workflow.id.as_str(),
+            "findings": last_report.findings.len(),
+        }),
+    );
 
     if last_report.status == crate::registry::WorkflowValidationStatus::Valid {
         let repair = final_repair_result(FinalRepairResultInput {
@@ -108,10 +139,21 @@ pub(crate) fn repair_workflow_command(
             unsupported_findings: Vec::new(),
             remaining_findings: Vec::new(),
         });
+        report_repair_complete(&ctx, &workflow, repair.stop_reason, repair.changed);
         return Ok(build_output(&workflow, last_report, repair));
     }
 
-    for _ in 0..max_repair_cycles {
+    for cycle in 1..=max_repair_cycles {
+        ctx.report_progress(
+            "Repair cycle started",
+            json!({
+                "stage": "repairing",
+                "workflowId": workflow.id.as_str(),
+                "step": cycle,
+                "total": max_repair_cycles,
+                "findings": last_report.findings.len(),
+            }),
+        );
         let assessment = assess_findings(&workflow.path, &last_report, &repair_mode);
         if !assessment.blocked.is_empty() {
             let repair = final_repair_result(FinalRepairResultInput {
@@ -125,54 +167,102 @@ pub(crate) fn repair_workflow_command(
                 unsupported_findings: Vec::new(),
                 remaining_findings: api_findings(&last_report.findings),
             });
+            report_repair_complete(&ctx, &workflow, repair.stop_reason, repair.changed);
             return Ok(build_output(&workflow, last_report, repair));
         }
         if !assessment.unsupported.is_empty() {
-            if repair_mode.allows_action(WorkflowRepairActionKind::AiRepair)
-                && let Some(action) = try_ai_repair(&ctx, &workflow, &assessment.unsupported)
+            if repair_mode.allows_action(WorkflowRepairActionKind::AiRepair) {
+                ctx.report_progress(
+                    "Running AI repair fallback",
+                    json!({
+                        "stage": "aiRepair",
+                        "workflowId": workflow.id.as_str(),
+                        "step": cycle,
+                        "total": max_repair_cycles,
+                        "findings": assessment.unsupported.len(),
+                    }),
+                );
+                if let Some(action) = try_ai_repair(&ctx, &workflow, &assessment.unsupported)
                     .with_context(|| {
                         format!(
                             "failed to run AI repair fallback for workflow `{}`",
                             workflow.id
                         )
                     })?
-            {
-                changed = true;
-                repair_cycles_run += 1;
-                applied_fixes.push(action);
-                workflow = resolve_workflow_for_context(&ctx, id).with_context(|| {
-                    format!(
-                        "failed to refresh workflow summary for `{}` after AI repair fallback",
-                        workflow.id
-                    )
-                })?;
-                last_report =
-                    validate_workflow(&workflow, run_validation_command).with_context(|| {
+                {
+                    changed = true;
+                    repair_cycles_run += 1;
+                    applied_fixes.push(action);
+                    ctx.report_progress(
+                        "AI repair fallback applied",
+                        json!({
+                            "stage": "aiRepair",
+                            "workflowId": workflow.id.as_str(),
+                            "step": cycle,
+                            "total": max_repair_cycles,
+                        }),
+                    );
+                    workflow = resolve_workflow_for_context(&ctx, id).with_context(|| {
                         format!(
-                            "failed to validate workflow `{}` after AI repair cycle {}",
-                            workflow.id, repair_cycles_run
+                            "failed to refresh workflow summary for `{}` after AI repair fallback",
+                            workflow.id
                         )
                     })?;
-                if last_report.status == crate::registry::WorkflowValidationStatus::Valid {
-                    if should_commit_changes(&ctx) {
-                        commit_repair_changes(&workflow.path).with_context(|| {
-                            format!("failed to commit repaired workflow `{}`", workflow.id)
+                    ctx.report_progress(
+                        "Validating repaired workflow",
+                        json!({
+                            "stage": "validating",
+                            "workflowId": workflow.id.as_str(),
+                            "step": cycle,
+                            "total": max_repair_cycles,
+                        }),
+                    );
+                    last_report = validate_workflow(&workflow, run_validation_command)
+                        .with_context(|| {
+                            format!(
+                                "failed to validate workflow `{}` after AI repair cycle {}",
+                                workflow.id, repair_cycles_run
+                            )
                         })?;
+                    ctx.report_progress(
+                        "Validation completed",
+                        json!({
+                            "stage": "validating",
+                            "workflowId": workflow.id.as_str(),
+                            "step": cycle,
+                            "total": max_repair_cycles,
+                            "findings": last_report.findings.len(),
+                        }),
+                    );
+                    if last_report.status == crate::registry::WorkflowValidationStatus::Valid {
+                        if should_commit_changes(&ctx) {
+                            ctx.report_progress(
+                                "Committing repaired workflow",
+                                json!({
+                                    "stage": "committing",
+                                    "workflowId": workflow.id.as_str(),
+                                }),
+                            );
+                            commit_repair_changes(&workflow.path).with_context(|| {
+                                format!("failed to commit repaired workflow `{}`", workflow.id)
+                            })?;
+                        }
+                        let repair = final_repair_result(FinalRepairResultInput {
+                            repair_mode,
+                            max_repair_cycles,
+                            repair_cycles_run,
+                            changed,
+                            stop_reason: WorkflowRepairStopReason::Valid,
+                            applied_fixes,
+                            blocked_findings: Vec::new(),
+                            unsupported_findings: Vec::new(),
+                            remaining_findings: Vec::new(),
+                        });
+                        report_repair_complete(&ctx, &workflow, repair.stop_reason, repair.changed);
+                        return Ok(build_output(&workflow, last_report, repair));
                     }
-                    let repair = final_repair_result(FinalRepairResultInput {
-                        repair_mode,
-                        max_repair_cycles,
-                        repair_cycles_run,
-                        changed,
-                        stop_reason: WorkflowRepairStopReason::Valid,
-                        applied_fixes,
-                        blocked_findings: Vec::new(),
-                        unsupported_findings: Vec::new(),
-                        remaining_findings: Vec::new(),
-                    });
-                    return Ok(build_output(&workflow, last_report, repair));
+                    continue;
                 }
-                continue;
             }
             let repair = final_repair_result(FinalRepairResultInput {
                 repair_mode,
@@ -185,6 +275,7 @@ pub(crate) fn repair_workflow_command(
                 unsupported_findings: assessment.unsupported.iter().map(finding_to_api).collect(),
                 remaining_findings: api_findings(&last_report.findings),
             });
+            report_repair_complete(&ctx, &workflow, repair.stop_reason, repair.changed);
             return Ok(build_output(&workflow, last_report, repair));
         }
 
@@ -206,9 +297,19 @@ pub(crate) fn repair_workflow_command(
                 unsupported_findings: Vec::new(),
                 remaining_findings: Vec::new(),
             });
+            report_repair_complete(&ctx, &workflow, repair.stop_reason, repair.changed);
             return Ok(build_output(&workflow, last_report, repair));
         }
 
+        ctx.report_progress(
+            "Applying deterministic fixes",
+            json!({
+                "stage": "repairing",
+                "workflowId": workflow.id.as_str(),
+                "step": cycle,
+                "total": max_repair_cycles,
+            }),
+        );
         ensure_git_repo(&workflow.path).with_context(|| {
             format!(
                 "failed to ensure git repository for workflow `{}`",
@@ -271,12 +372,24 @@ pub(crate) fn repair_workflow_command(
                 unsupported_findings: Vec::new(),
                 remaining_findings: api_findings(&last_report.findings),
             });
+            report_repair_complete(&ctx, &workflow, repair.stop_reason, repair.changed);
             return Ok(build_output(&workflow, last_report, repair));
         }
 
         changed = true;
         repair_cycles_run += 1;
+        let cycle_action_count = cycle_actions.len();
         applied_fixes.extend(cycle_actions);
+        ctx.report_progress(
+            "Applied deterministic fixes",
+            json!({
+                "stage": "repairing",
+                "workflowId": workflow.id.as_str(),
+                "step": cycle,
+                "total": max_repair_cycles,
+                "fixes": cycle_action_count,
+            }),
+        );
 
         workflow = resolve_workflow_for_context(&ctx, id).with_context(|| {
             format!(
@@ -284,14 +397,40 @@ pub(crate) fn repair_workflow_command(
                 workflow.id
             )
         })?;
+        ctx.report_progress(
+            "Validating repaired workflow",
+            json!({
+                "stage": "validating",
+                "workflowId": workflow.id.as_str(),
+                "step": cycle,
+                "total": max_repair_cycles,
+            }),
+        );
         last_report = validate_workflow(&workflow, run_validation_command).with_context(|| {
             format!(
                 "failed to validate workflow `{}` after repair cycle {}",
                 workflow.id, repair_cycles_run
             )
         })?;
+        ctx.report_progress(
+            "Validation completed",
+            json!({
+                "stage": "validating",
+                "workflowId": workflow.id.as_str(),
+                "step": cycle,
+                "total": max_repair_cycles,
+                "findings": last_report.findings.len(),
+            }),
+        );
         if last_report.status == crate::registry::WorkflowValidationStatus::Valid {
             if should_commit_changes(&ctx) {
+                ctx.report_progress(
+                    "Committing repaired workflow",
+                    json!({
+                        "stage": "committing",
+                        "workflowId": workflow.id.as_str(),
+                    }),
+                );
                 commit_repair_changes(&workflow.path).with_context(|| {
                     format!("failed to commit repaired workflow `{}`", workflow.id)
                 })?;
@@ -307,6 +446,7 @@ pub(crate) fn repair_workflow_command(
                 unsupported_findings: Vec::new(),
                 remaining_findings: Vec::new(),
             });
+            report_repair_complete(&ctx, &workflow, repair.stop_reason, repair.changed);
             return Ok(build_output(&workflow, last_report, repair));
         }
     }
@@ -322,7 +462,25 @@ pub(crate) fn repair_workflow_command(
         unsupported_findings: Vec::new(),
         remaining_findings: api_findings(&last_report.findings),
     });
+    report_repair_complete(&ctx, &workflow, repair.stop_reason, repair.changed);
     Ok(build_output(&workflow, last_report, repair))
+}
+
+fn report_repair_complete(
+    ctx: &WorkflowCommandContext<'_>,
+    workflow: &WorkflowSummary,
+    stop_reason: WorkflowRepairStopReason,
+    changed: bool,
+) {
+    ctx.report_progress(
+        "Workflow repair complete",
+        json!({
+            "stage": "complete",
+            "workflowId": workflow.id.as_str(),
+            "stopReason": stop_reason,
+            "changed": changed,
+        }),
+    );
 }
 
 fn final_repair_result(input: FinalRepairResultInput) -> WorkflowRepairResult {

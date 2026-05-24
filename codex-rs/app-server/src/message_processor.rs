@@ -420,8 +420,11 @@ impl MessageProcessor {
             thread_watch_manager,
             thread_list_state_permit,
         );
-        let workflow_processor =
-            WorkflowRequestProcessor::new(Arc::clone(&config), config_manager.clone());
+        let workflow_processor = WorkflowRequestProcessor::new(
+            Arc::clone(&config),
+            config_manager.clone(),
+            Arc::clone(&outgoing),
+        );
         let artifact_processor = ArtifactRequestProcessor::new(Arc::clone(&config));
         if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {
             // Keep plugin startup warmups aligned at app-server startup.

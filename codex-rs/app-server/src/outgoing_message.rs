@@ -520,6 +520,18 @@ impl OutgoingMessageSender {
             .await;
     }
 
+    pub(crate) fn try_send_server_notification(&self, notification: ServerNotification) {
+        tracing::trace!("app-server event: {notification}");
+        self.analytics_events_client
+            .track_notification(notification.clone());
+        let outgoing_message = OutgoingMessage::AppServerNotification(notification);
+        if let Err(err) = self.sender.try_send(OutgoingEnvelope::Broadcast {
+            message: outgoing_message,
+        }) {
+            warn!("failed to enqueue server notification to client: {err:?}");
+        }
+    }
+
     pub(crate) async fn send_server_notification_to_connections(
         &self,
         connection_ids: &[ConnectionId],

@@ -3,11 +3,15 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_utils_cli::CliConfigOverrides;
+use codex_workflows::WORKFLOW_RUNTIME_EVENT_PREFIX;
 use codex_workflows::WorkflowCommandContext;
+use codex_workflows::WorkflowCommandProgress;
 use codex_workflows::WorkflowSummary;
 use codex_workflows::discover_workflows_for_context;
 use codex_workflows::execute_workflow_command;
 use codex_workflows::parse_workflow_command_with_workflows;
+use serde_json::Value as JsonValue;
+use serde_json::json;
 
 #[derive(Debug, clap::Parser)]
 #[command(bin_name = "codex workflow")]
@@ -45,6 +49,7 @@ pub(crate) async fn load_workflow_command_context(
         config: &config.workflows,
         codex_self_exe: config.codex_self_exe.clone(),
         stage_session_id: stage_session_id.map(ToString::to_string),
+        progress: None,
     })?;
     Ok((config, workflows))
 }
@@ -63,6 +68,25 @@ pub async fn run_workflow_command(
     )
     .await?;
     let command = parse_workflow_command_with_workflows(&cmd.args, &workflows)?;
+    let workflow_run_id = std::env::var("CODEX_WORKFLOW_RUN_ID").ok();
+    let progress = |event: WorkflowCommandProgress| {
+        if workflow_run_id.is_some() {
+            let payload = json!({
+                "type": "progress",
+                "message": event.message,
+                "data": event.data,
+            });
+            eprintln!("{WORKFLOW_RUNTIME_EVENT_PREFIX}{payload}");
+        } else {
+            let detail = event.data.as_ref().and_then(format_cli_progress_data);
+            match (event.message.is_empty(), detail) {
+                (true, Some(detail)) => eprintln!("{detail}"),
+                (false, Some(detail)) => eprintln!("{} ({detail})", event.message),
+                (false, None) => eprintln!("{}", event.message),
+                (true, None) => {}
+            }
+        }
+    };
     let output = execute_workflow_command(
         WorkflowCommandContext {
             codex_home: config.codex_home.as_path(),
@@ -70,9 +94,87 @@ pub async fn run_workflow_command(
             config: &config.workflows,
             codex_self_exe: config.codex_self_exe.clone(),
             stage_session_id: cmd.stage_session_id,
+            progress: Some(&progress),
         },
         command,
     )?;
     println!("{}", output.message);
     Ok(())
+}
+
+fn format_cli_progress_data(data: &JsonValue) -> Option<String> {
+    let object = data.as_object()?;
+    let mut parts = Vec::new();
+
+    if let Some(workflow_id) = object.get("workflowId").and_then(simple_progress_value) {
+        parts.push(workflow_id);
+    }
+
+    match (
+        object.get("step").and_then(simple_progress_value),
+        object.get("total").and_then(simple_progress_value),
+    ) {
+        (Some(step), Some(total)) => parts.push(format!("cycle {step}/{total}")),
+        (Some(step), None) => parts.push(format!("cycle {step}")),
+        (None, Some(total)) => parts.push(format!("total cycles {total}")),
+        (None, None) => {}
+    }
+
+    for key in [
+        "mode",
+        "maxRepairCycles",
+        "findings",
+        "fixes",
+        "stopReason",
+        "changed",
+    ] {
+        if let Some(value) = object.get(key).and_then(simple_progress_value) {
+            parts.push(match key {
+                "maxRepairCycles" => format!("max cycles {value}"),
+                "stopReason" => format!("stop reason {value}"),
+                _ => format!("{key} {value}"),
+            });
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
+    }
+}
+
+fn simple_progress_value(value: &JsonValue) -> Option<String> {
+    match value {
+        JsonValue::Null => None,
+        JsonValue::String(text) => Some(text.clone()),
+        JsonValue::Number(number) => Some(number.to_string()),
+        JsonValue::Bool(flag) => Some(flag.to_string()),
+        JsonValue::Array(_) | JsonValue::Object(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    use super::format_cli_progress_data;
+
+    #[test]
+    fn cli_progress_data_formats_repair_context_without_raw_json() {
+        let data = json!({
+            "stage": "repairing",
+            "workflowId": "broken/fix",
+            "step": 2,
+            "total": 3,
+            "findings": 4,
+            "fixes": 2,
+        });
+
+        assert_eq!(
+            format_cli_progress_data(&data),
+            Some("broken/fix, cycle 2/3, findings 4, fixes 2".to_string())
+        );
+    }
 }

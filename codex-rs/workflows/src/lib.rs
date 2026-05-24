@@ -38,6 +38,8 @@ pub use context::WorkflowContext;
 pub use context::read_workflow_context_from_mention_target;
 pub use execute::WorkflowCommandContext;
 pub use execute::WorkflowCommandOutput;
+pub use execute::WorkflowCommandProgress;
+pub use execute::WorkflowCommandProgressHandler;
 pub use execute::discover_workflows_for_context;
 pub use execute::execute_workflow_command;
 pub use execute::resolve_workflow_for_context;
