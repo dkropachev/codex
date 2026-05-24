@@ -128,13 +128,14 @@ pub(crate) fn repair_workflow_command(
             return Ok(build_output(&workflow, last_report, repair));
         }
         if !assessment.unsupported.is_empty() {
-            if let Some(action) = try_ai_repair(&ctx, &workflow, &assessment.unsupported)
-                .with_context(|| {
-                    format!(
-                        "failed to run AI repair fallback for workflow `{}`",
-                        workflow.id
-                    )
-                })?
+            if repair_mode.allows_action(WorkflowRepairActionKind::AiRepair)
+                && let Some(action) = try_ai_repair(&ctx, &workflow, &assessment.unsupported)
+                    .with_context(|| {
+                        format!(
+                            "failed to run AI repair fallback for workflow `{}`",
+                            workflow.id
+                        )
+                    })?
             {
                 changed = true;
                 repair_cycles_run += 1;

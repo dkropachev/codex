@@ -854,12 +854,15 @@ export default async function run(_ctx: WorkflowContext, input: WorkflowInput): 
             panic!("expected workflow repair response");
         };
 
-        assert_eq!(response.message, "valid");
+        assert!(response.message.contains("Repairing workflow"));
+        assert!(response.message.contains("Validation passed."));
         assert_eq!(
             response.repair.stop_reason,
             codex_app_server_protocol::WorkflowRepairStopReason::Valid
         );
         assert_eq!(response.repair.changed, true);
         assert!(!response.repair.applied_fixes.is_empty());
+        assert_eq!(response.validation_command_results.len(), 1);
+        assert!(response.validation_command_results[0].succeeded);
     }
 }

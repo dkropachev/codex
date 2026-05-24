@@ -8,6 +8,7 @@ mod publication;
 mod quality_hook;
 mod registry;
 pub(crate) mod repair;
+mod repair_mode;
 mod spec;
 mod staging;
 mod validation;
