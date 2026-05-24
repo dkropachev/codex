@@ -1087,9 +1087,12 @@ process.exit(result.status ?? 1);
             result["workingDirectory"],
             serde_json::json!(cwd.path().display().to_string())
         );
+        let process_cwd = result["processCwd"]
+            .as_str()
+            .expect("process cwd should serialize as a string");
         assert_eq!(
-            result["processCwd"],
-            serde_json::json!(workflow.path.display().to_string())
+            std::fs::canonicalize(process_cwd).unwrap(),
+            std::fs::canonicalize(&workflow.path).unwrap()
         );
     }
 }
