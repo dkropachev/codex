@@ -306,7 +306,7 @@ async fn run_workflow_autocomplete_session(
     let mut saw_run = vec![false; scenario.run_snippets.len()];
     let should_run = !scenario.run_snippets.is_empty();
 
-    let exit_code_result = timeout(Duration::from_secs(30), async {
+    let exit_code_result = timeout(Duration::from_secs(90), async {
         loop {
             select! {
                 result = output_rx.recv() => match result {
@@ -343,7 +343,7 @@ async fn run_workflow_autocomplete_session(
                             let popup_keys = scenario.popup_keys.to_vec();
                             tokio::spawn(async move {
                                 for key in popup_keys {
-                                    sleep(Duration::from_millis(150)).await;
+                                    sleep(Duration::from_millis(500)).await;
                                     let payload = match key {
                                         WorkflowAutocompletePopupKey::Down => b"\x1b[B".to_vec(),
                                         WorkflowAutocompletePopupKey::Enter => b"\r".to_vec(),

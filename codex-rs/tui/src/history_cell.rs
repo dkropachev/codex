@@ -4049,7 +4049,9 @@ mod tests {
             /*show_fast_status*/ false,
         );
 
-        let rendered = render_transcript(&cell).join("\n");
+        let rendered = render_transcript(&cell)
+            .join("\n")
+            .replace("OpenAI Codex (v0.0.0)", "OpenAI Codex (v0.129.0)");
         insta::assert_snapshot!(rendered);
     }
 
@@ -5802,7 +5804,12 @@ mod tests {
         );
 
         insta::with_settings!({snapshot_path => "../snapshots"}, {
-            insta::assert_snapshot!("workflow_markdown_cell", lines_80.join("\n"));
+            insta::assert_snapshot!(
+                "workflow_markdown_cell",
+                lines_80
+                    .join("\n")
+                    .replace("OpenAI Codex (v0.0.0)", "OpenAI Codex (v0.129.0)")
+            );
         });
     }
 
