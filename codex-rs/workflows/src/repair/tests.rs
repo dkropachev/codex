@@ -243,6 +243,58 @@ fn write_build_fixable_workflow_fixture(workflow_dir: &Path) {
     .unwrap();
 }
 
+fn write_layout_fixable_workflow_fixture(workflow_dir: &Path) {
+    fs::create_dir_all(workflow_dir.join("src")).unwrap();
+    fs::create_dir_all(workflow_dir.join(".git")).unwrap();
+    fs::write(workflow_dir.join(".git/HEAD"), "ref: refs/heads/master\n").unwrap();
+    fs::write(
+        workflow_dir.join("README.md"),
+        "# Workflow\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
+    )
+    .unwrap();
+    fs::write(
+        workflow_dir.join("DESIGN.md"),
+        "# Workflow Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
+    )
+    .unwrap();
+    fs::write(
+        workflow_dir.join("package.json"),
+        r#"{
+  "name": "codex-workflow-layout-fixable",
+  "private": true,
+  "type": "module"
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        workflow_dir.join("src/workflow.ts"),
+        "export interface WorkflowInput { input?: string; }\nexport interface WorkflowOutput { ok: boolean; }\nexport const WorkflowOutput = { toTuiMarkdown() { return { markdown: \"done\" }; } };\nexport default async function workflow() { return { ok: true }; }\nexport async function complete() { return []; }\n",
+    )
+    .unwrap();
+    write_workflow_spec(
+        &workflow_dir.join("workflow.yaml"),
+        &crate::spec::WorkflowSpec {
+            id: "broken/layout".to_string(),
+            validation: json!({
+                "commands": ["exit 0"],
+                "coverage": {
+                    "positive": true,
+                    "negative": true,
+                    "progress": true,
+                    "finalResult": true,
+                    "failureUx": true,
+                    "load": true,
+                    "autocomplete": true,
+                    "recovery": false,
+                }
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+}
+
 #[test]
 fn repair_workflow_command_repairs_validation_findings_iteratively() {
     let home = TempDir::new().unwrap();
@@ -263,7 +315,9 @@ fn repair_workflow_command_repairs_validation_findings_iteratively() {
 
     let output: WorkflowCommandOutput = repair_workflow_command(ctx, "broken/fix").unwrap();
 
-    assert_eq!(output.message, "valid");
+    assert!(output.message.contains("Repairing workflow"));
+    assert!(output.message.contains("Applied fixes:"));
+    assert!(output.message.contains("Validation passed."));
     assert_eq!(output.data["repair"]["changed"], true);
     assert_eq!(output.data["repair"]["stopReason"], "valid");
     assert_eq!(output.data["validation"]["findings"], serde_json::json!([]));
@@ -309,6 +363,12 @@ fn repair_workflow_command_reports_blocked_findings_when_mode_is_too_narrow() {
 
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();
 
+    assert!(output.message.contains("Blocked findings:"));
+    assert!(
+        output
+            .message
+            .contains("repair mode `metadata` blocked the remaining findings")
+    );
     assert_eq!(output.data["repair"]["stopReason"], "blockedByRepairMode");
     assert!(
         output.data["repair"]["blockedFindings"]
@@ -342,6 +402,7 @@ fn repair_workflow_command_reports_unsupported_validation_command_failures() {
 
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();
 
+    assert!(output.message.contains("Unsupported findings:"));
     assert_eq!(output.data["repair"]["stopReason"], "unsupportedFindings");
     assert!(
         output.data["repair"]["unsupportedFindings"]
@@ -371,7 +432,7 @@ fn repair_workflow_command_applies_known_build_command_fixers() {
 
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();
 
-    assert_eq!(output.message, "valid");
+    assert!(output.message.contains("Validation passed."));
     assert_eq!(output.data["repair"]["stopReason"], "valid");
     assert!(workflow_dir.join("tsconfig.json").is_file());
     assert!(
@@ -379,6 +440,40 @@ fn repair_workflow_command_applies_known_build_command_fixers() {
             .as_array()
             .is_some_and(|fixes| fixes.iter().any(|fix| fix["kind"] == "repairTsconfig"))
     );
+}
+
+#[test]
+fn repair_workflow_command_reports_created_layout_directories() {
+    let home = TempDir::new().unwrap();
+    let cwd = TempDir::new().unwrap();
+    let workflow_dir = home.path().join("workflows/broken/layout");
+    fs::create_dir_all(&workflow_dir).unwrap();
+    write_layout_fixable_workflow_fixture(&workflow_dir);
+
+    let config = codex_config::types::WorkflowsConfigToml {
+        commit_policy: Some("manual".to_string()),
+        ..Default::default()
+    };
+    let ctx = WorkflowCommandContext {
+        codex_home: home.path(),
+        cwd: cwd.path(),
+        config: &config,
+    };
+
+    let output = repair_workflow_command(ctx, "broken/layout").unwrap();
+
+    assert!(output.message.contains("Created src/tests/ directory"));
+    assert!(output.message.contains("Created state/ directory"));
+    assert!(
+        output
+            .message
+            .contains("Created state/.gitkeep placeholder")
+    );
+    assert_eq!(output.data["repair"]["stopReason"], "valid");
+    assert_eq!(output.data["repair"]["changed"], true);
+    assert!(workflow_dir.join("src/tests").is_dir());
+    assert!(workflow_dir.join("state").is_dir());
+    assert!(workflow_dir.join("state/.gitkeep").is_file());
 }
 
 #[test]
@@ -399,6 +494,7 @@ fn repair_workflow_command_commits_successful_repairs_when_commit_policy_allows_
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();
 
     assert_eq!(output.data["repair"]["stopReason"], "valid");
+    assert!(output.message.contains("Validation passed."));
 
     let head = Command::new("git")
         .args(["rev-parse", "HEAD"])

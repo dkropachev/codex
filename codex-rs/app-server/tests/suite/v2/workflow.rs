@@ -220,7 +220,8 @@ async fn workflow_repair_returns_structured_result() -> Result<()> {
     .await??;
     let response: WorkflowRepairResponse = to_response(response)?;
 
-    assert_eq!(response.message, "valid");
+    assert!(response.message.contains("Repairing workflow"));
+    assert!(response.message.contains("Validation passed."));
     assert_eq!(response.repair.stop_reason, WorkflowRepairStopReason::Valid);
     assert!(response.repair.changed);
     assert!(!response.repair.applied_fixes.is_empty());
@@ -268,6 +269,7 @@ async fn workflow_repair_returns_blocked_mode_result() -> Result<()> {
         response.repair.stop_reason,
         WorkflowRepairStopReason::BlockedByRepairMode
     );
+    assert!(response.message.contains("Blocked findings:"));
     assert!(!response.repair.blocked_findings.is_empty());
     assert!(response.repair.unsupported_findings.is_empty());
 
@@ -309,6 +311,7 @@ async fn workflow_repair_returns_unsupported_command_result() -> Result<()> {
         response.repair.stop_reason,
         WorkflowRepairStopReason::UnsupportedFindings
     );
+    assert!(response.message.contains("Unsupported findings:"));
     assert!(!response.repair.unsupported_findings.is_empty());
     assert!(!response.repair.changed);
 

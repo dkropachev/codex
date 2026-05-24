@@ -1,0 +1,1302 @@
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
+
+use anyhow::Context;
+use anyhow::Result;
+use anyhow::anyhow;
+use serde_json::Value as JsonValue;
+use serde_json::json;
+
+use self::message::repair_output_message;
+use crate::execute::WorkflowCommandContext;
+use crate::execute::WorkflowCommandOutput;
+use crate::registry::DEFAULT_MAX_REPAIR_CYCLES;
+use crate::registry::WorkflowSummary;
+use crate::registry::discover_workflows;
+use crate::registry::find_workflow;
+use crate::repair::types::WorkflowRepairAction;
+use crate::repair::types::WorkflowRepairActionKind;
+use crate::repair::types::WorkflowRepairResult;
+use crate::repair::types::WorkflowRepairStopReason;
+use crate::repair::types::WorkflowValidationFindingInfo;
+use crate::repair::types::WorkflowValidationInfo;
+use crate::repair_mode::WorkflowRepairMode;
+use crate::spec::read_workflow_spec;
+use crate::spec::scaffold_workflow_spec;
+use crate::spec::write_workflow_spec;
+use crate::validation_finding::WorkflowValidationFinding;
+use crate::validation_runner::WorkflowValidationReport;
+use crate::validation_runner::run_validation_command;
+use crate::validation_runner::validate_workflow;
+
+#[cfg(test)]
+mod tests;
+
+mod message;
+
+pub mod types;
+
+#[derive(Debug, Default)]
+struct FixPlan {
+    update_validation_yaml: bool,
+    repair_readme: bool,
+    repair_design: bool,
+    repair_package_manifest: bool,
+    repair_tsconfig: bool,
+    create_layout: bool,
+    add_coverage_markers: BTreeSet<String>,
+    package_names: BTreeSet<String>,
+    build_script: bool,
+    test_script: bool,
+    run_script: bool,
+    spec_reset: bool,
+}
+
+pub(crate) fn repair_workflow_command(
+    ctx: WorkflowCommandContext<'_>,
+    id: &str,
+) -> Result<WorkflowCommandOutput> {
+    let repair_mode = WorkflowRepairMode::parse(
+        ctx.config
+            .repair_mode
+            .as_deref()
+            .unwrap_or(crate::DEFAULT_REPAIR_MODE),
+    )?;
+    let max_repair_cycles = ctx
+        .config
+        .max_repair_cycles
+        .unwrap_or(DEFAULT_MAX_REPAIR_CYCLES);
+
+    let initial_workflow = find_workflow(ctx.codex_home, ctx.cwd, ctx.config, id)
+        .with_context(|| format!("failed to resolve workflow `{id}` for repair"))?;
+    let mut workflow = initial_workflow;
+    let mut applied_fixes = Vec::new();
+    let mut repair_cycles_run = 0;
+    let mut changed = false;
+    let mut last_report =
+        validate_workflow(&workflow, run_validation_command).with_context(|| {
+            format!(
+                "failed to validate workflow `{}` before repair",
+                workflow.id
+            )
+        })?;
+
+    if last_report.status == crate::registry::WorkflowValidationStatus::Valid {
+        let repair = final_repair_result(
+            repair_mode,
+            max_repair_cycles,
+            repair_cycles_run,
+            changed,
+            WorkflowRepairStopReason::Valid,
+            applied_fixes,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        return Ok(build_output(&workflow, last_report, repair));
+    }
+
+    for _ in 0..max_repair_cycles {
+        let assessment = assess_findings(&workflow.path, &last_report, &repair_mode);
+        if !assessment.unsupported.is_empty() {
+            let repair = final_repair_result(
+                repair_mode,
+                max_repair_cycles,
+                repair_cycles_run,
+                false,
+                WorkflowRepairStopReason::UnsupportedFindings,
+                Vec::new(),
+                Vec::new(),
+                assessment.unsupported.iter().map(finding_to_api).collect(),
+                api_findings(&last_report.findings),
+            );
+            return Ok(build_output(&workflow, last_report, repair));
+        }
+        if !assessment.blocked.is_empty() {
+            let repair = final_repair_result(
+                repair_mode,
+                max_repair_cycles,
+                repair_cycles_run,
+                false,
+                WorkflowRepairStopReason::BlockedByRepairMode,
+                Vec::new(),
+                assessment.blocked.iter().map(finding_to_api).collect(),
+                Vec::new(),
+                api_findings(&last_report.findings),
+            );
+            return Ok(build_output(&workflow, last_report, repair));
+        }
+
+        let plan = build_fix_plan(&workflow.path, &workflow, &last_report).with_context(|| {
+            format!(
+                "failed to build a repair plan for workflow `{}`",
+                workflow.id
+            )
+        })?;
+        if plan.is_empty() {
+            let repair = final_repair_result(
+                repair_mode,
+                max_repair_cycles,
+                repair_cycles_run,
+                false,
+                WorkflowRepairStopReason::NoChangesApplied,
+                applied_fixes,
+                api_findings(&last_report.findings),
+                Vec::new(),
+                Vec::new(),
+            );
+            return Ok(build_output(&workflow, last_report, repair));
+        }
+
+        ensure_git_repo(&workflow.path).with_context(|| {
+            format!(
+                "failed to ensure git repository for workflow `{}`",
+                workflow.id
+            )
+        })?;
+        let mut cycle_actions = Vec::new();
+        if plan.spec_reset || plan.update_validation_yaml {
+            cycle_actions.extend(apply_validation_yaml_fix(&workflow, &plan).with_context(
+                || format!("failed to repair workflow metadata for `{}`", workflow.id),
+            )?);
+        }
+        if plan.create_layout {
+            cycle_actions.extend(apply_layout_fix(&workflow, &last_report).with_context(|| {
+                format!("failed to repair workflow layout for `{}`", workflow.id)
+            })?);
+        }
+        if plan.repair_readme {
+            cycle_actions
+                .push(apply_readme_fix(&workflow).with_context(|| {
+                    format!("failed to repair README.md for `{}`", workflow.id)
+                })?);
+        }
+        if plan.repair_design {
+            cycle_actions
+                .push(apply_design_fix(&workflow).with_context(|| {
+                    format!("failed to repair DESIGN.md for `{}`", workflow.id)
+                })?);
+        }
+        if plan.repair_package_manifest {
+            cycle_actions.push(
+                apply_package_manifest_fix(&workflow, &plan).with_context(|| {
+                    format!("failed to repair package.json for `{}`", workflow.id)
+                })?,
+            );
+        }
+        if !plan.add_coverage_markers.is_empty() {
+            cycle_actions.push(
+                apply_coverage_marker_fix(&workflow, &plan.add_coverage_markers).with_context(
+                    || format!("failed to update coverage markers for `{}`", workflow.id),
+                )?,
+            );
+        }
+        if plan.repair_tsconfig {
+            cycle_actions.push(apply_tsconfig_fix(&workflow).with_context(|| {
+                format!("failed to repair tsconfig.json for `{}`", workflow.id)
+            })?);
+        }
+
+        cycle_actions.retain(|action| !action.detail.is_empty());
+        if cycle_actions.is_empty() {
+            let repair = final_repair_result(
+                repair_mode,
+                max_repair_cycles,
+                repair_cycles_run,
+                changed,
+                WorkflowRepairStopReason::NoChangesApplied,
+                applied_fixes,
+                Vec::new(),
+                Vec::new(),
+                api_findings(&last_report.findings),
+            );
+            return Ok(build_output(&workflow, last_report, repair));
+        }
+
+        changed = true;
+        repair_cycles_run += 1;
+        applied_fixes.extend(cycle_actions);
+
+        workflow = refresh_workflow_summary(ctx.codex_home, ctx.cwd, ctx.config, &workflow.path)
+            .with_context(|| {
+                format!(
+                    "failed to refresh workflow summary for `{}` after applying fixes",
+                    workflow.id
+                )
+            })?;
+        last_report = validate_workflow(&workflow, run_validation_command).with_context(|| {
+            format!(
+                "failed to validate workflow `{}` after repair cycle {}",
+                workflow.id, repair_cycles_run
+            )
+        })?;
+        if last_report.status == crate::registry::WorkflowValidationStatus::Valid {
+            if should_commit_changes(&ctx) {
+                commit_repair_changes(&workflow.path).with_context(|| {
+                    format!("failed to commit repaired workflow `{}`", workflow.id)
+                })?;
+            }
+            let repair = final_repair_result(
+                repair_mode,
+                max_repair_cycles,
+                repair_cycles_run,
+                changed,
+                WorkflowRepairStopReason::Valid,
+                applied_fixes,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+            return Ok(build_output(&workflow, last_report, repair));
+        }
+    }
+
+    let repair = final_repair_result(
+        repair_mode,
+        max_repair_cycles,
+        repair_cycles_run,
+        changed,
+        WorkflowRepairStopReason::RepairBudgetExhausted,
+        applied_fixes,
+        Vec::new(),
+        Vec::new(),
+        api_findings(&last_report.findings),
+    );
+    Ok(build_output(&workflow, last_report, repair))
+}
+
+fn final_repair_result(
+    repair_mode: WorkflowRepairMode,
+    max_repair_cycles: u32,
+    repair_cycles_run: u32,
+    changed: bool,
+    stop_reason: WorkflowRepairStopReason,
+    applied_fixes: Vec<WorkflowRepairAction>,
+    blocked_findings: Vec<WorkflowValidationFindingInfo>,
+    unsupported_findings: Vec<WorkflowValidationFindingInfo>,
+    remaining_findings: Vec<WorkflowValidationFindingInfo>,
+) -> WorkflowRepairResult {
+    WorkflowRepairResult {
+        mode: repair_mode.to_string(),
+        max_repair_cycles,
+        repair_cycles_run,
+        changed,
+        stop_reason,
+        applied_fixes,
+        remaining_findings,
+        blocked_findings,
+        unsupported_findings,
+    }
+}
+
+fn build_output(
+    workflow: &WorkflowSummary,
+    report: WorkflowValidationReport,
+    repair: WorkflowRepairResult,
+) -> WorkflowCommandOutput {
+    WorkflowCommandOutput {
+        message: repair_output_message(workflow, &repair),
+        data: json!({
+            "workflow": workflow,
+            "validation": validation_report_to_api(&report),
+            "repair": repair,
+        }),
+    }
+}
+
+fn refresh_workflow_summary(
+    codex_home: &Path,
+    cwd: &Path,
+    config: &codex_config::types::WorkflowsConfigToml,
+    workflow_path: &Path,
+) -> Result<WorkflowSummary> {
+    let workflows = discover_workflows(codex_home, cwd, config)?;
+    workflows
+        .into_iter()
+        .find(|workflow| workflow.path == workflow_path)
+        .ok_or_else(|| {
+            anyhow!(
+                "failed to refresh workflow summary at {}",
+                workflow_path.display()
+            )
+        })
+}
+
+struct Assessment {
+    blocked: Vec<WorkflowValidationFinding>,
+    unsupported: Vec<WorkflowValidationFinding>,
+}
+
+fn assess_findings(
+    workflow_path: &Path,
+    report: &WorkflowValidationReport,
+    repair_mode: &WorkflowRepairMode,
+) -> Assessment {
+    let mut blocked = Vec::new();
+    let mut unsupported = Vec::new();
+
+    for finding in &report.findings {
+        let Some(kinds) = action_kinds_for_finding(finding, report) else {
+            unsupported.push(finding.clone());
+            continue;
+        };
+        if kinds.iter().any(|kind| !repair_mode.allows_action(*kind)) {
+            blocked.push(finding.clone());
+        }
+    }
+
+    if blocked.is_empty() && unsupported.is_empty() && report.findings.is_empty() {
+        let _ = workflow_path;
+    }
+
+    Assessment {
+        blocked,
+        unsupported,
+    }
+}
+
+fn build_fix_plan(
+    workflow_path: &Path,
+    workflow: &WorkflowSummary,
+    report: &WorkflowValidationReport,
+) -> Result<FixPlan> {
+    let mut plan = FixPlan::default();
+    for finding in &report.findings {
+        match finding {
+            WorkflowValidationFinding::WorkflowSpecReadFailed { .. } => {
+                plan.update_validation_yaml = true;
+                plan.spec_reset = true;
+            }
+            WorkflowValidationFinding::WorkflowIdMismatch { .. } => {
+                plan.update_validation_yaml = true;
+            }
+            WorkflowValidationFinding::MissingFile { path } => {
+                if path == Path::new("README.md") {
+                    plan.repair_readme = true;
+                } else if path == Path::new("DESIGN.md") {
+                    plan.repair_design = true;
+                } else if path == Path::new("package.json") {
+                    plan.repair_package_manifest = true;
+                } else if path == Path::new("tsconfig.json") {
+                    plan.repair_tsconfig = true;
+                } else {
+                    plan.create_layout = true;
+                }
+            }
+            WorkflowValidationFinding::MissingDirectory { .. } => {
+                plan.create_layout = true;
+            }
+            WorkflowValidationFinding::MissingGitRepository { .. } => {
+                plan.create_layout = true;
+            }
+            WorkflowValidationFinding::WorkflowPathEscapesRoot { .. } => {}
+            WorkflowValidationFinding::MissingDocumentHeading { path, .. } => {
+                if path == Path::new("README.md") {
+                    plan.repair_readme = true;
+                } else {
+                    plan.repair_design = true;
+                }
+            }
+            WorkflowValidationFinding::PackageManifestParseFailed { .. } => {
+                plan.repair_package_manifest = true;
+            }
+            WorkflowValidationFinding::UndeclaredPackageImport { package_name, .. } => {
+                plan.repair_package_manifest = true;
+                plan.package_names.insert(package_name.clone());
+            }
+            WorkflowValidationFinding::MissingValidationCommands { .. }
+            | WorkflowValidationFinding::EmptyValidationCommands { .. }
+            | WorkflowValidationFinding::InvalidValidationCommands { .. }
+            | WorkflowValidationFinding::MissingCoverageMetadata { .. }
+            | WorkflowValidationFinding::MissingCoverageKey { .. }
+            | WorkflowValidationFinding::InvalidCoverageKeyType { .. }
+            | WorkflowValidationFinding::CoverageKeyMustBeTrue { .. } => {
+                plan.update_validation_yaml = true;
+            }
+            WorkflowValidationFinding::MissingCoverageMarker { key, .. } => {
+                plan.add_coverage_markers.insert(key.clone());
+            }
+            WorkflowValidationFinding::CodeOutsideSrc { paths }
+            | WorkflowValidationFinding::TestsOutsideSrcTests { paths }
+            | WorkflowValidationFinding::DatabasesOutsideState { paths } => {
+                let _ = workflow_path;
+                plan.create_layout = true;
+                if paths.iter().any(|path| is_test_path(path.as_path())) {
+                    plan.add_coverage_markers.insert("positive".to_string());
+                    plan.add_coverage_markers.insert("negative".to_string());
+                    plan.add_coverage_markers.insert("load".to_string());
+                    plan.add_coverage_markers.insert("autocomplete".to_string());
+                }
+            }
+            WorkflowValidationFinding::ValidationCommandFailed {
+                command, exit_code, ..
+            } => {
+                if !command_fixable(command, *exit_code) {
+                    continue;
+                }
+                plan.repair_package_manifest = true;
+                plan.repair_tsconfig = command.contains("npm run build");
+                plan.build_script = command.contains("npm run build");
+                plan.test_script = command.contains("npm test");
+                plan.run_script = true;
+            }
+            WorkflowValidationFinding::WorkflowApiContractExtractionFailed { .. } => {
+                return Err(anyhow!(
+                    "workflow API contract extraction failures are not repaired automatically"
+                ));
+            }
+        }
+    }
+
+    if plan.spec_reset {
+        plan.update_validation_yaml = true;
+    }
+
+    if plan.update_validation_yaml {
+        let _ = workflow;
+    }
+
+    Ok(plan)
+}
+
+fn action_kinds_for_finding(
+    finding: &WorkflowValidationFinding,
+    report: &WorkflowValidationReport,
+) -> Option<Vec<WorkflowRepairActionKind>> {
+    let _ = report;
+    let kinds = match finding {
+        WorkflowValidationFinding::WorkflowSpecReadFailed { .. }
+        | WorkflowValidationFinding::WorkflowIdMismatch { .. }
+        | WorkflowValidationFinding::MissingValidationCommands { .. }
+        | WorkflowValidationFinding::EmptyValidationCommands { .. }
+        | WorkflowValidationFinding::InvalidValidationCommands { .. }
+        | WorkflowValidationFinding::MissingCoverageMetadata { .. }
+        | WorkflowValidationFinding::MissingCoverageKey { .. }
+        | WorkflowValidationFinding::InvalidCoverageKeyType { .. }
+        | WorkflowValidationFinding::CoverageKeyMustBeTrue { .. } => {
+            vec![WorkflowRepairActionKind::NormalizeValidationMetadata]
+        }
+        WorkflowValidationFinding::MissingFile { path } => {
+            if path == Path::new("README.md") {
+                vec![WorkflowRepairActionKind::RepairReadme]
+            } else if path == Path::new("DESIGN.md") {
+                vec![WorkflowRepairActionKind::RepairDesign]
+            } else if path == Path::new("package.json") {
+                vec![WorkflowRepairActionKind::RepairPackageManifest]
+            } else if path == Path::new("tsconfig.json") {
+                vec![WorkflowRepairActionKind::RepairTsconfig]
+            } else if is_test_path(path) {
+                vec![WorkflowRepairActionKind::ScaffoldWorkflowTests]
+            } else if is_code_path(path) {
+                vec![WorkflowRepairActionKind::ScaffoldWorkflowSource]
+            } else {
+                vec![WorkflowRepairActionKind::RepairLayout]
+            }
+        }
+        WorkflowValidationFinding::MissingDirectory { .. }
+        | WorkflowValidationFinding::MissingGitRepository { .. }
+        | WorkflowValidationFinding::CodeOutsideSrc { .. }
+        | WorkflowValidationFinding::TestsOutsideSrcTests { .. }
+        | WorkflowValidationFinding::DatabasesOutsideState { .. } => {
+            vec![WorkflowRepairActionKind::RepairLayout]
+        }
+        WorkflowValidationFinding::MissingDocumentHeading { path, .. } => {
+            if path == Path::new("README.md") {
+                vec![WorkflowRepairActionKind::RepairReadme]
+            } else {
+                vec![WorkflowRepairActionKind::RepairDesign]
+            }
+        }
+        WorkflowValidationFinding::PackageManifestParseFailed { .. }
+        | WorkflowValidationFinding::UndeclaredPackageImport { .. } => {
+            vec![WorkflowRepairActionKind::RepairPackageManifest]
+        }
+        WorkflowValidationFinding::MissingCoverageMarker { .. } => {
+            vec![WorkflowRepairActionKind::AddCoverageMarkers]
+        }
+        WorkflowValidationFinding::ValidationCommandFailed {
+            command, exit_code, ..
+        } => {
+            if !command_fixable(command, *exit_code) {
+                return None;
+            }
+            let mut kinds = vec![WorkflowRepairActionKind::RepairPackageManifest];
+            if command.contains("npm run build") {
+                kinds.push(WorkflowRepairActionKind::RepairTsconfig);
+            }
+            kinds
+        }
+        WorkflowValidationFinding::WorkflowPathEscapesRoot { .. }
+        | WorkflowValidationFinding::WorkflowApiContractExtractionFailed { .. } => {
+            return None;
+        }
+    };
+    Some(kinds)
+}
+
+fn apply_validation_yaml_fix(
+    workflow: &WorkflowSummary,
+    plan: &FixPlan,
+) -> Result<Vec<WorkflowRepairAction>> {
+    let spec_path = workflow.workflow_yaml_path.clone();
+    let mut spec = read_workflow_spec(&spec_path).unwrap_or_else(|_| {
+        scaffold_workflow_spec(
+            workflow.id.clone(),
+            workflow
+                .title
+                .clone()
+                .unwrap_or_else(|| display_title(&workflow.id)),
+            workflow
+                .user_description
+                .clone()
+                .unwrap_or_else(|| format!("Workflow {}", workflow.id)),
+            &codex_config::types::WorkflowsConfigToml::default(),
+        )
+    });
+    let mut changed = false;
+
+    if plan.spec_reset {
+        spec = scaffold_workflow_spec(
+            workflow.id.clone(),
+            workflow
+                .title
+                .clone()
+                .unwrap_or_else(|| display_title(&workflow.id)),
+            workflow
+                .user_description
+                .clone()
+                .unwrap_or_else(|| format!("Workflow {}", workflow.id)),
+            &codex_config::types::WorkflowsConfigToml::default(),
+        );
+        changed = true;
+    }
+
+    if spec.id != workflow.id {
+        spec.id = workflow.id.clone();
+        changed = true;
+    }
+
+    if plan.update_validation_yaml {
+        let mut validation = if spec.validation.is_object() {
+            spec.validation.clone()
+        } else {
+            JsonValue::Object(Default::default())
+        };
+        let Some(validation_object) = validation.as_object_mut() else {
+            return Err(anyhow!("workflow validation must be a JSON object"));
+        };
+
+        let commands_need_fix = plan.spec_reset
+            || validation_object
+                .get("commands")
+                .and_then(JsonValue::as_array)
+                .is_none_or(|commands| {
+                    commands.is_empty() || !commands.iter().all(JsonValue::is_string)
+                });
+        if commands_need_fix {
+            validation_object.insert(
+                "commands".to_string(),
+                JsonValue::Array(vec![
+                    JsonValue::String("npm run build".to_string()),
+                    JsonValue::String("npm test".to_string()),
+                ]),
+            );
+        }
+
+        let coverage_need_fix = plan.spec_reset
+            || match validation_object.get("coverage") {
+                Some(JsonValue::Object(coverage)) => {
+                    const REQUIRED_TRUE_KEYS: &[&str] = &[
+                        "positive",
+                        "negative",
+                        "progress",
+                        "finalResult",
+                        "failureUx",
+                        "load",
+                        "autocomplete",
+                    ];
+                    REQUIRED_TRUE_KEYS
+                        .iter()
+                        .any(|key| coverage.get(*key) != Some(&JsonValue::Bool(true)))
+                        || coverage.get("recovery") != Some(&JsonValue::Bool(false))
+                }
+                _ => true,
+            };
+        if coverage_need_fix {
+            validation_object.insert(
+                "coverage".to_string(),
+                json!({
+                    "positive": true,
+                    "negative": true,
+                    "progress": true,
+                    "finalResult": true,
+                    "failureUx": true,
+                    "load": true,
+                    "autocomplete": true,
+                    "recovery": false,
+                }),
+            );
+        }
+
+        if !validation_object.contains_key("profile") {
+            validation_object.insert(
+                "profile".to_string(),
+                JsonValue::String("default".to_string()),
+            );
+        }
+        spec.validation = validation;
+        changed = true;
+    }
+
+    if !changed {
+        return Ok(Vec::new());
+    }
+
+    write_workflow_spec(&spec_path, &spec)?;
+    Ok(vec![WorkflowRepairAction {
+        kind: WorkflowRepairActionKind::NormalizeValidationMetadata,
+        path: spec_path,
+        detail: "Updated workflow.yaml metadata".to_string(),
+    }])
+}
+
+fn apply_layout_fix(
+    workflow: &WorkflowSummary,
+    report: &WorkflowValidationReport,
+) -> Result<Vec<WorkflowRepairAction>> {
+    let mut actions = Vec::new();
+    if ensure_dir(&workflow.path.join("src"))? {
+        actions.push(WorkflowRepairAction {
+            kind: WorkflowRepairActionKind::RepairLayout,
+            path: workflow.path.join("src"),
+            detail: "Created src/ directory".to_string(),
+        });
+    }
+    if ensure_dir(&workflow.path.join("src/tests"))? {
+        actions.push(WorkflowRepairAction {
+            kind: WorkflowRepairActionKind::ScaffoldWorkflowTests,
+            path: workflow.path.join("src/tests"),
+            detail: "Created src/tests/ directory".to_string(),
+        });
+    }
+    if ensure_dir(&workflow.path.join("state"))? {
+        actions.push(WorkflowRepairAction {
+            kind: WorkflowRepairActionKind::RepairLayout,
+            path: workflow.path.join("state"),
+            detail: "Created state/ directory".to_string(),
+        });
+    }
+    ensure_git_repo(&workflow.path)?;
+
+    let mut moved_any = false;
+    visit_layout_files(&workflow.path, &mut |relative, path| {
+        if relative.starts_with(Path::new("src")) || relative.starts_with(Path::new("state")) {
+            return Ok(());
+        }
+        if is_database_path(relative) {
+            let target = workflow.path.join("state").join(relative);
+            move_file(path, &target)?;
+            moved_any = true;
+            actions.push(WorkflowRepairAction {
+                kind: WorkflowRepairActionKind::RepairLayout,
+                path: target,
+                detail: format!("Moved database file {} to state/", relative.display()),
+            });
+        } else if is_test_path(relative) {
+            let target = workflow
+                .path
+                .join("src/tests")
+                .join(strip_tests_prefix(relative));
+            move_file(path, &target)?;
+            moved_any = true;
+            actions.push(WorkflowRepairAction {
+                kind: WorkflowRepairActionKind::ScaffoldWorkflowTests,
+                path: target,
+                detail: format!("Moved test file {} under src/tests/", relative.display()),
+            });
+        } else if is_code_path(relative) {
+            let target = workflow.path.join("src").join(relative);
+            move_file(path, &target)?;
+            moved_any = true;
+            actions.push(WorkflowRepairAction {
+                kind: WorkflowRepairActionKind::ScaffoldWorkflowSource,
+                path: target,
+                detail: format!("Moved code file {} under src/", relative.display()),
+            });
+        }
+        Ok(())
+    })?;
+
+    if !workflow.path.join("src/workflow.ts").is_file() {
+        write_scaffold_source(workflow, &workflow.path.join("src/workflow.ts"))?;
+        actions.push(WorkflowRepairAction {
+            kind: WorkflowRepairActionKind::ScaffoldWorkflowSource,
+            path: workflow.path.join("src/workflow.ts"),
+            detail: "Created src/workflow.ts scaffold".to_string(),
+        });
+    }
+
+    if report.findings.iter().any(|finding| {
+        matches!(
+            finding,
+            WorkflowValidationFinding::MissingGitRepository { .. }
+        )
+    }) && !workflow.path.join(".git/HEAD").is_file()
+    {
+        init_git_repo(&workflow.path)?;
+        actions.push(WorkflowRepairAction {
+            kind: WorkflowRepairActionKind::RepairLayout,
+            path: workflow.path.join(".git"),
+            detail: "Initialized git repository".to_string(),
+        });
+    }
+
+    if !workflow.path.join("state/.gitkeep").is_file() {
+        fs::write(workflow.path.join("state/.gitkeep"), "").with_context(|| {
+            format!(
+                "failed to write {}",
+                workflow.path.join("state/.gitkeep").display()
+            )
+        })?;
+        actions.push(WorkflowRepairAction {
+            kind: WorkflowRepairActionKind::RepairLayout,
+            path: workflow.path.join("state/.gitkeep"),
+            detail: "Created state/.gitkeep placeholder".to_string(),
+        });
+    }
+
+    if !moved_any && actions.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    Ok(actions)
+}
+
+fn apply_readme_fix(workflow: &WorkflowSummary) -> Result<WorkflowRepairAction> {
+    let path = workflow.path.join("README.md");
+    fs::write(&path, readme_template(workflow))
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(WorkflowRepairAction {
+        kind: WorkflowRepairActionKind::RepairReadme,
+        path,
+        detail: "Updated README.md".to_string(),
+    })
+}
+
+fn apply_design_fix(workflow: &WorkflowSummary) -> Result<WorkflowRepairAction> {
+    let path = workflow.path.join("DESIGN.md");
+    fs::write(&path, design_template(workflow))
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(WorkflowRepairAction {
+        kind: WorkflowRepairActionKind::RepairDesign,
+        path,
+        detail: "Updated DESIGN.md".to_string(),
+    })
+}
+
+fn apply_package_manifest_fix(
+    workflow: &WorkflowSummary,
+    plan: &FixPlan,
+) -> Result<WorkflowRepairAction> {
+    let path = workflow.path.join("package.json");
+    let mut manifest = match fs::read_to_string(&path) {
+        Ok(contents) => serde_json::from_str::<JsonValue>(&contents)
+            .unwrap_or_else(|_| JsonValue::Object(Default::default())),
+        Err(_) => JsonValue::Object(Default::default()),
+    };
+    let Some(object) = manifest.as_object_mut() else {
+        return Err(anyhow!("package.json must be a JSON object"));
+    };
+
+    object.insert("private".to_string(), JsonValue::Bool(true));
+    object.insert("type".to_string(), JsonValue::String("module".to_string()));
+
+    let scripts = object
+        .entry("scripts")
+        .or_insert_with(|| JsonValue::Object(Default::default()));
+    let Some(scripts_object) = scripts.as_object_mut() else {
+        return Err(anyhow!("package.json scripts must be a JSON object"));
+    };
+    if plan.build_script || plan.repair_tsconfig {
+        scripts_object.insert(
+            "build".to_string(),
+            JsonValue::String("tsc --noEmit".to_string()),
+        );
+    }
+    if plan.test_script || !scripts_object.contains_key("test") {
+        scripts_object.insert(
+            "test".to_string(),
+            JsonValue::String("node --import tsx --test src/tests/**/*.test.ts".to_string()),
+        );
+    }
+    if plan.run_script || !scripts_object.contains_key("run") {
+        scripts_object.insert(
+            "run".to_string(),
+            JsonValue::String("tsx src/workflow.ts".to_string()),
+        );
+    }
+
+    let deps = object
+        .entry("dependencies")
+        .or_insert_with(|| JsonValue::Object(Default::default()));
+    let Some(deps_object) = deps.as_object_mut() else {
+        return Err(anyhow!("package.json dependencies must be a JSON object"));
+    };
+    deps_object.insert(
+        "@openai/codex-sdk".to_string(),
+        JsonValue::String("latest".to_string()),
+    );
+    for package_name in &plan.package_names {
+        deps_object.insert(
+            package_name.clone(),
+            JsonValue::String("latest".to_string()),
+        );
+    }
+
+    let dev_deps = object
+        .entry("devDependencies")
+        .or_insert_with(|| JsonValue::Object(Default::default()));
+    let Some(dev_deps_object) = dev_deps.as_object_mut() else {
+        return Err(anyhow!(
+            "package.json devDependencies must be a JSON object"
+        ));
+    };
+    dev_deps_object.insert(
+        "@types/node".to_string(),
+        JsonValue::String("latest".to_string()),
+    );
+    dev_deps_object.insert("tsx".to_string(), JsonValue::String("latest".to_string()));
+    dev_deps_object.insert(
+        "typescript".to_string(),
+        JsonValue::String("latest".to_string()),
+    );
+
+    fs::write(&path, serde_json::to_string_pretty(&manifest)? + "\n")
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(WorkflowRepairAction {
+        kind: WorkflowRepairActionKind::RepairPackageManifest,
+        path,
+        detail: "Updated package.json".to_string(),
+    })
+}
+
+fn apply_coverage_marker_fix(
+    workflow: &WorkflowSummary,
+    marker_keys: &BTreeSet<String>,
+) -> Result<WorkflowRepairAction> {
+    let canonical_files = [
+        (
+            "workflow.positive.test.ts",
+            vec!["positive", "progress", "finalResult"],
+        ),
+        ("workflow.load.test.ts", vec!["load"]),
+        ("workflow.autocomplete.test.ts", vec!["autocomplete"]),
+        ("workflow.negative.test.ts", vec!["negative", "failureUx"]),
+    ];
+
+    ensure_dir(&workflow.path.join("src/tests"))?;
+    for (file_name, markers) in canonical_files {
+        let path = workflow.path.join("src/tests").join(file_name);
+        let required_markers: Vec<_> = markers
+            .into_iter()
+            .filter(|marker| marker_keys.contains(*marker))
+            .collect();
+        if required_markers.is_empty() {
+            continue;
+        }
+        let mut contents = fs::read_to_string(&path).unwrap_or_default();
+        for marker in &required_markers {
+            let marker_line = format!("// workflow-covers: {marker}");
+            if !contents.contains(&marker_line) {
+                contents = format!("{marker_line}\n{contents}");
+            }
+        }
+        if contents.is_empty() {
+            contents = format!(
+                "// workflow-covers: {}\nexport {{}};\n",
+                required_markers.join(" ")
+            );
+        }
+        fs::write(&path, contents)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+    }
+
+    if marker_keys.contains("recovery") {
+        let path = workflow.path.join("src/tests/workflow.recovery.test.ts");
+        let mut contents = fs::read_to_string(&path).unwrap_or_default();
+        let marker_line = "// workflow-covers: recovery";
+        if !contents.contains(marker_line) {
+            contents = format!("{marker_line}\n{contents}");
+        }
+        if contents.is_empty() {
+            contents = format!("{marker_line}\nexport {{}};\n");
+        }
+        fs::write(&path, contents)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+    }
+
+    Ok(WorkflowRepairAction {
+        kind: WorkflowRepairActionKind::AddCoverageMarkers,
+        path: workflow.path.join("src/tests"),
+        detail: format!(
+            "Updated coverage markers for {} marker(s)",
+            marker_keys.len()
+        ),
+    })
+}
+
+fn apply_tsconfig_fix(workflow: &WorkflowSummary) -> Result<WorkflowRepairAction> {
+    let path = workflow.path.join("tsconfig.json");
+    fs::write(&path, tsconfig_template())
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(WorkflowRepairAction {
+        kind: WorkflowRepairActionKind::RepairTsconfig,
+        path,
+        detail: "Created tsconfig.json".to_string(),
+    })
+}
+
+fn validation_report_to_api(report: &WorkflowValidationReport) -> WorkflowValidationInfo {
+    WorkflowValidationInfo {
+        status: report.status,
+        findings: api_findings(&report.findings),
+    }
+}
+
+fn api_findings(findings: &[WorkflowValidationFinding]) -> Vec<WorkflowValidationFindingInfo> {
+    findings.to_vec()
+}
+
+fn finding_to_api(finding: &WorkflowValidationFinding) -> WorkflowValidationFindingInfo {
+    finding.clone()
+}
+
+fn should_commit_changes(ctx: &WorkflowCommandContext<'_>) -> bool {
+    !matches!(
+        ctx.config.commit_policy.as_deref(),
+        Some("manual" | "none" | "disabled")
+    )
+}
+
+fn commit_repair_changes(path: &Path) -> Result<()> {
+    init_git_repo(path)?;
+    run_git(path, &["add", "."])?;
+    let diff = Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .current_dir(path)
+        .output()
+        .with_context(|| format!("failed to inspect staged diff in {}", path.display()))?;
+    if diff.status.success() {
+        return Ok(());
+    }
+    let output = Command::new("git")
+        .args(["commit", "-m", "Repair workflow"])
+        .current_dir(path)
+        .env("GIT_AUTHOR_NAME", "Codex")
+        .env("GIT_AUTHOR_EMAIL", "codex@openai.com")
+        .env("GIT_COMMITTER_NAME", "Codex")
+        .env("GIT_COMMITTER_EMAIL", "codex@openai.com")
+        .output()
+        .with_context(|| format!("failed to run git commit in {}", path.display()))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let mut message = format!(
+            "git commit failed in {} with {}",
+            path.display(),
+            output.status
+        );
+        if !stdout.is_empty() {
+            message.push_str(&format!("; stdout: {stdout}"));
+        }
+        if !stderr.is_empty() {
+            message.push_str(&format!("; stderr: {stderr}"));
+        }
+        Err(anyhow!(message))
+    }
+}
+
+fn run_git(path: &Path, args: &[&str]) -> Result<()> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(path)
+        .output()
+        .with_context(|| format!("failed to run git {} in {}", args.join(" "), path.display()))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let mut message = format!(
+            "git {} failed in {} with {}",
+            args.join(" "),
+            path.display(),
+            output.status
+        );
+        if !stdout.is_empty() {
+            message.push_str(&format!("; stdout: {stdout}"));
+        }
+        if !stderr.is_empty() {
+            message.push_str(&format!("; stderr: {stderr}"));
+        }
+        Err(anyhow!(message))
+    }
+}
+
+fn init_git_repo(path: &Path) -> Result<()> {
+    run_git(path, &["init"])
+}
+
+fn ensure_dir(path: &Path) -> Result<bool> {
+    let existed = path.exists();
+    fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))?;
+    Ok(!existed)
+}
+
+fn ensure_git_repo(path: &Path) -> Result<()> {
+    if path.join(".git/HEAD").is_file() {
+        return Ok(());
+    }
+    init_git_repo(path)
+}
+
+fn visit_layout_files(
+    workflow_path: &Path,
+    visitor: &mut impl FnMut(&Path, &Path) -> Result<()>,
+) -> Result<()> {
+    visit_layout_files_inner(workflow_path, workflow_path, visitor)
+}
+
+fn visit_layout_files_inner(
+    workflow_path: &Path,
+    dir: &Path,
+    visitor: &mut impl FnMut(&Path, &Path) -> Result<()>,
+) -> Result<()> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) => {
+            if dir == workflow_path {
+                return Err(err.into());
+            }
+            return Ok(());
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if should_skip_layout_dir(&path) {
+                continue;
+            }
+            visit_layout_files_inner(workflow_path, &path, visitor)?;
+            continue;
+        }
+
+        let Ok(relative) = path.strip_prefix(workflow_path) else {
+            continue;
+        };
+        visitor(relative, &path)?;
+    }
+
+    Ok(())
+}
+
+fn should_skip_layout_dir(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some(".git" | "node_modules" | "target" | "dist" | "build" | "coverage")
+    )
+}
+
+fn move_file(source: &Path, target: &Path) -> Result<()> {
+    if source == target {
+        return Ok(());
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if target.exists() {
+        if target.is_dir() {
+            fs::remove_dir_all(target)
+                .with_context(|| format!("failed to remove {}", target.display()))?;
+        } else {
+            fs::remove_file(target)
+                .with_context(|| format!("failed to remove {}", target.display()))?;
+        }
+    }
+    match fs::rename(source, target) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            fs::copy(source, target).with_context(|| {
+                format!(
+                    "failed to copy {} to {}",
+                    source.display(),
+                    target.display()
+                )
+            })?;
+            fs::remove_file(source)
+                .with_context(|| format!("failed to remove {}", source.display()))?;
+            Ok(())
+        }
+    }
+}
+
+fn write_scaffold_source(workflow: &WorkflowSummary, path: &Path) -> Result<()> {
+    let command_label = workflow
+        .command
+        .as_deref()
+        .unwrap_or_else(|| workflow.id.split('/').next_back().unwrap_or(&workflow.id));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(
+        path,
+        format!(
+            r##"import {{ WorkflowContext }} from "@openai/codex-sdk/workflow";
+
+export interface WorkflowInput {{
+  input?: string;
+}}
+
+export interface WorkflowOutput {{
+  ok: true;
+  input: WorkflowInput;
+}}
+
+function validateInput(input: unknown) {{
+  if (!input || typeof input !== "object" || Array.isArray(input)) {{
+    throw new Error("workflow input must be a JSON object");
+  }}
+  return input as WorkflowInput;
+}}
+
+export const WorkflowOutput = {{
+  toTuiMarkdown(result: WorkflowOutput) {{
+    return {{ markdown: "# Workflow\n\nWorkflow complete." }};
+  }},
+}};
+
+export default async function {command_label}(ctx: WorkflowContext, input: WorkflowInput): Promise<WorkflowOutput> {{
+  const normalizedInput = validateInput(input);
+  ctx.progress("Running workflow", {{ input: normalizedInput }});
+  return {{ ok: true, input: normalizedInput }};
+}}
+
+export async function complete(_ctx: WorkflowContext) {{
+  return [];
+}}
+"##,
+            command_label = command_label.replace('-', "_"),
+        ),
+    )
+    .with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn readme_template(workflow: &WorkflowSummary) -> String {
+    let title = workflow
+        .title
+        .clone()
+        .unwrap_or_else(|| display_title(&workflow.id));
+    let description = workflow
+        .user_description
+        .clone()
+        .unwrap_or_else(|| "Workflow repair scaffold.".to_string());
+    let command_label = workflow
+        .command
+        .as_deref()
+        .unwrap_or_else(|| workflow.id.split('/').next_back().unwrap_or(&workflow.id));
+    format!(
+        "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nPrefer `ctx.status({{ workflowName, workflowStatus, threads? }})` while the workflow is running so the TUI can render `Workflow <workflowName>: <workflowStatus>` with optional `-> <threadName>: <threadStatus>` rows when more than one thread is active. `ctx.progress(message, data?)` remains available as a legacy shorthand for single-string status updates. `ctx.cwd`, `ctx.currentWorkingDirectory`, `ctx.repoRoot`, and `ctx.workingDirectory` point at the workspace that launched the workflow, while `process.cwd()` stays on the workflow package directory. `ctx.runWorkflow(workflow, input?, {{ onStatusUpdate }})` can intercept child workflow status updates and either forward, transform, bundle, or suppress them. Export a named default async function for the execution entrypoint, an optional named `complete(...)` export for autocomplete, and an optional `WorkflowOutput.toTuiMarkdown(result)` value companion for markdown rendering. `/workflow validate {id}` extracts and publishes the TS contract after the workflow passes validation. Keep the default export focused on canonical JSON results. `ctx.reportToUserMarkdown(markdown)` still works for direct markdown handoffs, but it is now the escape hatch rather than the primary result channel.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json` and resolved from this directory's `node_modules`.\n\n## Validation\n\nRun the configured validation commands from `workflow.yaml` and keep the coverage markers aligned with the documented contract. Prefer commands that fail fast on missing dependencies or type errors.\n\n## Maintenance\n\nUpdate `README.md`, `DESIGN.md`, `workflow.yaml`, and the test markers together when the workflow contract changes.\n",
+        id = workflow.id,
+    )
+}
+
+fn design_template(workflow: &WorkflowSummary) -> String {
+    let title = workflow
+        .title
+        .clone()
+        .unwrap_or_else(|| display_title(&workflow.id));
+    format!(
+        "# {title} Design\n\n## Overview\n\nThis workflow is a local TypeScript package driven by `tsx` and validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `src/workflow.ts` owns the runtime behavior and exports the named default async function, an optional `complete(...)` export, and an optional `WorkflowOutput.toTuiMarkdown(result)` companion.\n- `src/tests/` carries the coverage contract for positive, load, autocomplete, negative, and recovery paths.\n- `workflow.yaml` records validation commands and coverage expectations.\n- `state/` holds any persistent data.\n\n## Data Flow\n\n1. A registered workflow command loads the workflow from the local package.\n2. The named default export validates input, emits progress, and returns the canonical JSON result.\n3. If present, `WorkflowOutput.toTuiMarkdown(result)` provides the markdown view for the TUI and workflow-to-workflow callers.\n4. `codex workflow validate {id}` runs the local validation commands, checks the required docs/layout/coverage markers, extracts the TS contract, and publishes it only after validation passes.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors. When the workflow cannot satisfy its contract, fail with a specific error that names the broken path.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.ts`: positive path, progress, JSON result, and markdown companion coverage.\n- `src/tests/workflow.load.test.ts`: loadability smoke.\n- `src/tests/workflow.autocomplete.test.ts`: registry and command-completion readiness smoke.\n- `src/tests/workflow.negative.test.ts`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.ts`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep dependency usage local. Keep `// workflow-covers:` markers aligned with `validation.coverage`, including load and autocomplete. Update this file when the workflow behavior or review expectations change.\n",
+        id = workflow.id,
+    )
+}
+
+fn tsconfig_template() -> String {
+    "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"strict\": true,\n    \"noEmit\": true\n  },\n  \"include\": [\"src/**/*.ts\"]\n}\n".to_string()
+}
+
+fn display_title(id: &str) -> String {
+    id.split('/').next_back().unwrap_or(id).replace('-', " ")
+}
+
+fn strip_tests_prefix(path: &Path) -> PathBuf {
+    if let Ok(stripped) = path.strip_prefix(Path::new("tests")) {
+        return stripped.to_path_buf();
+    }
+    path.file_name()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("workflow.test.ts"))
+}
+
+fn is_code_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some("ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts")
+    )
+}
+
+fn is_test_path(path: &Path) -> bool {
+    if path.starts_with(Path::new("tests")) {
+        return true;
+    }
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.contains(".test.") || name.contains(".spec."))
+}
+
+fn is_database_path(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    file_name.ends_with(".db")
+        || file_name.ends_with(".sqlite")
+        || file_name.ends_with(".sqlite3")
+        || file_name.ends_with(".db-wal")
+        || file_name.ends_with(".db-shm")
+        || file_name.ends_with(".sqlite-wal")
+        || file_name.ends_with(".sqlite-shm")
+        || file_name.ends_with(".sqlite3-wal")
+        || file_name.ends_with(".sqlite3-shm")
+}
+
+fn command_fixable(command: &str, _exit_code: Option<i32>) -> bool {
+    if command.contains("exit 1") {
+        return false;
+    }
+    command.contains("npm run build") || command.contains("npm test")
+}
+
+impl FixPlan {
+    fn is_empty(&self) -> bool {
+        !self.update_validation_yaml
+            && !self.repair_readme
+            && !self.repair_design
+            && !self.repair_package_manifest
+            && !self.repair_tsconfig
+            && !self.create_layout
+            && self.add_coverage_markers.is_empty()
+            && self.package_names.is_empty()
+            && !self.build_script
+            && !self.test_script
+            && !self.run_script
+            && !self.spec_reset
+    }
+}

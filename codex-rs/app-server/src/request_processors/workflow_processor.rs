@@ -308,7 +308,7 @@ impl WorkflowRequestProcessor {
             data: output.data,
         })
         .map(T::from)
-        .map_err(|err| internal_error(format!("workflow command failed: {err}")))
+        .map_err(|err| internal_error(format!("workflow command failed: {err:#}")))
     }
 
     async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
@@ -806,7 +806,8 @@ export default async function run(_ctx: WorkflowContext, input: WorkflowInput): 
             panic!("expected workflow repair response");
         };
 
-        assert_eq!(response.message, "valid");
+        assert!(response.message.contains("Repairing workflow"));
+        assert!(response.message.contains("Validation passed."));
         assert_eq!(
             response.repair.stop_reason,
             codex_app_server_protocol::WorkflowRepairStopReason::Valid
