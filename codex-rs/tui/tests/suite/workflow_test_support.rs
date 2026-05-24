@@ -115,15 +115,23 @@ process.exit(result.status ?? 1);
 }
 
 pub(super) fn ensure_codex_binary(repo_root: &Path) -> Result<PathBuf> {
-    let build_status = Command::new("cargo")
+    match Command::new("cargo")
         .arg("build")
         .arg("-p")
         .arg("codex-cli")
         .arg("--bin")
         .arg("codex")
         .current_dir(repo_root.join("codex-rs"))
-        .status()?;
-    anyhow::ensure!(build_status.success(), "failed to build codex binary");
+        .status()
+    {
+        Ok(build_status) => {
+            anyhow::ensure!(build_status.success(), "failed to build codex binary");
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            // Bazel test environments do not provide cargo on PATH; use the runfile binary.
+        }
+        Err(err) => return Err(err.into()),
+    }
 
     codex_utils_cargo_bin::cargo_bin("codex").map_err(Into::into)
 }

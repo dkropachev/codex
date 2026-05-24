@@ -85,6 +85,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::user_input::TextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
+#[cfg(unix)]
 use codex_workflows::WORKFLOW_RUNTIME_EVENT_PREFIX;
 use crossterm::event::KeyModifiers;
 use futures::SinkExt;
@@ -92,6 +93,7 @@ use futures::StreamExt;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::Line;
+#[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
