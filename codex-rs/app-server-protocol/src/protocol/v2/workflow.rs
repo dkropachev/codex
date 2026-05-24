@@ -114,6 +114,17 @@ pub enum WorkflowValidationFindingInfo {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct WorkflowValidationCommandResult {
+    pub command: String,
+    pub succeeded: bool,
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct WorkflowValidationInfo {
     pub status: WorkflowValidationStatus,
     pub findings: Vec<WorkflowValidationFindingInfo>,
@@ -402,6 +413,7 @@ pub struct WorkflowRepairResponse {
     pub message: String,
     pub workflow: WorkflowSummary,
     pub validation: WorkflowValidationInfo,
+    pub validation_command_results: Vec<WorkflowValidationCommandResult>,
     pub repair: WorkflowRepairResult,
 }
 

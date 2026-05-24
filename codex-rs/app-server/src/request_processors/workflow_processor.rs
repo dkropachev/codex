@@ -36,6 +36,7 @@ use codex_app_server_protocol::WorkflowRunResponse;
 use codex_app_server_protocol::WorkflowSummary;
 use codex_app_server_protocol::WorkflowValidateParams;
 use codex_app_server_protocol::WorkflowValidateResponse;
+use codex_app_server_protocol::WorkflowValidationCommandResult;
 use codex_app_server_protocol::WorkflowValidationFindingInfo;
 use codex_app_server_protocol::WorkflowValidationInfo;
 use codex_app_server_protocol::WorkflowValidationStatus;
@@ -185,6 +186,7 @@ impl WorkflowRequestProcessor {
                 message: response.message,
                 workflow: payload.workflow,
                 validation: payload.validation,
+                validation_command_results: payload.validation_command_results,
                 repair: payload.repair,
             }
             .into(),
@@ -676,6 +678,7 @@ fn config_value_to_command_string(value: JsonValue) -> String {
 struct WorkflowRepairPayload {
     workflow: WorkflowSummary,
     validation: WorkflowValidationInfo,
+    validation_command_results: Vec<WorkflowValidationCommandResult>,
     repair: WorkflowRepairResult,
 }
 
@@ -814,5 +817,7 @@ export default async function run(_ctx: WorkflowContext, input: WorkflowInput): 
         );
         assert_eq!(response.repair.changed, true);
         assert!(!response.repair.applied_fixes.is_empty());
+        assert_eq!(response.validation_command_results.len(), 1);
+        assert!(response.validation_command_results[0].succeeded);
     }
 }

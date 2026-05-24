@@ -55,6 +55,18 @@ struct FixPlan {
     spec_reset: bool,
 }
 
+struct FinalRepairResultInput {
+    repair_mode: WorkflowRepairMode,
+    max_repair_cycles: u32,
+    repair_cycles_run: u32,
+    changed: bool,
+    stop_reason: WorkflowRepairStopReason,
+    applied_fixes: Vec<WorkflowRepairAction>,
+    blocked_findings: Vec<WorkflowValidationFindingInfo>,
+    unsupported_findings: Vec<WorkflowValidationFindingInfo>,
+    remaining_findings: Vec<WorkflowValidationFindingInfo>,
+}
+
 pub(crate) fn repair_workflow_command(
     ctx: WorkflowCommandContext<'_>,
     id: &str,
@@ -85,48 +97,48 @@ pub(crate) fn repair_workflow_command(
         })?;
 
     if last_report.status == crate::registry::WorkflowValidationStatus::Valid {
-        let repair = final_repair_result(
+        let repair = final_repair_result(FinalRepairResultInput {
             repair_mode,
             max_repair_cycles,
             repair_cycles_run,
             changed,
-            WorkflowRepairStopReason::Valid,
+            stop_reason: WorkflowRepairStopReason::Valid,
             applied_fixes,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        );
+            blocked_findings: Vec::new(),
+            unsupported_findings: Vec::new(),
+            remaining_findings: Vec::new(),
+        });
         return Ok(build_output(&workflow, last_report, repair));
     }
 
     for _ in 0..max_repair_cycles {
         let assessment = assess_findings(&workflow.path, &last_report, &repair_mode);
         if !assessment.unsupported.is_empty() {
-            let repair = final_repair_result(
+            let repair = final_repair_result(FinalRepairResultInput {
                 repair_mode,
                 max_repair_cycles,
                 repair_cycles_run,
-                false,
-                WorkflowRepairStopReason::UnsupportedFindings,
-                Vec::new(),
-                Vec::new(),
-                assessment.unsupported.iter().map(finding_to_api).collect(),
-                api_findings(&last_report.findings),
-            );
+                changed: false,
+                stop_reason: WorkflowRepairStopReason::UnsupportedFindings,
+                applied_fixes: Vec::new(),
+                blocked_findings: Vec::new(),
+                unsupported_findings: assessment.unsupported.iter().map(finding_to_api).collect(),
+                remaining_findings: api_findings(&last_report.findings),
+            });
             return Ok(build_output(&workflow, last_report, repair));
         }
         if !assessment.blocked.is_empty() {
-            let repair = final_repair_result(
+            let repair = final_repair_result(FinalRepairResultInput {
                 repair_mode,
                 max_repair_cycles,
                 repair_cycles_run,
-                false,
-                WorkflowRepairStopReason::BlockedByRepairMode,
-                Vec::new(),
-                assessment.blocked.iter().map(finding_to_api).collect(),
-                Vec::new(),
-                api_findings(&last_report.findings),
-            );
+                changed: false,
+                stop_reason: WorkflowRepairStopReason::BlockedByRepairMode,
+                applied_fixes: Vec::new(),
+                blocked_findings: assessment.blocked.iter().map(finding_to_api).collect(),
+                unsupported_findings: Vec::new(),
+                remaining_findings: api_findings(&last_report.findings),
+            });
             return Ok(build_output(&workflow, last_report, repair));
         }
 
@@ -137,17 +149,17 @@ pub(crate) fn repair_workflow_command(
             )
         })?;
         if plan.is_empty() {
-            let repair = final_repair_result(
+            let repair = final_repair_result(FinalRepairResultInput {
                 repair_mode,
                 max_repair_cycles,
                 repair_cycles_run,
-                false,
-                WorkflowRepairStopReason::NoChangesApplied,
+                changed: false,
+                stop_reason: WorkflowRepairStopReason::NoChangesApplied,
                 applied_fixes,
-                api_findings(&last_report.findings),
-                Vec::new(),
-                Vec::new(),
-            );
+                blocked_findings: api_findings(&last_report.findings),
+                unsupported_findings: Vec::new(),
+                remaining_findings: Vec::new(),
+            });
             return Ok(build_output(&workflow, last_report, repair));
         }
 
@@ -202,17 +214,17 @@ pub(crate) fn repair_workflow_command(
 
         cycle_actions.retain(|action| !action.detail.is_empty());
         if cycle_actions.is_empty() {
-            let repair = final_repair_result(
+            let repair = final_repair_result(FinalRepairResultInput {
                 repair_mode,
                 max_repair_cycles,
                 repair_cycles_run,
                 changed,
-                WorkflowRepairStopReason::NoChangesApplied,
+                stop_reason: WorkflowRepairStopReason::NoChangesApplied,
                 applied_fixes,
-                Vec::new(),
-                Vec::new(),
-                api_findings(&last_report.findings),
-            );
+                blocked_findings: Vec::new(),
+                unsupported_findings: Vec::new(),
+                remaining_findings: api_findings(&last_report.findings),
+            });
             return Ok(build_output(&workflow, last_report, repair));
         }
 
@@ -239,69 +251,61 @@ pub(crate) fn repair_workflow_command(
                     format!("failed to commit repaired workflow `{}`", workflow.id)
                 })?;
             }
-            let repair = final_repair_result(
+            let repair = final_repair_result(FinalRepairResultInput {
                 repair_mode,
                 max_repair_cycles,
                 repair_cycles_run,
                 changed,
-                WorkflowRepairStopReason::Valid,
+                stop_reason: WorkflowRepairStopReason::Valid,
                 applied_fixes,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            );
+                blocked_findings: Vec::new(),
+                unsupported_findings: Vec::new(),
+                remaining_findings: Vec::new(),
+            });
             return Ok(build_output(&workflow, last_report, repair));
         }
     }
 
-    let repair = final_repair_result(
+    let repair = final_repair_result(FinalRepairResultInput {
         repair_mode,
         max_repair_cycles,
         repair_cycles_run,
         changed,
-        WorkflowRepairStopReason::RepairBudgetExhausted,
+        stop_reason: WorkflowRepairStopReason::RepairBudgetExhausted,
         applied_fixes,
-        Vec::new(),
-        Vec::new(),
-        api_findings(&last_report.findings),
-    );
+        blocked_findings: Vec::new(),
+        unsupported_findings: Vec::new(),
+        remaining_findings: api_findings(&last_report.findings),
+    });
     Ok(build_output(&workflow, last_report, repair))
 }
 
-fn final_repair_result(
-    repair_mode: WorkflowRepairMode,
-    max_repair_cycles: u32,
-    repair_cycles_run: u32,
-    changed: bool,
-    stop_reason: WorkflowRepairStopReason,
-    applied_fixes: Vec<WorkflowRepairAction>,
-    blocked_findings: Vec<WorkflowValidationFindingInfo>,
-    unsupported_findings: Vec<WorkflowValidationFindingInfo>,
-    remaining_findings: Vec<WorkflowValidationFindingInfo>,
-) -> WorkflowRepairResult {
+fn final_repair_result(input: FinalRepairResultInput) -> WorkflowRepairResult {
     WorkflowRepairResult {
-        mode: repair_mode.to_string(),
-        max_repair_cycles,
-        repair_cycles_run,
-        changed,
-        stop_reason,
-        applied_fixes,
-        remaining_findings,
-        blocked_findings,
-        unsupported_findings,
+        mode: input.repair_mode.to_string(),
+        max_repair_cycles: input.max_repair_cycles,
+        repair_cycles_run: input.repair_cycles_run,
+        changed: input.changed,
+        stop_reason: input.stop_reason,
+        applied_fixes: input.applied_fixes,
+        remaining_findings: input.remaining_findings,
+        blocked_findings: input.blocked_findings,
+        unsupported_findings: input.unsupported_findings,
     }
 }
 
 fn build_output(
     workflow: &WorkflowSummary,
-    report: WorkflowValidationReport,
+    mut report: WorkflowValidationReport,
     repair: WorkflowRepairResult,
 ) -> WorkflowCommandOutput {
+    let validation_command_results = std::mem::take(&mut report.command_results);
     WorkflowCommandOutput {
         message: repair_output_message(workflow, &repair),
         data: json!({
             "workflow": workflow,
             "validation": validation_report_to_api(&report),
+            "validationCommandResults": validation_command_results,
             "repair": repair,
         }),
     }

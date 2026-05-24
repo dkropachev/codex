@@ -542,6 +542,7 @@ export type { WorkflowSummary } from "./WorkflowSummary";
 export type { WorkflowThreadStatus } from "./WorkflowThreadStatus";
 export type { WorkflowValidateParams } from "./WorkflowValidateParams";
 export type { WorkflowValidateResponse } from "./WorkflowValidateResponse";
+export type { WorkflowValidationCommandResult } from "./WorkflowValidationCommandResult";
 export type { WorkflowValidationFindingInfo } from "./WorkflowValidationFindingInfo";
 export type { WorkflowValidationInfo } from "./WorkflowValidationInfo";
 export type { WorkflowValidationStatus } from "./WorkflowValidationStatus";

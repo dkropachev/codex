@@ -137,7 +137,7 @@ fn write_command_failure_workflow_fixture(workflow_dir: &Path) {
         &crate::spec::WorkflowSpec {
             id: "broken/fix".to_string(),
             validation: json!({
-                "commands": ["exit 1"],
+                "commands": ["node -e \"console.log('out'); console.error('err'); process.exit(1)\""],
                 "coverage": {
                     "positive": true,
                     "negative": true,
@@ -408,6 +408,24 @@ fn repair_workflow_command_reports_unsupported_validation_command_failures() {
         output.data["repair"]["unsupportedFindings"]
             .as_array()
             .is_some_and(|findings| !findings.is_empty())
+    );
+    assert_eq!(
+        output.data["validationCommandResults"][0]["command"],
+        "node -e \"console.log('out'); console.error('err'); process.exit(1)\""
+    );
+    assert_eq!(
+        output.data["validationCommandResults"][0]["succeeded"],
+        false
+    );
+    assert!(
+        output.data["validationCommandResults"][0]["stdout"]
+            .as_str()
+            .is_some_and(|stdout| stdout.contains("out"))
+    );
+    assert!(
+        output.data["validationCommandResults"][0]["stderr"]
+            .as_str()
+            .is_some_and(|stderr| stderr.contains("err"))
     );
     assert_eq!(output.data["repair"]["changed"], false);
 }

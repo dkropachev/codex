@@ -72,7 +72,7 @@ fn write_unsupported_command_fixture(workflow_dir: &std::path::Path) -> Result<(
     fs::create_dir_all(workflow_dir.join(".git"))?;
     fs::write(
         workflow_dir.join("workflow.yaml"),
-        "id: broken/fix\nvalidation:\n  commands:\n    - exit 1\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
+        "id: broken/fix\nvalidation:\n  commands:\n    - node -e \"console.log('out'); console.error('err'); process.exit(1)\"\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
     )?;
     fs::write(
         workflow_dir.join("README.md"),
@@ -314,6 +314,17 @@ async fn workflow_repair_returns_unsupported_command_result() -> Result<()> {
     assert!(response.message.contains("Unsupported findings:"));
     assert!(!response.repair.unsupported_findings.is_empty());
     assert!(!response.repair.changed);
+    assert_eq!(response.validation_command_results.len(), 1);
+    assert!(
+        response.validation_command_results[0]
+            .stdout
+            .contains("out")
+    );
+    assert!(
+        response.validation_command_results[0]
+            .stderr
+            .contains("err")
+    );
 
     Ok(())
 }

@@ -21182,6 +21182,12 @@
           "validation": {
             "$ref": "#/definitions/v2/WorkflowValidationInfo"
           },
+          "validationCommandResults": {
+            "items": {
+              "$ref": "#/definitions/v2/WorkflowValidationCommandResult"
+            },
+            "type": "array"
+          },
           "workflow": {
             "$ref": "#/definitions/v2/WorkflowSummary"
           }
@@ -21190,6 +21196,7 @@
           "message",
           "repair",
           "validation",
+          "validationCommandResults",
           "workflow"
         ],
         "title": "WorkflowRepairResponse",
@@ -21465,6 +21472,36 @@
           "message"
         ],
         "title": "WorkflowValidateResponse",
+        "type": "object"
+      },
+      "WorkflowValidationCommandResult": {
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "exitCode": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "stderr": {
+            "type": "string"
+          },
+          "stdout": {
+            "type": "string"
+          },
+          "succeeded": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "command",
+          "stderr",
+          "stdout",
+          "succeeded"
+        ],
         "type": "object"
       },
       "WorkflowValidationFindingInfo": {
