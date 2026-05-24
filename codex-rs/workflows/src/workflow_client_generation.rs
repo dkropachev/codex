@@ -102,11 +102,12 @@ fn render_generated_workflow_module(
             .format_schemas
             .contains_key("tui.markdown.v1")
         {
-            let callable_name = callable
-                .contract
-                .callable_name
-                .as_deref()
-                .expect("callable workflows always have callable names");
+            let callable_name = callable.contract.callable_name.as_deref().ok_or_else(|| {
+                anyhow!(
+                    "callable workflow {} is missing callable_name",
+                    callable.workflow.id
+                )
+            })?;
             let companion_name = format!("{}WorkflowOutput", pascal_case(callable_name));
             let import_path = relative_import_path(
                 &module_path,
@@ -130,11 +131,12 @@ fn render_generated_workflow_module(
     output.push('\n');
 
     for callable in callables {
-        let callable_name = callable
-            .contract
-            .callable_name
-            .as_deref()
-            .expect("callable workflows always have callable names");
+        let callable_name = callable.contract.callable_name.as_deref().ok_or_else(|| {
+            anyhow!(
+                "callable workflow {} is missing callable_name",
+                callable.workflow.id
+            )
+        })?;
         let pascal_name = pascal_case(callable_name);
         let input_type_name = format!("{pascal_name}Input");
         let output_type_name = format!("{pascal_name}Output");
@@ -577,7 +579,11 @@ fn render_object_type(schema: &JsonValue) -> Result<String> {
     let mut names = properties.keys().cloned().collect::<Vec<_>>();
     names.sort();
     for name in names {
-        let property_schema = properties.get(&name).expect("property exists");
+        let Some(property_schema) = properties.get(&name) else {
+            return Err(anyhow!(
+                "property {name} was missing from schema properties"
+            ));
+        };
         let optional = !required.contains(name.as_str());
         fields.push(format!(
             "{}{}: {}",
@@ -761,7 +767,7 @@ mod tests {
         let mut source_contracts = BTreeMap::new();
         source_contracts.insert(workflow.path.clone(), workflow_contract("codeReview"));
 
-        generate_workflow_client_modules(&[workflow.clone()], &source_contracts)
+        generate_workflow_client_modules(std::slice::from_ref(&workflow), &source_contracts)
             .expect("generate client module");
 
         let generated = fs::read_to_string(workflow.path.join(GENERATED_WORKFLOW_MODULE_PATH))

@@ -499,7 +499,7 @@ pub(crate) fn read_published_workflow_source_contract(
     if record.workflow_id != workflow.id || record.workflow_path != workflow.path {
         return Ok(None);
     }
-    Ok(Some(record.source_contract.unwrap_or_else(|| {
+    Ok(Some(record.source_contract.unwrap_or({
         WorkflowSourceContract {
             callable_name: None,
             input_schema: record.contract.input_schema,
