@@ -72,12 +72,13 @@ pub(crate) fn repair_workflow_command(
 ) -> Result<WorkflowCommandOutput> {
     let initial_workflow = resolve_workflow_for_context(&ctx, id)
         .with_context(|| format!("failed to resolve workflow `{id}` for repair"))?;
-    let repair_mode = WorkflowRepairMode::parse(&initial_workflow.repair_mode).with_context(|| {
-        format!(
-            "failed to parse repair mode `{}` for workflow `{id}`",
-            initial_workflow.repair_mode
-        )
-    })?;
+    let repair_mode =
+        WorkflowRepairMode::parse(&initial_workflow.repair_mode).with_context(|| {
+            format!(
+                "failed to parse repair mode `{}` for workflow `{id}`",
+                initial_workflow.repair_mode
+            )
+        })?;
     let max_repair_cycles = ctx
         .config
         .max_repair_cycles
