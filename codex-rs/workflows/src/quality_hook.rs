@@ -10,9 +10,9 @@ use crate::registry::workflow_git_status;
 use crate::validation_finding::WorkflowValidationFinding;
 use crate::validation_runner::WorkflowValidationReport;
 use crate::validation_runner::run_validation_command;
-use crate::validation_runner::validate_workflow;
 use crate::validation_runner::validation_report_message;
 use crate::workflow_api::validate_and_publish_workflow_api;
+use crate::workflow_api::validate_workflow_api_contract;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkflowQualityHookFeedback {
@@ -131,7 +131,7 @@ fn workflow_quality_failure_for_workflow(
         return Ok(None);
     }
 
-    let report = validate_workflow(workflow, run_validation_command)?;
+    let report = validate_workflow_api_contract(workflow, run_validation_command)?;
     if report.status == crate::registry::WorkflowValidationStatus::Valid {
         return Ok(None);
     }
@@ -285,6 +285,11 @@ mod tests {
         fs::create_dir_all(workflow_dir.join("src/tests")).expect("create src/tests");
         fs::create_dir_all(workflow_dir.join("state")).expect("create state");
         fs::write(
+            workflow_dir.join(".gitignore"),
+            "node_modules/\nartifacts/\nstate/*\n!state/.gitkeep\n",
+        )
+        .expect("write .gitignore");
+        fs::write(
             workflow_dir.join("README.md"),
             "# Test\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
         )
@@ -342,7 +347,7 @@ mod tests {
         fs::create_dir_all(workflow_dir.join(".git")).expect("create git dir");
         fs::write(
             workflow_dir.join("workflow.yaml"),
-            "id: review/fix\napi:\n  inputSchema:\n    type: object\n  outputSchema:\n    type: object\nvalidation:\n  commands:\n    - exit 0\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
+            "id: review/fix\napi:\n  inputSchema:\n    type: object\n  outputSchema:\n    type: object\n    additionalProperties: true\nvalidation:\n  commands:\n    - exit 0\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
         )
         .expect("write workflow spec");
 

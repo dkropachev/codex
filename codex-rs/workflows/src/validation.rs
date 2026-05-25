@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -60,6 +61,7 @@ const REQUIRED_TRUE_COVERAGE_KEYS: &[&str] = &[
     "autocomplete",
 ];
 const WORKFLOW_TEST_MARKER_PREFIX: &str = "workflow-covers:";
+const RUNTIME_STATE_GITIGNORE_PATTERNS: &[&str] = &["artifacts/", "state/*", "!state/.gitkeep"];
 const BARE_NODE_BUILTINS: &[&str] = &[
     "assert",
     "assert/strict",
@@ -204,7 +206,10 @@ pub(crate) fn validate_workflow_dir(
     if let Some(spec) = spec.as_ref() {
         findings.extend(validate_validation_commands(spec));
         findings.extend(validate_coverage_metadata(workflow_dir, spec));
+        findings.extend(validate_output_schemas(spec));
     }
+    findings.extend(validate_runtime_state_gitignore(workflow_dir));
+    findings.extend(validate_tracked_runtime_state(workflow_dir));
 
     let mut code_outside_src = Vec::new();
     let mut tests_outside_src_tests = Vec::new();
@@ -447,6 +452,151 @@ fn validate_validation_commands(
     }
 }
 
+fn validate_output_schemas(spec: &crate::spec::WorkflowSpec) -> Vec<WorkflowValidationFinding> {
+    let mut findings = Vec::new();
+    if let Some(output_schema) = spec.api.get("outputSchema")
+        && !output_schema.is_null()
+    {
+        collect_ambiguous_output_schema_findings(
+            output_schema,
+            "api.outputSchema".to_string(),
+            &mut findings,
+        );
+    }
+    if let Some(tool) = spec.tool.as_ref()
+        && !tool.output_schema.is_null()
+    {
+        collect_ambiguous_output_schema_findings(
+            &tool.output_schema,
+            "tool.outputSchema".to_string(),
+            &mut findings,
+        );
+    }
+    findings
+}
+
+fn collect_ambiguous_output_schema_findings(
+    schema: &JsonValue,
+    schema_path: String,
+    findings: &mut Vec<WorkflowValidationFinding>,
+) {
+    if object_schema_has_ambiguous_shape(schema) {
+        findings.push(WorkflowValidationFinding::AmbiguousWorkflowOutputSchema {
+            path: PathBuf::from(WORKFLOW_YAML),
+            schema_path: schema_path.clone(),
+        });
+    }
+
+    for union_key in ["anyOf", "oneOf", "allOf"] {
+        if let Some(entries) = schema.get(union_key).and_then(JsonValue::as_array) {
+            for (index, item) in entries.iter().enumerate() {
+                collect_ambiguous_output_schema_findings(
+                    item,
+                    format!("{schema_path}.{union_key}[{index}]"),
+                    findings,
+                );
+            }
+        }
+    }
+    if let Some(properties) = schema.get("properties").and_then(JsonValue::as_object) {
+        for (name, property_schema) in properties {
+            collect_ambiguous_output_schema_findings(
+                property_schema,
+                format!("{schema_path}.properties.{name}"),
+                findings,
+            );
+        }
+    }
+    if let Some(items) = schema.get("items") {
+        collect_ambiguous_output_schema_findings(items, format!("{schema_path}.items"), findings);
+    }
+}
+
+fn object_schema_has_ambiguous_shape(schema: &JsonValue) -> bool {
+    if !schema_declares_object_type(schema) {
+        return false;
+    }
+    let has_properties = schema
+        .get("properties")
+        .and_then(JsonValue::as_object)
+        .is_some_and(|properties| !properties.is_empty());
+    let has_additional_properties = schema
+        .as_object()
+        .is_some_and(|object| object.contains_key("additionalProperties"));
+    !has_properties && !has_additional_properties
+}
+
+fn schema_declares_object_type(schema: &JsonValue) -> bool {
+    match schema.get("type") {
+        Some(JsonValue::String(type_name)) => type_name == "object",
+        Some(JsonValue::Array(type_names)) => {
+            type_names.iter().any(|type_name| type_name == "object")
+        }
+        _ => false,
+    }
+}
+
+fn validate_runtime_state_gitignore(workflow_dir: &Path) -> Vec<WorkflowValidationFinding> {
+    let gitignore_path = workflow_dir.join(".gitignore");
+    let contents = fs::read_to_string(&gitignore_path).unwrap_or_default();
+    let missing_patterns = RUNTIME_STATE_GITIGNORE_PATTERNS
+        .iter()
+        .filter(|pattern| !gitignore_contains_pattern(&contents, pattern))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if missing_patterns.is_empty() {
+        Vec::new()
+    } else {
+        vec![WorkflowValidationFinding::RuntimeStateGitignoreMissing {
+            path: PathBuf::from(".gitignore"),
+            patterns: missing_patterns,
+        }]
+    }
+}
+
+fn gitignore_contains_pattern(contents: &str, pattern: &str) -> bool {
+    contents.lines().any(|line| line.trim() == pattern)
+}
+
+fn validate_tracked_runtime_state(workflow_dir: &Path) -> Vec<WorkflowValidationFinding> {
+    if !workflow_dir.join(".git/HEAD").is_file() {
+        return Vec::new();
+    }
+
+    let Ok(output) = Command::new("git")
+        .args(["ls-files", "-z", "--", "state", "artifacts"])
+        .current_dir(workflow_dir)
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    let mut tracked_runtime_paths = output
+        .stdout
+        .split(|byte| *byte == b'\0')
+        .filter(|bytes| !bytes.is_empty())
+        .filter_map(|bytes| std::str::from_utf8(bytes).ok())
+        .map(PathBuf::from)
+        .filter(|path| is_runtime_state_path(path))
+        .collect::<Vec<_>>();
+    tracked_runtime_paths.sort();
+    if tracked_runtime_paths.is_empty() {
+        Vec::new()
+    } else {
+        vec![WorkflowValidationFinding::TrackedRuntimeStateFiles {
+            paths: tracked_runtime_paths,
+        }]
+    }
+}
+
+fn is_runtime_state_path(path: &Path) -> bool {
+    path.starts_with(Path::new("artifacts"))
+        || (path.starts_with(Path::new("state")) && path != Path::new("state/.gitkeep"))
+}
+
 fn collect_test_coverage_markers(workflow_dir: &Path) -> BTreeSet<String> {
     let mut markers = BTreeSet::new();
     for (_, _, contents) in workflow_test_files(workflow_dir) {
@@ -623,6 +773,7 @@ fn is_allowed_non_src_code_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::process::Command;
 
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -639,6 +790,11 @@ mod tests {
         fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
         fs::create_dir_all(workflow_dir.join("state")).unwrap();
         fs::create_dir_all(workflow_dir.join(".git")).unwrap();
+        fs::write(
+            workflow_dir.join(".gitignore"),
+            "node_modules/\nartifacts/\nstate/*\n!state/.gitkeep\n",
+        )
+        .unwrap();
         fs::write(
             workflow_dir.join("README.md"),
             "# Example\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
@@ -839,6 +995,146 @@ test("workflow rejects invalid input", async () => {
                 .iter()
                 .any(|message| {
                     message.contains("missing test coverage marker `// workflow-covers: load`")
+                })
+        );
+    }
+
+    #[test]
+    fn validate_workflow_dir_rejects_ambiguous_output_schema() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = create_valid_workflow_dir(&root, "example");
+        write_workflow_spec(
+            &workflow_dir.join(crate::spec::WORKFLOW_YAML),
+            &WorkflowSpec {
+                id: "example".to_string(),
+                api: json!({
+                    "inputSchema": { "type": "object", "additionalProperties": true },
+                    "outputSchema": { "type": "object" }
+                }),
+                validation: json!({
+                    "commands": ["npm run build", "npm test"],
+                    "coverage": {
+                        "positive": true,
+                        "negative": true,
+                        "progress": true,
+                        "finalResult": true,
+                        "failureUx": true,
+                        "load": true,
+                        "autocomplete": true,
+                        "recovery": false,
+                    }
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
+        assert!(
+            finding_messages(&validation.findings)
+                .iter()
+                .any(|message| {
+                    message.contains(
+                        "workflow output schema at api.outputSchema must declare properties or additionalProperties explicitly",
+                    )
+                })
+        );
+    }
+
+    #[test]
+    fn validate_workflow_dir_accepts_explicit_open_output_schema() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = create_valid_workflow_dir(&root, "example");
+        write_workflow_spec(
+            &workflow_dir.join(crate::spec::WORKFLOW_YAML),
+            &WorkflowSpec {
+                id: "example".to_string(),
+                api: json!({
+                    "inputSchema": { "type": "object", "additionalProperties": true },
+                    "outputSchema": { "type": "object", "additionalProperties": true }
+                }),
+                validation: json!({
+                    "commands": ["npm run build", "npm test"],
+                    "coverage": {
+                        "positive": true,
+                        "negative": true,
+                        "progress": true,
+                        "finalResult": true,
+                        "failureUx": true,
+                        "load": true,
+                        "autocomplete": true,
+                        "recovery": false,
+                    }
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Valid);
+        assert!(validation.findings.is_empty());
+    }
+
+    #[test]
+    fn validate_workflow_dir_requires_runtime_state_gitignore_patterns() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = create_valid_workflow_dir(&root, "example");
+        fs::write(workflow_dir.join(".gitignore"), "node_modules/\n").unwrap();
+
+        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
+        assert!(
+            finding_messages(&validation.findings)
+                .iter()
+                .any(|message| message.contains("runtime state ignore rules are missing"))
+        );
+    }
+
+    #[test]
+    fn validate_workflow_dir_rejects_tracked_runtime_state() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = create_valid_workflow_dir(&root, "example");
+        fs::remove_dir_all(workflow_dir.join(".git")).unwrap();
+        assert!(
+            Command::new("git")
+                .arg("init")
+                .current_dir(&workflow_dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::write(workflow_dir.join("state/reviews.sqlite3"), "db").unwrap();
+        fs::create_dir_all(workflow_dir.join("artifacts/run-1")).unwrap();
+        fs::write(workflow_dir.join("artifacts/run-1/output.txt"), "artifact").unwrap();
+        assert!(
+            Command::new("git")
+                .args([
+                    "add",
+                    "-f",
+                    "state/reviews.sqlite3",
+                    "artifacts/run-1/output.txt",
+                ])
+                .current_dir(&workflow_dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
+        assert!(
+            finding_messages(&validation.findings)
+                .iter()
+                .any(|message| {
+                    message.contains(
+                        "runtime state files must not be tracked by git: artifacts/run-1/output.txt, state/reviews.sqlite3",
+                    )
                 })
         );
     }

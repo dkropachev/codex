@@ -12,6 +12,14 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
 
+fn write_runtime_gitignore(workflow_dir: &Path) {
+    fs::write(
+        workflow_dir.join(".gitignore"),
+        "node_modules/\nartifacts/\nstate/*\n!state/.gitkeep\n",
+    )
+    .unwrap();
+}
+
 fn write_broken_workflow_fixture(workflow_dir: &Path) {
     fs::write(
         workflow_dir.join("README.md"),
@@ -88,6 +96,7 @@ fn write_command_failure_workflow_fixture(workflow_dir: &Path) {
     fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
     fs::create_dir_all(workflow_dir.join("state")).unwrap();
     fs::create_dir_all(workflow_dir.join(".git")).unwrap();
+    write_runtime_gitignore(workflow_dir);
     fs::write(
         workflow_dir.join("README.md"),
         "# Workflow\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
@@ -165,6 +174,7 @@ fn write_build_fixable_workflow_fixture(workflow_dir: &Path) {
     fs::create_dir_all(workflow_dir.join("state")).unwrap();
     fs::create_dir_all(workflow_dir.join(".git")).unwrap();
     fs::create_dir_all(workflow_dir.join("node_modules/.bin")).unwrap();
+    write_runtime_gitignore(workflow_dir);
     fs::write(
         workflow_dir.join("README.md"),
         "# Workflow\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
@@ -295,6 +305,92 @@ fn write_layout_fixable_workflow_fixture(workflow_dir: &Path) {
         },
     )
     .unwrap();
+}
+
+fn write_tracked_runtime_state_workflow_fixture(workflow_dir: &Path) {
+    fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
+    fs::create_dir_all(workflow_dir.join("state")).unwrap();
+    fs::write(
+        workflow_dir.join("README.md"),
+        "# Workflow\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
+    )
+    .unwrap();
+    fs::write(
+        workflow_dir.join("DESIGN.md"),
+        "# Workflow Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
+    )
+    .unwrap();
+    fs::write(
+        workflow_dir.join("package.json"),
+        r#"{
+  "name": "codex-workflow-tracked-runtime-state",
+  "private": true,
+  "type": "module"
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        workflow_dir.join("src/workflow.ts"),
+        "export interface WorkflowInput { input?: string; }\nexport interface WorkflowOutput { ok: boolean; }\nexport const WorkflowOutput = { toTuiMarkdown() { return { markdown: \"done\" }; } };\nexport default async function workflow() { return { ok: true }; }\nexport async function complete() { return []; }\n",
+    )
+    .unwrap();
+    fs::write(
+        workflow_dir.join("src/tests/workflow.positive.test.ts"),
+        "// workflow-covers: positive progress finalResult\nexport {};\n",
+    )
+    .unwrap();
+    fs::write(
+        workflow_dir.join("src/tests/workflow.load.test.ts"),
+        "// workflow-covers: load\nexport {};\n",
+    )
+    .unwrap();
+    fs::write(
+        workflow_dir.join("src/tests/workflow.autocomplete.test.ts"),
+        "// workflow-covers: autocomplete\nexport {};\n",
+    )
+    .unwrap();
+    fs::write(
+        workflow_dir.join("src/tests/workflow.negative.test.ts"),
+        "// workflow-covers: negative failureUx\nexport {};\n",
+    )
+    .unwrap();
+    fs::write(workflow_dir.join("state/.gitkeep"), "").unwrap();
+    fs::write(workflow_dir.join("state/reviews.sqlite3"), "db").unwrap();
+    write_workflow_spec(
+        &workflow_dir.join("workflow.yaml"),
+        &crate::spec::WorkflowSpec {
+            id: "broken/runtime-state".to_string(),
+            validation: json!({
+                "commands": ["exit 0"],
+                "coverage": {
+                    "positive": true,
+                    "negative": true,
+                    "progress": true,
+                    "finalResult": true,
+                    "failureUx": true,
+                    "load": true,
+                    "autocomplete": true,
+                    "recovery": false,
+                }
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let status = Command::new("git")
+        .args(["init"])
+        .current_dir(workflow_dir)
+        .status()
+        .unwrap();
+    assert!(status.success(), "git init should succeed");
+    let status = Command::new("git")
+        .args(["add", "."])
+        .current_dir(workflow_dir)
+        .status()
+        .unwrap();
+    assert!(status.success(), "git add should succeed");
 }
 
 #[cfg(unix)]
@@ -603,6 +699,46 @@ fn repair_workflow_command_reports_created_layout_directories() {
     assert!(workflow_dir.join("src/tests").is_dir());
     assert!(workflow_dir.join("state").is_dir());
     assert!(workflow_dir.join("state/.gitkeep").is_file());
+}
+
+#[test]
+fn repair_workflow_command_untracks_runtime_state_and_updates_gitignore() {
+    let home = TempDir::new().unwrap();
+    let cwd = TempDir::new().unwrap();
+    let workflow_dir = home.path().join("workflows/broken/runtime-state");
+    fs::create_dir_all(&workflow_dir).unwrap();
+    write_tracked_runtime_state_workflow_fixture(&workflow_dir);
+
+    let config = codex_config::types::WorkflowsConfigToml {
+        commit_policy: Some("manual".to_string()),
+        ..Default::default()
+    };
+    let ctx = WorkflowCommandContext {
+        codex_home: home.path(),
+        cwd: cwd.path(),
+        config: &config,
+        codex_self_exe: None,
+        stage_session_id: None,
+        progress: None,
+    };
+
+    let output = repair_workflow_command(ctx, "broken/runtime-state").unwrap();
+
+    assert_eq!(output.data["repair"]["stopReason"], "valid");
+    assert_eq!(output.data["repair"]["changed"], true);
+    let gitignore = fs::read_to_string(workflow_dir.join(".gitignore")).unwrap();
+    assert!(gitignore.contains("artifacts/"));
+    assert!(gitignore.contains("state/*"));
+    assert!(gitignore.contains("!state/.gitkeep"));
+    assert!(workflow_dir.join("state/reviews.sqlite3").is_file());
+
+    let tracked = Command::new("git")
+        .args(["ls-files", "--", "state/reviews.sqlite3"])
+        .current_dir(&workflow_dir)
+        .output()
+        .unwrap();
+    assert!(tracked.status.success());
+    assert_eq!(String::from_utf8(tracked.stdout).unwrap(), "");
 }
 
 #[test]

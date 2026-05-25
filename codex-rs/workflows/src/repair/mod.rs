@@ -24,6 +24,7 @@ use crate::repair::types::WorkflowRepairStopReason;
 use crate::repair::types::WorkflowValidationFindingInfo;
 use crate::repair::types::WorkflowValidationInfo;
 use crate::repair_mode::WorkflowRepairMode;
+use crate::spec::WorkflowSpec;
 use crate::spec::read_workflow_spec;
 use crate::spec::scaffold_workflow_spec;
 use crate::spec::write_workflow_spec;
@@ -39,9 +40,12 @@ mod message;
 
 pub mod types;
 
+const RUNTIME_STATE_GITIGNORE_PATTERNS: &[&str] = &["artifacts/", "state/*", "!state/.gitkeep"];
+
 #[derive(Debug, Default)]
 struct FixPlan {
     update_validation_yaml: bool,
+    repair_output_schema_contracts: bool,
     repair_readme: bool,
     repair_design: bool,
     repair_package_manifest: bool,
@@ -317,7 +321,7 @@ pub(crate) fn repair_workflow_command(
             )
         })?;
         let mut cycle_actions = Vec::new();
-        if plan.spec_reset || plan.update_validation_yaml {
+        if plan.spec_reset || plan.update_validation_yaml || plan.repair_output_schema_contracts {
             cycle_actions.extend(apply_validation_yaml_fix(&workflow, &plan).with_context(
                 || format!("failed to repair workflow metadata for `{}`", workflow.id),
             )?);
@@ -671,6 +675,13 @@ fn build_fix_plan(
             | WorkflowValidationFinding::CoverageKeyMustBeTrue { .. } => {
                 plan.update_validation_yaml = true;
             }
+            WorkflowValidationFinding::AmbiguousWorkflowOutputSchema { .. } => {
+                plan.repair_output_schema_contracts = true;
+            }
+            WorkflowValidationFinding::RuntimeStateGitignoreMissing { .. }
+            | WorkflowValidationFinding::TrackedRuntimeStateFiles { .. } => {
+                plan.create_layout = true;
+            }
             WorkflowValidationFinding::MissingCoverageMarker { key, .. } => {
                 plan.add_coverage_markers.insert(key.clone());
             }
@@ -698,9 +709,10 @@ fn build_fix_plan(
                 plan.test_script = command.contains("npm test");
                 plan.run_script = true;
             }
-            WorkflowValidationFinding::WorkflowApiContractExtractionFailed { .. } => {
+            WorkflowValidationFinding::WorkflowApiContractExtractionFailed { .. }
+            | WorkflowValidationFinding::WorkflowApiContractSmokeFailed { .. } => {
                 return Err(anyhow!(
-                    "workflow API contract extraction failures are not repaired automatically"
+                    "workflow API contract failures are not repaired automatically"
                 ));
             }
         }
@@ -734,6 +746,9 @@ fn action_kinds_for_finding(
         | WorkflowValidationFinding::CoverageKeyMustBeTrue { .. } => {
             vec![WorkflowRepairActionKind::NormalizeValidationMetadata]
         }
+        WorkflowValidationFinding::AmbiguousWorkflowOutputSchema { .. } => {
+            vec![WorkflowRepairActionKind::NormalizeValidationMetadata]
+        }
         WorkflowValidationFinding::MissingFile { path } => {
             if path == Path::new("README.md") {
                 vec![WorkflowRepairActionKind::RepairReadme]
@@ -755,7 +770,9 @@ fn action_kinds_for_finding(
         | WorkflowValidationFinding::MissingGitRepository { .. }
         | WorkflowValidationFinding::CodeOutsideSrc { .. }
         | WorkflowValidationFinding::TestsOutsideSrcTests { .. }
-        | WorkflowValidationFinding::DatabasesOutsideState { .. } => {
+        | WorkflowValidationFinding::DatabasesOutsideState { .. }
+        | WorkflowValidationFinding::RuntimeStateGitignoreMissing { .. }
+        | WorkflowValidationFinding::TrackedRuntimeStateFiles { .. } => {
             vec![WorkflowRepairActionKind::RepairLayout]
         }
         WorkflowValidationFinding::MissingDocumentHeading { path, .. } => {
@@ -785,7 +802,8 @@ fn action_kinds_for_finding(
             kinds
         }
         WorkflowValidationFinding::WorkflowPathEscapesRoot { .. }
-        | WorkflowValidationFinding::WorkflowApiContractExtractionFailed { .. } => {
+        | WorkflowValidationFinding::WorkflowApiContractExtractionFailed { .. }
+        | WorkflowValidationFinding::WorkflowApiContractSmokeFailed { .. } => {
             return None;
         }
     };
@@ -906,6 +924,10 @@ fn apply_validation_yaml_fix(
         changed = true;
     }
 
+    if plan.repair_output_schema_contracts && normalize_output_schema_contracts(&mut spec) {
+        changed = true;
+    }
+
     if !changed {
         return Ok(Vec::new());
     }
@@ -916,6 +938,75 @@ fn apply_validation_yaml_fix(
         path: spec_path,
         detail: "Updated workflow.yaml metadata".to_string(),
     }])
+}
+
+fn normalize_output_schema_contracts(spec: &mut WorkflowSpec) -> bool {
+    let mut changed = false;
+    if let Some(output_schema) = spec.api.get_mut("outputSchema")
+        && !output_schema.is_null()
+    {
+        changed |= normalize_output_schema(output_schema);
+    }
+    if let Some(tool) = spec.tool.as_mut()
+        && !tool.output_schema.is_null()
+    {
+        changed |= normalize_output_schema(&mut tool.output_schema);
+    }
+    changed
+}
+
+fn normalize_output_schema(schema: &mut JsonValue) -> bool {
+    let mut changed = false;
+    if output_object_schema_needs_explicit_shape(schema)
+        && let Some(object) = schema.as_object_mut()
+    {
+        object.insert("additionalProperties".to_string(), JsonValue::Bool(true));
+        changed = true;
+    }
+
+    for union_key in ["anyOf", "oneOf", "allOf"] {
+        if let Some(entries) = schema.get_mut(union_key).and_then(JsonValue::as_array_mut) {
+            for entry in entries {
+                changed |= normalize_output_schema(entry);
+            }
+        }
+    }
+    if let Some(properties) = schema
+        .get_mut("properties")
+        .and_then(JsonValue::as_object_mut)
+    {
+        for property_schema in properties.values_mut() {
+            changed |= normalize_output_schema(property_schema);
+        }
+    }
+    if let Some(items) = schema.get_mut("items") {
+        changed |= normalize_output_schema(items);
+    }
+    changed
+}
+
+fn output_object_schema_needs_explicit_shape(schema: &JsonValue) -> bool {
+    if !output_schema_declares_object_type(schema) {
+        return false;
+    }
+    let has_properties = schema
+        .get("properties")
+        .and_then(JsonValue::as_object)
+        .is_some_and(|properties| !properties.is_empty());
+    let has_additional_properties = schema
+        .as_object()
+        .is_some_and(|object| object.contains_key("additionalProperties"));
+    !has_properties && !has_additional_properties
+}
+
+fn output_schema_declares_object_type(schema: &JsonValue) -> bool {
+    match schema.get("type") {
+        Some(JsonValue::String(type_name)) => type_name == "object",
+        Some(JsonValue::Array(type_names)) => {
+            type_names.iter().any(|type_name| type_name == "object")
+        }
+        _ => false,
+    }
 }
 
 fn apply_layout_fix(
@@ -945,6 +1036,26 @@ fn apply_layout_fix(
         });
     }
     ensure_git_repo(&workflow.path)?;
+
+    if ensure_runtime_state_gitignore(&workflow.path)? {
+        actions.push(WorkflowRepairAction {
+            kind: WorkflowRepairActionKind::RepairLayout,
+            path: workflow.path.join(".gitignore"),
+            detail: "Updated runtime state ignore rules".to_string(),
+        });
+    }
+
+    let tracked_runtime_state_paths = tracked_runtime_state_paths(report);
+    if untrack_runtime_state_files(&workflow.path, &tracked_runtime_state_paths)? {
+        actions.push(WorkflowRepairAction {
+            kind: WorkflowRepairActionKind::RepairLayout,
+            path: workflow.path.join(".gitignore"),
+            detail: format!(
+                "Removed {} runtime state file(s) from git tracking",
+                tracked_runtime_state_paths.len()
+            ),
+        });
+    }
 
     let mut moved_any = false;
     visit_layout_files(&workflow.path, &mut |relative, path| {
@@ -1028,6 +1139,78 @@ fn apply_layout_fix(
     }
 
     Ok(actions)
+}
+
+fn ensure_runtime_state_gitignore(workflow_path: &Path) -> Result<bool> {
+    let path = workflow_path.join(".gitignore");
+    let mut contents = fs::read_to_string(&path).unwrap_or_default();
+    let missing_patterns = RUNTIME_STATE_GITIGNORE_PATTERNS
+        .iter()
+        .filter(|pattern| !gitignore_contains_pattern(&contents, pattern))
+        .copied()
+        .collect::<Vec<_>>();
+    if missing_patterns.is_empty() {
+        return Ok(false);
+    }
+
+    if !contents.is_empty() && !contents.ends_with('\n') {
+        contents.push('\n');
+    }
+    for pattern in missing_patterns {
+        contents.push_str(pattern);
+        contents.push('\n');
+    }
+    fs::write(&path, contents).with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(true)
+}
+
+fn gitignore_contains_pattern(contents: &str, pattern: &str) -> bool {
+    contents.lines().any(|line| line.trim() == pattern)
+}
+
+fn tracked_runtime_state_paths(report: &WorkflowValidationReport) -> Vec<PathBuf> {
+    let mut paths = report
+        .findings
+        .iter()
+        .filter_map(|finding| match finding {
+            WorkflowValidationFinding::TrackedRuntimeStateFiles { paths } => Some(paths.as_slice()),
+            _ => None,
+        })
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn untrack_runtime_state_files(workflow_path: &Path, paths: &[PathBuf]) -> Result<bool> {
+    if paths.is_empty() || !workflow_path.join(".git/HEAD").is_file() {
+        return Ok(false);
+    }
+
+    let output = Command::new("git")
+        .args(["rm", "--cached", "--ignore-unmatch", "--"])
+        .args(paths)
+        .current_dir(workflow_path)
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to remove runtime state files from git index in {}",
+                workflow_path.display()
+            )
+        })?;
+    if output.status.success() {
+        return Ok(true);
+    }
+
+    Err(anyhow!(
+        "git rm --cached failed in {} with {}: {}{}",
+        workflow_path.display(),
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    ))
 }
 
 fn apply_readme_fix(workflow: &WorkflowSummary) -> Result<WorkflowRepairAction> {
@@ -1414,7 +1597,7 @@ fn write_scaffold_source(workflow: &WorkflowSummary, path: &Path) -> Result<()> 
     fs::write(
         path,
         format!(
-            r##"import {{ WorkflowContext }} from "@openai/codex-sdk/workflow";
+            r##"import type {{ WorkflowContext }} from "@openai/codex-sdk/workflow";
 
 export interface WorkflowInput {{
   input?: string;
@@ -1447,6 +1630,23 @@ export default async function {command_label}(ctx: WorkflowContext, input: Workf
 export async function complete(_ctx: WorkflowContext) {{
   return [];
 }}
+
+if (import.meta.url === `file://${{process.argv[1]}}`) {{
+  const inputIndex = process.argv.indexOf("--input");
+  const rawInput = inputIndex >= 0 ? process.argv[inputIndex + 1] : "{{}}";
+  const input = JSON.parse(rawInput ?? "{{}}");
+  const output = await {command_label}({{
+    progress() {{}},
+    reportToUserMarkdown() {{}},
+    status() {{}},
+    runWorkflow() {{ throw new Error("runWorkflow() is unavailable in direct CLI smoke"); }},
+    cwd: process.cwd(),
+    currentWorkingDirectory: process.cwd(),
+    repoRoot: process.cwd(),
+    workingDirectory: process.cwd(),
+  }} as never, input);
+  console.log(JSON.stringify(output, null, 2));
+}}
 "##,
             command_label = command_label.replace('-', "_"),
         ),
@@ -1468,7 +1668,7 @@ fn readme_template(workflow: &WorkflowSummary) -> String {
         .as_deref()
         .unwrap_or_else(|| workflow.id.split('/').next_back().unwrap_or(&workflow.id));
     format!(
-        "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nPrefer `ctx.status({{ workflowName, workflowStatus, threads? }})` while the workflow is running so the TUI can render `Workflow <workflowName>: <workflowStatus>` with optional `-> <threadName>: <threadStatus>` rows when more than one thread is active. `ctx.progress(message, data?)` remains available as a legacy shorthand for single-string status updates. `ctx.cwd`, `ctx.currentWorkingDirectory`, `ctx.repoRoot`, and `ctx.workingDirectory` point at the workspace that launched the workflow, while `process.cwd()` stays on the workflow package directory. `ctx.runWorkflow(workflow, input?, {{ onStatusUpdate }})` can intercept child workflow status updates and either forward, transform, bundle, or suppress them. Export a named default async function for the execution entrypoint, an optional named `complete(...)` export for autocomplete, and an optional `WorkflowOutput.toTuiMarkdown(result)` value companion for markdown rendering. `/workflow validate {id}` extracts and publishes the TS contract after the workflow passes validation. Keep the default export focused on canonical JSON results. `ctx.reportToUserMarkdown(markdown)` still works for direct markdown handoffs, but it is now the escape hatch rather than the primary result channel.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json` and resolved from this directory's `node_modules`.\n\n## Validation\n\nRun the configured validation commands from `workflow.yaml` and keep the coverage markers aligned with the documented contract. Prefer commands that fail fast on missing dependencies or type errors.\n\n## Maintenance\n\nUpdate `README.md`, `DESIGN.md`, `workflow.yaml`, and the test markers together when the workflow contract changes.\n",
+        "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nPrefer `ctx.status({{ workflowName, workflowStatus, threads? }})` while the workflow is running so the TUI can render `Workflow <workflowName>: <workflowStatus>` with optional `-> <threadName>: <threadStatus>` rows when more than one thread is active. `ctx.progress(message, data?)` remains available as a legacy shorthand for single-string status updates. `ctx.cwd`, `ctx.currentWorkingDirectory`, `ctx.repoRoot`, and `ctx.workingDirectory` point at the workspace that launched the workflow, while `process.cwd()` stays on the workflow package directory. `ctx.runWorkflow(workflow, input?, {{ onStatusUpdate }})` can intercept child workflow status updates and either forward, transform, bundle, or suppress them. Export a named default async function for the execution entrypoint, an optional named `complete(...)` export for autocomplete, and an optional `WorkflowOutput.toTuiMarkdown(result)` value companion for markdown rendering. `/workflow validate {id}` extracts, smoke-tests when `validation.contractSmoke` is configured, and publishes the TS contract after the workflow passes validation. Keep the default export focused on canonical JSON results.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json` and resolved from this directory's `node_modules`.\n\n## Validation\n\nRun the configured validation commands from `workflow.yaml` and keep the coverage markers and contract smoke output aligned with the documented contract. Prefer commands that fail fast on missing dependencies or type errors.\n\n## Maintenance\n\nUpdate `README.md`, `DESIGN.md`, `workflow.yaml`, and the test markers together when the workflow contract changes. Keep runtime state and generated artifacts under ignored `state/` or `artifacts/` paths.\n",
         id = workflow.id,
     )
 }
@@ -1479,7 +1679,7 @@ fn design_template(workflow: &WorkflowSummary) -> String {
         .clone()
         .unwrap_or_else(|| display_title(&workflow.id));
     format!(
-        "# {title} Design\n\n## Overview\n\nThis workflow is a local TypeScript package driven by `tsx` and validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `src/workflow.ts` owns the runtime behavior and exports the named default async function, an optional `complete(...)` export, and an optional `WorkflowOutput.toTuiMarkdown(result)` companion.\n- `src/tests/` carries the coverage contract for positive, load, autocomplete, negative, and recovery paths.\n- `workflow.yaml` records validation commands and coverage expectations.\n- `state/` holds any persistent data.\n\n## Data Flow\n\n1. A registered workflow command loads the workflow from the local package.\n2. The named default export validates input, emits progress, and returns the canonical JSON result.\n3. If present, `WorkflowOutput.toTuiMarkdown(result)` provides the markdown view for the TUI and workflow-to-workflow callers.\n4. `codex workflow validate {id}` runs the local validation commands, checks the required docs/layout/coverage markers, extracts the TS contract, and publishes it only after validation passes.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors. When the workflow cannot satisfy its contract, fail with a specific error that names the broken path.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.ts`: positive path, progress, JSON result, and markdown companion coverage.\n- `src/tests/workflow.load.test.ts`: loadability smoke.\n- `src/tests/workflow.autocomplete.test.ts`: registry and command-completion readiness smoke.\n- `src/tests/workflow.negative.test.ts`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.ts`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep dependency usage local. Keep `// workflow-covers:` markers aligned with `validation.coverage`, including load and autocomplete. Update this file when the workflow behavior or review expectations change.\n",
+        "# {title} Design\n\n## Overview\n\nThis workflow is a local TypeScript package driven by `tsx` and validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `src/workflow.ts` owns the runtime behavior and exports the named default async function, an optional `complete(...)` export, and an optional `WorkflowOutput.toTuiMarkdown(result)` companion.\n- `src/tests/` carries the coverage contract for positive, load, autocomplete, negative, and recovery paths.\n- `workflow.yaml` records validation commands, contract smoke input, and coverage expectations.\n- `state/` holds persistent runtime data; `artifacts/` holds generated run artifacts. Both are ignored except for `state/.gitkeep`.\n\n## Data Flow\n\n1. A registered workflow command loads the workflow from the local package.\n2. The named default export validates input, emits progress, and returns the canonical JSON result.\n3. If present, `WorkflowOutput.toTuiMarkdown(result)` provides the markdown view for the TUI and workflow-to-workflow callers.\n4. `codex workflow validate {id}` runs the local validation commands, checks docs/layout/coverage markers, smoke-tests the contract when configured, extracts the TS contract, and publishes it only after validation passes.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors. When the workflow cannot satisfy its contract, fail with a specific error that names the broken path.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.ts`: positive path, progress, JSON result, and markdown companion coverage.\n- `src/tests/workflow.load.test.ts`: loadability smoke.\n- `src/tests/workflow.autocomplete.test.ts`: registry and command-completion readiness smoke.\n- `src/tests/workflow.negative.test.ts`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.ts`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep dependency usage local. Keep `// workflow-covers:` markers aligned with `validation.coverage`, including load and autocomplete. Update this file when the workflow behavior or review expectations change. Keep runtime state and generated artifacts out of git.\n",
         id = workflow.id,
     )
 }
@@ -1542,6 +1742,7 @@ fn command_fixable(command: &str, _exit_code: Option<i32>) -> bool {
 impl FixPlan {
     fn is_empty(&self) -> bool {
         !self.update_validation_yaml
+            && !self.repair_output_schema_contracts
             && !self.repair_readme
             && !self.repair_design
             && !self.repair_package_manifest

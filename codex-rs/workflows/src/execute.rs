@@ -48,9 +48,11 @@ use crate::staging::create_stage_root;
 use crate::staging::publish_staged_workflow;
 use crate::staging::session_stage_root_path;
 use crate::validation_runner::run_validation_command;
+#[cfg(test)]
 use crate::validation_runner::validate_workflow;
 use crate::validation_runner::validation_report_message;
 use crate::workflow_api::validate_and_publish_workflow_api;
+use crate::workflow_api::validate_workflow_api_contract;
 use crate::workflow_runtime;
 
 #[derive(Clone)]
@@ -259,7 +261,7 @@ fn where_workflow(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowC
 fn validate(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommandOutput> {
     let workflow = resolve_workflow_for_context(&ctx, id)?;
     let report = if ctx.stage_session_id.is_some() {
-        validate_workflow(&workflow, run_validation_command)?
+        validate_workflow_api_contract(&workflow, run_validation_command)?
     } else {
         validate_and_publish_workflow_api(
             ctx.codex_home,
@@ -344,7 +346,6 @@ fn develop(ctx: WorkflowCommandContext<'_>, description: &str) -> Result<Workflo
     );
     write_workflow_spec(&path.join(WORKFLOW_YAML), &spec)?;
     write_scaffold_files(&path, &id, &title, description)?;
-    fs::write(path.join(".gitignore"), "node_modules/\n")?;
     let live_path = live_root.path.join(&id);
     let staged = StagedWorkflow {
         _guard: ctx
@@ -764,16 +765,21 @@ fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -
         .next_back()
         .filter(|command| !command.is_empty())
         .unwrap_or(id);
+    let entrypoint_name = command_label.replace('-', "_");
+    fs::write(
+        path.join(".gitignore"),
+        "node_modules/\ndist/\n.DS_Store\nartifacts/\nstate/*\n!state/.gitkeep\n",
+    )?;
     fs::write(
         path.join("README.md"),
         format!(
-            "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nPrefer `ctx.status({{ workflowName, workflowStatus, threads? }})` while the workflow is running so the TUI can render `Workflow <workflowName>: <workflowStatus>` with optional `-> <threadName>: <threadStatus>` rows when more than one thread is active. `ctx.progress(message, data?)` remains available as a legacy shorthand for single-string status updates. `ctx.runWorkflow(workflow, input?, {{ onStatusUpdate }})` can intercept child workflow status updates and either forward, transform, bundle, or suppress them. Use `ctx.reportToUserMarkdown(markdown)` only when the workflow should hand markdown back to the next plain user turn in the TUI.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json` and resolved from this directory's `node_modules`.\n\n## Validation\n\nRun `codex workflow validate {id}` after changes and keep the validation commands, docs, and coverage markers aligned with the workflow implementation.\n\n## Maintenance\n\nKeep `README.md`, `DESIGN.md`, `workflow.yaml`, and the test coverage markers in sync when workflow behavior changes. Update both docs together when the workflow contract changes.\n"
+            "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nPrefer `ctx.status({{ workflowName, workflowStatus, threads? }})` while the workflow is running so the TUI can render `Workflow <workflowName>: <workflowStatus>` with optional `-> <threadName>: <threadStatus>` rows when more than one thread is active. `ctx.progress(message, data?)` remains available as a legacy shorthand for single-string status updates. `ctx.runWorkflow(workflow, input?, {{ onStatusUpdate }})` can intercept child workflow status updates and either forward, transform, bundle, or suppress them. Export a named default async function for the execution entrypoint and keep the return value as the canonical JSON result. Use `WorkflowOutput.toTuiMarkdown(result)` for the markdown view when the workflow has a user-facing result.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json` and resolved from this directory's `node_modules`.\n\n## Validation\n\nRun `codex workflow validate {id}` after changes and keep the validation commands, contract smoke output, docs, and coverage markers aligned with the workflow implementation.\n\n## Maintenance\n\nKeep `README.md`, `DESIGN.md`, `workflow.yaml`, and the test coverage markers in sync when workflow behavior changes. Update both docs together when the workflow contract changes. Keep generated or persistent runtime files under ignored `state/` or `artifacts/` paths.\n"
         ),
     )?;
     fs::write(
         path.join("DESIGN.md"),
         format!(
-            "# {title} Design\n\n## Overview\n\nThis workflow is a local TypeScript package driven by `tsx` and validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `src/workflow.ts` owns the runtime behavior.\n- `src/tests/` carries the coverage contract for positive, load, autocomplete, negative, and recovery paths.\n- `workflow.yaml` records validation commands and coverage expectations.\n- `state/` holds any persistent data.\n\n## Data Flow\n\n1. A registered workflow command loads the workflow from the local package.\n2. The workflow validates input, emits progress, and reports markdown when it has a user-facing result.\n3. `codex workflow validate {id}` runs the local validation commands and checks the required docs, layout, and coverage markers, including loadability and autocomplete readiness.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.ts`: positive path, progress, and final markdown handoff.\n- `src/tests/workflow.load.test.ts`: loadability smoke.\n- `src/tests/workflow.autocomplete.test.ts`: registry and command-completion readiness smoke.\n- `src/tests/workflow.negative.test.ts`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.ts`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep dependency usage local. Keep `// workflow-covers:` markers aligned with `validation.coverage`, including load and autocomplete. Update this file when the workflow behavior or review expectations change.\n"
+            "# {title} Design\n\n## Overview\n\nThis workflow is a local TypeScript package driven by `tsx` and validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `src/workflow.ts` owns the named default async function, the typed workflow contract, autocomplete, and the optional markdown formatter.\n- `src/tests/` carries the coverage contract for positive, load, autocomplete, negative, and recovery paths.\n- `workflow.yaml` records validation commands, contract smoke input, and coverage expectations.\n- `state/` holds persistent runtime data; `artifacts/` holds generated run artifacts. Both are ignored except for `state/.gitkeep`.\n\n## Data Flow\n\n1. A registered workflow command loads the workflow from the local package.\n2. The workflow validates input, emits progress, and returns the canonical JSON result.\n3. `WorkflowOutput.toTuiMarkdown(result)` provides the markdown view for the TUI and workflow-to-workflow callers.\n4. `codex workflow validate {id}` runs the local validation commands, checks docs/layout/coverage markers, smoke-tests the output contract when configured, and publishes the contract only after validation passes.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors. When the workflow cannot satisfy its output contract, fail with a specific error before returning partial data.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.ts`: positive path, progress, JSON result, and markdown companion coverage.\n- `src/tests/workflow.load.test.ts`: loadability smoke.\n- `src/tests/workflow.autocomplete.test.ts`: registry and command-completion readiness smoke.\n- `src/tests/workflow.negative.test.ts`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.ts`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep dependency usage local. Keep `// workflow-covers:` markers aligned with `validation.coverage`, including load and autocomplete. Update this file when the workflow behavior or review expectations change. Keep runtime state and generated artifacts out of git.\n"
         ),
     )?;
     fs::write(
@@ -813,41 +819,59 @@ fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -
     fs::write(
         path.join("src/workflow.ts"),
         format!(
-            r#"import {{ defineWorkflow, runWorkflow }} from "@openai/codex-sdk/workflow";
+            r#"import type {{ WorkflowContext }} from "@openai/codex-sdk/workflow";
 
-function validateInput(input: unknown) {{
+export interface WorkflowInput {{
+  input?: string;
+}}
+
+export interface WorkflowOutput {{
+  ok: true;
+  input: WorkflowInput;
+}}
+
+function validateInput(input: unknown): WorkflowInput {{
   if (!input || typeof input !== "object" || Array.isArray(input)) {{
     throw new Error("workflow input must be a JSON object");
   }}
-  return input;
+  return input as WorkflowInput;
 }}
 
-const workflow = defineWorkflow({{
-  id: "{id}",
-  title: "{title}",
-  description: "{description}",
-  async run(ctx, input) {{
-    const normalizedInput = validateInput(input);
-    ctx.progress("Running workflow", {{ input: normalizedInput }});
-    ctx.reportToUserMarkdown("{markdown}");
-    return {{ ok: true, input: normalizedInput }};
+export const WorkflowOutput = {{
+  toTuiMarkdown(result: WorkflowOutput) {{
+    return {{ markdown: "{markdown}" }};
   }},
-}});
+}};
 
-export default workflow;
+export default async function {entrypoint_name}(ctx: WorkflowContext, input: WorkflowInput): Promise<WorkflowOutput> {{
+  const normalizedInput = validateInput(input);
+  ctx.progress("Running workflow", {{ input: normalizedInput }});
+  return {{ ok: true, input: normalizedInput }};
+}}
+
+export async function complete(_ctx: WorkflowContext) {{
+  return [];
+}}
 
 if (import.meta.url === `file://${{process.argv[1]}}`) {{
   const inputIndex = process.argv.indexOf("--input");
   const rawInput = inputIndex >= 0 ? process.argv[inputIndex + 1] : "{{}}";
   const input = JSON.parse(rawInput ?? "{{}}");
-  const output = await runWorkflow(workflow, {{ input }});
+  const output = await {entrypoint_name}({{
+    progress() {{}},
+    reportToUserMarkdown() {{}},
+    status() {{}},
+    runWorkflow() {{ throw new Error("runWorkflow() is unavailable in direct CLI smoke"); }},
+    cwd: process.cwd(),
+    currentWorkingDirectory: process.cwd(),
+    repoRoot: process.cwd(),
+    workingDirectory: process.cwd(),
+  }} as never, input);
   console.log(JSON.stringify(output, null, 2));
 }}
 "#,
-            id = escape_ts_string(id),
-            title = escape_ts_string(title),
-            description = escape_ts_string(description),
             markdown = escape_ts_string(&format!("# {title}\n\nWorkflow complete.")),
+            entrypoint_name = entrypoint_name,
         ),
     )?;
     fs::write(
@@ -856,24 +880,29 @@ if (import.meta.url === `file://${{process.argv[1]}}`) {{
             r#"// workflow-covers: positive progress finalResult
 import assert from "node:assert/strict";
 import test from "node:test";
-import workflow from "../workflow.ts";
+import workflow, {{ WorkflowOutput }} from "../workflow.ts";
 
-test("workflow reports progress and markdown", async () => {{
+test("workflow reports progress and formats markdown", async () => {{
   const events: unknown[] = [];
-  const output = await workflow.run({{
+  const output = await workflow({{
     progress(message: string, data: unknown) {{
       events.push(["progress", message, data]);
     }},
     reportToUserMarkdown(markdown: string) {{
       events.push(["report", markdown]);
     }},
-  }}, {{ input: "example" }});
+    status() {{}},
+    runWorkflow() {{ throw new Error("runWorkflow() is unavailable in unit tests"); }},
+    cwd: process.cwd(),
+    currentWorkingDirectory: process.cwd(),
+    repoRoot: process.cwd(),
+    workingDirectory: process.cwd(),
+  }} as never, {{ input: "example" }});
+  const formatted = WorkflowOutput.toTuiMarkdown(output);
 
   assert.deepEqual(output, {{ ok: true, input: {{ input: "example" }} }});
-  assert.deepEqual(events, [
-    ["progress", "Running workflow", {{ input: {{ input: "example" }} }}],
-    ["report", "{markdown}"],
-  ]);
+  assert.deepEqual(formatted, {{ markdown: "{markdown}" }});
+  assert.deepEqual(events, [["progress", "Running workflow", {{ input: {{ input: "example" }} }}]]);
 }});
 "#,
             markdown = escape_ts_string(&format!("# {title}\n\nWorkflow complete.")),
@@ -885,7 +914,26 @@ test("workflow reports progress and markdown", async () => {{
     )?;
     fs::write(
         path.join("src/tests/workflow.autocomplete.test.ts"),
-        "// workflow-covers: autocomplete\nexport {};\n",
+        r#"// workflow-covers: autocomplete
+import assert from "node:assert/strict";
+import test from "node:test";
+import { complete } from "../workflow.ts";
+
+test("workflow exposes autocomplete", async () => {
+  const suggestions = await complete({
+    cwd: process.cwd(),
+    currentWorkingDirectory: process.cwd(),
+    repoRoot: process.cwd(),
+    workingDirectory: process.cwd(),
+    progress() {},
+    status() {},
+    reportToUserMarkdown() {},
+    runWorkflow() { throw new Error("runWorkflow() is unavailable in unit tests"); },
+  } as never);
+
+  assert.deepEqual(suggestions, []);
+});
+"#,
     )?;
     fs::write(
         path.join("src/tests/workflow.negative.test.ts"),
@@ -896,10 +944,16 @@ import workflow from "../workflow.ts";
 
 test("workflow rejects invalid input", async () => {
   await assert.rejects(
-    workflow.run({
+    workflow({
       progress() {},
       reportToUserMarkdown() {},
-    }, null),
+      cwd: process.cwd(),
+      currentWorkingDirectory: process.cwd(),
+      repoRoot: process.cwd(),
+      workingDirectory: process.cwd(),
+      status() {},
+      runWorkflow() { throw new Error("runWorkflow() is unavailable in unit tests"); },
+    } as never, null),
     /workflow input must be a JSON object/
   );
 });
@@ -914,8 +968,12 @@ fn write_scaffold_runtime_stubs(path: &Path) -> Result<()> {
     let node_modules = path.join("node_modules");
     let bin_dir = node_modules.join(".bin");
     let sdk_dir = node_modules.join("@openai/codex-sdk");
+    let types_node_dir = node_modules.join("@types/node");
+    let typescript_dir = node_modules.join("typescript");
     fs::create_dir_all(&bin_dir)?;
     fs::create_dir_all(&sdk_dir)?;
+    fs::create_dir_all(&types_node_dir)?;
+    fs::create_dir_all(&typescript_dir)?;
 
     fs::write(
         sdk_dir.join("package.json"),
@@ -924,9 +982,29 @@ fn write_scaffold_runtime_stubs(path: &Path) -> Result<()> {
   "private": true,
   "type": "module",
   "exports": {
-    "./workflow": "./workflow.js"
+    "./workflow": {
+      "types": "./workflow.d.ts",
+      "default": "./workflow.js"
+    }
   }
 }
+"#,
+    )?;
+    fs::write(
+        sdk_dir.join("workflow.d.ts"),
+        r#"export interface WorkflowContext {
+  cwd: string;
+  currentWorkingDirectory: string;
+  repoRoot: string;
+  workingDirectory: string;
+  progress(message: string, data?: unknown): void;
+  reportToUserMarkdown(markdown: string): void;
+  status(status: unknown): void;
+  runWorkflow(workflow: string, input?: unknown, options?: unknown): Promise<unknown>;
+}
+
+export declare function defineWorkflow<T>(workflow: T): T;
+export declare function runWorkflow(workflow: unknown, options?: unknown): Promise<unknown>;
 "#,
     )?;
     fs::write(
@@ -955,6 +1033,18 @@ export async function runWorkflow(workflow, options = {}) {
 "#,
     )?;
     fs::write(
+        types_node_dir.join("package.json"),
+        "{\n  \"name\": \"@types/node\",\n  \"private\": true,\n  \"types\": \"./index.d.ts\"\n}\n",
+    )?;
+    fs::write(
+        types_node_dir.join("index.d.ts"),
+        r#"declare const process: {
+  argv: string[];
+  cwd(): string;
+};
+"#,
+    )?;
+    fs::write(
         bin_dir.join("tsx"),
         "#!/bin/sh\nexec node --experimental-strip-types \"$@\"\n",
     )?;
@@ -962,6 +1052,22 @@ export async function runWorkflow(workflow, options = {}) {
         bin_dir.join("tsx.cmd"),
         "@echo off\r\nnode --experimental-strip-types %*\r\n",
     )?;
+    if let Ok(typescript_library) = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../node_modules/typescript/lib/typescript.js")
+        .canonicalize()
+    {
+        fs::write(
+            typescript_dir.join("index.js"),
+            format!(
+                "module.exports = require({});\n",
+                serde_json::to_string(typescript_library.to_string_lossy().as_ref())?
+            ),
+        )?;
+        fs::write(
+            typescript_dir.join("package.json"),
+            "{\n  \"name\": \"typescript\",\n  \"private\": true,\n  \"main\": \"./index.js\"\n}\n",
+        )?;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1277,6 +1383,11 @@ mod tests {
         fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
         fs::create_dir_all(workflow_dir.join("state")).unwrap();
         fs::write(
+            workflow_dir.join(".gitignore"),
+            "node_modules/\nartifacts/\nstate/*\n!state/.gitkeep\n",
+        )
+        .unwrap();
+        fs::write(
             workflow_dir.join("README.md"),
             "# Test\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
         )
@@ -1322,6 +1433,14 @@ mod tests {
             &workflow_dir.join(WORKFLOW_YAML),
             &crate::spec::WorkflowSpec {
                 id: "review/fix".to_string(),
+                api: json!({
+                    "inputSchema": { "type": "object", "additionalProperties": true },
+                    "outputSchema": {
+                        "type": "object",
+                        "properties": { "ok": { "type": "boolean" } },
+                        "additionalProperties": true
+                    }
+                }),
                 validation: json!({
                     "commands": validation_commands,
                     "coverage": {
@@ -1459,6 +1578,12 @@ mod tests {
                 .join(".codex/workflows/jira-summary/state/.gitkeep")
                 .is_file()
         );
+        let gitignore =
+            fs::read_to_string(cwd.path().join(".codex/workflows/jira-summary/.gitignore"))
+                .unwrap();
+        assert!(gitignore.contains("artifacts/"));
+        assert!(gitignore.contains("state/*"));
+        assert!(gitignore.contains("!state/.gitkeep"));
         let spec = read_workflow_spec(
             &cwd.path()
                 .join(".codex/workflows/jira-summary/workflow.yaml"),
@@ -1492,6 +1617,10 @@ mod tests {
         assert_eq!(
             spec.validation["coverage"]["recovery"],
             JsonValue::Bool(false)
+        );
+        assert_eq!(
+            spec.validation["contractSmoke"]["input"]["input"],
+            JsonValue::String("example".to_string())
         );
     }
 

@@ -582,6 +582,11 @@ mod tests {
         fs::create_dir_all(workflow.join("tests")).unwrap();
         fs::create_dir_all(workflow.join(".git")).unwrap();
         fs::write(
+            workflow.join(".gitignore"),
+            "node_modules/\nartifacts/\nstate/*\n!state/.gitkeep\n",
+        )
+        .unwrap();
+        fs::write(
             workflow.join("README.md"),
             "# Test\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
         )
@@ -719,6 +724,11 @@ mod tests {
         .unwrap();
         fs::write(dir.join("state/.gitkeep"), "").unwrap();
         fs::create_dir_all(dir.join(".git")).unwrap();
+        fs::write(
+            dir.join(".gitignore"),
+            "node_modules/\nartifacts/\nstate/*\n!state/.gitkeep\n",
+        )
+        .unwrap();
         write_workflow_spec(
             &dir.join(WORKFLOW_YAML),
             &crate::spec::WorkflowSpec {

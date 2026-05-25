@@ -469,6 +469,11 @@ mod tests {
         std::fs::create_dir_all(dir.join("state")).unwrap();
         std::fs::create_dir_all(dir.join(".git")).unwrap();
         std::fs::write(
+            dir.join(".gitignore"),
+            "node_modules/\nartifacts/\nstate/*\n!state/.gitkeep\n",
+        )
+        .unwrap();
+        std::fs::write(
             dir.join("workflow.yaml"),
             "id: reports/jira-summary\ntitle: Jira Summary\nuserDescription: Summarize Jira work\nvalidation:\n  commands:\n    - npm run build\n    - npm test\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\ntool:\n  description: Run the Jira summary workflow\n  inputSchema:\n    type: object\n  outputSchema: null\n  registerOn:\n    - afterAgent\n",
         )

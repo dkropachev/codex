@@ -79,6 +79,17 @@ pub enum WorkflowValidationFinding {
     DatabasesOutsideState {
         paths: Vec<PathBuf>,
     },
+    RuntimeStateGitignoreMissing {
+        path: PathBuf,
+        patterns: Vec<String>,
+    },
+    TrackedRuntimeStateFiles {
+        paths: Vec<PathBuf>,
+    },
+    AmbiguousWorkflowOutputSchema {
+        path: PathBuf,
+        schema_path: String,
+    },
     ValidationCommandFailed {
         command: String,
         exit_code: Option<i32>,
@@ -88,6 +99,12 @@ pub enum WorkflowValidationFinding {
     WorkflowApiContractExtractionFailed {
         path: PathBuf,
         error: String,
+    },
+    WorkflowApiContractSmokeFailed {
+        command: String,
+        error: String,
+        stdout: String,
+        stderr: String,
     },
 }
 
@@ -178,6 +195,19 @@ impl WorkflowValidationFinding {
                     display_paths(paths)
                 )
             }
+            Self::RuntimeStateGitignoreMissing { patterns, .. } => format!(
+                "runtime state ignore rules are missing from .gitignore: {}",
+                patterns.join(", ")
+            ),
+            Self::TrackedRuntimeStateFiles { paths } => {
+                format!(
+                    "runtime state files must not be tracked by git: {}",
+                    display_paths(paths)
+                )
+            }
+            Self::AmbiguousWorkflowOutputSchema { schema_path, .. } => format!(
+                "workflow output schema at {schema_path} must declare properties or additionalProperties explicitly"
+            ),
             Self::ValidationCommandFailed {
                 command, exit_code, ..
             } => match exit_code {
@@ -190,6 +220,9 @@ impl WorkflowValidationFinding {
                 "failed to extract workflow API contract from {}: {error}",
                 path.display()
             ),
+            Self::WorkflowApiContractSmokeFailed { command, error, .. } => {
+                format!("workflow contract smoke command `{command}` failed: {error}")
+            }
         }
     }
 
@@ -222,13 +255,17 @@ impl WorkflowValidationFinding {
             | Self::EmptyValidationCommands { .. }
             | Self::InvalidValidationCommands { .. }
             | Self::ValidationCommandFailed { .. }
-            | Self::WorkflowApiContractExtractionFailed { .. } => "WF-007",
+            | Self::AmbiguousWorkflowOutputSchema { .. }
+            | Self::WorkflowApiContractExtractionFailed { .. }
+            | Self::WorkflowApiContractSmokeFailed { .. } => "WF-007",
             Self::MissingDirectory { .. }
             | Self::MissingGitRepository { .. }
             | Self::WorkflowPathEscapesRoot { .. }
             | Self::CodeOutsideSrc { .. }
             | Self::TestsOutsideSrcTests { .. }
-            | Self::DatabasesOutsideState { .. } => "WF-003",
+            | Self::DatabasesOutsideState { .. }
+            | Self::RuntimeStateGitignoreMissing { .. }
+            | Self::TrackedRuntimeStateFiles { .. } => "WF-003",
             Self::WorkflowIdMismatch { .. } => "WF-007",
             Self::WorkflowSpecReadFailed { .. } => "WF-011",
         }
@@ -266,15 +303,20 @@ impl WorkflowValidationFinding {
             | Self::InvalidCoverageKeyType { path, .. }
             | Self::CoverageKeyMustBeTrue { path, .. }
             | Self::MissingCoverageMarker { path, .. }
+            | Self::RuntimeStateGitignoreMissing { path, .. }
+            | Self::AmbiguousWorkflowOutputSchema { path, .. }
             | Self::WorkflowApiContractExtractionFailed { path, .. } => path.clone(),
             Self::WorkflowPathEscapesRoot { workflow_path, .. } => workflow_path.clone(),
             Self::CodeOutsideSrc { paths }
             | Self::TestsOutsideSrcTests { paths }
-            | Self::DatabasesOutsideState { paths } => paths
+            | Self::DatabasesOutsideState { paths }
+            | Self::TrackedRuntimeStateFiles { paths } => paths
                 .first()
                 .cloned()
                 .unwrap_or_else(|| workflow_path.to_path_buf()),
-            Self::ValidationCommandFailed { .. } => workflow_path.to_path_buf(),
+            Self::ValidationCommandFailed { .. } | Self::WorkflowApiContractSmokeFailed { .. } => {
+                workflow_path.to_path_buf()
+            }
         }
     }
 }
