@@ -165,8 +165,15 @@ impl App {
         let display_command = shlex::try_join(command.iter().map(String::as_str))
             .unwrap_or_else(|_| command.join(" "));
         if let Err(err) = result {
-            self.chat_widget
-                .add_error_message(format!("Workflow failed: {display_command}: {err}"));
+            let markdown_result_was_emitted = workflow_state
+                .as_ref()
+                .is_some_and(|state| state.markdown_result_emitted);
+            if !(markdown_result_was_emitted
+                && err.contains("workflow host closed the connection without returning a result"))
+            {
+                self.chat_widget
+                    .add_error_message(format!("Workflow failed: {display_command}: {err}"));
+            }
         } else if let Some(state) = workflow_state
             && !state.markdown_result_emitted
         {
@@ -365,6 +372,7 @@ fn push_stderr_line(stderr: &mut String, line: impl AsRef<str>) {
 mod tests {
     use super::super::test_support::make_test_app;
     use super::super::tests::make_test_app_with_channels;
+    use super::WorkflowRunState;
     use crate::app_event::AppEvent;
     use codex_protocol::ThreadId;
     use ratatui::text::Line;
@@ -436,5 +444,36 @@ mod tests {
 
         assert_eq!(injected_for_b, vec!["b-1"]);
         assert!(app.pending_workflow_markdown_handoffs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn workflow_process_finish_suppresses_host_closed_error_after_markdown_handoff() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        while app_event_rx.try_recv().is_ok() {}
+
+        let run_id = "run-1".to_string();
+        app.workflow_runs.insert(
+            run_id.clone(),
+            WorkflowRunState {
+                workflow_name: "code-review".to_string(),
+                markdown_result_emitted: true,
+            },
+        );
+
+        app.handle_workflow_process_finished(
+            run_id,
+            vec!["code-review".to_string()],
+            String::new(),
+            Err(
+                "workflow exited with exit status: 1\nError: failed to run workflow code-review\nCaused by:\n    workflow host closed the connection without returning a result"
+                    .to_string(),
+            ),
+        );
+
+        assert!(app.workflow_runs.is_empty());
+        assert!(
+            std::iter::from_fn(|| app_event_rx.try_recv().ok())
+                .all(|event| { !matches!(event, AppEvent::InsertHistoryCell(_)) })
+        );
     }
 }
