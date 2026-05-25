@@ -914,6 +914,38 @@ export default async function run(_ctx: WorkflowContext, input: WorkflowInput): 
         .unwrap();
     }
 
+    #[test]
+    fn workflow_validation_finding_new_app_server_variants_round_trip() {
+        let findings = vec![
+            codex_workflows::WorkflowValidationFinding::RuntimeStateGitignoreMissing {
+                path: "state/.gitignore".into(),
+                patterns: vec!["*".to_string(), "!.gitignore".to_string()],
+            },
+            codex_workflows::WorkflowValidationFinding::TrackedRuntimeStateFiles {
+                paths: vec!["state/cache.db".into(), "state/logs/session.jsonl".into()],
+            },
+            codex_workflows::WorkflowValidationFinding::AmbiguousWorkflowOutputSchema {
+                path: "src/workflow.ts".into(),
+                schema_path: "WorkflowOutput.schema".to_string(),
+            },
+            codex_workflows::WorkflowValidationFinding::WorkflowApiContractSmokeFailed {
+                command: "npm run contract-smoke".to_string(),
+                error: "contract smoke failed".to_string(),
+                stdout: "stdout".to_string(),
+                stderr: "stderr".to_string(),
+            },
+        ];
+
+        let round_tripped = findings
+            .iter()
+            .cloned()
+            .map(validation_finding_to_api)
+            .map(validation_finding_from_api)
+            .collect::<Vec<_>>();
+
+        assert_eq!(round_tripped, findings);
+    }
+
     #[tokio::test]
     async fn workflow_repair_rpc_returns_structured_repair_results() {
         let home = TempDir::new().unwrap();
