@@ -3076,6 +3076,7 @@ mod tests {
     fn custom_provider_for_base_url(base_url: String) -> ModelProviderInfo {
         ModelProviderInfo {
             name: "DeepSeek".to_string(),
+            enabled: None,
             base_url: Some(base_url),
             env_key: None,
             env_key_instructions: None,

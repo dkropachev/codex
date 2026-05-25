@@ -72,6 +72,10 @@ pub struct ModelProviderInfo {
     /// Friendly display name.
     #[serde(default)]
     pub name: String,
+    /// Optional readiness toggle. Setting this to false prevents the provider
+    /// from being considered ready for automatic discovery.
+    #[serde(default)]
+    pub enabled: Option<bool>,
     /// Base URL for the provider's OpenAI-compatible API.
     pub base_url: Option<String>,
     /// Environment variable that stores the user's API key for this provider.
@@ -304,6 +308,7 @@ impl ModelProviderInfo {
     pub fn create_openai_provider(base_url: Option<String>) -> ModelProviderInfo {
         ModelProviderInfo {
             name: OPENAI_PROVIDER_NAME.into(),
+            enabled: None,
             base_url,
             env_key: None,
             env_key_instructions: None,
@@ -340,6 +345,7 @@ impl ModelProviderInfo {
     pub fn create_deepseek_provider() -> ModelProviderInfo {
         ModelProviderInfo {
             name: DEEPSEEK_PROVIDER_NAME.into(),
+            enabled: None,
             base_url: Some(DEEPSEEK_DEFAULT_BASE_URL.into()),
             env_key: Some("DEEPSEEK_API_KEY".to_string()),
             env_key_instructions: None,
@@ -363,6 +369,7 @@ impl ModelProviderInfo {
     ) -> ModelProviderInfo {
         ModelProviderInfo {
             name: AMAZON_BEDROCK_PROVIDER_NAME.into(),
+            enabled: None,
             base_url: Some(AMAZON_BEDROCK_DEFAULT_BASE_URL.into()),
             env_key: None,
             env_key_instructions: None,
@@ -400,7 +407,10 @@ impl ModelProviderInfo {
         self.auth.is_some()
     }
 
-    pub fn is_config_ready(&self, _provider_id: &str) -> bool {
+    pub fn is_config_ready(&self, provider_id: &str) -> bool {
+        if self.enabled == Some(false) {
+            return false;
+        }
         if self
             .base_url
             .as_deref()
@@ -431,6 +441,9 @@ impl ModelProviderInfo {
             return true;
         }
         if let Some(aws) = self.aws.as_ref() {
+            if provider_id == AMAZON_BEDROCK_PROVIDER_ID && self.enabled != Some(true) {
+                return false;
+            }
             return aws
                 .profile
                 .as_deref()
@@ -492,31 +505,36 @@ pub fn built_in_model_providers(
 ///
 /// Configured providers extend the built-in set. Built-in providers are not
 /// generally overridable, but specific providers allow narrow overrides:
-/// Amazon Bedrock supports `aws.profile` and `aws.region`, and DeepSeek
-/// supports `token` for a config-backed bearer token.
+/// Amazon Bedrock supports `enabled`, `aws.profile`, and `aws.region`, and
+/// DeepSeek supports `token` for a config-backed bearer token.
 pub fn merge_configured_model_providers(
     mut model_providers: HashMap<String, ModelProviderInfo>,
     configured_model_providers: HashMap<String, ModelProviderInfo>,
 ) -> Result<HashMap<String, ModelProviderInfo>, String> {
     for (key, mut provider) in configured_model_providers {
         if key == AMAZON_BEDROCK_PROVIDER_ID {
+            let enabled_override = provider.enabled.take();
             let aws_override = provider.aws.take();
             if provider != ModelProviderInfo::default() {
                 return Err(format!(
                     "model_providers.{AMAZON_BEDROCK_PROVIDER_ID} only supports changing \
-`aws.profile` and `aws.region`; other non-default provider fields are not supported"
+`enabled`, `aws.profile`, and `aws.region`; other non-default provider fields are not supported"
                 ));
             }
 
-            if let Some(aws_override) = aws_override
-                && let Some(built_in_provider) = model_providers.get_mut(AMAZON_BEDROCK_PROVIDER_ID)
-                && let Some(built_in_aws) = built_in_provider.aws.as_mut()
-            {
-                if let Some(profile) = aws_override.profile {
-                    built_in_aws.profile = Some(profile);
+            if let Some(built_in_provider) = model_providers.get_mut(AMAZON_BEDROCK_PROVIDER_ID) {
+                if let Some(enabled) = enabled_override {
+                    built_in_provider.enabled = Some(enabled);
                 }
-                if let Some(region) = aws_override.region {
-                    built_in_aws.region = Some(region);
+                if let Some(aws_override) = aws_override
+                    && let Some(built_in_aws) = built_in_provider.aws.as_mut()
+                {
+                    if let Some(profile) = aws_override.profile {
+                        built_in_aws.profile = Some(profile);
+                    }
+                    if let Some(region) = aws_override.region {
+                        built_in_aws.region = Some(region);
+                    }
                 }
             }
         } else if key == DEEPSEEK_PROVIDER_ID {
@@ -584,6 +602,7 @@ fn oss_provider_base_url_from_env() -> Option<String> {
 fn create_unconfigured_oss_provider() -> ModelProviderInfo {
     ModelProviderInfo {
         name: "gpt-oss".into(),
+        enabled: None,
         base_url: None,
         env_key: None,
         env_key_instructions: None,
@@ -605,6 +624,7 @@ fn create_unconfigured_oss_provider() -> ModelProviderInfo {
 pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
     ModelProviderInfo {
         name: "gpt-oss".into(),
+        enabled: None,
         base_url: Some(base_url.into()),
         env_key: None,
         env_key_instructions: None,

@@ -1438,6 +1438,11 @@
           "description": "Base URL for the provider's OpenAI-compatible API.",
           "type": "string"
         },
+        "enabled": {
+          "default": null,
+          "description": "Optional readiness toggle. Setting this to false prevents the provider from being considered ready for automatic discovery.",
+          "type": "boolean"
+        },
         "env_http_headers": {
           "additionalProperties": {
             "type": "string"

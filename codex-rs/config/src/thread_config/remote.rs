@@ -152,6 +152,7 @@ fn model_provider_from_proto(
     let id = provider.id;
     let info = ModelProviderInfo {
         name: provider.name,
+        enabled: None,
         base_url: provider.base_url,
         env_key: provider.env_key,
         env_key_instructions: provider.env_key_instructions,
@@ -181,6 +182,7 @@ fn model_provider_to_proto(
 ) -> proto::ModelProvider {
     let ModelProviderInfo {
         name,
+        enabled: _,
         base_url,
         env_key,
         env_key_instructions,
@@ -456,6 +458,7 @@ mod tests {
     fn expected_provider() -> ModelProviderInfo {
         ModelProviderInfo {
             name: "Local".to_string(),
+            enabled: None,
             base_url: Some("http://127.0.0.1:8061/api/codex".to_string()),
             env_key: None,
             env_key_instructions: None,

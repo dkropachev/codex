@@ -421,6 +421,9 @@ profile = "codex-bedrock"
 fn accepts_amazon_bedrock_aws_profile_override() {
     let cfg = toml::from_str::<ConfigToml>(
         r#"
+[model_providers.amazon-bedrock]
+enabled = true
+
 [model_providers.amazon-bedrock.aws]
 profile = "codex-bedrock"
 region = "us-west-2"
@@ -428,6 +431,12 @@ region = "us-west-2"
     )
     .expect("Amazon Bedrock AWS overrides should deserialize");
 
+    assert_eq!(
+        cfg.model_providers
+            .get("amazon-bedrock")
+            .and_then(|provider| provider.enabled),
+        Some(true)
+    );
     assert_eq!(
         cfg.model_providers
             .get("amazon-bedrock")
@@ -586,7 +595,7 @@ region = "us-west-2"
 
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(err.to_string().contains(
-        "model_providers.amazon-bedrock only supports changing `aws.profile` and `aws.region`; other non-default provider fields are not supported"
+        "model_providers.amazon-bedrock only supports changing `enabled`, `aws.profile`, and `aws.region`; other non-default provider fields are not supported"
     ));
 }
 
@@ -5480,6 +5489,7 @@ model_verbosity = "high"
 
     let openai_custom_provider = ModelProviderInfo {
         name: "OpenAI custom".to_string(),
+        enabled: None,
         base_url: Some("https://api.openai.com/v1".to_string()),
         env_key: Some("OPENAI_API_KEY".to_string()),
         env_key_instructions: None,

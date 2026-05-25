@@ -13,6 +13,7 @@ base_url = "http://localhost:11434/v1"
         "#;
     let expected_provider = ModelProviderInfo {
         name: "Ollama".into(),
+        enabled: None,
         base_url: Some("http://localhost:11434/v1".into()),
         env_key: None,
         env_key_instructions: None,
@@ -44,6 +45,7 @@ query_params = { api-version = "2025-04-01-preview" }
         "#;
     let expected_provider = ModelProviderInfo {
         name: "Azure".into(),
+        enabled: None,
         base_url: Some("https://xxxxx.openai.azure.com/openai".into()),
         env_key: Some("AZURE_OPENAI_API_KEY".into()),
         env_key_instructions: None,
@@ -78,6 +80,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         "#;
     let expected_provider = ModelProviderInfo {
         name: "Example".into(),
+        enabled: None,
         base_url: Some("https://example.com".into()),
         env_key: Some("API_KEY".into()),
         env_key_instructions: None,
@@ -159,6 +162,7 @@ fn test_supports_remote_compaction_for_openai() {
 fn test_supports_remote_compaction_for_azure_name() {
     let provider = ModelProviderInfo {
         name: "Azure".into(),
+        enabled: None,
         base_url: Some("https://example.com/openai".into()),
         env_key: Some("AZURE_OPENAI_API_KEY".into()),
         env_key_instructions: None,
@@ -183,6 +187,7 @@ fn test_supports_remote_compaction_for_azure_name() {
 fn test_supports_remote_compaction_for_non_openai_non_azure_provider() {
     let provider = ModelProviderInfo {
         name: "Example".into(),
+        enabled: None,
         base_url: Some("https://example.com/v1".into()),
         env_key: Some("API_KEY".into()),
         env_key_instructions: None,
@@ -259,6 +264,7 @@ fn test_create_amazon_bedrock_provider() {
         ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
         ModelProviderInfo {
             name: "Amazon Bedrock".to_string(),
+            enabled: None,
             base_url: Some("https://bedrock-mantle.us-east-1.api.aws/openai/v1".to_string()),
             env_key: None,
             env_key_instructions: None,
@@ -287,6 +293,7 @@ fn test_create_deepseek_provider() {
         ModelProviderInfo::create_deepseek_provider(),
         ModelProviderInfo {
             name: "DeepSeek".to_string(),
+            enabled: None,
             base_url: Some("https://api.deepseek.com/v1".to_string()),
             env_key: Some("DEEPSEEK_API_KEY".to_string()),
             env_key_instructions: None,
@@ -509,6 +516,42 @@ fn test_merge_configured_model_providers_applies_amazon_bedrock_profile_override
 }
 
 #[test]
+fn test_built_in_amazon_bedrock_is_not_config_ready_without_enabled() {
+    let provider =
+        ModelProviderInfo::create_amazon_bedrock_provider(Some(ModelProviderAwsAuthInfo {
+            profile: Some("codex-bedrock".to_string()),
+            region: Some("us-west-2".to_string()),
+        }));
+
+    assert!(!provider.is_config_ready(AMAZON_BEDROCK_PROVIDER_ID));
+}
+
+#[test]
+fn test_amazon_bedrock_is_config_ready_after_enabled_override() {
+    let providers = merge_configured_model_providers(
+        built_in_model_providers(/*openai_base_url*/ None),
+        std::collections::HashMap::from([(
+            AMAZON_BEDROCK_PROVIDER_ID.to_string(),
+            ModelProviderInfo {
+                enabled: Some(true),
+                aws: Some(ModelProviderAwsAuthInfo {
+                    profile: Some("codex-bedrock".to_string()),
+                    region: None,
+                }),
+                ..ModelProviderInfo::default()
+            },
+        )]),
+    )
+    .expect("provider merge should succeed");
+
+    let provider = providers
+        .get(AMAZON_BEDROCK_PROVIDER_ID)
+        .expect("Amazon Bedrock provider should be present");
+
+    assert!(provider.is_config_ready(AMAZON_BEDROCK_PROVIDER_ID));
+}
+
+#[test]
 fn test_merge_configured_model_providers_rejects_amazon_bedrock_non_default_fields() {
     let configured_model_providers = std::collections::HashMap::from([(
         AMAZON_BEDROCK_PROVIDER_ID.to_string(),
@@ -528,7 +571,7 @@ fn test_merge_configured_model_providers_rejects_amazon_bedrock_non_default_fiel
             configured_model_providers,
         ),
         Err(
-            "model_providers.amazon-bedrock only supports changing `aws.profile` and `aws.region`; other non-default provider fields are not supported"
+            "model_providers.amazon-bedrock only supports changing `enabled`, `aws.profile`, and `aws.region`; other non-default provider fields are not supported"
                 .to_string()
         )
     );

@@ -141,6 +141,26 @@ additional production routes. For DeepSeek, adding either
 `[model_providers.deepseek] token = "sk-..."` or `DEEPSEEK_API_KEY` is enough for
 the built-in provider to become available to the router.
 
+## Built-in Amazon Bedrock provider
+
+Codex includes a built-in `amazon-bedrock` provider for Amazon Bedrock's
+OpenAI-compatible endpoint. To make this provider available to model-router
+curated discovery, opt in explicitly and configure AWS auth as needed:
+
+```toml
+[model_providers.amazon-bedrock]
+enabled = true
+
+[model_providers.amazon-bedrock.aws]
+profile = "codex-bedrock"
+region = "us-west-2"
+```
+
+The `aws.profile` and `aws.region` fields are optional; when omitted, the AWS SDK
+default credential chain is used. Ambient AWS environment variables alone do not
+make the built-in Bedrock provider ready for router discovery unless
+`enabled = true` is also set.
+
 ## Model router
 
 `[model_router]` enables adaptive routing for internal Codex model calls.
@@ -223,6 +243,9 @@ the active provider's available model catalog, and every ready non-active
 provider in `model_providers`. A provider is ready when it has a non-empty base
 URL plus an auth signal such as a config token, populated `env_key`, command
 auth, configured HTTP headers, configured AWS auth, or no auth requirement.
+Amazon Bedrock is opt-in for curated discovery: set
+`[model_providers.amazon-bedrock] enabled = true` before AWS auth signals make it
+ready.
 Provider-specific model managers are used, so OpenAI-compatible providers expand
 through `/models` and static-catalog providers expand through their local
 catalog. Auto-discovered curated candidates are production-selectable
