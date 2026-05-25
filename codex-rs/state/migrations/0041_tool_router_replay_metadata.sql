@@ -1,0 +1,9 @@
+ALTER TABLE tool_router_ledger ADD COLUMN tool_call_source TEXT;
+ALTER TABLE tool_router_ledger ADD COLUMN tool_name TEXT;
+ALTER TABLE tool_router_ledger ADD COLUMN tool_namespace TEXT;
+ALTER TABLE tool_router_ledger ADD COLUMN tool_input_json TEXT;
+ALTER TABLE tool_router_ledger ADD COLUMN tool_output_json TEXT;
+ALTER TABLE tool_router_ledger ADD COLUMN tool_success INTEGER;
+ALTER TABLE tool_router_ledger ADD COLUMN prompt_json TEXT;
+ALTER TABLE tool_router_ledger ADD COLUMN previous_prompt_json TEXT;
+ALTER TABLE tool_router_ledger ADD COLUMN dialog_locator_json TEXT;

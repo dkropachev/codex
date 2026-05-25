@@ -64,6 +64,8 @@ use crate::tasks::SessionTaskContext;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::execute_user_shell_command;
 use crate::tools::ToolRouter;
+use crate::tools::context::ToolCallDialogContext;
+use crate::tools::context::ToolCallDialogSnapshot;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::CreateGoalHandler;
@@ -483,7 +485,13 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         },
     ));
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    ToolCallRuntime::new(router, session, turn_context, tracker)
+    ToolCallRuntime::new(
+        router,
+        session,
+        turn_context,
+        tracker,
+        ToolCallDialogContext::default(),
+    )
 }
 
 fn make_connector(id: &str, name: &str) -> AppInfo {
@@ -7670,6 +7678,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             tracker,
             call,
             ToolCallSource::Direct,
+            ToolCallDialogSnapshot::default(),
         )
         .await
         .err()

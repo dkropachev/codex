@@ -64,6 +64,15 @@ pub struct ToolRouterLedgerEntry {
     pub truncated_output_tokens: i64,
     pub outcome: Option<String>,
     pub request_shape_json: Option<String>,
+    pub tool_call_source: Option<String>,
+    pub tool_name: Option<String>,
+    pub tool_namespace: Option<String>,
+    pub tool_input_json: Option<String>,
+    pub tool_output_json: Option<String>,
+    pub tool_success: Option<bool>,
+    pub prompt_json: Option<String>,
+    pub previous_prompt_json: Option<String>,
+    pub dialog_locator_json: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,9 +250,18 @@ impl StateRuntime {
                 original_output_tokens,
                 truncated_output_tokens,
                 outcome,
-                request_shape_json
+                request_shape_json,
+                tool_call_source,
+                tool_name,
+                tool_namespace,
+                tool_input_json,
+                tool_output_json,
+                tool_success,
+                prompt_json,
+                previous_prompt_json,
+                dialog_locator_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(now_ms)
@@ -270,6 +288,15 @@ impl StateRuntime {
         .bind(entry.truncated_output_tokens)
         .bind(entry.outcome)
         .bind(entry.request_shape_json)
+        .bind(entry.tool_call_source)
+        .bind(entry.tool_name)
+        .bind(entry.tool_namespace)
+        .bind(entry.tool_input_json)
+        .bind(entry.tool_output_json)
+        .bind(entry.tool_success)
+        .bind(entry.prompt_json)
+        .bind(entry.previous_prompt_json)
+        .bind(entry.dialog_locator_json)
         .execute(self.pool.as_ref())
         .await?;
         Ok(())
@@ -1015,6 +1042,15 @@ mod tests {
                 truncated_output_tokens: 7,
                 outcome: Some("ok".to_string()),
                 request_shape_json: None,
+                tool_call_source: Some("direct".to_string()),
+                tool_name: Some("exec_command".to_string()),
+                tool_namespace: None,
+                tool_input_json: Some(r#"{"cmd":"pwd"}"#.to_string()),
+                tool_output_json: Some(r#"{"type":"function_call_output"}"#.to_string()),
+                tool_success: Some(true),
+                prompt_json: Some(r#"{"input":[]}"#.to_string()),
+                previous_prompt_json: Some(r#"{"input":["previous"]}"#.to_string()),
+                dialog_locator_json: Some(r#"{"session_id":"thread"}"#.to_string()),
             })
             .await
             .expect("record ledger entry");
@@ -1037,7 +1073,16 @@ mod tests {
                 spark_completion_tokens,
                 returned_output_tokens,
                 original_output_tokens,
-                truncated_output_tokens
+                truncated_output_tokens,
+                tool_call_source,
+                tool_name,
+                tool_namespace,
+                tool_input_json,
+                tool_output_json,
+                tool_success,
+                prompt_json,
+                previous_prompt_json,
+                dialog_locator_json
             FROM tool_router_ledger
             WHERE call_id = ?
             "#,
@@ -1065,6 +1110,15 @@ mod tests {
             returned_output_tokens: i64,
             original_output_tokens: i64,
             truncated_output_tokens: i64,
+            tool_call_source: Option<String>,
+            tool_name: Option<String>,
+            tool_namespace: Option<String>,
+            tool_input_json: Option<String>,
+            tool_output_json: Option<String>,
+            tool_success: Option<bool>,
+            prompt_json: Option<String>,
+            previous_prompt_json: Option<String>,
+            dialog_locator_json: Option<String>,
         }
 
         assert_eq!(
@@ -1105,6 +1159,19 @@ mod tests {
                 truncated_output_tokens: row
                     .try_get("truncated_output_tokens")
                     .expect("truncated output tokens"),
+                tool_call_source: row.try_get("tool_call_source").expect("tool call source"),
+                tool_name: row.try_get("tool_name").expect("tool name"),
+                tool_namespace: row.try_get("tool_namespace").expect("tool namespace"),
+                tool_input_json: row.try_get("tool_input_json").expect("tool input json"),
+                tool_output_json: row.try_get("tool_output_json").expect("tool output json"),
+                tool_success: row.try_get("tool_success").expect("tool success"),
+                prompt_json: row.try_get("prompt_json").expect("prompt json"),
+                previous_prompt_json: row
+                    .try_get("previous_prompt_json")
+                    .expect("previous prompt json"),
+                dialog_locator_json: row
+                    .try_get("dialog_locator_json")
+                    .expect("dialog locator json"),
             },
             LedgerRow {
                 selected_tools_json: r#"["exec_command"]"#.to_string(),
@@ -1123,6 +1190,15 @@ mod tests {
                 returned_output_tokens: 7,
                 original_output_tokens: 9,
                 truncated_output_tokens: 7,
+                tool_call_source: Some("direct".to_string()),
+                tool_name: Some("exec_command".to_string()),
+                tool_namespace: None,
+                tool_input_json: Some(r#"{"cmd":"pwd"}"#.to_string()),
+                tool_output_json: Some(r#"{"type":"function_call_output"}"#.to_string()),
+                tool_success: Some(true),
+                prompt_json: Some(r#"{"input":[]}"#.to_string()),
+                previous_prompt_json: Some(r#"{"input":["previous"]}"#.to_string()),
+                dialog_locator_json: Some(r#"{"session_id":"thread"}"#.to_string()),
             }
         );
     }
@@ -1152,6 +1228,12 @@ mod tests {
         assert!(columns.contains("guidance_tokens"));
         assert!(columns.contains("format_description_tokens"));
         assert!(columns.contains("request_shape_json"));
+        assert!(columns.contains("tool_call_source"));
+        assert!(columns.contains("tool_input_json"));
+        assert!(columns.contains("tool_output_json"));
+        assert!(columns.contains("prompt_json"));
+        assert!(columns.contains("previous_prompt_json"));
+        assert!(columns.contains("dialog_locator_json"));
         assert!(!columns.contains("estimated_schema_tokens_saved"));
         assert!(!columns.contains("net_tokens_saved"));
     }
@@ -1450,6 +1532,15 @@ mod tests {
             truncated_output_tokens: 7,
             outcome: outcome.map(str::to_string),
             request_shape_json: None,
+            tool_call_source: None,
+            tool_name: None,
+            tool_namespace: None,
+            tool_input_json: None,
+            tool_output_json: None,
+            tool_success: None,
+            prompt_json: None,
+            previous_prompt_json: None,
+            dialog_locator_json: None,
         }
     }
 }

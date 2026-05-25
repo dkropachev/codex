@@ -25,6 +25,7 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolCallDialogContext;
 use crate::tools::context::ToolPayload;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolCall;
@@ -105,6 +106,7 @@ impl CodeModeService {
         turn: &Arc<TurnContext>,
         router: Arc<ToolRouter>,
         tracker: SharedTurnDiffTracker,
+        dialog_context: ToolCallDialogContext,
     ) -> Option<codex_code_mode::CodeModeTurnWorker> {
         if !turn.features.enabled(Feature::CodeMode) {
             return None;
@@ -114,8 +116,13 @@ impl CodeModeService {
             session: Arc::clone(session),
             turn: Arc::clone(turn),
         };
-        let tool_runtime =
-            ToolCallRuntime::new(router, Arc::clone(session), Arc::clone(turn), tracker);
+        let tool_runtime = ToolCallRuntime::new(
+            router,
+            Arc::clone(session),
+            Arc::clone(turn),
+            tracker,
+            dialog_context,
+        );
         let host = Arc::new(CoreTurnHost { exec, tool_runtime });
         Some(self.inner.start_turn_worker(host))
     }

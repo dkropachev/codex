@@ -641,6 +641,15 @@ mod tests {
             truncated_output_tokens: 7,
             outcome: outcome.map(str::to_string),
             request_shape_json: None,
+            tool_call_source: None,
+            tool_name: None,
+            tool_namespace: None,
+            tool_input_json: None,
+            tool_output_json: None,
+            tool_success: None,
+            prompt_json: None,
+            previous_prompt_json: None,
+            dialog_locator_json: None,
         }
     }
 }

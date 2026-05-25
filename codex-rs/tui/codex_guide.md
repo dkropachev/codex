@@ -63,7 +63,7 @@ This guide is a source map for user-facing Codex surfaces. Before changing an en
 ### Internal Plugin-Like Surfaces
 
 - `model-router`: routes normal chat turns plus internal model calls for subagents and modules. User surfaces are `/model-router enable|disable|inherit`, `codex model-router policy|lifecycle|shadows|promote|demote|tune`, and `codex model-router report show|apply`.
-- `tool-router`: exposes one structured model-visible `tool_router` function that routes to internal tools. User-facing maintenance is mostly `codex tool-router tune` plus telemetry and state inspection.
+- `tool-router`: keeps tool dispatch and telemetry centralized while advertising the normal tool schemas directly. User-facing maintenance is mostly `codex tool-router tune` plus telemetry and state inspection.
 - `implement`: owns targeted review/fix cycles after agent edits. User surfaces are `/implement enable|disable|inherit|implicit --max-cycles=N [task]` and `codex implement enable|disable|implicit --max-cycles=N`.
 - `skills`: owns bundled and local `SKILL.md` discovery, plugin-provided skills, enablement rules, and the model-visible `<skills_instructions>` block.
 - `mcp/apps`: owns configured MCP servers, connector-backed apps, plugin-provided `.mcp.json` and `.app.json` files, OAuth/auth status, and model-visible tool schemas.
@@ -248,13 +248,13 @@ The temporary marketplace snapshot under `$CODEX_HOME/.tmp/plugins/plugins/` con
 
 ## Tool Router
 
-- Description: tool-router is the internal structured-tool surface. The model calls one `tool_router` function with intent, target metadata, a domain, and an action; Codex then routes to shell, filesystem, git, MCP, app, image, agent, memory, config, or direct internal tools. Remembered tool selectors are persisted in `tool_router_remembered_tools`, re-advertised only for a matching `(repo_key, task_key)` within the 30-day freshness window, and keyed by git trust root when available or absolute `cwd` otherwise.
-- User surfaces: there is no TUI slash command. `features.tool_router` controls model visibility, `codex tool-router tune --introspect` analyzes telemetry with a model-router-selected introspection model, and the raw `tool_router` call/result is the main runtime debugging surface.
-- Configuration: the router schema requires `request`, `where.kind`, `targets`, and `action.kind`. `verbosity` can be `auto`, `brief`, `normal`, or `full`. Default guidance version is 2, schema version is 1, default guidance cap is 600 tokens, and the hard cap is 1200 tokens.
-- Tuning: prefer exact `action.tool` or deterministic `action.kind`, typed targets, concrete payload keys, and `batch` for independent read-only reads. Dynamic guidance should stay small, sanitized, and keyed to repeated routing failures rather than request-specific paths. The optional introspection pass uses model-router for its model choice.
-- Debug recipe: inspect the raw JSON payload, selected tool, fallback tool, invalid route errors, outcome breakdowns, toolset hash, visible router-schema tokens, hidden tool-schema tokens, and persisted dynamic guidance.
+- Description: tool-router is the internal structured-tool dispatch and telemetry surface. With `features.tool_router` enabled, Codex advertises the normal tool schemas directly instead of a bundled model-visible `tool_router` function; `tool_search` remains advertised when configured so deferred tools stay discoverable. Runtime tool calls still pass through `ToolRouter`, which records the tool input, output, success/outcome, source, model response ordinal, prompt snapshot, previous prompt snapshot, and dialog locator metadata for replay-oriented investigations. Remembered tool selectors are persisted in `tool_router_remembered_tools` for diagnostics and tuning history, but they do not add extra model-visible schemas in direct-advertisement mode.
+- User surfaces: there is no TUI slash command. `features.tool_router` controls the dispatch/accounting mode, `codex tool-router tune --introspect` analyzes telemetry with a model-router-selected introspection model, and `tool_router_ledger` is the main runtime debugging surface.
+- Configuration: direct tool schemas come from the standard tool registry and MCP/app/dynamic tool loading. `tool_search` remains controlled by the search-tool configuration and deferred tool inventory.
+- Tuning: inspect repeated failures by `route_kind`, `selected_tools_json`, `tool_name`, `tool_call_source`, `outcome`, and prompt snapshots. Dynamic guidance applies only to legacy model-visible router prompt info, so direct-advertisement issues usually need tool schema, tool description, policy, or registry fixes.
+- Debug recipe: inspect the raw tool input/output JSON, selected tool, invalid route errors, outcome breakdowns, toolset hash, model response ordinal, prompt snapshots, and dialog locator JSON. Use `thread_id`/`turn_id`/`call_id` plus `prompt_json` and `previous_prompt_json` to reconstruct the model request that produced a tool call.
 - Source entrypoints: `codex-rs/tools/src/tool_router.rs`, `codex-rs/tools/src/tool_router_prompt.rs`, `codex-rs/tools/src/tool_discovery.rs`, `codex-rs/tools/src/tool_registry_plan.rs`, `codex-rs/core/src/tool_router_tune.rs`, `codex-rs/state/src/runtime/tool_router.rs`, `codex-rs/cli/src/main.rs`.
-- Token impact: tool-router reduces prompt cost by hiding full tool schemas behind a compact router schema and catalog. Bad routing, verbose outputs, or over-broad actions can erase those savings.
+- Token impact: direct advertisement spends the normal visible tool-schema tokens while avoiding an extra router prompt. The ledger still records visible and hidden schema token estimates so changes in tool inventory can be measured over time.
 
 ## Config And Debug Surfaces
 
@@ -327,7 +327,8 @@ LIMIT 50;
 
 ```sql
 SELECT datetime(created_at_ms / 1000, 'unixepoch') AS created, thread_id, turn_id, route_kind,
-       selected_tools_json, net_tokens_saved, returned_output_tokens, truncated_output_tokens, outcome
+       selected_tools_json, tool_name, tool_call_source, returned_output_tokens,
+       truncated_output_tokens, outcome, model_response_ordinal, dialog_locator_json
 FROM tool_router_ledger
 ORDER BY created_at_ms DESC
 LIMIT 20;

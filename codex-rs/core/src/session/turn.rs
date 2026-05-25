@@ -52,6 +52,7 @@ use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolCallDialogContext;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolRouterParams;
@@ -396,6 +397,7 @@ pub(crate) async fn run_turn(
         .new_session(),
         None => sess.services.model_client.new_session(),
     };
+    let tool_call_dialog_context = ToolCallDialogContext::default();
     // Pending input is drained into history before building the next model request.
     // However, we defer that drain until after sampling in two cases:
     // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.
@@ -481,6 +483,7 @@ pub(crate) async fn run_turn(
             sampling_request_input,
             &explicitly_enabled_connectors,
             skills_outcome,
+            tool_call_dialog_context.clone(),
             cancellation_token.child_token(),
         )
         .await
@@ -1100,6 +1103,7 @@ async fn run_sampling_request(
     input: Vec<ResponseItem>,
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
+    tool_call_dialog_context: ToolCallDialogContext,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     let router = built_tools(
@@ -1119,6 +1123,7 @@ async fn run_sampling_request(
         Arc::clone(&sess),
         Arc::clone(&turn_context),
         Arc::clone(&turn_diff_tracker),
+        tool_call_dialog_context.clone(),
     );
     let _code_mode_worker = sess
         .services
@@ -1128,6 +1133,7 @@ async fn run_sampling_request(
             &turn_context,
             Arc::clone(&router),
             Arc::clone(&turn_diff_tracker),
+            tool_call_dialog_context.clone(),
         )
         .await;
     let mut retries = 0;
@@ -1148,6 +1154,7 @@ async fn run_sampling_request(
             base_instructions.clone(),
         )
         .await;
+        tool_runtime.record_prompt(&prompt).await;
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),

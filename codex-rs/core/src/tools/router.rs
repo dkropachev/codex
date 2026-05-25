@@ -4,6 +4,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolCallDialogSnapshot;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutputTokenAccounting;
 use crate::tools::context::ToolPayload;
@@ -19,6 +20,7 @@ use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::LocalShellAction;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
@@ -28,21 +30,17 @@ use codex_state::ToolRouterRememberedToolSelector;
 use codex_state::ToolRouterRulePruneOptions;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
-use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::TOOL_ROUTER_DEFAULT_GUIDANCE_TOKEN_CAP;
 use codex_tools::TOOL_ROUTER_DEFAULT_GUIDANCE_VERSION;
-use codex_tools::TOOL_ROUTER_SCHEMA_VERSION;
 use codex_tools::TOOL_ROUTER_TOOL_NAME;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use codex_tools::compose_tool_router_guidance;
-use codex_tools::create_tool_router_tool;
-use codex_tools::estimate_router_text_tokens;
-use codex_tools::tool_router_format_description;
 use codex_tools::toolset_hash_from_specs;
 use codex_workflows::WorkflowPublishedTool;
+use serde_json::json;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -70,6 +68,7 @@ pub struct ToolRouter {
     parallel_mcp_server_names: HashSet<String>,
     tool_router_token_estimates: Option<ToolRouterTokenEstimates>,
     tool_router_prompt_info: Option<ToolRouterPromptInfo>,
+    tool_router_toolset_hash: Option<String>,
 }
 
 pub(crate) struct ToolRouterParams<'a> {
@@ -110,6 +109,7 @@ struct RoutedDispatchContext {
     cancellation_token: CancellationToken,
     tracker: SharedTurnDiffTracker,
     router_call_id: String,
+    dialog_snapshot: ToolCallDialogSnapshot,
 }
 
 impl ToolRouter {
@@ -120,7 +120,7 @@ impl ToolRouter {
             unavailable_called_tools,
             parallel_mcp_server_names,
             discoverable_tools,
-            remembered_tool_selectors,
+            remembered_tool_selectors: _,
             dynamic_tools,
             workflow_tools,
         } = params;
@@ -165,41 +165,25 @@ impl ToolRouter {
         };
         let mut full_routed_specs = unwrapped_model_visible_specs.clone();
         full_routed_specs.extend(deferred_routed_specs);
-        let (model_visible_specs, tool_router_token_estimates, tool_router_prompt_info) = if config
-            .tool_router
-        {
-            let router_spec = create_tool_router_tool();
-            let mut model_visible_specs = Vec::new();
-            model_visible_specs.push(router_spec.clone());
-            if let Some(tool_search_spec) = find_tool_search_spec(&unwrapped_model_visible_specs) {
-                model_visible_specs.push(tool_search_spec);
-            }
-            model_visible_specs.extend(build_remembered_model_visible_specs(
-                &full_routed_specs,
-                &remembered_tool_selectors,
-            ));
-            let format_description =
-                tool_router_format_description(&router_spec, &full_routed_specs);
+        let (
+            model_visible_specs,
+            tool_router_token_estimates,
+            tool_router_prompt_info,
+            tool_router_toolset_hash,
+        ) = if config.tool_router {
+            let model_visible_specs = unwrapped_model_visible_specs;
             let token_estimates = ToolRouterTokenEstimates {
                 visible_router_schema_tokens: estimate_tool_schema_tokens(&model_visible_specs),
-                hidden_tool_schema_tokens: estimate_tool_schema_tokens(&full_routed_specs),
-            };
-            let prompt_info = ToolRouterPromptInfo {
-                format_description_tokens: i64::try_from(estimate_router_text_tokens(
-                    &format_description,
-                ))
-                .unwrap_or(i64::MAX),
-                format_description,
-                toolset_hash: toolset_hash_from_specs(&full_routed_specs),
-                router_schema_version: TOOL_ROUTER_SCHEMA_VERSION,
+                hidden_tool_schema_tokens: 0,
             };
             (
                 model_visible_specs,
                 Some(token_estimates),
-                Some(prompt_info),
+                None,
+                Some(toolset_hash_from_specs(&full_routed_specs)),
             )
         } else {
-            (unwrapped_model_visible_specs, None, None)
+            (unwrapped_model_visible_specs, None, None, None)
         };
 
         Self {
@@ -210,6 +194,7 @@ impl ToolRouter {
             parallel_mcp_server_names,
             tool_router_token_estimates,
             tool_router_prompt_info,
+            tool_router_toolset_hash,
         }
     }
 
@@ -226,6 +211,34 @@ impl ToolRouter {
 
     pub(crate) fn tool_router_prompt_info(&self) -> Option<&ToolRouterPromptInfo> {
         self.tool_router_prompt_info.as_ref()
+    }
+
+    pub(crate) async fn record_tool_call_result_for_logging(
+        &self,
+        session: &Session,
+        turn: &TurnContext,
+        call: &ToolCall,
+        source: &ToolCallSource,
+        result: AnyToolResult,
+        dialog_snapshot: &ToolCallDialogSnapshot,
+    ) -> AnyToolResult {
+        let (tool_output_json, success, token_accounting) = direct_tool_output_log(&result);
+        let outcome = success.map(|success| if success { "ok" } else { "failed" }.to_string());
+        self.record_direct_tool_usage(
+            session,
+            turn,
+            &call.call_id,
+            &call.tool_name,
+            source,
+            &call.payload,
+            tool_output_json,
+            success,
+            token_accounting,
+            outcome,
+            dialog_snapshot,
+        )
+        .await;
+        result
     }
 
     pub(crate) fn learned_rule_tool_names(&self) -> BTreeSet<String> {
@@ -400,6 +413,7 @@ impl ToolRouter {
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
         source: ToolCallSource,
+        dialog_snapshot: ToolCallDialogSnapshot,
     ) -> Result<AnyToolResult, FunctionCallError> {
         let ToolCall {
             tool_name,
@@ -416,10 +430,17 @@ impl ToolRouter {
                     tracker,
                     call_id,
                     payload,
+                    dialog_snapshot,
                 )
                 .await;
         }
 
+        let session_for_log = Arc::clone(&session);
+        let turn_for_log = Arc::clone(&turn);
+        let call_id_for_log = call_id.clone();
+        let tool_name_for_log = tool_name.clone();
+        let source_for_log = source.clone();
+        let payload_for_log = payload.clone();
         let invocation = ToolInvocation {
             session,
             turn,
@@ -431,7 +452,46 @@ impl ToolRouter {
             payload,
         };
 
-        self.registry.dispatch_any(invocation).await
+        let result = self.registry.dispatch_any(invocation).await;
+        match &result {
+            Ok(result) => {
+                let (tool_output_json, success, token_accounting) = direct_tool_output_log(result);
+                let outcome =
+                    success.map(|success| if success { "ok" } else { "failed" }.to_string());
+                self.record_direct_tool_usage(
+                    session_for_log.as_ref(),
+                    turn_for_log.as_ref(),
+                    &call_id_for_log,
+                    &tool_name_for_log,
+                    &source_for_log,
+                    &payload_for_log,
+                    tool_output_json,
+                    success,
+                    token_accounting,
+                    outcome,
+                    &dialog_snapshot,
+                )
+                .await;
+            }
+            Err(err) => {
+                let tool_output_json = Some(tool_error_output_json(err));
+                self.record_direct_tool_usage(
+                    session_for_log.as_ref(),
+                    turn_for_log.as_ref(),
+                    &call_id_for_log,
+                    &tool_name_for_log,
+                    &source_for_log,
+                    &payload_for_log,
+                    tool_output_json,
+                    Some(false),
+                    ToolOutputTokenAccounting::zero(),
+                    Some(tool_error_outcome(err)),
+                    &dialog_snapshot,
+                )
+                .await;
+            }
+        }
+        result
     }
 
     async fn dispatch_tool_router_call(
@@ -442,6 +502,7 @@ impl ToolRouter {
         tracker: SharedTurnDiffTracker,
         call_id: String,
         payload: ToolPayload,
+        dialog_snapshot: ToolCallDialogSnapshot,
     ) -> Result<AnyToolResult, FunctionCallError> {
         self.prune_tool_router_rules(&session).await;
         let arguments = match &payload {
@@ -456,6 +517,7 @@ impl ToolRouter {
                     &call_id,
                     "invalid_payload",
                     /*request_shape_json*/ None,
+                    &dialog_snapshot,
                 )
                 .await;
                 return Err(FunctionCallError::RespondToModel(
@@ -481,6 +543,7 @@ impl ToolRouter {
                     &call_id,
                     "route_error",
                     request_shape_json,
+                    &dialog_snapshot,
                 )
                 .await;
                 return Err(err);
@@ -497,6 +560,7 @@ impl ToolRouter {
                     &usage,
                     ToolOutputTokenAccounting::from_returned(estimate_text_tokens(&message)),
                     Some("noop".to_string()),
+                    &dialog_snapshot,
                 )
                 .await;
                 Ok(AnyToolResult {
@@ -519,6 +583,7 @@ impl ToolRouter {
                     &usage,
                     ToolOutputTokenAccounting::from_returned(estimate_text_tokens(&message)),
                     Some(if success { "ok" } else { "failed" }.to_string()),
+                    &dialog_snapshot,
                 )
                 .await;
                 Ok(AnyToolResult {
@@ -535,6 +600,7 @@ impl ToolRouter {
                     cancellation_token,
                     tracker,
                     router_call_id: call_id,
+                    dialog_snapshot,
                 };
                 self.dispatch_single_routed_tool(context, payload, *call, usage)
                     .await
@@ -546,6 +612,7 @@ impl ToolRouter {
                     cancellation_token,
                     tracker,
                     router_call_id: call_id,
+                    dialog_snapshot,
                 };
                 self.dispatch_fanout_routed_tools(context, payload, calls, usage)
                     .await
@@ -581,6 +648,7 @@ impl ToolRouter {
             &usage,
             token_accounting,
             Some(if success { "ok" } else { "failed" }.to_string()),
+            &context.dialog_snapshot,
         )
         .await;
         Ok(AnyToolResult {
@@ -643,6 +711,7 @@ impl ToolRouter {
             &usage,
             token_accounting,
             Some(if all_success { "ok" } else { "failed" }.to_string()),
+            &context.dialog_snapshot,
         )
         .await;
         Ok(AnyToolResult {
@@ -663,6 +732,16 @@ impl ToolRouter {
             call_id,
             payload,
         } = call;
+        let session_for_log = Arc::clone(&context.session);
+        let turn_for_log = Arc::clone(&context.turn);
+        let call_id_for_log = call_id.clone();
+        let tool_name_for_log = tool_name.clone();
+        let payload_for_log = payload.clone();
+        let source = ToolCallSource::Routed {
+            router_call_id: context.router_call_id.clone(),
+        };
+        let source_for_log = source.clone();
+        let dialog_snapshot = context.dialog_snapshot.clone();
         let invocation = ToolInvocation {
             session: context.session,
             turn: context.turn,
@@ -670,12 +749,49 @@ impl ToolRouter {
             tracker: context.tracker,
             call_id,
             tool_name,
-            source: ToolCallSource::Routed {
-                router_call_id: context.router_call_id,
-            },
+            source,
             payload,
         };
-        self.registry.dispatch_any(invocation).await
+        let result = self.registry.dispatch_any(invocation).await;
+        match &result {
+            Ok(result) => {
+                let (tool_output_json, success, token_accounting) = direct_tool_output_log(result);
+                let outcome =
+                    success.map(|success| if success { "ok" } else { "failed" }.to_string());
+                self.record_direct_tool_usage(
+                    session_for_log.as_ref(),
+                    turn_for_log.as_ref(),
+                    &call_id_for_log,
+                    &tool_name_for_log,
+                    &source_for_log,
+                    &payload_for_log,
+                    tool_output_json,
+                    success,
+                    token_accounting,
+                    outcome,
+                    &dialog_snapshot,
+                )
+                .await;
+            }
+            Err(err) => {
+                let tool_output_json = Some(tool_error_output_json(err));
+                self.record_direct_tool_usage(
+                    session_for_log.as_ref(),
+                    turn_for_log.as_ref(),
+                    &call_id_for_log,
+                    &tool_name_for_log,
+                    &source_for_log,
+                    &payload_for_log,
+                    tool_output_json,
+                    Some(false),
+                    ToolOutputTokenAccounting::zero(),
+                    Some(tool_error_outcome(err)),
+                    &dialog_snapshot,
+                )
+                .await;
+            }
+        }
+        result
     }
 
     async fn record_tool_router_usage(
@@ -686,6 +802,7 @@ impl ToolRouter {
         usage: &routing_tool::ToolRouterUsage,
         token_accounting: ToolOutputTokenAccounting,
         outcome: Option<String>,
+        dialog_snapshot: &ToolCallDialogSnapshot,
     ) {
         let Some(tokens) = self.tool_router_token_estimates else {
             return;
@@ -695,6 +812,17 @@ impl ToolRouter {
         };
         let guidance = self.tool_router_guidance_telemetry(session, turn).await;
         let prompt_info = self.tool_router_prompt_info.as_ref();
+        let toolset_hash = prompt_info
+            .map(|info| info.toolset_hash.clone())
+            .or_else(|| self.tool_router_toolset_hash.clone())
+            .unwrap_or_default();
+        let router_schema_version = prompt_info
+            .map(|info| info.router_schema_version)
+            .unwrap_or_default();
+        let dialog_locator_json = dialog_locator_json(
+            session, turn, call_id, /*tool_name*/ None, /*tool_namespace*/ None,
+            /*source*/ None,
+        );
         if let Err(err) = state_db
             .record_tool_router_ledger_entry(ToolRouterLedgerEntry {
                 thread_id: session.conversation_id.to_string(),
@@ -702,12 +830,8 @@ impl ToolRouter {
                 call_id: call_id.to_string(),
                 model_slug: turn.model_info.slug.clone(),
                 model_provider: turn.config.model_provider_id.clone(),
-                toolset_hash: prompt_info
-                    .map(|info| info.toolset_hash.clone())
-                    .unwrap_or_default(),
-                router_schema_version: prompt_info
-                    .map(|info| info.router_schema_version)
-                    .unwrap_or_default(),
+                toolset_hash,
+                router_schema_version,
                 model_response_ordinal: turn.model_response_ordinal(),
                 guidance_version: guidance.guidance_version,
                 guidance_tokens: guidance.guidance_tokens,
@@ -726,10 +850,91 @@ impl ToolRouter {
                 truncated_output_tokens: token_accounting.truncated_output_tokens,
                 outcome,
                 request_shape_json: usage.request_shape_json.clone(),
+                tool_call_source: Some("tool_router".to_string()),
+                tool_name: Some(TOOL_ROUTER_TOOL_NAME.to_string()),
+                tool_namespace: None,
+                tool_input_json: usage.request_shape_json.clone(),
+                tool_output_json: None,
+                tool_success: None,
+                prompt_json: dialog_snapshot.prompt_json.clone(),
+                previous_prompt_json: dialog_snapshot.previous_prompt_json.clone(),
+                dialog_locator_json,
             })
             .await
         {
             tracing::warn!("failed to record tool_router ledger entry: {err}");
+        }
+    }
+
+    async fn record_direct_tool_usage(
+        &self,
+        session: &Session,
+        turn: &TurnContext,
+        call_id: &str,
+        tool_name: &ToolName,
+        source: &ToolCallSource,
+        payload: &ToolPayload,
+        tool_output_json: Option<String>,
+        success: Option<bool>,
+        token_accounting: ToolOutputTokenAccounting,
+        outcome: Option<String>,
+        dialog_snapshot: &ToolCallDialogSnapshot,
+    ) {
+        let Some(tokens) = self.tool_router_token_estimates else {
+            return;
+        };
+        let Some(state_db) = session.services.state_db.as_deref() else {
+            return;
+        };
+
+        let tool_name_display = tool_name.display();
+        let dialog_locator_json = dialog_locator_json(
+            session,
+            turn,
+            call_id,
+            Some(tool_name.name.as_str()),
+            tool_name.namespace.as_deref(),
+            Some(source),
+        );
+
+        if let Err(err) = state_db
+            .record_tool_router_ledger_entry(ToolRouterLedgerEntry {
+                thread_id: session.conversation_id.to_string(),
+                turn_id: turn.sub_id.clone(),
+                call_id: call_id.to_string(),
+                model_slug: turn.model_info.slug.clone(),
+                model_provider: turn.config.model_provider_id.clone(),
+                toolset_hash: self.tool_router_toolset_hash.clone().unwrap_or_default(),
+                router_schema_version: 0,
+                model_response_ordinal: turn.model_response_ordinal(),
+                guidance_version: 0,
+                guidance_tokens: 0,
+                format_description_tokens: 0,
+                route_kind: tool_call_source_route_kind(source).to_string(),
+                selected_tools: vec![tool_name_display],
+                visible_router_schema_tokens: tokens.visible_router_schema_tokens,
+                hidden_tool_schema_tokens: tokens.hidden_tool_schema_tokens,
+                spark_prompt_tokens: 0,
+                spark_completion_tokens: 0,
+                fanout_call_count: 1,
+                returned_output_tokens: token_accounting.returned_output_tokens,
+                original_output_tokens: token_accounting.original_output_tokens,
+                truncated_output_tokens: token_accounting.truncated_output_tokens,
+                outcome,
+                request_shape_json: None,
+                tool_call_source: Some(tool_call_source_label(source)),
+                tool_name: Some(tool_name.name.clone()),
+                tool_namespace: tool_name.namespace.clone(),
+                tool_input_json: tool_payload_json(payload),
+                tool_output_json,
+                tool_success: success,
+                prompt_json: dialog_snapshot.prompt_json.clone(),
+                previous_prompt_json: dialog_snapshot.previous_prompt_json.clone(),
+                dialog_locator_json,
+            })
+            .await
+        {
+            tracing::warn!("failed to record direct tool_router ledger entry: {err}");
         }
     }
 
@@ -800,6 +1005,7 @@ impl ToolRouter {
         call_id: &str,
         outcome: &str,
         request_shape_json: Option<String>,
+        dialog_snapshot: &ToolCallDialogSnapshot,
     ) {
         self.record_tool_router_usage(
             session,
@@ -815,6 +1021,7 @@ impl ToolRouter {
             },
             ToolOutputTokenAccounting::zero(),
             Some(outcome.to_string()),
+            dialog_snapshot,
         )
         .await;
     }
@@ -843,87 +1050,124 @@ fn estimate_text_tokens(text: &str) -> i64 {
     i64::try_from(text.len().div_ceil(4)).unwrap_or(i64::MAX)
 }
 
-fn find_tool_search_spec(specs: &[ToolSpec]) -> Option<ToolSpec> {
-    specs.iter().find_map(|spec| match spec {
-        ToolSpec::ToolSearch { .. } => Some(spec.clone()),
-        ToolSpec::Function(_)
-        | ToolSpec::Namespace(_)
-        | ToolSpec::LocalShell {}
-        | ToolSpec::ImageGeneration { .. }
-        | ToolSpec::WebSearch { .. }
-        | ToolSpec::Freeform(_) => None,
-    })
+fn direct_tool_output_log(
+    result: &AnyToolResult,
+) -> (Option<String>, Option<bool>, ToolOutputTokenAccounting) {
+    let response_item = result
+        .result
+        .to_response_item(&result.call_id, &result.payload);
+    let returned_output_tokens = estimate_response_input_item_tokens(response_item.clone());
+    let token_accounting = result.result.token_accounting(returned_output_tokens);
+    (
+        serde_json::to_string(&response_item).ok(),
+        Some(result.result.success_for_logging()),
+        token_accounting,
+    )
 }
 
-fn build_remembered_model_visible_specs(
-    routed_specs: &[ToolSpec],
-    remembered_tool_selectors: &[ToolRouterRememberedToolSelector],
-) -> Vec<ToolSpec> {
-    let mut model_visible_specs = Vec::new();
-    let mut seen_selectors = HashSet::new();
-    let mut namespace_positions = HashMap::<String, usize>::new();
+fn estimate_response_input_item_tokens(response_item: ResponseInputItem) -> i64 {
+    let content = routing_tool::response_to_content_items(response_item);
+    let text = codex_protocol::models::function_call_output_content_items_to_text(&content)
+        .unwrap_or_default();
+    estimate_text_tokens(&text)
+}
 
-    for selector in remembered_tool_selectors {
-        if !seen_selectors.insert(selector.clone()) {
-            continue;
-        }
+fn tool_error_output_json(error: &FunctionCallError) -> String {
+    json!({
+        "type": "error",
+        "message": error.to_string(),
+    })
+    .to_string()
+}
 
-        if selector.tool_namespace.is_empty() {
-            if let Some(spec) = routed_specs.iter().find(|spec| {
-                !matches!(spec, ToolSpec::Namespace(_)) && spec.name() == selector.tool_name
-            }) {
-                model_visible_specs.push(spec.clone());
-            }
-            continue;
-        }
-
-        let Some((namespace_name, namespace_description, tool)) =
-            routed_specs.iter().find_map(|spec| match spec {
-                ToolSpec::Namespace(namespace) if namespace.name == selector.tool_namespace => {
-                    namespace.tools.iter().find_map(|tool| match tool {
-                        ResponsesApiNamespaceTool::Function(tool)
-                            if tool.name == selector.tool_name =>
-                        {
-                            Some((
-                                namespace.name.clone(),
-                                namespace.description.clone(),
-                                tool.clone(),
-                            ))
-                        }
-                        _ => None,
-                    })
-                }
-                _ => None,
-            })
-        else {
-            continue;
-        };
-
-        if let Some(index) = namespace_positions.get(&namespace_name).copied() {
-            if let Some(ToolSpec::Namespace(existing_namespace)) =
-                model_visible_specs.get_mut(index)
-                && !existing_namespace
-                    .tools
-                    .iter()
-                    .any(|existing_tool| match existing_tool {
-                        ResponsesApiNamespaceTool::Function(existing_tool) => {
-                            existing_tool.name == tool.name
-                        }
-                    })
-            {
-                existing_namespace
-                    .tools
-                    .push(ResponsesApiNamespaceTool::Function(tool));
-            }
-        } else {
-            namespace_positions.insert(namespace_name.clone(), model_visible_specs.len());
-            model_visible_specs.push(ToolSpec::Namespace(ResponsesApiNamespace {
-                name: namespace_name,
-                description: namespace_description,
-                tools: vec![ResponsesApiNamespaceTool::Function(tool)],
-            }));
+fn tool_error_outcome(error: &FunctionCallError) -> String {
+    match error {
+        FunctionCallError::Fatal(_) => "fatal",
+        FunctionCallError::RespondToModel(_) | FunctionCallError::MissingLocalShellCallId => {
+            "failed"
         }
     }
+    .to_string()
+}
 
-    model_visible_specs
+fn tool_call_source_route_kind(source: &ToolCallSource) -> &'static str {
+    match source {
+        ToolCallSource::Direct => "direct",
+        ToolCallSource::Routed { .. } => "routed_inner",
+        ToolCallSource::CodeMode { .. } => "code_mode",
+    }
+}
+
+fn tool_call_source_label(source: &ToolCallSource) -> String {
+    match source {
+        ToolCallSource::Direct => "direct".to_string(),
+        ToolCallSource::Routed { router_call_id } => format!("routed:{router_call_id}"),
+        ToolCallSource::CodeMode {
+            cell_id,
+            runtime_tool_call_id,
+        } => format!("code_mode:{cell_id}:{runtime_tool_call_id}"),
+    }
+}
+
+fn tool_payload_json(payload: &ToolPayload) -> Option<String> {
+    let value = match payload {
+        ToolPayload::Function { arguments } => json!({
+            "type": "function",
+            "arguments": arguments,
+        }),
+        ToolPayload::ToolSearch { arguments } => json!({
+            "type": "tool_search",
+            "arguments": arguments,
+        }),
+        ToolPayload::Custom { input } => json!({
+            "type": "custom",
+            "input": input,
+        }),
+        ToolPayload::LocalShell { params } => json!({
+            "type": "local_shell",
+            "params": {
+                "command": &params.command,
+                "workdir": &params.workdir,
+                "timeout_ms": params.timeout_ms,
+                "sandbox_permissions": &params.sandbox_permissions,
+                "prefix_rule": &params.prefix_rule,
+                "additional_permissions": &params.additional_permissions,
+                "justification": &params.justification,
+            },
+        }),
+        ToolPayload::Mcp {
+            server,
+            tool,
+            raw_arguments,
+        } => json!({
+            "type": "mcp",
+            "server": server,
+            "tool": tool,
+            "raw_arguments": raw_arguments,
+        }),
+    };
+    serde_json::to_string(&value).ok()
+}
+
+fn dialog_locator_json(
+    session: &Session,
+    turn: &TurnContext,
+    call_id: &str,
+    tool_name: Option<&str>,
+    tool_namespace: Option<&str>,
+    source: Option<&ToolCallSource>,
+) -> Option<String> {
+    serde_json::to_string(&json!({
+        "session_id": session.conversation_id.to_string(),
+        "thread_id": session.conversation_id.to_string(),
+        "turn_id": &turn.sub_id,
+        "call_id": call_id,
+        "model_response_ordinal": turn.model_response_ordinal(),
+        "model_slug": &turn.model_info.slug,
+        "model_provider": &turn.config.model_provider_id,
+        "tool_name": tool_name,
+        "tool_namespace": tool_namespace,
+        "tool_call_source": source.map(tool_call_source_label),
+    }))
+    .ok()
 }

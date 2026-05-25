@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::session::tests::make_session_and_context;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolCallDialogSnapshot;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -19,7 +20,6 @@ use codex_state::ToolRouterRememberedToolSelector;
 use codex_state::ToolRouterRequestShape;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::JsonSchema;
-use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -149,7 +149,7 @@ async fn tool_router_fanout_does_not_use_general_parallel_support() -> anyhow::R
 }
 
 #[tokio::test]
-async fn tool_router_mode_without_deferred_tools_only_exposes_router() -> anyhow::Result<()> {
+async fn tool_router_mode_without_deferred_tools_exposes_real_tools() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
     let mut tools_config = turn.tools_config.clone();
     tools_config.tool_router = true;
@@ -168,14 +168,21 @@ async fn tool_router_mode_without_deferred_tools_only_exposes_router() -> anyhow
         },
     );
 
+    let visible_names = router
+        .model_visible_specs()
+        .into_iter()
+        .map(|spec| spec.name().to_string())
+        .collect::<Vec<_>>();
+    assert!(!visible_names.iter().any(|name| name == "tool_router"));
     assert_eq!(
+        visible_names,
         router
-            .model_visible_specs()
-            .iter()
-            .map(ToolSpec::name)
-            .collect::<Vec<_>>(),
-        vec!["tool_router"]
+            .specs()
+            .into_iter()
+            .map(|spec| spec.name().to_string())
+            .collect::<Vec<_>>()
     );
+    assert!(router.tool_router_prompt_info().is_none());
 
     Ok(())
 }
@@ -211,20 +218,20 @@ async fn tool_router_mode_with_deferred_tools_exposes_tool_search() -> anyhow::R
         },
     );
 
-    assert_eq!(
-        router
-            .model_visible_specs()
-            .iter()
-            .map(ToolSpec::name)
-            .collect::<Vec<_>>(),
-        vec!["tool_router", "tool_search"]
-    );
+    let visible_names = router
+        .model_visible_specs()
+        .into_iter()
+        .map(|spec| spec.name().to_string())
+        .collect::<Vec<_>>();
+    assert!(!visible_names.iter().any(|name| name == "tool_router"));
+    assert!(visible_names.iter().any(|name| name == "tool_search"));
+    assert!(router.tool_router_prompt_info().is_none());
 
     Ok(())
 }
 
 #[tokio::test]
-async fn tool_router_mode_coalesces_remembered_namespace_children() -> anyhow::Result<()> {
+async fn tool_router_mode_remembered_tools_do_not_change_visibility() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
     let mut tools_config = turn.tools_config.clone();
     tools_config.tool_router = true;
@@ -294,36 +301,33 @@ async fn tool_router_mode_coalesces_remembered_namespace_children() -> anyhow::R
         },
     );
 
-    let visible_specs = router.model_visible_specs();
     assert_eq!(
-        visible_specs.iter().map(ToolSpec::name).collect::<Vec<_>>(),
-        vec![
-            "tool_router",
-            plain_tool_name.as_str(),
-            "mcp__test_server__calendar"
-        ]
-    );
-
-    let ToolSpec::Namespace(namespace) = &visible_specs[2] else {
-        panic!("expected remembered namespace spec");
-    };
-    assert_eq!(namespace.name, "mcp__test_server__calendar");
-    assert_eq!(
-        namespace
-            .tools
+        router
+            .model_visible_specs()
             .iter()
-            .map(|tool| match tool {
-                ResponsesApiNamespaceTool::Function(tool) => tool.name.as_str(),
-            })
+            .map(ToolSpec::name)
             .collect::<Vec<_>>(),
-        vec!["create_event", "list_events"]
+        base_router
+            .model_visible_specs()
+            .iter()
+            .map(ToolSpec::name)
+            .collect::<Vec<_>>()
+    );
+    assert!(router.model_visible_specs().iter().any(|spec| {
+        matches!(spec, ToolSpec::Namespace(namespace) if namespace.name == "mcp__test_server__calendar")
+    }));
+    assert!(
+        router
+            .model_visible_specs()
+            .iter()
+            .any(|spec| spec.name() == plain_tool_name.as_str())
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn tool_router_mode_reexposes_remembered_deferred_namespace_children() -> anyhow::Result<()> {
+async fn tool_router_mode_keeps_deferred_tools_behind_tool_search() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
     let mut tools_config = turn.tools_config.clone();
     tools_config.tool_router = true;
@@ -372,32 +376,16 @@ async fn tool_router_mode_reexposes_remembered_deferred_namespace_children() -> 
     );
 
     let visible_specs = router.model_visible_specs();
-    assert_eq!(
-        visible_specs.iter().map(ToolSpec::name).collect::<Vec<_>>(),
-        vec!["tool_router", "tool_search", "mcp__test_server__calendar"]
-    );
-
-    let ToolSpec::Namespace(namespace) = &visible_specs[2] else {
-        panic!("expected remembered namespace spec");
-    };
-    assert_eq!(namespace.name, "mcp__test_server__calendar");
-    assert_eq!(
-        namespace
-            .tools
-            .iter()
-            .map(|tool| match tool {
-                ResponsesApiNamespaceTool::Function(tool) => tool.name.as_str(),
-            })
-            .collect::<Vec<_>>(),
-        vec!["create_event", "list_events"]
-    );
+    let visible_names = visible_specs.iter().map(ToolSpec::name).collect::<Vec<_>>();
+    assert!(!visible_names.contains(&"tool_router"));
+    assert!(visible_names.contains(&"tool_search"));
+    assert!(!visible_names.contains(&"mcp__test_server__calendar"));
 
     Ok(())
 }
 
 #[tokio::test]
-async fn tool_router_mode_keeps_prompt_info_stable_when_remembered_tools_change()
--> anyhow::Result<()> {
+async fn tool_router_mode_omits_prompt_info_when_remembered_tools_change() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
     let mut tools_config = turn.tools_config.clone();
     tools_config.tool_router = true;
@@ -441,7 +429,7 @@ async fn tool_router_mode_keeps_prompt_info_stable_when_remembered_tools_change(
         },
     );
 
-    assert_ne!(
+    assert_eq!(
         base_router
             .model_visible_specs()
             .iter()
@@ -453,30 +441,8 @@ async fn tool_router_mode_keeps_prompt_info_stable_when_remembered_tools_change(
             .map(ToolSpec::name)
             .collect::<Vec<_>>()
     );
-
-    let base_prompt_info = base_router
-        .tool_router_prompt_info()
-        .expect("base router prompt info should exist");
-    let remembered_prompt_info = remembered_router
-        .tool_router_prompt_info()
-        .expect("remembered router prompt info should exist");
-
-    assert_eq!(
-        base_prompt_info.format_description,
-        remembered_prompt_info.format_description
-    );
-    assert_eq!(
-        base_prompt_info.format_description_tokens,
-        remembered_prompt_info.format_description_tokens
-    );
-    assert_eq!(
-        base_prompt_info.toolset_hash,
-        remembered_prompt_info.toolset_hash
-    );
-    assert_eq!(
-        base_prompt_info.router_schema_version,
-        remembered_prompt_info.router_schema_version
-    );
+    assert!(base_router.tool_router_prompt_info().is_none());
+    assert!(remembered_router.tool_router_prompt_info().is_none());
 
     Ok(())
 }
@@ -637,6 +603,7 @@ async fn routed_inner_dispatch_records_router_source() -> anyhow::Result<()> {
         parallel_mcp_server_names: HashSet::new(),
         tool_router_token_estimates: None,
         tool_router_prompt_info: None,
+        tool_router_toolset_hash: None,
     };
     let call = ToolCall {
         tool_name: ToolName::plain("tool_router"),
@@ -661,6 +628,7 @@ async fn routed_inner_dispatch_records_router_source() -> anyhow::Result<()> {
             Arc::new(Mutex::new(TurnDiffTracker::new())),
             call,
             ToolCallSource::Direct,
+            ToolCallDialogSnapshot::default(),
         )
         .await?;
 
@@ -670,6 +638,93 @@ async fn routed_inner_dispatch_records_router_source() -> anyhow::Result<()> {
         Some(ToolCallSource::Routed {
             router_call_id: "router-call".to_string(),
         })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn direct_tool_dispatch_records_replay_metadata() -> anyhow::Result<()> {
+    let (mut session, turn) = make_session_and_context().await;
+    let codex_home = tempfile::tempdir().expect("temp dir");
+    let state_db =
+        codex_state::StateRuntime::init(codex_home.path().to_path_buf(), "openai".to_string())
+            .await?;
+    session.services.state_db = Some(Arc::clone(&state_db));
+    turn.increment_model_response_ordinal();
+
+    let tool_name = ToolName::plain("list_dir");
+    let specs = vec![ConfiguredToolSpec::new(function_tool("list_dir"), false)];
+    let registry = ToolRegistry::with_handler_for_test(
+        tool_name.clone(),
+        Arc::new(RecordingHandler {
+            source: Arc::new(Mutex::new(None)),
+        }),
+    );
+    let index = ToolRouterIndex::build(&specs, &registry, &HashSet::new());
+    let router = ToolRouter {
+        registry,
+        specs,
+        index,
+        model_visible_specs: Vec::new(),
+        parallel_mcp_server_names: HashSet::new(),
+        tool_router_token_estimates: Some(ToolRouterTokenEstimates {
+            visible_router_schema_tokens: 50,
+            hidden_tool_schema_tokens: 0,
+        }),
+        tool_router_prompt_info: None,
+        tool_router_toolset_hash: Some("direct-toolset".to_string()),
+    };
+    let call = ToolCall {
+        tool_name,
+        call_id: "direct-call".to_string(),
+        payload: ToolPayload::Function {
+            arguments: r#"{"path":"."}"#.to_string(),
+        },
+    };
+    let dialog_snapshot = ToolCallDialogSnapshot {
+        prompt_json: Some(r#"{"input":["current"]}"#.to_string()),
+        previous_prompt_json: Some(r#"{"input":["previous"]}"#.to_string()),
+    };
+
+    router
+        .dispatch_tool_call_with_code_mode_result(
+            Arc::new(session),
+            Arc::new(turn),
+            CancellationToken::new(),
+            Arc::new(Mutex::new(TurnDiffTracker::new())),
+            call,
+            ToolCallSource::Direct,
+            dialog_snapshot,
+        )
+        .await?;
+
+    let observations = state_db
+        .tool_router_tune_observations(ToolRouterDiagnosticsWindow::AllTime, None)
+        .await?;
+
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].toolset_hash, "direct-toolset");
+    assert_eq!(
+        observations[0].route_kind_breakdown,
+        vec![codex_state::ToolRouterTuneCount {
+            name: "direct".to_string(),
+            count: 1,
+        }]
+    );
+    assert_eq!(
+        observations[0].selected_tool_breakdown,
+        vec![codex_state::ToolRouterTuneCount {
+            name: "list_dir".to_string(),
+            count: 1,
+        }]
+    );
+    assert_eq!(
+        observations[0].outcome_breakdown,
+        vec![codex_state::ToolRouterTuneCount {
+            name: "ok".to_string(),
+            count: 1,
+        }]
     );
 
     Ok(())
@@ -703,6 +758,7 @@ async fn route_errors_record_sanitized_request_shape() -> anyhow::Result<()> {
             toolset_hash: "test-toolset".to_string(),
             router_schema_version: 1,
         }),
+        tool_router_toolset_hash: None,
     };
     let call = ToolCall {
         tool_name: ToolName::plain("tool_router"),
@@ -726,6 +782,7 @@ async fn route_errors_record_sanitized_request_shape() -> anyhow::Result<()> {
             Arc::new(Mutex::new(TurnDiffTracker::new())),
             call,
             ToolCallSource::Direct,
+            ToolCallDialogSnapshot::default(),
         )
         .await
         .err()

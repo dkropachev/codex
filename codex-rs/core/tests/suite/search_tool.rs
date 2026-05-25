@@ -835,7 +835,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remembered_tools_are_reexposed_for_matching_repo_and_task() -> Result<()> {
+async fn remembered_tools_stay_deferred_for_matching_repo_and_task() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -939,8 +939,8 @@ async fn remembered_tools_are_reexposed_for_matching_repo_and_task() -> Result<(
     assert!(
         session_b_tools
             .iter()
-            .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
-        "session B should directly advertise the remembered namespace: {session_b_tools:?}"
+            .all(|name| name != SEARCH_CALENDAR_NAMESPACE),
+        "session B should keep the remembered namespace behind tool_search: {session_b_tools:?}"
     );
     assert!(
         !session_b_tools
@@ -994,7 +994,7 @@ async fn remembered_tools_are_reexposed_for_matching_repo_and_task() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remembered_tools_fall_back_to_cwd_outside_git_repos() -> Result<()> {
+async fn remembered_tools_stay_deferred_with_cwd_fallback_outside_git_repos() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1080,8 +1080,14 @@ async fn remembered_tools_fall_back_to_cwd_outside_git_repos() -> Result<()> {
     assert!(
         session_b_tools
             .iter()
-            .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
-        "session B should directly advertise the remembered namespace via cwd fallback: {session_b_tools:?}"
+            .any(|name| name == TOOL_SEARCH_TOOL_NAME),
+        "session B should still advertise tool_search via cwd fallback: {session_b_tools:?}"
+    );
+    assert!(
+        session_b_tools
+            .iter()
+            .all(|name| name != SEARCH_CALENDAR_NAMESPACE),
+        "session B should keep the remembered namespace behind tool_search via cwd fallback: {session_b_tools:?}"
     );
 
     Ok(())

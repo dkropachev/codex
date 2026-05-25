@@ -14,6 +14,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolCallDialogContext;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolArgumentDiffConsumer;
@@ -31,6 +32,7 @@ pub(crate) struct ToolCallRuntime {
     turn_context: Arc<TurnContext>,
     tracker: SharedTurnDiffTracker,
     parallel_execution: Arc<RwLock<()>>,
+    dialog_context: ToolCallDialogContext,
 }
 
 impl ToolCallRuntime {
@@ -39,6 +41,7 @@ impl ToolCallRuntime {
         session: Arc<Session>,
         turn_context: Arc<TurnContext>,
         tracker: SharedTurnDiffTracker,
+        dialog_context: ToolCallDialogContext,
     ) -> Self {
         Self {
             router,
@@ -46,7 +49,12 @@ impl ToolCallRuntime {
             turn_context,
             tracker,
             parallel_execution: Arc::new(RwLock::new(())),
+            dialog_context,
         }
+    }
+
+    pub(crate) async fn record_prompt(&self, prompt: &crate::client_common::Prompt) {
+        self.dialog_context.record_prompt(prompt).await;
     }
 
     pub(crate) fn find_spec(&self, tool_name: &codex_tools::ToolName) -> Option<ToolSpec> {
@@ -92,6 +100,9 @@ impl ToolCallRuntime {
         let turn = Arc::clone(&self.turn_context);
         let tracker = Arc::clone(&self.tracker);
         let lock = Arc::clone(&self.parallel_execution);
+        let dialog_context = self.dialog_context;
+        let source_for_cancel = source.clone();
+        let source_for_dispatch = source;
         let invocation_cancellation_token = cancellation_token.clone();
         let started = Instant::now();
         let display_name = call.tool_name.display();
@@ -103,6 +114,10 @@ impl ToolCallRuntime {
             call_id = call.call_id.as_str(),
             aborted = false,
         );
+        let session_for_cancel = Arc::clone(&session);
+        let turn_for_cancel = Arc::clone(&turn);
+        let session_for_dispatch = Arc::clone(&session);
+        let turn_for_dispatch = Arc::clone(&turn);
 
         let handle: AbortOnDropHandle<Result<AnyToolResult, FunctionCallError>> =
             AbortOnDropHandle::new(tokio::spawn(async move {
@@ -110,7 +125,19 @@ impl ToolCallRuntime {
                     _ = cancellation_token.cancelled() => {
                         let secs = started.elapsed().as_secs_f32().max(0.1);
                         dispatch_span.record("aborted", true);
-                        Ok(Self::aborted_response(&call, secs))
+                        let result = Self::aborted_response(&call, secs);
+                        let dialog_snapshot = dialog_context.snapshot().await;
+                        let result = router
+                            .record_tool_call_result_for_logging(
+                                session_for_cancel.as_ref(),
+                                turn_for_cancel.as_ref(),
+                                &call,
+                                &source_for_cancel,
+                                result,
+                                &dialog_snapshot,
+                            )
+                            .await;
+                        Ok(result)
                     },
                     res = async {
                         let _guard = if supports_parallel {
@@ -119,14 +146,16 @@ impl ToolCallRuntime {
                             Either::Right(lock.write().await)
                         };
 
+                        let dialog_snapshot = dialog_context.snapshot().await;
                         router
                             .dispatch_tool_call_with_code_mode_result(
-                                session,
-                                turn,
+                                session_for_dispatch,
+                                turn_for_dispatch,
                                 invocation_cancellation_token,
                                 tracker,
                                 call.clone(),
-                                source,
+                                source_for_dispatch,
+                                dialog_snapshot,
                             )
                             .instrument(dispatch_span.clone())
                             .await

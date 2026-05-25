@@ -1,3 +1,4 @@
+use crate::client_common::Prompt;
 use crate::context_manager::truncate_function_output_payload;
 use crate::original_image_detail::sanitize_original_image_detail;
 use crate::session::session::Session;
@@ -24,13 +25,59 @@ use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use serde_json::json;
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ToolCallDialogSnapshot {
+    pub(crate) prompt_json: Option<String>,
+    pub(crate) previous_prompt_json: Option<String>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ToolCallDialogContext {
+    inner: Arc<RwLock<ToolCallDialogSnapshot>>,
+}
+
+impl Default for ToolCallDialogContext {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(ToolCallDialogSnapshot::default())),
+        }
+    }
+}
+
+impl ToolCallDialogContext {
+    pub(crate) async fn record_prompt(&self, prompt: &Prompt) {
+        let mut state = self.inner.write().await;
+        state.previous_prompt_json = state.prompt_json.take();
+        state.prompt_json = prompt_snapshot_json(prompt);
+    }
+
+    pub(crate) async fn snapshot(&self) -> ToolCallDialogSnapshot {
+        self.inner.read().await.clone()
+    }
+}
+
+fn prompt_snapshot_json(prompt: &Prompt) -> Option<String> {
+    serde_json::to_string(&json!({
+        "input": prompt.get_formatted_input(),
+        "tools": &prompt.tools,
+        "parallel_tool_calls": prompt.parallel_tool_calls,
+        "base_instructions": &prompt.base_instructions,
+        "personality": &prompt.personality,
+        "output_schema": &prompt.output_schema,
+        "output_schema_strict": prompt.output_schema_strict,
+    }))
+    .ok()
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolCallSource {
