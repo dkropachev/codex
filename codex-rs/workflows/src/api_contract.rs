@@ -564,6 +564,7 @@ pub(crate) fn publish_validated_workflow_api_contract(
 pub(crate) fn extract_workflow_source_contract_from_typescript(
     workflow_dir: &Path,
 ) -> Result<WorkflowSourceContract> {
+    ensure_repo_typescript_shim(workflow_dir)?;
     let workflow_path = workflow_dir.join("src/workflow.ts");
     let output = Command::new("node")
         .current_dir(workflow_dir)
@@ -601,6 +602,99 @@ pub(crate) fn extract_workflow_source_contract_from_typescript(
             )
         })?;
     Ok(extracted.into())
+}
+
+pub(crate) fn ensure_repo_typescript_shim(workflow_dir: &Path) -> Result<bool> {
+    let typescript_dir = workflow_dir.join("node_modules/typescript");
+    let typescript_package = typescript_dir.join("package.json");
+    if typescript_package.is_file() {
+        return Ok(true);
+    }
+
+    let Some(typescript_library) = repo_typescript_library() else {
+        return Ok(false);
+    };
+
+    fs::create_dir_all(&typescript_dir).with_context(|| {
+        format!(
+            "failed to create TypeScript shim directory {}",
+            typescript_dir.display()
+        )
+    })?;
+    fs::write(
+        typescript_dir.join("index.js"),
+        format!(
+            "module.exports = require({});\n",
+            serde_json::to_string(typescript_library.to_string_lossy().as_ref())?
+        ),
+    )
+    .with_context(|| {
+        format!(
+            "failed to write TypeScript shim {}",
+            typescript_dir.join("index.js").display()
+        )
+    })?;
+    fs::write(
+        &typescript_package,
+        "{\n  \"name\": \"typescript\",\n  \"private\": true,\n  \"main\": \"./index.js\"\n}\n",
+    )
+    .with_context(|| {
+        format!(
+            "failed to write TypeScript shim package {}",
+            typescript_package.display()
+        )
+    })?;
+    Ok(true)
+}
+
+fn repo_typescript_library() -> Option<PathBuf> {
+    let relative_path = "node_modules/typescript/lib/typescript.js";
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let current_dir = std::env::current_dir().ok();
+    let candidates = [
+        bazel_runfile(relative_path),
+        Some(manifest_dir.join("../..").join(relative_path)),
+        current_dir
+            .as_ref()
+            .map(|cwd| cwd.join("..").join(relative_path)),
+        current_dir.as_ref().map(|cwd| cwd.join(relative_path)),
+    ];
+
+    candidates
+        .into_iter()
+        .flatten()
+        .find_map(|path| path.canonicalize().ok())
+}
+
+fn bazel_runfile(relative_path: &str) -> Option<PathBuf> {
+    let runfile_path = format!("_main/{relative_path}");
+    let runfile_suffix = format!("/{relative_path}");
+    if let Some(manifest_file) = std::env::var_os("RUNFILES_MANIFEST_FILE")
+        && let Ok(manifest) = fs::read_to_string(manifest_file)
+    {
+        for line in manifest.lines() {
+            if let Some((logical_path, physical_path)) = line.split_once(' ')
+                && (logical_path == runfile_path || logical_path.ends_with(&runfile_suffix))
+            {
+                return Some(PathBuf::from(physical_path));
+            }
+        }
+    }
+
+    let runfile_paths = [
+        PathBuf::from(&runfile_path),
+        PathBuf::from("__main__").join(relative_path),
+        PathBuf::from(relative_path),
+    ];
+    ["RUNFILES_DIR", "TEST_SRCDIR"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .flat_map(|root| {
+            runfile_paths
+                .iter()
+                .map(move |path| PathBuf::from(&root).join(path))
+        })
+        .find(|path| path.is_file())
 }
 
 pub(crate) fn workflow_api_contract_from_spec_api(api: &JsonValue) -> Option<WorkflowApiContract> {
@@ -733,34 +827,9 @@ pub(crate) fn prepare_typescript_workflow_dir(workflow_dir: &Path) -> bool {
     )
     .expect("tsconfig");
 
-    let typescript_library = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../node_modules/typescript/lib/typescript.js")
-        .canonicalize();
-    let Ok(typescript_library) = typescript_library else {
+    if !ensure_repo_typescript_shim(workflow_dir).expect("typescript shim") {
         return false;
-    };
-    let typescript_module = workflow_dir.join("node_modules/typescript/index.js");
-    let typescript_package = workflow_dir.join("node_modules/typescript/package.json");
-
-    fs::write(
-        &typescript_module,
-        format!(
-            "module.exports = require({});\n",
-            serde_json::to_string(typescript_library.to_string_lossy().as_ref())
-                .expect("typescript library path")
-        ),
-    )
-    .expect("typescript shim");
-    fs::write(
-        &typescript_package,
-        r#"{
-  "name": "typescript",
-  "private": true,
-  "main": "./index.js"
-}
-"#,
-    )
-    .expect("typescript package json");
+    }
 
     true
 }

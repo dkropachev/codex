@@ -19965,6 +19965,80 @@
         },
         {
           "properties": {
+            "path": {
+              "type": "string"
+            },
+            "patterns": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "runtimeStateGitignoreMissing"
+              ],
+              "title": "RuntimeStateGitignoreMissingWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "patterns",
+            "type"
+          ],
+          "title": "RuntimeStateGitignoreMissingWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "paths": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "trackedRuntimeStateFiles"
+              ],
+              "title": "TrackedRuntimeStateFilesWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "paths",
+            "type"
+          ],
+          "title": "TrackedRuntimeStateFilesWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "schema_path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "ambiguousWorkflowOutputSchema"
+              ],
+              "title": "AmbiguousWorkflowOutputSchemaWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "schema_path",
+            "type"
+          ],
+          "title": "AmbiguousWorkflowOutputSchemaWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
             "command": {
               "type": "string"
             },
@@ -20020,6 +20094,38 @@
             "type"
           ],
           "title": "WorkflowApiContractExtractionFailedWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "stderr": {
+              "type": "string"
+            },
+            "stdout": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "workflowApiContractSmokeFailed"
+              ],
+              "title": "WorkflowApiContractSmokeFailedWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "command",
+            "error",
+            "stderr",
+            "stdout",
+            "type"
+          ],
+          "title": "WorkflowApiContractSmokeFailedWorkflowValidationFindingInfo",
           "type": "object"
         }
       ]

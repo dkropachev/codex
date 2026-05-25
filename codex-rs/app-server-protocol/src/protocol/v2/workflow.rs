@@ -99,6 +99,17 @@ pub enum WorkflowValidationFindingInfo {
     DatabasesOutsideState {
         paths: Vec<PathBuf>,
     },
+    RuntimeStateGitignoreMissing {
+        path: PathBuf,
+        patterns: Vec<String>,
+    },
+    TrackedRuntimeStateFiles {
+        paths: Vec<PathBuf>,
+    },
+    AmbiguousWorkflowOutputSchema {
+        path: PathBuf,
+        schema_path: String,
+    },
     ValidationCommandFailed {
         command: String,
         exit_code: Option<i32>,
@@ -108,6 +119,12 @@ pub enum WorkflowValidationFindingInfo {
     WorkflowApiContractExtractionFailed {
         path: PathBuf,
         error: String,
+    },
+    WorkflowApiContractSmokeFailed {
+        command: String,
+        error: String,
+        stdout: String,
+        stderr: String,
     },
 }
 

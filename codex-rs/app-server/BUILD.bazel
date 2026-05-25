@@ -17,5 +17,6 @@ codex_rust_crate(
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",
     ],
+    test_data_extra = ["//:node_modules/typescript/lib/typescript.js"],
     test_tags = ["no-sandbox"],
 )

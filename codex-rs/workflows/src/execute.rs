@@ -1052,22 +1052,7 @@ export async function runWorkflow(workflow, options = {}) {
         bin_dir.join("tsx.cmd"),
         "@echo off\r\nnode --experimental-strip-types %*\r\n",
     )?;
-    if let Ok(typescript_library) = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../node_modules/typescript/lib/typescript.js")
-        .canonicalize()
-    {
-        fs::write(
-            typescript_dir.join("index.js"),
-            format!(
-                "module.exports = require({});\n",
-                serde_json::to_string(typescript_library.to_string_lossy().as_ref())?
-            ),
-        )?;
-        fs::write(
-            typescript_dir.join("package.json"),
-            "{\n  \"name\": \"typescript\",\n  \"private\": true,\n  \"main\": \"./index.js\"\n}\n",
-        )?;
-    }
+    crate::api_contract::ensure_repo_typescript_shim(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

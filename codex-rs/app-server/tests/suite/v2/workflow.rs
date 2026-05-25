@@ -67,7 +67,14 @@ fn write_valid_workflow(
             id.replace('/', "-")
         ),
     )?;
-    fs::write(workflow_dir.join("src/workflow.ts"), "export {};\n")?;
+    fs::write(
+        workflow_dir.join(".gitignore"),
+        "artifacts/\nstate/*\n!state/.gitkeep\n",
+    )?;
+    fs::write(
+        workflow_dir.join("src/workflow.ts"),
+        "export interface WorkflowInput { input?: string; }\nexport interface WorkflowOutput { ok: boolean; }\nexport default async function runWorkflow(_ctx: unknown, _input: WorkflowInput): Promise<WorkflowOutput> {\n  return { ok: true };\n}\n",
+    )?;
     fs::write(
         workflow_dir.join("src/tests/workflow.positive.test.ts"),
         "// workflow-covers: positive progress finalResult\nexport {};\n",

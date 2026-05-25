@@ -572,6 +572,17 @@ pub(crate) fn validation_finding_to_api(
         codex_workflows::WorkflowValidationFinding::DatabasesOutsideState { paths } => {
             WorkflowValidationFindingInfo::DatabasesOutsideState { paths }
         }
+        codex_workflows::WorkflowValidationFinding::RuntimeStateGitignoreMissing {
+            path,
+            patterns,
+        } => WorkflowValidationFindingInfo::RuntimeStateGitignoreMissing { path, patterns },
+        codex_workflows::WorkflowValidationFinding::TrackedRuntimeStateFiles { paths } => {
+            WorkflowValidationFindingInfo::TrackedRuntimeStateFiles { paths }
+        }
+        codex_workflows::WorkflowValidationFinding::AmbiguousWorkflowOutputSchema {
+            path,
+            schema_path,
+        } => WorkflowValidationFindingInfo::AmbiguousWorkflowOutputSchema { path, schema_path },
         codex_workflows::WorkflowValidationFinding::ValidationCommandFailed {
             command,
             exit_code,
@@ -587,6 +598,17 @@ pub(crate) fn validation_finding_to_api(
             path,
             error,
         } => WorkflowValidationFindingInfo::WorkflowApiContractExtractionFailed { path, error },
+        codex_workflows::WorkflowValidationFinding::WorkflowApiContractSmokeFailed {
+            command,
+            error,
+            stdout,
+            stderr,
+        } => WorkflowValidationFindingInfo::WorkflowApiContractSmokeFailed {
+            command,
+            error,
+            stdout,
+            stderr,
+        },
     }
 }
 
@@ -670,6 +692,21 @@ fn validation_finding_from_api(
         WorkflowValidationFindingInfo::DatabasesOutsideState { paths } => {
             codex_workflows::WorkflowValidationFinding::DatabasesOutsideState { paths }
         }
+        WorkflowValidationFindingInfo::RuntimeStateGitignoreMissing { path, patterns } => {
+            codex_workflows::WorkflowValidationFinding::RuntimeStateGitignoreMissing {
+                path,
+                patterns,
+            }
+        }
+        WorkflowValidationFindingInfo::TrackedRuntimeStateFiles { paths } => {
+            codex_workflows::WorkflowValidationFinding::TrackedRuntimeStateFiles { paths }
+        }
+        WorkflowValidationFindingInfo::AmbiguousWorkflowOutputSchema { path, schema_path } => {
+            codex_workflows::WorkflowValidationFinding::AmbiguousWorkflowOutputSchema {
+                path,
+                schema_path,
+            }
+        }
         WorkflowValidationFindingInfo::ValidationCommandFailed {
             command,
             exit_code,
@@ -687,6 +724,17 @@ fn validation_finding_from_api(
                 error,
             }
         }
+        WorkflowValidationFindingInfo::WorkflowApiContractSmokeFailed {
+            command,
+            error,
+            stdout,
+            stderr,
+        } => codex_workflows::WorkflowValidationFinding::WorkflowApiContractSmokeFailed {
+            command,
+            error,
+            stdout,
+            stderr,
+        },
     }
 }
 
