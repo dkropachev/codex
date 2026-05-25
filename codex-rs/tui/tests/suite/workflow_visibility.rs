@@ -153,7 +153,7 @@ async fn run_workflow_visibility_session(
     let mut sent_interrupts = false;
     let mut scheduled_workflow_command = false;
 
-    let exit_code_result = timeout(Duration::from_secs(30), async {
+    let exit_code_result = timeout(Duration::from_secs(/*secs*/ 90), async {
         loop {
             select! {
                 result = output_rx.recv() => match result {
@@ -169,9 +169,9 @@ async fn run_workflow_visibility_session(
                             let workflow_writer = workflow_writer.clone();
                             let workflow_command = workflow_command.clone();
                             tokio::spawn(async move {
-                                sleep(Duration::from_secs(1)).await;
+                                sleep(Duration::from_secs(/*secs*/ 1)).await;
                                 let _ = workflow_writer.send(workflow_command.into_bytes()).await;
-                                sleep(Duration::from_millis(100)).await;
+                                sleep(Duration::from_millis(/*millis*/ 100)).await;
                                 let _ = workflow_writer.send(b"\r".to_vec()).await;
                             });
                         }
@@ -195,10 +195,15 @@ async fn run_workflow_visibility_session(
                             && !sent_interrupts
                         {
                             sent_interrupts = true;
-                            for _ in 0..4 {
-                                let _ = interrupt_writer.send(vec![3]).await;
-                                sleep(Duration::from_millis(150)).await;
-                            }
+                            let interrupt_writer = interrupt_writer.clone();
+                            tokio::spawn(async move {
+                                // The first interrupts can be consumed by the just-finished
+                                // workflow; keep retrying until the TUI is idle and exits.
+                                for _ in 0..20 {
+                                    let _ = interrupt_writer.send(vec![3]).await;
+                                    sleep(Duration::from_millis(/*millis*/ 500)).await;
+                                }
+                            });
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break exit_rx.await,
