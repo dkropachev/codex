@@ -1,4 +1,5 @@
 use super::repair_workflow_command;
+use super::repair_workflow_command_with_runners;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -7,7 +8,11 @@ use std::sync::Mutex;
 
 use crate::execute::WorkflowCommandContext;
 use crate::execute::WorkflowCommandOutput;
+use crate::registry::WorkflowSummary;
+use crate::repair::types::WorkflowRepairAction;
+use crate::repair::types::WorkflowRepairActionKind;
 use crate::spec::write_workflow_spec;
+use crate::validation_runner::WorkflowValidationCommandResult;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -661,6 +666,80 @@ fn repair_workflow_command_applies_known_build_command_fixers() {
         output.data["repair"]["appliedFixes"]
             .as_array()
             .is_some_and(|fixes| fixes.iter().any(|fix| fix["kind"] == "repairTsconfig"))
+    );
+}
+
+#[test]
+fn repair_workflow_command_refreshes_dependencies_for_broken_local_tsc() {
+    let home = TempDir::new().unwrap();
+    let cwd = TempDir::new().unwrap();
+    let workflow_dir = home.path().join("workflows/broken/fix");
+    fs::create_dir_all(&workflow_dir).unwrap();
+    write_build_fixable_workflow_fixture(&workflow_dir);
+    fs::remove_dir_all(workflow_dir.join("node_modules")).unwrap();
+
+    let config = codex_config::types::WorkflowsConfigToml {
+        commit_policy: Some("manual".to_string()),
+        ..Default::default()
+    };
+    let ctx = WorkflowCommandContext {
+        codex_home: home.path(),
+        cwd: cwd.path(),
+        config: &config,
+        codex_self_exe: None,
+        stage_session_id: None,
+        progress: None,
+    };
+    let command_runner =
+        |command: &str, cwd: &Path| -> anyhow::Result<WorkflowValidationCommandResult> {
+            let installed_tsc = cwd.join("node_modules/typescript/lib/tsc.js").is_file();
+            let succeeded = command != "npm run build" || installed_tsc;
+            Ok(WorkflowValidationCommandResult {
+                command: command.to_string(),
+                succeeded,
+                exit_code: Some(if succeeded { 0 } else { 1 }),
+                stdout: String::new(),
+                stderr: if succeeded {
+                    String::new()
+                } else {
+                    "Error: Cannot find module '../lib/tsc.js'".to_string()
+                },
+            })
+        };
+    let mut install_calls = 0;
+    let dependency_installer = |workflow: &WorkflowSummary, policy: &str| {
+        assert_eq!(policy, "locked");
+        install_calls += 1;
+        fs::create_dir_all(workflow.path.join("node_modules/typescript/lib")).unwrap();
+        fs::write(
+            workflow.path.join("node_modules/typescript/lib/tsc.js"),
+            "module.exports = {};",
+        )
+        .unwrap();
+        Ok::<Option<WorkflowRepairAction>, anyhow::Error>(Some(WorkflowRepairAction {
+            kind: WorkflowRepairActionKind::RepairPackageManifest,
+            path: workflow.path.join("package-lock.json"),
+            detail: "Installed workflow dependencies".to_string(),
+        }))
+    };
+
+    let output = repair_workflow_command_with_runners(
+        ctx,
+        "broken/fix",
+        command_runner,
+        dependency_installer,
+    )
+    .unwrap();
+
+    assert_eq!(install_calls, 1);
+    assert_eq!(output.data["repair"]["stopReason"], "valid");
+    assert_eq!(output.data["validation"]["findings"], serde_json::json!([]));
+    assert!(
+        output.data["repair"]["appliedFixes"]
+            .as_array()
+            .is_some_and(|fixes| fixes
+                .iter()
+                .any(|fix| fix["detail"] == "Installed workflow dependencies"))
     );
 }
 

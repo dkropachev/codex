@@ -29,6 +29,7 @@ use crate::spec::read_workflow_spec;
 use crate::spec::scaffold_workflow_spec;
 use crate::spec::write_workflow_spec;
 use crate::validation_finding::WorkflowValidationFinding;
+use crate::validation_runner::WorkflowValidationCommandResult;
 use crate::validation_runner::WorkflowValidationReport;
 use crate::validation_runner::run_validation_command;
 use crate::validation_runner::validate_workflow;
@@ -56,6 +57,7 @@ struct FixPlan {
     build_script: bool,
     test_script: bool,
     run_script: bool,
+    refresh_dependencies: bool,
     spec_reset: bool,
 }
 
@@ -75,6 +77,24 @@ pub(crate) fn repair_workflow_command(
     ctx: WorkflowCommandContext<'_>,
     id: &str,
 ) -> Result<WorkflowCommandOutput> {
+    repair_workflow_command_with_runners(
+        ctx,
+        id,
+        run_validation_command,
+        apply_dependency_install_fix,
+    )
+}
+
+fn repair_workflow_command_with_runners<F, D>(
+    ctx: WorkflowCommandContext<'_>,
+    id: &str,
+    mut command_runner: F,
+    mut dependency_installer: D,
+) -> Result<WorkflowCommandOutput>
+where
+    F: FnMut(&str, &Path) -> Result<WorkflowValidationCommandResult>,
+    D: FnMut(&WorkflowSummary, &str) -> Result<Option<WorkflowRepairAction>>,
+{
     ctx.report_progress(
         "Resolving workflow",
         json!({
@@ -115,13 +135,12 @@ pub(crate) fn repair_workflow_command(
             "workflowId": workflow.id.as_str(),
         }),
     );
-    let mut last_report =
-        validate_workflow(&workflow, run_validation_command).with_context(|| {
-            format!(
-                "failed to validate workflow `{}` before repair",
-                workflow.id
-            )
-        })?;
+    let mut last_report = validate_workflow(&workflow, &mut command_runner).with_context(|| {
+        format!(
+            "failed to validate workflow `{}` before repair",
+            workflow.id
+        )
+    })?;
     ctx.report_progress(
         "Validation completed",
         json!({
@@ -221,8 +240,8 @@ pub(crate) fn repair_workflow_command(
                             "total": max_repair_cycles,
                         }),
                     );
-                    last_report = validate_workflow(&workflow, run_validation_command)
-                        .with_context(|| {
+                    last_report =
+                        validate_workflow(&workflow, &mut command_runner).with_context(|| {
                             format!(
                                 "failed to validate workflow `{}` after AI repair cycle {}",
                                 workflow.id, repair_cycles_run
@@ -344,11 +363,27 @@ pub(crate) fn repair_workflow_command(
                 })?);
         }
         if plan.repair_package_manifest {
-            cycle_actions.push(
-                apply_package_manifest_fix(&workflow, &plan).with_context(|| {
-                    format!("failed to repair package.json for `{}`", workflow.id)
-                })?,
-            );
+            let package_action = apply_package_manifest_fix(&workflow, &plan)
+                .with_context(|| format!("failed to repair package.json for `{}`", workflow.id))?;
+            let package_manifest_changed = !package_action.detail.is_empty();
+            cycle_actions.push(package_action);
+            if (plan.refresh_dependencies || package_manifest_changed)
+                && let Some(action) = dependency_installer(
+                    &workflow,
+                    ctx.config
+                        .dependency_update_policy
+                        .as_deref()
+                        .unwrap_or("locked"),
+                )
+                .with_context(|| {
+                    format!(
+                        "failed to refresh workflow dependencies for `{}`",
+                        workflow.id
+                    )
+                })?
+            {
+                cycle_actions.push(action);
+            }
         }
         if !plan.add_coverage_markers.is_empty() {
             cycle_actions.push(
@@ -410,7 +445,7 @@ pub(crate) fn repair_workflow_command(
                 "total": max_repair_cycles,
             }),
         );
-        last_report = validate_workflow(&workflow, run_validation_command).with_context(|| {
+        last_report = validate_workflow(&workflow, &mut command_runner).with_context(|| {
             format!(
                 "failed to validate workflow `{}` after repair cycle {}",
                 workflow.id, repair_cycles_run
@@ -664,6 +699,7 @@ fn build_fix_plan(
             }
             WorkflowValidationFinding::UndeclaredPackageImport { package_name, .. } => {
                 plan.repair_package_manifest = true;
+                plan.refresh_dependencies = true;
                 plan.package_names.insert(package_name.clone());
             }
             WorkflowValidationFinding::MissingValidationCommands { .. }
@@ -698,7 +734,10 @@ fn build_fix_plan(
                 }
             }
             WorkflowValidationFinding::ValidationCommandFailed {
-                command, exit_code, ..
+                command,
+                exit_code,
+                stdout,
+                stderr,
             } => {
                 if !command_fixable(command, *exit_code) {
                     continue;
@@ -708,6 +747,7 @@ fn build_fix_plan(
                 plan.build_script = command.contains("npm run build");
                 plan.test_script = command.contains("npm test");
                 plan.run_script = true;
+                plan.refresh_dependencies = dependency_install_fixable(stdout, stderr);
             }
             WorkflowValidationFinding::WorkflowApiContractExtractionFailed { .. }
             | WorkflowValidationFinding::WorkflowApiContractSmokeFailed { .. } => {
@@ -1240,6 +1280,7 @@ fn apply_package_manifest_fix(
     plan: &FixPlan,
 ) -> Result<WorkflowRepairAction> {
     let path = workflow.path.join("package.json");
+    let existing_contents = fs::read_to_string(&path).ok();
     let mut manifest = match fs::read_to_string(&path) {
         Ok(contents) => serde_json::from_str::<JsonValue>(&contents)
             .unwrap_or_else(|_| JsonValue::Object(Default::default())),
@@ -1312,7 +1353,16 @@ fn apply_package_manifest_fix(
         JsonValue::String("latest".to_string()),
     );
 
-    fs::write(&path, serde_json::to_string_pretty(&manifest)? + "\n")
+    let updated_contents = serde_json::to_string_pretty(&manifest)? + "\n";
+    if existing_contents.as_deref() == Some(updated_contents.as_str()) {
+        return Ok(WorkflowRepairAction {
+            kind: WorkflowRepairActionKind::RepairPackageManifest,
+            path,
+            detail: String::new(),
+        });
+    }
+
+    fs::write(&path, updated_contents)
         .with_context(|| format!("failed to write {}", path.display()))?;
     Ok(WorkflowRepairAction {
         kind: WorkflowRepairActionKind::RepairPackageManifest,
@@ -1388,13 +1438,63 @@ fn apply_coverage_marker_fix(
 
 fn apply_tsconfig_fix(workflow: &WorkflowSummary) -> Result<WorkflowRepairAction> {
     let path = workflow.path.join("tsconfig.json");
-    fs::write(&path, tsconfig_template())
-        .with_context(|| format!("failed to write {}", path.display()))?;
+    let contents = tsconfig_template();
+    if fs::read_to_string(&path).ok().as_deref() == Some(contents.as_str()) {
+        return Ok(WorkflowRepairAction {
+            kind: WorkflowRepairActionKind::RepairTsconfig,
+            path,
+            detail: String::new(),
+        });
+    }
+
+    fs::write(&path, contents).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(WorkflowRepairAction {
         kind: WorkflowRepairActionKind::RepairTsconfig,
         path,
         detail: "Created tsconfig.json".to_string(),
     })
+}
+
+fn apply_dependency_install_fix(
+    workflow: &WorkflowSummary,
+    dependency_update_policy: &str,
+) -> Result<Option<WorkflowRepairAction>> {
+    if !dependency_updates_enabled(dependency_update_policy) {
+        return Ok(None);
+    }
+    if !workflow.path.join("package.json").is_file() {
+        return Ok(None);
+    }
+
+    let output = Command::new("npm")
+        .args(["install", "--ignore-scripts", "--no-audit", "--no-fund"])
+        .current_dir(&workflow.path)
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to run npm install for workflow `{}` in {}",
+                workflow.id,
+                workflow.path.display()
+            )
+        })?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "npm install failed for workflow `{}` with exit code {:?}\nstdout:\n{}\nstderr:\n{}",
+            workflow.id,
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    Ok(Some(WorkflowRepairAction {
+        kind: WorkflowRepairActionKind::RepairPackageManifest,
+        path: workflow.path.join("package-lock.json"),
+        detail:
+            "Installed workflow dependencies with npm install --ignore-scripts --no-audit --no-fund"
+                .to_string(),
+    }))
 }
 
 fn validation_report_to_api(report: &WorkflowValidationReport) -> WorkflowValidationInfo {
@@ -1685,7 +1785,7 @@ fn design_template(workflow: &WorkflowSummary) -> String {
 }
 
 fn tsconfig_template() -> String {
-    "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"strict\": true,\n    \"noEmit\": true\n  },\n  \"include\": [\"src/**/*.ts\"]\n}\n".to_string()
+    "{\n  \"compilerOptions\": {\n    \"types\": [\"node\"],\n    \"allowImportingTsExtensions\": true,\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"strict\": true,\n    \"noEmit\": true\n  },\n  \"include\": [\"src/**/*.ts\"]\n}\n".to_string()
 }
 
 fn display_title(id: &str) -> String {
@@ -1739,6 +1839,25 @@ fn command_fixable(command: &str, _exit_code: Option<i32>) -> bool {
     command.contains("npm run build") || command.contains("npm test")
 }
 
+fn dependency_install_fixable(stdout: &str, stderr: &str) -> bool {
+    let output = format!("{stdout}\n{stderr}");
+    [
+        "Cannot find module",
+        "Cannot find package",
+        "ERR_MODULE_NOT_FOUND",
+        "MODULE_NOT_FOUND",
+        "could not determine executable to run",
+        "tsc: not found",
+        "tsx: not found",
+    ]
+    .iter()
+    .any(|needle| output.contains(needle))
+}
+
+fn dependency_updates_enabled(policy: &str) -> bool {
+    !matches!(policy, "none" | "manual" | "disabled" | "never" | "off")
+}
+
 impl FixPlan {
     fn is_empty(&self) -> bool {
         !self.update_validation_yaml
@@ -1753,6 +1872,7 @@ impl FixPlan {
             && !self.build_script
             && !self.test_script
             && !self.run_script
+            && !self.refresh_dependencies
             && !self.spec_reset
     }
 }
