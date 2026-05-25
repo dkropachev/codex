@@ -120,7 +120,11 @@ pub(super) async fn evaluate_candidate(
         }
 
         let judge = judge_candidate_case(config, case, &replay.text, runtime).await?;
-        add_turn_budget(&mut budget_used, &judge.token_usage, None);
+        add_turn_budget(
+            &mut budget_used,
+            &judge.token_usage,
+            /*candidate*/ None,
+        );
         record_model_router_tune_ledger_entry(
             state_db,
             case.task_key.as_str(),
@@ -284,7 +288,7 @@ async fn replay_candidate_case(
         &candidate_config,
         case.user_message.clone(),
         REPLAY_BASE_INSTRUCTIONS,
-        None,
+        /*output_schema*/ None,
     )
     .await
 }
@@ -399,7 +403,7 @@ async fn run_model_tune_turn(
             config
                 .service_tier
                 .map(|service_tier| service_tier.request_value().to_string()),
-            None,
+            /*turn_metadata_header*/ None,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await?;

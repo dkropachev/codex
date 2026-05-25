@@ -735,8 +735,9 @@ mod tests {
             ..Default::default()
         };
 
-        let lifecycle = effective_lifecycle_for_route(Some(&router), "subagent.review", None)
-            .expect("lifecycle");
+        let lifecycle =
+            effective_lifecycle_for_route(Some(&router), "subagent.review", /*route*/ None)
+                .expect("lifecycle");
 
         assert_eq!(lifecycle.window, "7d");
         assert_eq!(lifecycle.min_evaluated, 40);

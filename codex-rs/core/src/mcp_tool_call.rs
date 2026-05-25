@@ -184,9 +184,9 @@ pub(crate) async fn handle_mcp_tool_call(
         &invocation,
         mcp_app_resource_uri.clone(),
         McpToolCallStatus::InProgress,
-        None,
-        None,
-        None,
+        /*result*/ None,
+        /*error*/ None,
+        /*duration*/ None,
     );
     sess.emit_turn_item_started(turn_context, &tool_call_started_item)
         .await;

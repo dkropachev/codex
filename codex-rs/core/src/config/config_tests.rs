@@ -1738,7 +1738,7 @@ network_access = false  # This should be ignored.
             /*profile_sandbox_mode*/ None,
             WindowsSandboxLevel::Disabled,
             /*active_project*/ None,
-            /*permission_profile_constraint*/ None,
+            /*sandbox_policy_constraint*/ None,
         )
         .await;
     assert_eq!(resolution, SandboxPolicy::DangerFullAccess);
@@ -1759,7 +1759,7 @@ network_access = true  # This should be ignored.
             /*profile_sandbox_mode*/ None,
             WindowsSandboxLevel::Disabled,
             /*active_project*/ None,
-            /*permission_profile_constraint*/ None,
+            /*sandbox_policy_constraint*/ None,
         )
         .await;
     assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
@@ -1791,7 +1791,7 @@ trust_level = "trusted"
             /*profile_sandbox_mode*/ None,
             WindowsSandboxLevel::Disabled,
             /*active_project*/ None,
-            /*permission_profile_constraint*/ None,
+            /*sandbox_policy_constraint*/ None,
         )
         .await;
     if cfg!(target_os = "windows") {
@@ -1831,7 +1831,7 @@ exclude_slash_tmp = true
             /*profile_sandbox_mode*/ None,
             WindowsSandboxLevel::Disabled,
             /*active_project*/ None,
-            /*permission_profile_constraint*/ None,
+            /*sandbox_policy_constraint*/ None,
         )
         .await;
     if cfg!(target_os = "windows") {
@@ -6447,7 +6447,7 @@ trust_level = "untrusted"
             /*profile_sandbox_mode*/ None,
             WindowsSandboxLevel::Disabled,
             Some(&active_project),
-            /*permission_profile_constraint*/ None,
+            /*sandbox_policy_constraint*/ None,
         )
         .await;
 

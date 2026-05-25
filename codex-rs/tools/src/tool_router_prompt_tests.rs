@@ -28,7 +28,7 @@ fn format_description_stays_within_budget() {
 #[test]
 fn guidance_cap_rejects_dynamic_guidance_without_dropping_default() {
     let dynamic = "Prefer a very specific route for this model and toolset.".repeat(80);
-    let guidance = compose_tool_router_guidance(Some(&dynamic), 50);
+    let guidance = compose_tool_router_guidance(Some(&dynamic), /*cap*/ 50);
 
     assert_eq!(
         guidance,

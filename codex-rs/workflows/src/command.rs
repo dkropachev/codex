@@ -111,19 +111,19 @@ pub fn parse_workflow_command(
     };
     match command {
         "develop" => Ok(WorkflowCommand::Develop {
-            description: joined_tail(args, 1, "develop", "a description")?,
+            description: joined_tail(args, /*start*/ 1, "develop", "a description")?,
         }),
         "describe" => Ok(WorkflowCommand::Describe {
-            id: required(args, 1, "describe", "a workflow id")?.to_string(),
-            description: joined_tail(args, 2, "describe", "a description")?,
+            id: required(args, /*index*/ 1, "describe", "a workflow id")?.to_string(),
+            description: joined_tail(args, /*start*/ 2, "describe", "a description")?,
         }),
         "docs" => Ok(WorkflowCommand::Docs {
-            id: required(args, 1, "docs", "a workflow id")?.to_string(),
-            instruction: joined_tail(args, 2, "docs", "an instruction")?,
+            id: required(args, /*index*/ 1, "docs", "a workflow id")?.to_string(),
+            instruction: joined_tail(args, /*start*/ 2, "docs", "an instruction")?,
         }),
         "edit" => Ok(WorkflowCommand::Edit {
-            id: required(args, 1, "edit", "a workflow id")?.to_string(),
-            instruction: joined_tail(args, 2, "edit", "an instruction")?,
+            id: required(args, /*index*/ 1, "edit", "a workflow id")?.to_string(),
+            instruction: joined_tail(args, /*start*/ 2, "edit", "an instruction")?,
         }),
         "repair" => Ok(WorkflowCommand::Fix {
             id: single_id(args, "repair")?,
@@ -203,7 +203,7 @@ fn parse_registered_workflow_command(
 }
 
 fn parse_run(args: &[String]) -> Result<WorkflowCommand, WorkflowCommandParseError> {
-    let id = required(args, 1, "run", "a workflow id")?.to_string();
+    let id = required(args, /*index*/ 1, "run", "a workflow id")?.to_string();
     let mut input = None;
     let mut input_fields = BTreeMap::new();
     let mut index = 2;
@@ -283,8 +283,8 @@ fn parse_config(args: &[String]) -> Result<WorkflowCommand, WorkflowCommandParse
     match args.get(1).map(String::as_str) {
         Some("show") if args.len() == 2 => Ok(WorkflowCommand::Config(WorkflowConfigCommand::Show)),
         Some("set") => Ok(WorkflowCommand::Config(WorkflowConfigCommand::Set {
-            key: required(args, 2, "config set", "a key")?.to_string(),
-            value: joined_tail(args, 3, "config set", "a value")?,
+            key: required(args, /*index*/ 2, "config set", "a key")?.to_string(),
+            value: joined_tail(args, /*start*/ 3, "config set", "a value")?,
         })),
         Some("clear") if args.len() == 3 => {
             Ok(WorkflowCommand::Config(WorkflowConfigCommand::Clear {
@@ -334,7 +334,7 @@ fn joined_tail(
 }
 
 fn single_id(args: &[String], command: &'static str) -> Result<String, WorkflowCommandParseError> {
-    let id = required(args, 1, command, "a workflow id")?.to_string();
+    let id = required(args, /*index*/ 1, command, "a workflow id")?.to_string();
     if args.len() > 2 {
         return Err(WorkflowCommandParseError::UnexpectedArgument(
             args[2].clone(),

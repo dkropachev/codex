@@ -631,7 +631,10 @@ mod tests {
     fn account_codex_home_uses_default_or_named_account_dir() {
         let codex_home = PathBuf::from("/tmp/codex-home");
 
-        assert_eq!(account_codex_home(&codex_home, None), codex_home);
+        assert_eq!(
+            account_codex_home(&codex_home, /*account_id*/ None),
+            codex_home
+        );
         assert_eq!(
             account_codex_home(&PathBuf::from("/tmp/codex-home"), Some("work")),
             PathBuf::from("/tmp/codex-home/accounts/work")

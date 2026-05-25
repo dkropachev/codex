@@ -2901,7 +2901,7 @@ async fn model_router_enable_requires_configured_router() {
         None
     );
     assert_eq!(
-        handlers::model_router_session_config_error(&config, None),
+        handlers::model_router_session_config_error(&config, /*enabled*/ None),
         None
     );
 }
@@ -3070,7 +3070,7 @@ async fn routed_bedrock_cmb_turn_uses_candidate_provider_client() -> anyhow::Res
         sse(vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "done"),
-            ev_completed_with_tokens("resp-1", 150),
+            ev_completed_with_tokens("resp-1", /*total_tokens*/ 150),
         ]),
     )
     .await;
@@ -3198,7 +3198,7 @@ async fn routed_turn_execution_never_uses_provider_with_broken_catalog() -> anyh
         sse(vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "done"),
-            ev_completed_with_tokens("resp-1", 150),
+            ev_completed_with_tokens("resp-1", /*total_tokens*/ 150),
         ]),
     )
     .await;

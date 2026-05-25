@@ -220,7 +220,7 @@ fn case_budget(
     let cost_used_usd_micros = candidates
         .iter()
         .filter_map(token_price_from_candidate)
-        .map(|price| estimate_token_cost(&usage, &price, 1.0).usd_micros)
+        .map(|price| estimate_token_cost(&usage, &price, /*confidence*/ 1.0).usd_micros)
         .sum();
     ModelRouterTuneBudgetUsed {
         cost_used_usd_micros,

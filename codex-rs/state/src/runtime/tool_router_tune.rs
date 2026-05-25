@@ -364,14 +364,28 @@ mod tests {
             .await
             .expect("state runtime");
 
-        let mut fallback = ledger_entry("call-1", "spark_script", 1, 11, 4, Some("failed"));
+        let mut fallback = ledger_entry(
+            "call-1",
+            "spark_script",
+            /*fanout_call_count*/ 1,
+            /*spark_prompt_tokens*/ 11,
+            /*spark_completion_tokens*/ 4,
+            Some("failed"),
+        );
         fallback.selected_tools = vec!["exec_command".to_string()];
         runtime
             .record_tool_router_ledger_entry(fallback)
             .await
             .expect("record fallback");
 
-        let mut deterministic = ledger_entry("call-2", "deterministic", 2, 0, 0, Some("ok"));
+        let mut deterministic = ledger_entry(
+            "call-2",
+            "deterministic",
+            /*fanout_call_count*/ 2,
+            /*spark_prompt_tokens*/ 0,
+            /*spark_completion_tokens*/ 0,
+            Some("ok"),
+        );
         deterministic.selected_tools = vec!["exec_command".to_string(), "tool_search".to_string()];
         runtime
             .record_tool_router_ledger_entry(deterministic)
@@ -454,14 +468,28 @@ mod tests {
         };
         let shape_json = serde_json::to_string(&shape).expect("shape json");
 
-        let mut fallback = ledger_entry("call-fallback", "spark", 1, 12, 3, Some("ok"));
+        let mut fallback = ledger_entry(
+            "call-fallback",
+            "spark",
+            /*fanout_call_count*/ 1,
+            /*spark_prompt_tokens*/ 12,
+            /*spark_completion_tokens*/ 3,
+            Some("ok"),
+        );
         fallback.selected_tools = vec!["exec_command".to_string()];
         fallback.request_shape_json = Some(shape_json.clone());
         runtime
             .record_tool_router_ledger_entry(fallback)
             .await
             .expect("record fallback");
-        let mut error = ledger_entry("call-error", "error", 0, 0, 0, Some("route_error"));
+        let mut error = ledger_entry(
+            "call-error",
+            "error",
+            /*fanout_call_count*/ 0,
+            /*spark_prompt_tokens*/ 0,
+            /*spark_completion_tokens*/ 0,
+            Some("route_error"),
+        );
         error.request_shape_json = Some(shape_json);
         runtime
             .record_tool_router_ledger_entry(error)
@@ -571,7 +599,10 @@ mod tests {
             ("call-noop", "none", Some("noop")),
             ("call-error", "error", Some("route_error")),
         ] {
-            let mut entry = ledger_entry(call_id, route_kind, 0, 0, 0, outcome);
+            let mut entry = ledger_entry(
+                call_id, route_kind, /*fanout_call_count*/ 0, /*spark_prompt_tokens*/ 0,
+                /*spark_completion_tokens*/ 0, outcome,
+            );
             entry.request_shape_json = Some(shape_json.clone());
             runtime
                 .record_tool_router_ledger_entry(entry)

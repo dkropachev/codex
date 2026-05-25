@@ -587,7 +587,10 @@ async fn routed_inner_dispatch_records_router_source() -> anyhow::Result<()> {
     let (session, turn) = make_session_and_context().await;
     let recorded_source = Arc::new(Mutex::new(None));
     let tool_name = ToolName::plain("list_dir");
-    let specs = vec![ConfiguredToolSpec::new(function_tool("list_dir"), false)];
+    let specs = vec![ConfiguredToolSpec::new(
+        function_tool("list_dir"),
+        /*supports_parallel_tool_calls*/ false,
+    )];
     let registry = ToolRegistry::with_handler_for_test(
         tool_name,
         Arc::new(RecordingHandler {
@@ -654,7 +657,10 @@ async fn direct_tool_dispatch_records_replay_metadata() -> anyhow::Result<()> {
     turn.increment_model_response_ordinal();
 
     let tool_name = ToolName::plain("list_dir");
-    let specs = vec![ConfiguredToolSpec::new(function_tool("list_dir"), false)];
+    let specs = vec![ConfiguredToolSpec::new(
+        function_tool("list_dir"),
+        /*supports_parallel_tool_calls*/ false,
+    )];
     let registry = ToolRegistry::with_handler_for_test(
         tool_name.clone(),
         Arc::new(RecordingHandler {
@@ -700,7 +706,10 @@ async fn direct_tool_dispatch_records_replay_metadata() -> anyhow::Result<()> {
         .await?;
 
     let observations = state_db
-        .tool_router_tune_observations(ToolRouterDiagnosticsWindow::AllTime, None)
+        .tool_router_tune_observations(
+            ToolRouterDiagnosticsWindow::AllTime,
+            /*model_slug*/ None,
+        )
         .await?;
 
     assert_eq!(observations.len(), 1);
@@ -793,7 +802,10 @@ async fn route_errors_record_sanitized_request_shape() -> anyhow::Result<()> {
     );
 
     let observations = state_db
-        .tool_router_tune_observations(ToolRouterDiagnosticsWindow::AllTime, None)
+        .tool_router_tune_observations(
+            ToolRouterDiagnosticsWindow::AllTime,
+            /*model_slug*/ None,
+        )
         .await?;
 
     assert_eq!(observations.len(), 1);
@@ -842,7 +854,11 @@ fn function_tool(name: &str) -> ToolSpec {
         description: String::new(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::object(Default::default(), None, Some(false.into())),
+        parameters: JsonSchema::object(
+            Default::default(),
+            /*required*/ None,
+            Some(false.into()),
+        ),
         output_schema: None,
     })
 }

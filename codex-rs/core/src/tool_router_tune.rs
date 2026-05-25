@@ -214,7 +214,7 @@ impl ToolRouterIntrospectionProvider for ToolRouterModelIntrospectionProvider {
                 routed_config
                     .service_tier
                     .map(|service_tier| service_tier.request_value().to_string()),
-                None,
+                /*turn_metadata_header*/ None,
                 &InferenceTraceContext::disabled(),
             )
             .await?;
@@ -863,13 +863,18 @@ mod tests {
     async fn dry_run_reports_optimizations_without_persisting() {
         let (_codex_home, runtime) = state_runtime().await;
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("spark", 25, 5))
+            .record_tool_router_ledger_entry(ledger_entry(
+                "spark", /*prompt_tokens*/ 25, /*completion_tokens*/ 5,
+            ))
             .await
             .expect("record ledger");
 
-        let report = tune_tool_router(&runtime, options(/*apply*/ false, 600))
-            .await
-            .expect("tune report");
+        let report = tune_tool_router(
+            &runtime,
+            options(/*apply*/ false, /*max_guidance_tokens*/ 600),
+        )
+        .await
+        .expect("tune report");
 
         assert!(report.optimizations.iter().any(|optimization| {
             optimization.optimization_type == ToolRouterOptimizationType::DynamicGuidance
@@ -910,13 +915,18 @@ mod tests {
     async fn apply_persists_only_passing_dynamic_guidance() {
         let (_codex_home, runtime) = state_runtime().await;
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("spark", 300, 60))
+            .record_tool_router_ledger_entry(ledger_entry(
+                "spark", /*prompt_tokens*/ 300, /*completion_tokens*/ 60,
+            ))
             .await
             .expect("record ledger");
 
-        let report = tune_tool_router(&runtime, options(/*apply*/ true, 600))
-            .await
-            .expect("tune report");
+        let report = tune_tool_router(
+            &runtime,
+            options(/*apply*/ true, /*max_guidance_tokens*/ 600),
+        )
+        .await
+        .expect("tune report");
 
         assert!(report.optimizations.iter().any(|optimization| {
             optimization.optimization_type == ToolRouterOptimizationType::DynamicGuidance
@@ -934,11 +944,13 @@ mod tests {
     async fn over_cap_dynamic_guidance_is_not_persisted() {
         let (_codex_home, runtime) = state_runtime().await;
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("spark", 30, 6))
+            .record_tool_router_ledger_entry(ledger_entry(
+                "spark", /*prompt_tokens*/ 30, /*completion_tokens*/ 6,
+            ))
             .await
             .expect("record ledger");
 
-        let report = tune_tool_router(&runtime, options(/*apply*/ true, 1))
+        let report = tune_tool_router(&runtime, options(/*apply*/ true, /*max_guidance_tokens*/ 1))
             .await
             .expect("tune report");
 
@@ -960,17 +972,24 @@ mod tests {
     async fn dynamic_guidance_savings_count_only_fallback_tokens() {
         let (_codex_home, runtime) = state_runtime().await;
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("spark", 30, 6))
+            .record_tool_router_ledger_entry(ledger_entry(
+                "spark", /*prompt_tokens*/ 30, /*completion_tokens*/ 6,
+            ))
             .await
             .expect("record fallback");
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("error", 99, 99))
+            .record_tool_router_ledger_entry(ledger_entry(
+                "error", /*prompt_tokens*/ 99, /*completion_tokens*/ 99,
+            ))
             .await
             .expect("record error");
 
-        let report = tune_tool_router(&runtime, options(/*apply*/ false, 600))
-            .await
-            .expect("tune report");
+        let report = tune_tool_router(
+            &runtime,
+            options(/*apply*/ false, /*max_guidance_tokens*/ 600),
+        )
+        .await
+        .expect("tune report");
         let dynamic = dynamic_optimization(&report);
 
         assert_eq!(dynamic.affected_call_count, 2);
@@ -984,13 +1003,18 @@ mod tests {
     async fn dynamic_guidance_error_only_has_zero_savings() {
         let (_codex_home, runtime) = state_runtime().await;
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("error", 99, 99))
+            .record_tool_router_ledger_entry(ledger_entry(
+                "error", /*prompt_tokens*/ 99, /*completion_tokens*/ 99,
+            ))
             .await
             .expect("record error");
 
-        let report = tune_tool_router(&runtime, options(/*apply*/ false, 600))
-            .await
-            .expect("tune report");
+        let report = tune_tool_router(
+            &runtime,
+            options(/*apply*/ false, /*max_guidance_tokens*/ 600),
+        )
+        .await
+        .expect("tune report");
         let dynamic = dynamic_optimization(&report);
 
         assert_eq!(dynamic.affected_call_count, 1);
@@ -1002,7 +1026,9 @@ mod tests {
     async fn introspection_guidance_persists_when_valid_and_applied() {
         let (_codex_home, runtime) = state_runtime().await;
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("spark", 30, 6))
+            .record_tool_router_ledger_entry(ledger_entry(
+                "spark", /*prompt_tokens*/ 30, /*completion_tokens*/ 6,
+            ))
             .await
             .expect("record ledger");
         let guidance = "For this shell-heavy toolset, route known shell execution directly with `action.tool` and `action.cmd`.";
@@ -1011,7 +1037,7 @@ mod tests {
             &runtime,
             introspection_options(
                 /*apply*/ true,
-                600,
+                /*max_guidance_tokens*/ 600,
                 "gpt-introspect",
                 valid_introspection_output(guidance),
             ),
@@ -1039,7 +1065,9 @@ mod tests {
     async fn introspection_without_explicit_model_override_still_runs() {
         let (_codex_home, runtime) = state_runtime().await;
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("spark", 30, 6))
+            .record_tool_router_ledger_entry(ledger_entry(
+                "spark", /*prompt_tokens*/ 30, /*completion_tokens*/ 6,
+            ))
             .await
             .expect("record ledger");
         let guidance = "For this shell-heavy toolset, route known shell execution directly with `action.tool` and `action.cmd`.";
@@ -1048,7 +1076,7 @@ mod tests {
             &runtime,
             introspection_options(
                 /*apply*/ true,
-                600,
+                /*max_guidance_tokens*/ 600,
                 "gpt-router-selected",
                 valid_introspection_output(guidance),
             ),
@@ -1069,7 +1097,9 @@ mod tests {
     async fn introspection_over_cap_guidance_is_not_persisted() {
         let (_codex_home, runtime) = state_runtime().await;
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("spark", 30, 6))
+            .record_tool_router_ledger_entry(ledger_entry(
+                "spark", /*prompt_tokens*/ 30, /*completion_tokens*/ 6,
+            ))
             .await
             .expect("record ledger");
 
@@ -1077,7 +1107,7 @@ mod tests {
             &runtime,
             introspection_options(
                 /*apply*/ true,
-                20,
+                /*max_guidance_tokens*/ 20,
                 "gpt-introspect",
                 valid_introspection_output(&"route direct tools ".repeat(200)),
             ),
@@ -1105,7 +1135,9 @@ mod tests {
     async fn malformed_introspection_output_is_not_persisted() {
         let (_codex_home, runtime) = state_runtime().await;
         runtime
-            .record_tool_router_ledger_entry(ledger_entry("spark", 30, 6))
+            .record_tool_router_ledger_entry(ledger_entry(
+                "spark", /*prompt_tokens*/ 30, /*completion_tokens*/ 6,
+            ))
             .await
             .expect("record ledger");
 
@@ -1113,7 +1145,7 @@ mod tests {
             &runtime,
             introspection_options(
                 /*apply*/ true,
-                600,
+                /*max_guidance_tokens*/ 600,
                 "gpt-introspect",
                 "not json".to_string(),
             ),
@@ -1185,7 +1217,11 @@ mod tests {
             request_shape_clusters: Vec::new(),
         };
 
-        let prompt = tool_router_introspection_prompt(&observation, Some("current"), 600);
+        let prompt = tool_router_introspection_prompt(
+            &observation,
+            Some("current"),
+            /*max_guidance_tokens*/ 600,
+        );
 
         assert!(prompt.contains("Sanitized telemetry"));
         assert!(prompt.contains("exec_command"));

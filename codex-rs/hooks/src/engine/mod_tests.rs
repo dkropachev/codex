@@ -114,9 +114,9 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        None,
-        None,
-        None,
+        /*codex_self_exe*/ None,
+        /*codex_home*/ None,
+        /*workflows_config*/ None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -254,9 +254,9 @@ fn unknown_requirement_source_hooks_stay_managed() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        None,
-        None,
-        None,
+        /*codex_self_exe*/ None,
+        /*codex_home*/ None,
+        /*workflows_config*/ None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -269,9 +269,9 @@ fn unknown_requirement_source_hooks_stay_managed() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        None,
-        None,
-        None,
+        /*codex_self_exe*/ None,
+        /*codex_home*/ None,
+        /*workflows_config*/ None,
     );
     assert_eq!(discovered.hook_entries.len(), 1);
     assert_eq!(discovered.hook_entries[0].source, HookSource::Unknown);
@@ -336,9 +336,9 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        None,
-        None,
-        None,
+        /*codex_self_exe*/ None,
+        /*codex_home*/ None,
+        /*workflows_config*/ None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -351,9 +351,9 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        None,
-        None,
-        None,
+        /*codex_self_exe*/ None,
+        /*codex_home*/ None,
+        /*workflows_config*/ None,
     );
     assert_eq!(discovered.hook_entries.len(), 2);
     assert_eq!(discovered.hook_entries[0].key, managed_disabled_key);
@@ -402,9 +402,9 @@ fn user_disablement_does_not_filter_managed_layer_hooks() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        None,
-        None,
-        None,
+        /*codex_self_exe*/ None,
+        /*codex_home*/ None,
+        /*workflows_config*/ None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -420,9 +420,9 @@ fn user_disablement_does_not_filter_managed_layer_hooks() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        None,
-        None,
-        None,
+        /*codex_self_exe*/ None,
+        /*codex_home*/ None,
+        /*workflows_config*/ None,
     );
     assert_eq!(discovered.hook_entries.len(), 1);
     assert_eq!(discovered.hook_entries[0].key, managed_key);
@@ -491,9 +491,9 @@ fn trusted_plugin_hook_stack(
         /*config_layer_stack*/ None,
         plugin_hook_sources.to_vec(),
         Vec::new(),
-        None,
-        None,
-        None,
+        /*codex_self_exe*/ None,
+        /*codex_home*/ None,
+        /*workflows_config*/ None,
     );
     let state = discovered
         .hook_entries
@@ -565,9 +565,9 @@ fn requirements_managed_hooks_warn_when_managed_dir_is_missing() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        None,
-        None,
-        None,
+        /*codex_self_exe*/ None,
+        /*codex_home*/ None,
+        /*workflows_config*/ None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -677,9 +677,9 @@ fn discovers_hooks_from_json_and_toml_in_the_same_layer() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        None,
-        None,
-        None,
+        /*codex_self_exe*/ None,
+        /*codex_home*/ None,
+        /*workflows_config*/ None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -770,9 +770,9 @@ print(json.dumps({
         Some(&config_layer_stack),
         plugin_hook_sources.clone(),
         Vec::new(),
-        None,
-        None,
-        None,
+        /*codex_self_exe*/ None,
+        /*codex_home*/ None,
+        /*workflows_config*/ None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -884,9 +884,9 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
         Some(&config_layer_stack),
         plugin_hook_sources,
         Vec::new(),
-        None,
-        None,
-        None,
+        /*codex_self_exe*/ None,
+        /*codex_home*/ None,
+        /*workflows_config*/ None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),
@@ -930,9 +930,9 @@ fn plugin_hook_load_warnings_are_startup_warnings() {
         /*config_layer_stack*/ None,
         Vec::new(),
         vec!["failed plugin hook".to_string()],
-        None,
-        None,
-        None,
+        /*codex_self_exe*/ None,
+        /*codex_home*/ None,
+        /*workflows_config*/ None,
         CommandShell {
             program: String::new(),
             args: Vec::new(),

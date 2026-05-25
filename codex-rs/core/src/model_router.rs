@@ -1605,7 +1605,7 @@ mod tests {
         apply_model_router(
             &mut config,
             ModelRouterSource::SubAgent(SubAgentSource::Review),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
         )
         .expect("router should apply");
@@ -1627,7 +1627,7 @@ mod tests {
         apply_model_router(
             &mut config,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &available_models,
         )
         .expect("router should apply");
@@ -1638,7 +1638,7 @@ mod tests {
     #[tokio::test]
     async fn available_router_models_discovers_custom_registered_provider() {
         let server = MockServer::start().await;
-        mount_models_response(&server, 200, vec!["deepseek-chat"]).await;
+        mount_models_response(&server, /*status*/ 200, vec!["deepseek-chat"]).await;
         let mut config = config::test_config().await;
         config.model = Some("gpt-5.4".to_string());
         config.model_router = Some(ModelRouterToml {
@@ -1658,9 +1658,14 @@ mod tests {
             &ModelRouterDiscoveryCache::new(),
         )
         .await;
-        let candidate_set =
-            build_candidate_set(&config, "module.review.triage", 80, &available_models, &[])
-                .expect("candidate set should build");
+        let candidate_set = build_candidate_set(
+            &config,
+            "module.review.triage",
+            /*prompt_bytes*/ 80,
+            &available_models,
+            &[],
+        )
+        .expect("candidate set should build");
 
         assert_eq!(candidate_set.candidates.is_empty(), false);
         assert!(candidate_set.candidates.iter().all(|candidate| {
@@ -1675,9 +1680,9 @@ mod tests {
     #[tokio::test]
     async fn available_router_models_skips_provider_when_catalog_fetch_fails() {
         let broken_server = MockServer::start().await;
-        mount_models_response(&broken_server, 500, vec!["broken-model"]).await;
+        mount_models_response(&broken_server, /*status*/ 500, vec!["broken-model"]).await;
         let working_server = MockServer::start().await;
-        mount_models_response(&working_server, 200, vec!["working-model"]).await;
+        mount_models_response(&working_server, /*status*/ 200, vec!["working-model"]).await;
         let mut config = config::test_config().await;
         config.model = Some("gpt-5.4".to_string());
         config.model_router = Some(ModelRouterToml {
@@ -1701,9 +1706,14 @@ mod tests {
             &ModelRouterDiscoveryCache::new(),
         )
         .await;
-        let candidate_set =
-            build_candidate_set(&config, "module.review.triage", 80, &available_models, &[])
-                .expect("candidate set should build");
+        let candidate_set = build_candidate_set(
+            &config,
+            "module.review.triage",
+            /*prompt_bytes*/ 80,
+            &available_models,
+            &[],
+        )
+        .expect("candidate set should build");
 
         let candidate_models = candidate_set
             .candidates
@@ -1744,9 +1754,14 @@ mod tests {
             &ModelRouterDiscoveryCache::new(),
         )
         .await;
-        let candidate_set =
-            build_candidate_set(&config, "module.review.triage", 80, &available_models, &[])
-                .expect("candidate set should build");
+        let candidate_set = build_candidate_set(
+            &config,
+            "module.review.triage",
+            /*prompt_bytes*/ 80,
+            &available_models,
+            &[],
+        )
+        .expect("candidate set should build");
 
         assert!(candidate_set.candidates.is_empty());
     }
@@ -1754,7 +1769,7 @@ mod tests {
     #[tokio::test]
     async fn available_router_models_discovers_ready_builtin_deepseek_provider() {
         let server = MockServer::start().await;
-        mount_models_response(&server, 200, vec!["deepseek-v4-flash"]).await;
+        mount_models_response(&server, /*status*/ 200, vec!["deepseek-v4-flash"]).await;
         let mut config = config::test_config().await;
         config.model = Some("gpt-5.4".to_string());
         config.model_router = Some(ModelRouterToml {
@@ -1777,9 +1792,14 @@ mod tests {
             &ModelRouterDiscoveryCache::new(),
         )
         .await;
-        let candidate_set =
-            build_candidate_set(&config, "module.review.triage", 80, &available_models, &[])
-                .expect("candidate set should build");
+        let candidate_set = build_candidate_set(
+            &config,
+            "module.review.triage",
+            /*prompt_bytes*/ 80,
+            &available_models,
+            &[],
+        )
+        .expect("candidate set should build");
 
         assert_eq!(candidate_set.candidates.is_empty(), false);
         assert!(candidate_set.candidates.iter().all(|candidate| {
@@ -1794,7 +1814,7 @@ mod tests {
     #[tokio::test]
     async fn available_router_models_discovers_ready_builtin_no_auth_provider() {
         let server = MockServer::start().await;
-        mount_models_response(&server, 200, vec!["llama3.2"]).await;
+        mount_models_response(&server, /*status*/ 200, vec!["llama3.2"]).await;
         let mut config = config::test_config().await;
         config.model = Some("gpt-5.4".to_string());
         config.model_router = Some(ModelRouterToml {
@@ -1821,9 +1841,14 @@ mod tests {
             &ModelRouterDiscoveryCache::new(),
         )
         .await;
-        let candidate_set =
-            build_candidate_set(&config, "module.review.triage", 80, &available_models, &[])
-                .expect("candidate set should build");
+        let candidate_set = build_candidate_set(
+            &config,
+            "module.review.triage",
+            /*prompt_bytes*/ 80,
+            &available_models,
+            &[],
+        )
+        .expect("candidate set should build");
 
         assert_eq!(candidate_set.candidates.is_empty(), false);
         assert!(candidate_set.candidates.iter().all(|candidate| {
@@ -1852,9 +1877,14 @@ mod tests {
             &ModelRouterDiscoveryCache::new(),
         )
         .await;
-        let candidate_set =
-            build_candidate_set(&config, "module.review.triage", 80, &available_models, &[])
-                .expect("candidate set should build");
+        let candidate_set = build_candidate_set(
+            &config,
+            "module.review.triage",
+            /*prompt_bytes*/ 80,
+            &available_models,
+            &[],
+        )
+        .expect("candidate set should build");
 
         assert!(candidate_set.candidates.is_empty());
     }
@@ -1879,7 +1909,7 @@ mod tests {
         apply_model_router_with_state(
             &mut config,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &available_models,
             Some(runtime.as_ref()),
         )
@@ -1914,7 +1944,7 @@ mod tests {
         apply_model_router(
             &mut config,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &available_models,
         )
         .expect("router should apply");
@@ -1950,7 +1980,7 @@ mod tests {
         apply_model_router(
             &mut config,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &available_models,
         )
         .expect("router should fall back");
@@ -1974,7 +2004,7 @@ mod tests {
         apply_model_router(
             &mut config,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &available_models,
         )
         .expect("router should apply");
@@ -2008,7 +2038,7 @@ mod tests {
         apply_model_router(
             &mut config,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &available_models,
         )
         .expect("router should apply");
@@ -2064,7 +2094,7 @@ mod tests {
         apply_model_router(
             &mut config,
             ModelRouterSource::SubAgent(SubAgentSource::Review),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
         )
         .expect("router should apply");
@@ -2096,7 +2126,7 @@ mod tests {
         let err = apply_model_router(
             &mut config,
             ModelRouterSource::SubAgent(SubAgentSource::Review),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
         )
         .expect_err("hard policy should reject all routes");
@@ -2131,7 +2161,7 @@ mod tests {
         apply_model_router(
             &mut config,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
         )
         .expect("router should apply");
@@ -2177,7 +2207,7 @@ mod tests {
         apply_model_router_with_state(
             &mut config,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
             Some(runtime.as_ref()),
         )
@@ -2340,9 +2370,15 @@ mod tests {
                 ],
                 ..Default::default()
             });
-            apply_model_router_with_state(&mut config, source, 80, &[], Some(runtime.as_ref()))
-                .await
-                .expect("router should apply");
+            apply_model_router_with_state(
+                &mut config,
+                source,
+                /*prompt_bytes*/ 80,
+                &[],
+                Some(runtime.as_ref()),
+            )
+            .await
+            .expect("router should apply");
             record_model_router_request_usage_for_config(
                 Some(runtime.as_ref()),
                 &config,
@@ -2439,7 +2475,7 @@ mod tests {
         apply_model_router(
             &mut config,
             ModelRouterSource::SubAgent(SubAgentSource::Review),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
         )
         .expect("router should apply");
@@ -2465,7 +2501,7 @@ mod tests {
         apply_model_router(
             &mut config,
             ModelRouterSource::Module("review.triage"),
-            8_000,
+            /*prompt_bytes*/ 8_000,
             &available_models,
         )
         .expect("router should apply");
@@ -2491,7 +2527,7 @@ mod tests {
         let err = apply_model_router(
             &mut config,
             ModelRouterSource::SubAgent(SubAgentSource::Review),
-            1,
+            /*prompt_bytes*/ 1,
             &[],
         )
         .expect_err("unknown provider should fail");
@@ -2535,7 +2571,7 @@ mod tests {
         apply_model_router_with_state(
             &mut config,
             ModelRouterSource::Module("review.review"),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
             Some(runtime.as_ref()),
         )
@@ -2577,7 +2613,7 @@ mod tests {
         apply_model_router_with_state(
             &mut config,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
             Some(runtime.as_ref()),
         )
@@ -2631,7 +2667,7 @@ mod tests {
         apply_model_router_with_state(
             &mut config,
             ModelRouterSource::SubAgent(SubAgentSource::Review),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
             Some(runtime.as_ref()),
         )
@@ -2663,7 +2699,7 @@ mod tests {
         apply_model_router_with_state(
             &mut config,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
             Some(runtime.as_ref()),
         )
@@ -2694,7 +2730,7 @@ mod tests {
         apply_model_router_with_state(
             &mut config,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
             Some(runtime.as_ref()),
         )
@@ -2731,8 +2767,8 @@ mod tests {
             LIFECYCLE_PHASE_PROMOTION,
             &candidate_identity,
             &base_identity,
-            true,
-            1,
+            /*success*/ true,
+            /*created_at_ms*/ 1,
         )
         .await;
         record_shadow(
@@ -2741,15 +2777,15 @@ mod tests {
             LIFECYCLE_PHASE_PROMOTION,
             &candidate_identity,
             &base_identity,
-            true,
-            2,
+            /*success*/ true,
+            /*created_at_ms*/ 2,
         )
         .await;
 
         apply_model_router_with_state(
             &mut config,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
             Some(runtime.as_ref()),
         )
@@ -2824,8 +2860,8 @@ mod tests {
             LIFECYCLE_PHASE_MONITORING,
             &candidate_identity,
             &base_identity,
-            false,
-            1,
+            /*success*/ false,
+            /*created_at_ms*/ 1,
         )
         .await;
         record_shadow(
@@ -2834,15 +2870,15 @@ mod tests {
             LIFECYCLE_PHASE_MONITORING,
             &candidate_identity,
             &base_identity,
-            false,
-            2,
+            /*success*/ false,
+            /*created_at_ms*/ 2,
         )
         .await;
 
         apply_model_router_with_state(
             &mut config,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
             Some(runtime.as_ref()),
         )
@@ -2901,8 +2937,8 @@ mod tests {
             LIFECYCLE_PHASE_PROMOTION,
             &candidate_identity,
             &base_identity,
-            false,
-            1,
+            /*success*/ false,
+            /*created_at_ms*/ 1,
         )
         .await;
         record_shadow(
@@ -2911,15 +2947,15 @@ mod tests {
             LIFECYCLE_PHASE_PROMOTION,
             &candidate_identity,
             &base_identity,
-            false,
-            2,
+            /*success*/ false,
+            /*created_at_ms*/ 2,
         )
         .await;
 
         apply_model_router_with_state(
             &mut config,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
             Some(runtime.as_ref()),
         )
@@ -2928,7 +2964,7 @@ mod tests {
         apply_model_router_with_state(
             &mut config,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
             Some(runtime.as_ref()),
         )
@@ -2979,15 +3015,15 @@ mod tests {
             LIFECYCLE_PHASE_PROMOTION,
             &candidate_identity,
             &base_identity,
-            false,
-            1,
+            /*success*/ false,
+            /*created_at_ms*/ 1,
         )
         .await;
 
         apply_model_router_with_state(
             &mut config,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
             Some(runtime.as_ref()),
         )

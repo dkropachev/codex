@@ -619,18 +619,26 @@ impl ToolRegistry {
                     .unwrap_or_else(|| "PostToolUse hook stopped execution".to_string());
                 let mut guard = response_cell.lock().await;
                 if let Some(result) = guard.as_mut() {
-                    result.result = Box::new(FunctionToolOutput::from_text(replacement_text, None));
+                    result.result = Box::new(FunctionToolOutput::from_text(
+                        replacement_text,
+                        /*success*/ None,
+                    ));
                 }
             } else if let Some(feedback_text) = outcome.feedback_message.clone() {
                 let mut guard = response_cell.lock().await;
                 if let Some(result) = guard.as_mut() {
                     if should_replace_shell_output_with_feedback(&invocation, outcome) {
-                        result.result =
-                            Box::new(FunctionToolOutput::from_text(feedback_text, None));
+                        result.result = Box::new(FunctionToolOutput::from_text(
+                            feedback_text,
+                            /*success*/ None,
+                        ));
                     } else {
                         let inner = std::mem::replace(
                             &mut result.result,
-                            Box::new(FunctionToolOutput::from_text(String::new(), None)),
+                            Box::new(FunctionToolOutput::from_text(
+                                String::new(),
+                                /*success*/ None,
+                            )),
                         );
                         result.result = Box::new(ToolOutputWithFeedback::new(inner, feedback_text));
                     }

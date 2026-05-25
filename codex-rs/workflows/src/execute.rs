@@ -1949,7 +1949,7 @@ mod tests {
     #[test]
     fn read_input_merges_cli_input_fields_into_empty_object() {
         let input = read_input(
-            None,
+            /*input*/ None,
             BTreeMap::from([
                 ("reviewMode".to_string(), "initial".to_string()),
                 ("scope".to_string(), "repo".to_string()),

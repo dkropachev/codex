@@ -131,8 +131,11 @@ impl WorkflowRequestProcessor {
         &self,
         params: WorkflowImpactParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let workflow =
-            self.resolve_workflow(params.id, None, params.stage_session_id.as_deref())?;
+        let workflow = self.resolve_workflow(
+            params.id,
+            /*target*/ None,
+            params.stage_session_id.as_deref(),
+        )?;
         let impact = workflow_impact(&workflow_to_core(&workflow))
             .map_err(|err| internal_error(format!("failed to inspect workflow impact: {err}")))?;
         Ok(Some(
@@ -276,7 +279,8 @@ impl WorkflowRequestProcessor {
             }),
             None => WorkflowCommand::Config(WorkflowConfigCommand::Clear { key: params.key }),
         };
-        let _response = self.execute::<WorkflowCommandResponse>(command, None)?;
+        let _response =
+            self.execute::<WorkflowCommandResponse>(command, /*stage_session_id*/ None)?;
         let config = self.load_latest_config().await?;
         Ok(Some(
             WorkflowConfigWriteResponse {
@@ -322,9 +326,10 @@ impl WorkflowRequestProcessor {
         &self,
         stage_session_id: Option<&str>,
     ) -> Result<Vec<WorkflowSummary>, JSONRPCErrorError> {
-        discover_workflows_for_context(
-            &self.workflow_command_context(stage_session_id.map(ToString::to_string), None),
-        )
+        discover_workflows_for_context(&self.workflow_command_context(
+            stage_session_id.map(ToString::to_string),
+            /*progress*/ None,
+        ))
         .map(|workflows| workflows.into_iter().map(summary_to_api).collect())
         .map_err(|err| internal_error(format!("failed to discover workflows: {err}")))
     }
@@ -346,7 +351,10 @@ impl WorkflowRequestProcessor {
         }
 
         resolve_workflow_for_context(
-            &self.workflow_command_context(stage_session_id.map(ToString::to_string), None),
+            &self.workflow_command_context(
+                stage_session_id.map(ToString::to_string),
+                /*progress*/ None,
+            ),
             &id,
         )
         .map(summary_to_api)
@@ -361,7 +369,7 @@ impl WorkflowRequestProcessor {
     where
         T: From<WorkflowCommandResponse>,
     {
-        self.execute_with_progress(command, stage_session_id, None)
+        self.execute_with_progress(command, stage_session_id, /*progress*/ None)
     }
 
     fn execute_with_progress<'a, T>(

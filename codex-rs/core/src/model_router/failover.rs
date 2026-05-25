@@ -275,7 +275,7 @@ mod tests {
         let route = apply_model_router_with_exclusions(
             &mut first,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
             &[],
         )
@@ -289,7 +289,7 @@ mod tests {
         let route = apply_model_router_with_exclusions(
             &mut failover,
             ModelRouterSource::Module("review.triage"),
-            80,
+            /*prompt_bytes*/ 80,
             &[],
             &[exclusion],
         )

@@ -866,7 +866,11 @@ mod ledger_tests {
         }
 
         let records = runtime
-            .list_tool_router_remembered_tools("/repo", "module.review.triage", 0)
+            .list_tool_router_remembered_tools(
+                "/repo",
+                "module.review.triage",
+                /*updated_at_ms_cutoff*/ 0,
+            )
             .await
             .expect("ordered lookup");
 
@@ -921,7 +925,7 @@ mod ledger_tests {
             fresh_key.clone(),
             now_ms - 1_000,
             now_ms - 1_000,
-            1,
+            /*request_count*/ 1,
         )
         .await;
         insert_row(
@@ -929,7 +933,7 @@ mod ledger_tests {
             stale_key,
             now_ms - TOOL_ROUTER_REMEMBERED_TOOL_MAX_AGE_MS - 10_000,
             now_ms - TOOL_ROUTER_REMEMBERED_TOOL_MAX_AGE_MS - 10_000,
-            1,
+            /*request_count*/ 1,
         )
         .await;
 
@@ -1317,10 +1321,38 @@ mod tests {
             .expect("state runtime");
 
         for entry in [
-            ledger_entry("call-1", "deterministic", 1, 0, 0, Some("ok")),
-            ledger_entry("call-2", "spark_script", 1, 11, 4, Some("failed")),
-            ledger_entry("call-3", "learned_rule", 3, 0, 0, Some("ok")),
-            ledger_entry("call-4", "error", 0, 0, 0, Some("route_error")),
+            ledger_entry(
+                "call-1",
+                "deterministic",
+                /*fanout_call_count*/ 1,
+                /*spark_prompt_tokens*/ 0,
+                /*spark_completion_tokens*/ 0,
+                Some("ok"),
+            ),
+            ledger_entry(
+                "call-2",
+                "spark_script",
+                /*fanout_call_count*/ 1,
+                /*spark_prompt_tokens*/ 11,
+                /*spark_completion_tokens*/ 4,
+                Some("failed"),
+            ),
+            ledger_entry(
+                "call-3",
+                "learned_rule",
+                /*fanout_call_count*/ 3,
+                /*spark_prompt_tokens*/ 0,
+                /*spark_completion_tokens*/ 0,
+                Some("ok"),
+            ),
+            ledger_entry(
+                "call-4",
+                "error",
+                /*fanout_call_count*/ 0,
+                /*spark_prompt_tokens*/ 0,
+                /*spark_completion_tokens*/ 0,
+                Some("route_error"),
+            ),
         ] {
             runtime
                 .record_tool_router_ledger_entry(entry)

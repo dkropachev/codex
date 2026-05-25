@@ -285,7 +285,11 @@ fn chat_tools_from_responses_tools(tools: &[Value]) -> (Vec<Value>, ChatToolName
         match tool_type {
             "function" => {
                 if let Some((chat_tool, chat_name, original_name)) =
-                    chat_function_tool_from_responses_tool(tool, None, &mut used_names)
+                    chat_function_tool_from_responses_tool(
+                        tool,
+                        /*namespace*/ None,
+                        &mut used_names,
+                    )
                 {
                     tool_names.insert(
                         chat_name,
@@ -419,7 +423,7 @@ fn sanitize_chat_tool_name(raw_name: &str) -> String {
     } else {
         sanitized
     };
-    truncate_ascii(sanitized, 64)
+    truncate_ascii(sanitized, /*max_len*/ 64)
 }
 
 fn truncate_ascii(value: &str, max_len: usize) -> String {

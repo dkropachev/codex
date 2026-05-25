@@ -501,7 +501,7 @@ mod tests {
             stream,
             tx,
             Duration::from_secs(5),
-            None,
+            /*telemetry*/ None,
             ChatToolNameMap::default(),
         ));
 

@@ -467,7 +467,7 @@ mod tests {
         };
 
         assert_eq!(
-            estimate_token_cost(&usage, &price, 1.5),
+            estimate_token_cost(&usage, &price, /*confidence*/ 1.5),
             CostEstimate {
                 usd_micros: 4_600_000,
                 confidence: 1.0,
@@ -522,8 +522,12 @@ mod tests {
         ];
 
         assert_eq!(
-            select_candidate("module.review.triage", 1_000, &candidates)
-                .map(|selection| (selection.index, selection.task_class)),
+            select_candidate(
+                "module.review.triage",
+                /*prompt_bytes*/ 1_000,
+                &candidates
+            )
+            .map(|selection| (selection.index, selection.task_class)),
             Some((1, RouterTaskClass::LatencySensitive))
         );
     }
@@ -550,8 +554,12 @@ mod tests {
         ];
 
         assert_eq!(
-            select_candidate("module.review.triage", 1_000, &candidates)
-                .map(|selection| selection.index),
+            select_candidate(
+                "module.review.triage",
+                /*prompt_bytes*/ 1_000,
+                &candidates
+            )
+            .map(|selection| selection.index),
             Some(1)
         );
     }
@@ -585,8 +593,12 @@ mod tests {
         ];
 
         assert_eq!(
-            select_candidate("module.review.learn", 100_000, &candidates)
-                .map(|selection| { (selection.index, selection.task_class) }),
+            select_candidate(
+                "module.review.learn",
+                /*prompt_bytes*/ 100_000,
+                &candidates
+            )
+            .map(|selection| { (selection.index, selection.task_class) }),
             Some((1, RouterTaskClass::RareQualitySensitive))
         );
     }
@@ -616,8 +628,12 @@ mod tests {
         ];
 
         assert_eq!(
-            select_candidate("module.review.triage", 8_000, &candidates)
-                .map(|selection| { (selection.index, selection.task_class) }),
+            select_candidate(
+                "module.review.triage",
+                /*prompt_bytes*/ 8_000,
+                &candidates
+            )
+            .map(|selection| { (selection.index, selection.task_class) }),
             Some((0, RouterTaskClass::LatencySensitive))
         );
     }

@@ -49,7 +49,7 @@ fn default_token_accounting_uses_returned_tokens_for_all_fields() {
     let output = FunctionToolOutput::from_text("ok".to_string(), Some(true));
 
     assert_eq!(
-        output.token_accounting(7),
+        output.token_accounting(/*returned_output_tokens*/ 7),
         ToolOutputTokenAccounting {
             returned_output_tokens: 7,
             original_output_tokens: 7,
@@ -72,7 +72,7 @@ fn exec_token_accounting_uses_original_and_truncated_output_tokens() {
         hook_command: Some("printf".to_string()),
     };
 
-    let accounting = output.token_accounting(17);
+    let accounting = output.token_accounting(/*returned_output_tokens*/ 17);
 
     assert_eq!(accounting.returned_output_tokens, 17);
     assert_eq!(accounting.original_output_tokens, 500);

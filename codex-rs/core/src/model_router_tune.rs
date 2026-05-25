@@ -236,7 +236,8 @@ pub async fn tune_model_router(
     .await?;
     refresh_model_router_report_deltas(state_db, config, &mut report).await?;
     if !options.dry_run {
-        let outcome = apply_model_router_tune_report(state_db, config, report, false).await?;
+        let outcome =
+            apply_model_router_tune_report(state_db, config, report, /*dry_run*/ false).await?;
         report = outcome.report;
     }
     apply::persist_report(state_db, &report).await?;
@@ -437,7 +438,7 @@ async fn build_report(
     };
     let mut used_runtime = false;
     let lifecycle_promotions = state_db
-        .model_router_lifecycle_promotions(None)
+        .model_router_lifecycle_promotions(/*task_key*/ None)
         .await
         .unwrap_or_else(|err| {
             tracing::debug!(error = %err, "failed to load model router lifecycle promotions for tune shadows");
@@ -664,7 +665,7 @@ fn proposed_metrics(
                 estimate_token_cost(
                     &estimate_task_usage(case.prompt_bytes, task_class),
                     &price,
-                    1.0,
+                    /*confidence*/ 1.0,
                 )
                 .usd_micros
             })
@@ -829,9 +830,10 @@ mod tests {
         report.recommendations[0].passing = false;
         report.recommendations[0].changes[0].confidence = 0.4;
 
-        let outcome = apply_model_router_tune_report(&runtime, &config, report, false)
-            .await
-            .expect("apply report");
+        let outcome =
+            apply_model_router_tune_report(&runtime, &config, report, /*dry_run*/ false)
+                .await
+                .expect("apply report");
 
         assert_eq!(outcome.applied_recommendations, 0);
         assert_eq!(
@@ -867,9 +869,14 @@ mod tests {
         );
         let report = base_report(&config, &identity_key);
 
-        let dry_run = apply_model_router_tune_report(&runtime, &config, report.clone(), true)
-            .await
-            .expect("dry-run apply");
+        let dry_run = apply_model_router_tune_report(
+            &runtime,
+            &config,
+            report.clone(),
+            /*dry_run*/ true,
+        )
+        .await
+        .expect("dry-run apply");
         assert_eq!(dry_run.applied_recommendations, 1);
         assert_eq!(
             runtime
@@ -879,9 +886,10 @@ mod tests {
             None
         );
 
-        let applied = apply_model_router_tune_report(&runtime, &config, report, false)
-            .await
-            .expect("apply");
+        let applied =
+            apply_model_router_tune_report(&runtime, &config, report, /*dry_run*/ false)
+                .await
+                .expect("apply");
         assert_eq!(applied.applied_recommendations, 1);
         let overlay = runtime
             .lookup_model_router_metric_overlay(&identity_key)
@@ -916,9 +924,10 @@ mod tests {
         let mut report = base_report(&config, &identity_key);
         report.config_fingerprint = "different".to_string();
 
-        let outcome = apply_model_router_tune_report(&runtime, &config, report, false)
-            .await
-            .expect("apply mismatch");
+        let outcome =
+            apply_model_router_tune_report(&runtime, &config, report, /*dry_run*/ false)
+                .await
+                .expect("apply mismatch");
 
         assert_eq!(outcome.applied_recommendations, 0);
         assert_eq!(outcome.report.apply_eligibility.eligible, false);

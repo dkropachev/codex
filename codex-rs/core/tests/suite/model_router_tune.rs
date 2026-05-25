@@ -117,9 +117,14 @@ async fn model_router_tune_persists_shadow_rows_and_cli_report() -> Result<()> {
     let deepseek_server = MockServer::start().await;
     let deepseek_base_url = format!("{}/v1", deepseek_server.uri());
 
-    mount_models_response_n_times(&openai_server, openai_models_response(), 3).await;
-    mount_models_response_n_times(&deepseek_server, deepseek_models_response(), 3).await;
-    mount_deepseek_chat_response_n_times(&deepseek_server, 2).await;
+    mount_models_response_n_times(&openai_server, openai_models_response(), /*times*/ 3).await;
+    mount_models_response_n_times(
+        &deepseek_server,
+        deepseek_models_response(),
+        /*times*/ 3,
+    )
+    .await;
+    mount_deepseek_chat_response_n_times(&deepseek_server, /*times*/ 2).await;
     let openai_response_mock = mount_sse_sequence(
         &openai_server,
         vec![
@@ -452,7 +457,7 @@ async fn model_router_tune_persists_shadow_rows_and_cli_report() -> Result<()> {
     );
 
     let mut shadow_recent_views = state_db
-        .model_router_shadow_evaluations(Some("history.cli"), 10)
+        .model_router_shadow_evaluations(Some("history.cli"), /*limit*/ 10)
         .await?
         .into_iter()
         .map(ShadowRecordView::from)

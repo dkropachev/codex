@@ -683,7 +683,9 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut store = Artifactory::open_at(temp.path().join("db.sqlite")).expect("open");
         let state_dir = temp.path().join("workflow-tools/active");
-        let registration = workflow_tool_registration_record(&state_dir, None, None);
+        let registration = workflow_tool_registration_record(
+            &state_dir, /*expires_at_unix_sec*/ None, /*refresh_after_unix_sec*/ None,
+        );
 
         let state = store
             .register_state(&StateRegistration {
@@ -719,11 +721,11 @@ mod tests {
             Some(90),
         );
 
-        assert!(!registration.is_expired(79));
-        assert!(registration.is_expired(80));
-        assert!(!registration.is_stale(79, &registration.source_digest));
-        assert!(registration.is_stale(80, &registration.source_digest));
-        assert!(registration.is_stale(79, "different"));
+        assert!(!registration.is_expired(/*now_unix_sec*/ 79));
+        assert!(registration.is_expired(/*now_unix_sec*/ 80));
+        assert!(!registration.is_stale(/*now_unix_sec*/ 79, &registration.source_digest));
+        assert!(registration.is_stale(/*now_unix_sec*/ 80, &registration.source_digest));
+        assert!(registration.is_stale(/*now_unix_sec*/ 79, "different"));
     }
 
     fn registration(state_dir: PathBuf) -> StateRegistration {

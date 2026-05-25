@@ -151,7 +151,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             root_config_overrides.clone(),
             interactive.config_profile.clone(),
             arg0_paths.clone(),
-            None,
+            /*stage_session_id*/ None,
         )
         .await?;
         if let Some(workflow_subcommand) =
@@ -2205,7 +2205,7 @@ async fn run_model_router_lifecycle_command(
     let effective_lifecycle = codex_model_router::policy::effective_lifecycle_for_route(
         config.model_router.as_ref(),
         cmd.task_key.as_deref().unwrap_or("model_router.lifecycle"),
-        None,
+        /*route*/ None,
     )?;
     let now_ms = Utc::now().timestamp_millis();
     let query = codex_state::ModelRouterLifecycleStatsQuery {
@@ -2359,7 +2359,7 @@ async fn run_model_router_demote_command(
     let lifecycle_window = codex_model_router::policy::effective_lifecycle_for_route(
         config.model_router.as_ref(),
         &cmd.task_key,
-        None,
+        /*route*/ None,
     )
     .ok()
     .map(|lifecycle| lifecycle.window);
@@ -2487,7 +2487,7 @@ async fn model_router_policy_report(
     let lifecycle = codex_model_router::policy::effective_lifecycle_for_route(
         Some(model_router),
         task_key.unwrap_or("model_router.policy"),
-        None,
+        /*route*/ None,
     )
     .unwrap_or_default();
 
@@ -2871,7 +2871,7 @@ async fn run_model_router_tune_command(
     let lifecycle_defaults = codex_model_router::policy::effective_lifecycle_for_route(
         config.model_router.as_ref(),
         "model_router.tune",
-        None,
+        /*route*/ None,
     )?;
     let window = cmd.window.unwrap_or(lifecycle_defaults.window);
     let cost_budget_usd = cmd

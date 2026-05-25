@@ -848,7 +848,7 @@ async fn tool_suggest_requires_apps_and_plugins_features() {
             Vec::new(),
             discoverable_tools.clone(),
             &[],
-            None,
+            /*workflow_tools*/ None,
         )
         .build();
 

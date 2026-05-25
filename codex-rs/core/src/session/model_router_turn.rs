@@ -162,7 +162,7 @@ impl Session {
             session_configuration.collaboration_mode.with_updates(
                 Some(model.clone()),
                 Some(per_turn_config.model_reasoning_effort),
-                None,
+                /*developer_instructions*/ None,
             );
         session_configuration.service_tier = per_turn_config.service_tier;
 

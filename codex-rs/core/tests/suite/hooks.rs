@@ -817,7 +817,7 @@ async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
 
     test.submit_turn("hello from the sea").await?;
 
-    let requests = wait_for_response_requests(&responses, 3).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 3).await;
     assert_eq!(requests.len(), 3);
     assert_eq!(
         request_hook_prompt_texts(&requests[1]),
@@ -918,7 +918,7 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
 
     let hook_inputs = wait_for_hook_inputs(
         test.codex_home_path(),
-        1,
+        /*expected_len*/ 1,
         read_session_start_hook_inputs,
         "session start hook inputs",
     )
@@ -980,7 +980,7 @@ async fn resumed_thread_keeps_stop_continuation_prompt_in_history() -> Result<()
 
     initial.submit_turn("tell me something").await?;
 
-    let initial_requests = wait_for_response_requests(&initial_responses, 2).await;
+    let initial_requests = wait_for_response_requests(&initial_responses, /*expected_len*/ 2).await;
     assert_eq!(initial_requests.len(), 2);
 
     let resumed_response = mount_sse_once(
@@ -1054,7 +1054,7 @@ async fn multiple_blocking_stop_hooks_persist_multiple_hook_prompt_fragments() -
 
     test.submit_turn("hello again").await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     assert_eq!(requests.len(), 2);
     assert_eq!(
         request_hook_prompt_texts(&requests[1]),
@@ -1258,7 +1258,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
 
     let hook_inputs = wait_for_hook_inputs(
         test.codex_home_path(),
-        3,
+        /*expected_len*/ 3,
         read_user_prompt_submit_hook_inputs,
         "queued user prompt hook inputs",
     )
@@ -1390,7 +1390,7 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
     )
     .await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     assert_eq!(requests.len(), 2);
     requests[1].function_call_output(call_id);
     assert!(
@@ -1480,7 +1480,7 @@ async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result
     )
     .await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     assert_eq!(requests.len(), 2);
     requests[1].function_call_output(call_id);
     assert!(
@@ -1562,7 +1562,7 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
     )
     .await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     assert_eq!(requests.len(), 2);
     requests[1].function_call_output(call_id);
     assert!(
@@ -1861,7 +1861,7 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
     )
     .await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -1961,7 +1961,7 @@ async fn pre_tool_use_blocks_shell_when_defined_in_config_toml() -> Result<()> {
     )
     .await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -2039,7 +2039,7 @@ async fn pre_tool_use_merges_hooks_json_and_config_toml() -> Result<()> {
     test.submit_turn("run the shell command with merged hook sources")
         .await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -2147,7 +2147,7 @@ async fn pre_tool_use_blocks_local_shell_before_execution() -> Result<()> {
     test.submit_turn("run the blocked local shell command")
         .await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -2242,7 +2242,7 @@ async fn pre_tool_use_blocks_exec_command_before_execution() -> Result<()> {
 
     test.submit_turn("run the blocked exec command").await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -2324,7 +2324,7 @@ async fn pre_tool_use_blocks_apply_patch_before_execution() -> Result<()> {
 
     test.submit_turn("apply the blocked patch").await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -2399,7 +2399,7 @@ async fn pre_tool_use_blocks_apply_patch_with_write_alias() -> Result<()> {
     test.submit_turn("apply the patch blocked by Write alias")
         .await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -2475,7 +2475,7 @@ async fn pre_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
 
     test.submit_turn("update the plan").await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -2545,7 +2545,7 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
     test.submit_turn("run the shell command with post hook")
         .await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     assert_eq!(requests.len(), 2);
     assert!(
         requests[1]
@@ -2642,7 +2642,7 @@ async fn post_tool_use_block_decision_replaces_shell_command_output_with_reason(
     test.submit_turn("run the shell command with blocking post hook")
         .await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     let output = requests
         .iter()
         .find_map(|request| request.function_call_output_text(call_id))
@@ -2651,7 +2651,7 @@ async fn post_tool_use_block_decision_replaces_shell_command_output_with_reason(
 
     let hook_inputs = wait_for_hook_inputs(
         test.codex_home_path(),
-        1,
+        /*expected_len*/ 1,
         read_post_tool_use_hook_inputs,
         "post tool use hook inputs",
     )
@@ -2715,7 +2715,7 @@ async fn post_tool_use_continue_false_replaces_shell_command_output_with_stop_re
     test.submit_turn("run the shell command with stop-style post hook")
         .await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -2786,7 +2786,7 @@ async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()
     test.submit_turn("run the local shell command with post hook")
         .await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     assert_eq!(requests.len(), 2);
     assert!(
         requests[1]
@@ -2862,7 +2862,7 @@ async fn post_tool_use_exit_two_replaces_one_shot_exec_command_output_with_feedb
     test.submit_turn("run the exec command with post hook")
         .await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
@@ -2957,7 +2957,7 @@ async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> R
     test.submit_turn("run the exec command session with post hook")
         .await?;
 
-    let requests = wait_for_response_requests(&responses, 3).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 3).await;
     let output = requests
         .iter()
         .find_map(|request| request.function_call_output_text(poll_call_id))
@@ -2966,7 +2966,7 @@ async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> R
 
     let pre_hook_inputs = wait_for_hook_inputs(
         test.codex_home_path(),
-        1,
+        /*expected_len*/ 1,
         read_pre_tool_use_hook_inputs,
         "pre tool use hook inputs",
     )
@@ -2978,7 +2978,7 @@ async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> R
 
     let post_hook_inputs = wait_for_hook_inputs(
         test.codex_home_path(),
-        1,
+        /*expected_len*/ 1,
         read_post_tool_use_hook_inputs,
         "post tool use hook inputs",
     )
@@ -3049,7 +3049,7 @@ async fn post_tool_use_records_additional_context_for_apply_patch() -> Result<()
 
     test.submit_turn("apply the patch with post hook").await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     let post_context = post_context.to_string();
     assert!(
         requests.iter().any(|request| request
@@ -3064,7 +3064,7 @@ async fn post_tool_use_records_additional_context_for_apply_patch() -> Result<()
 
     let hook_inputs = wait_for_hook_inputs(
         test.codex_home_path(),
-        1,
+        /*expected_len*/ 1,
         read_post_tool_use_hook_inputs,
         "post tool use hook inputs",
     )
@@ -3147,7 +3147,7 @@ async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<(
     test.submit_turn("apply the patch with edit alias post hook")
         .await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     let post_context = post_context.to_string();
     assert!(
         requests.iter().any(|request| request
@@ -3162,7 +3162,7 @@ async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<(
 
     let hook_inputs = wait_for_hook_inputs(
         test.codex_home_path(),
-        1,
+        /*expected_len*/ 1,
         read_post_tool_use_hook_inputs,
         "post tool use hook inputs",
     )
@@ -3229,7 +3229,7 @@ async fn post_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
 
     test.submit_turn("update the plan").await?;
 
-    let requests = wait_for_response_requests(&responses, 2).await;
+    let requests = wait_for_response_requests(&responses, /*expected_len*/ 2).await;
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item

@@ -75,7 +75,12 @@ async fn resolve_learned_route(
                 LearnedToolCall { tool, arguments },
             )
             .await?;
-            Ok(routing_tool::route_resolution("learned_rule", call, 0, 0))
+            Ok(routing_tool::route_resolution(
+                "learned_rule",
+                call,
+                /*fallback_prompt_tokens*/ 0,
+                /*fallback_completion_tokens*/ 0,
+            ))
         }
         LearnedRoute::Fanout { calls } => {
             let calls =
@@ -93,12 +98,14 @@ async fn call_for_learned_route_tool(
     base_args: &RouterArgs,
     call: LearnedToolCall,
 ) -> Result<ToolCall, FunctionCallError> {
-    let tool_name = index.find_exact(&call.tool, None)?.ok_or_else(|| {
-        FunctionCallError::RespondToModel(format!(
-            "tool_router learned rule selected unknown tool `{}`",
-            call.tool
-        ))
-    })?;
+    let tool_name = index
+        .find_exact(&call.tool, /*namespace*/ None)?
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(format!(
+                "tool_router learned rule selected unknown tool `{}`",
+                call.tool
+            ))
+        })?;
     if tool_name.name == "tool_router" {
         return Err(FunctionCallError::RespondToModel(
             "tool_router learned rule may not route to tool_router".to_string(),

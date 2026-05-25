@@ -82,7 +82,7 @@ impl App {
                 );
                 self.chat_widget.show_workflow_process_status(
                     format!("Workflow {workflow_name}: starting"),
-                    None,
+                    /*details*/ None,
                 );
                 tokio::spawn(async move {
                     let stdout_task = child.stdout.take().map(|stdout| {
@@ -211,8 +211,11 @@ impl App {
             .workflow_runs
             .get(&notification.run_id)
             .map(|state| state.workflow_name.as_str());
-        self.chat_widget
-            .handle_workflow_progress_notification(workflow_name, notification, None);
+        self.chat_widget.handle_workflow_progress_notification(
+            workflow_name,
+            notification,
+            /*replay_kind*/ None,
+        );
     }
 
     pub(crate) fn handle_workflow_markdown_result_notification(
@@ -416,10 +419,16 @@ mod tests {
         let thread_b = ThreadId::new();
 
         app.queue_workflow_markdown_handoff(Some(thread_a), "a-1".to_string());
-        app.queue_workflow_markdown_handoff(None, "global-1".to_string());
+        app.queue_workflow_markdown_handoff(
+            /*destination_thread_id*/ None,
+            "global-1".to_string(),
+        );
         app.queue_workflow_markdown_handoff(Some(thread_b), "b-1".to_string());
         app.queue_workflow_markdown_handoff(Some(thread_a), "a-2".to_string());
-        app.queue_workflow_markdown_handoff(None, "global-2".to_string());
+        app.queue_workflow_markdown_handoff(
+            /*destination_thread_id*/ None,
+            "global-2".to_string(),
+        );
 
         let injected_for_a = app
             .take_pending_workflow_markdown_handoffs_for_thread(thread_a)

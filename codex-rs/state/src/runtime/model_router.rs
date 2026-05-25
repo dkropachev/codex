@@ -822,7 +822,7 @@ impl StateRuntime {
         &self,
         task_key: Option<&str>,
     ) -> anyhow::Result<Vec<ModelRouterShadowEvaluationSummary>> {
-        self.model_router_shadow_evaluation_summaries_since(task_key, None)
+        self.model_router_shadow_evaluation_summaries_since(task_key, /*created_at_ms*/ None)
             .await
     }
 

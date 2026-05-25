@@ -455,10 +455,16 @@ async fn handle_request(
 
     match result {
         Ok(result) => {
-            let _ = write_response(&connection.writer, id, Some(result), None).await;
+            let _ = write_response(&connection.writer, id, Some(result), /*error*/ None).await;
         }
         Err(error) => {
-            let _ = write_response(&connection.writer, id, None, Some(error.to_string())).await;
+            let _ = write_response(
+                &connection.writer,
+                id,
+                /*result*/ None,
+                Some(error.to_string()),
+            )
+            .await;
         }
     }
 }
@@ -727,7 +733,10 @@ async fn with_shared_server<T>(
         .set_active(Some(Arc::clone(connection)))
         .await;
     let result = operation(runtime).await;
-    shared.elicitation_router.set_active(None).await;
+    shared
+        .elicitation_router
+        .set_active(/*connection*/ None)
+        .await;
     result
 }
 

@@ -523,8 +523,8 @@ mod tests {
         let config = WorkflowsConfigToml::default();
         let global = home.path().join("workflows").join("reports").join("jira");
         let local = project.path().join(".codex/workflows/reports/jira");
-        create_minimal_workflow(&global, "reports/jira", None);
-        create_minimal_workflow(&local, "reports/jira", None);
+        create_minimal_workflow(&global, "reports/jira", /*tool*/ None);
+        create_minimal_workflow(&local, "reports/jira", /*tool*/ None);
 
         let err = find_workflow(home.path(), project.path(), &config, "reports/jira").unwrap_err();
         assert!(matches!(err, WorkflowRegistryError::Duplicate(_)));
@@ -535,7 +535,7 @@ mod tests {
         let home = TempDir::new().unwrap();
         let project = TempDir::new().unwrap();
         let workflow = home.path().join("workflows/reports/jira-summary");
-        create_minimal_workflow(&workflow, "reports/jira-summary", None);
+        create_minimal_workflow(&workflow, "reports/jira-summary", /*tool*/ None);
 
         let discovered =
             discover_workflows(home.path(), project.path(), &WorkflowsConfigToml::default())

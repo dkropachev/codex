@@ -53,7 +53,7 @@ pub(super) async fn current_metric_state(
             .await?;
         current.insert(
             identity_key.clone(),
-            metric_snapshots(None, overlay.as_ref()),
+            metric_snapshots(/*candidate*/ None, overlay.as_ref()),
         );
     }
     Ok(current)
@@ -97,7 +97,7 @@ fn metric_snapshots(
                 token_price_from_candidate(candidate).map(|price| {
                     let usage = TokenUsage::default();
                     ModelRouterMetricValue::UsdMicros(
-                        estimate_token_cost(&usage, &price, 1.0).usd_micros,
+                        estimate_token_cost(&usage, &price, /*confidence*/ 1.0).usd_micros,
                     )
                 })
             }),

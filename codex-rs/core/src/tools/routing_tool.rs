@@ -170,7 +170,7 @@ pub(crate) async fn resolve_router_request(
     if is_noop_request(&args, &kind, &where_kind) {
         resolve!(RouterResolution::Noop {
             message: "No internal tool was executed for this routed request.".to_string(),
-            usage: usage("none", Vec::new(), 0),
+            usage: usage("none", Vec::new(), /*fanout_call_count*/ 0),
         });
     }
 
@@ -202,7 +202,11 @@ pub(crate) async fn resolve_router_request(
                 .process_status_summary(process_id)
                 .await,
             success: true,
-            usage: usage("deterministic", vec!["process.status".to_string()], 0),
+            usage: usage(
+                "deterministic",
+                vec!["process.status".to_string()],
+                /*fanout_call_count*/ 0
+            ),
         });
     }
 
@@ -540,7 +544,11 @@ fn tool_resolution(call: ToolCall) -> RouterResolution {
     let selected_tool = call.tool_name.display();
     RouterResolution::SingleTool {
         call: Box::new(call),
-        usage: usage("deterministic", vec![selected_tool], 1),
+        usage: usage(
+            "deterministic",
+            vec![selected_tool],
+            /*fanout_call_count*/ 1,
+        ),
     }
 }
 

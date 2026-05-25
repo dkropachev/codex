@@ -1245,7 +1245,7 @@ fn validate_model_router_model_rules(models: &ModelRouterModelsToml) -> Result<(
         validate_optional_rule_id(&label, rule.id.as_deref())?;
         validate_selector_list(&label, "tasks", &rule.tasks)?;
         validate_selector_list(&label, "except_tasks", &rule.except_tasks)?;
-        validate_model_selector_list(&label, &rule.models, true)?;
+        validate_model_selector_list(&label, &rule.models, /*require_non_empty*/ true)?;
     }
     Ok(())
 }
@@ -1256,7 +1256,7 @@ fn validate_model_router_bias_rules(bias: &ModelRouterBiasToml) -> Result<(), St
         validate_optional_rule_id(&label, rule.id.as_deref())?;
         validate_selector_list(&label, "tasks", &rule.tasks)?;
         validate_selector_list(&label, "except_tasks", &rule.except_tasks)?;
-        validate_model_selector_list(&label, &rule.models, true)?;
+        validate_model_selector_list(&label, &rule.models, /*require_non_empty*/ true)?;
         if !rule.score_bias.is_finite() || !(-1.0..=1.0).contains(&rule.score_bias) {
             return Err(format!(
                 "{label}: score_bias must be a finite value between -1.0 and 1.0"
@@ -1277,7 +1277,7 @@ fn validate_model_router_lifecycle(lifecycle: &ModelRouterLifecycleToml) -> Resu
         }
         validate_selector_list(&label, "tasks", &rule.tasks)?;
         validate_selector_list(&label, "except_tasks", &rule.except_tasks)?;
-        validate_model_selector_list(&label, &rule.models, false)?;
+        validate_model_selector_list(&label, &rule.models, /*require_non_empty*/ false)?;
         validate_lifecycle_values(&label, rule)?;
     }
     Ok(())

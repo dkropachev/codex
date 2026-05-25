@@ -118,7 +118,10 @@ impl App {
                         notification.markdown.clone(),
                     ),
                 ServerNotificationThreadTarget::Global => {
-                    self.queue_workflow_markdown_handoff(None, notification.markdown.clone())
+                    self.queue_workflow_markdown_handoff(
+                        /*destination_thread_id*/ None,
+                        notification.markdown.clone(),
+                    )
                 }
                 ServerNotificationThreadTarget::InvalidThreadId(thread_id) => {
                     tracing::warn!(

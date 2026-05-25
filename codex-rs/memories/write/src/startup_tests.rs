@@ -328,7 +328,9 @@ async fn memories_startup_phase1_routes_model_for_prompt() -> anyhow::Result<()>
     let request_context = context
         .stage_one_request_context(&test.config, "gpt-5.4", ReasoningEffort::Low)
         .await;
-    let routed = request_context.routed_for_prompt(&context, 1024).await;
+    let routed = request_context
+        .routed_for_prompt(&context, /*prompt_bytes*/ 1024)
+        .await;
 
     assert_ne!(routed.config.model.as_deref(), Some("gpt-5.4"));
 

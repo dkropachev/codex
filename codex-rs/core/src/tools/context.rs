@@ -185,7 +185,7 @@ impl ToolOutputTokenAccounting {
     }
 
     pub(crate) fn zero() -> Self {
-        Self::from_returned(0)
+        Self::from_returned(/*returned_output_tokens*/ 0)
     }
 
     pub(crate) fn with_returned_output_tokens(self, returned_output_tokens: i64) -> Self {

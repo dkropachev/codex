@@ -251,7 +251,7 @@ impl StateRuntime {
         &self,
         query: ModelRouterLifecycleStatsQuery,
     ) -> anyhow::Result<ModelRouterLifecycleStatsSummary> {
-        let event_rows = model_router_lifecycle_events_query(&query, None)
+        let event_rows = model_router_lifecycle_events_query(&query, /*limit*/ None)
             .build()
             .fetch_all(self.pool.as_ref())
             .await?;

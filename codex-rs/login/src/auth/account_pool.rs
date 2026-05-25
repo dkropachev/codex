@@ -839,7 +839,12 @@ mod tests {
             AccountPoolBucket::Regular,
             "usage limit reached".to_string(),
         );
-        pool.set_usage_for_testing("work-pro", Some(100), None, Instant::now());
+        pool.set_usage_for_testing(
+            "work-pro",
+            Some(100),
+            /*spark_remaining*/ None,
+            Instant::now(),
+        );
 
         let auth = pool
             .auth()

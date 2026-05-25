@@ -8313,7 +8313,7 @@ mod tests {
             /*width*/ 72,
             /*enhanced_keys_supported*/ false,
             |composer| {
-                composer.set_workflows_enabled(true);
+                composer.set_workflows_enabled(/*enabled*/ true);
                 composer.set_workflow_mentions(Some(vec![
                     test_workflow_summary_with_command_options(
                         "reports/code-review",
@@ -8351,7 +8351,7 @@ mod tests {
             /*width*/ 44,
             /*enhanced_keys_supported*/ false,
             |composer| {
-                composer.set_workflows_enabled(true);
+                composer.set_workflows_enabled(/*enabled*/ true);
                 composer.set_workflow_mentions(Some(vec![
                     test_workflow_summary_with_command_options(
                         "reports/code-review",
@@ -8389,7 +8389,7 @@ mod tests {
             /*width*/ 76,
             /*enhanced_keys_supported*/ false,
             |composer| {
-                composer.set_workflows_enabled(true);
+                composer.set_workflows_enabled(/*enabled*/ true);
                 composer.set_workflow_mentions(Some(vec![
                     test_workflow_summary_with_command_options(
                         "reports/code-review",
@@ -8430,7 +8430,7 @@ mod tests {
             /*width*/ 48,
             /*enhanced_keys_supported*/ false,
             |composer| {
-                composer.set_workflows_enabled(true);
+                composer.set_workflows_enabled(/*enabled*/ true);
                 composer.set_workflow_mentions(Some(vec![
                     test_workflow_summary_with_command_options(
                         "reports/code-review",
@@ -8471,7 +8471,7 @@ mod tests {
             /*width*/ 76,
             /*enhanced_keys_supported*/ false,
             |composer| {
-                composer.set_workflows_enabled(true);
+                composer.set_workflows_enabled(/*enabled*/ true);
                 composer.set_workflow_mentions(Some(vec![
                     test_workflow_summary_with_command_options(
                         "reports/code-review",

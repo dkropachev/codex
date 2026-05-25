@@ -314,7 +314,7 @@ mod tests {
         );
         assert!(
             index
-                .find_exact("list", None)
+                .find_exact("list", /*namespace*/ None)
                 .expect_err("ambiguous bare name")
                 .to_string()
                 .contains("ambiguous")
@@ -325,7 +325,10 @@ mod tests {
     fn built_in_read_only_tools_are_fanout_safe() {
         let registry =
             ToolRegistry::with_handler_for_test(ToolName::plain("list_dir"), Arc::new(TestHandler));
-        let specs = vec![ConfiguredToolSpec::new(function_tool("list_dir"), false)];
+        let specs = vec![ConfiguredToolSpec::new(
+            function_tool("list_dir"),
+            /*supports_parallel_tool_calls*/ false,
+        )];
         let index = ToolRouterIndex::build(&specs, &registry, &HashSet::new());
 
         assert!(index.fanout_safe(&ToolName::plain("list_dir")));
@@ -337,14 +340,16 @@ mod tests {
         let index = ToolRouterIndex::build(
             &[ConfiguredToolSpec::new(
                 function_tool("missing_tool"),
-                false,
+                /*supports_parallel_tool_calls*/ false,
             )],
             &ToolRegistry::empty_for_test(),
             &HashSet::new(),
         );
 
         assert_eq!(
-            index.find_exact("missing_tool", None).expect("lookup"),
+            index
+                .find_exact("missing_tool", /*namespace*/ None)
+                .expect("lookup"),
             None
         );
     }
@@ -365,9 +370,18 @@ mod tests {
         let registry =
             ToolRegistry::with_handler_for_test(ToolName::plain("list_dir"), Arc::new(TestHandler));
         let specs = vec![
-            ConfiguredToolSpec::new(function_tool("list_dir"), false),
-            ConfiguredToolSpec::new(function_tool("missing_tool"), false),
-            ConfiguredToolSpec::new(function_tool(TOOL_ROUTER_TOOL_NAME), false),
+            ConfiguredToolSpec::new(
+                function_tool("list_dir"),
+                /*supports_parallel_tool_calls*/ false,
+            ),
+            ConfiguredToolSpec::new(
+                function_tool("missing_tool"),
+                /*supports_parallel_tool_calls*/ false,
+            ),
+            ConfiguredToolSpec::new(
+                function_tool(TOOL_ROUTER_TOOL_NAME),
+                /*supports_parallel_tool_calls*/ false,
+            ),
         ];
         let index = ToolRouterIndex::build(&specs, &registry, &HashSet::new());
 
@@ -383,7 +397,11 @@ mod tests {
             description: String::new(),
             strict: false,
             defer_loading: None,
-            parameters: JsonSchema::object(Default::default(), None, Some(false.into())),
+            parameters: JsonSchema::object(
+                Default::default(),
+                /*required*/ None,
+                Some(false.into()),
+            ),
             output_schema: None,
         })
     }
