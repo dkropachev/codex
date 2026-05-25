@@ -12,6 +12,7 @@ use crate::compact_remote::build_compact_request_log_data;
 use crate::compact_remote::log_remote_compact_failure;
 use crate::compact_remote::process_compacted_history;
 use crate::compact_remote::trim_function_call_history_to_fit_context_window;
+use crate::model_router::model_client_for_config;
 use crate::session::session::Session;
 use crate::session::turn::built_tools;
 use crate::session::turn::model_visible_tools_for_turn;
@@ -196,7 +197,12 @@ async fn run_remote_compact_task_inner_impl(
         )
         .await
     } else {
-        let mut owned_client_session = sess.services.model_client.new_session();
+        let mut owned_client_session = model_client_for_config(
+            &turn_context.config,
+            &sess.services.model_client,
+            &sess.services.auth_manager,
+        )
+        .new_session();
         run_remote_compaction_request_v2(
             sess,
             turn_context,

@@ -905,10 +905,17 @@ pub(crate) fn model_client_for_config(
     parent: &ModelClient,
     parent_auth_manager: &Arc<AuthManager>,
 ) -> ModelClient {
+    let auth_manager = auth_manager_for_config(config, parent_auth_manager);
+    if parent.matches_provider_info(&config.model_provider_id, &config.model_provider)
+        && Arc::ptr_eq(&auth_manager, parent_auth_manager)
+    {
+        return parent.clone();
+    }
+
     parent.with_provider_info(
         &config.model_provider_id,
         config.model_provider.clone(),
-        Some(auth_manager_for_config(config, parent_auth_manager)),
+        Some(auth_manager),
     )
 }
 
@@ -1437,7 +1444,9 @@ pub(crate) fn apply_candidate(
     config: &mut Config,
     candidate: &ModelRouterCandidateToml,
 ) -> Result<(), String> {
-    if let Some(model_provider_id) = &candidate.model_provider {
+    if let Some(model_provider_id) = &candidate.model_provider
+        && model_provider_id != &config.model_provider_id
+    {
         let model_provider = config
             .model_providers
             .get(model_provider_id)
@@ -1661,6 +1670,85 @@ mod tests {
                     .as_deref()
                     .is_some_and(|id| id.starts_with("auto:deepseek-custom:"))
         }));
+    }
+
+    #[tokio::test]
+    async fn available_router_models_skips_provider_when_catalog_fetch_fails() {
+        let broken_server = MockServer::start().await;
+        mount_models_response(&broken_server, 500, vec!["broken-model"]).await;
+        let working_server = MockServer::start().await;
+        mount_models_response(&working_server, 200, vec!["working-model"]).await;
+        let mut config = config::test_config().await;
+        config.model = Some("gpt-5.4".to_string());
+        config.model_router = Some(ModelRouterToml {
+            enabled: true,
+            candidates: Vec::new(),
+            ..Default::default()
+        });
+        config.model_providers.insert(
+            "broken-custom".to_string(),
+            custom_provider_for_base_url(broken_server.uri()),
+        );
+        config.model_providers.insert(
+            "working-custom".to_string(),
+            custom_provider_for_base_url(working_server.uri()),
+        );
+        retain_only_additional_providers(&mut config, &["broken-custom", "working-custom"]);
+
+        let available_models = available_router_models(
+            &config,
+            &empty_models_manager(),
+            &ModelRouterDiscoveryCache::new(),
+        )
+        .await;
+        let candidate_set =
+            build_candidate_set(&config, "module.review.triage", 80, &available_models, &[])
+                .expect("candidate set should build");
+
+        let candidate_models = candidate_set
+            .candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.model_provider.as_deref(),
+                    candidate.model.as_deref(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            candidate_models,
+            vec![(Some("working-custom"), Some("working-model"))]
+        );
+    }
+
+    #[tokio::test]
+    async fn available_router_models_skips_provider_when_catalog_payload_is_invalid() {
+        let server = MockServer::start().await;
+        mount_invalid_models_response(&server).await;
+        let mut config = config::test_config().await;
+        config.model = Some("gpt-5.4".to_string());
+        config.model_router = Some(ModelRouterToml {
+            enabled: true,
+            candidates: Vec::new(),
+            ..Default::default()
+        });
+        config.model_providers.insert(
+            "broken-custom".to_string(),
+            custom_provider_for_base_url(server.uri()),
+        );
+        retain_only_additional_providers(&mut config, &["broken-custom"]);
+
+        let available_models = available_router_models(
+            &config,
+            &empty_models_manager(),
+            &ModelRouterDiscoveryCache::new(),
+        )
+        .await;
+        let candidate_set =
+            build_candidate_set(&config, "module.review.triage", 80, &available_models, &[])
+                .expect("candidate set should build");
+
+        assert!(candidate_set.candidates.is_empty());
     }
 
     #[tokio::test]
@@ -2975,6 +3063,14 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/models"))
             .respond_with(ResponseTemplate::new(status).set_body_json(ModelsResponse { models }))
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_invalid_models_response(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not valid json"))
             .mount(server)
             .await;
     }

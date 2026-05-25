@@ -15,6 +15,7 @@ use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
 use crate::hook_runtime::run_pre_compact_hooks;
+use crate::model_router::model_client_for_config;
 use crate::session::session::Session;
 use crate::session::turn::built_tools;
 use crate::session::turn::model_visible_tools_for_turn;
@@ -189,9 +190,12 @@ async fn run_remote_compact_task_inner_impl(
         output_schema: None,
         output_schema_strict: true,
     };
-    let mut new_history = sess
-        .services
-        .model_client
+    let model_client = model_client_for_config(
+        &turn_context.config,
+        &sess.services.model_client,
+        &sess.services.auth_manager,
+    );
+    let mut new_history = model_client
         .compact_conversation_history(
             &prompt,
             &turn_context.model_info,

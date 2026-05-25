@@ -763,6 +763,7 @@ pub(crate) struct ChatWidget {
     raw_output_mode: bool,
     /// Runtime value resolved by core. `config.service_tier` remains the explicit user choice.
     effective_service_tier: Option<ServiceTier>,
+    model_router_session_enabled_override: Option<bool>,
     /// The unmasked collaboration mode settings (always Default mode).
     ///
     /// Masks are applied on top of this base mode to derive the effective mode.
@@ -4950,6 +4951,7 @@ impl ChatWidget {
             raw_output_mode: config.tui_raw_output_mode,
             config,
             effective_service_tier,
+            model_router_session_enabled_override: None,
             skills_all: Vec::new(),
             skills_initial_state: None,
             current_collaboration_mode,

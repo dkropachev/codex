@@ -33,6 +33,7 @@ const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the ma
 const GOAL_USAGE: &str = "Usage: /goal <objective>";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
+const MODEL_ROUTER_USAGE: &str = "Usage: /model-router [enable|disable|inherit|status]";
 
 fn workflow_command_argv(command: &str, args: &str) -> Option<Vec<String>> {
     let mut argv = vec![command.to_string()];
@@ -176,6 +177,61 @@ impl ChatWidget {
             .send(AppEvent::RawOutputModeChanged { enabled });
     }
 
+    fn handle_model_router_command_args(&mut self, args: &str) {
+        match args.to_ascii_lowercase().as_str() {
+            "" | "status" => self.add_model_router_status(),
+            "enable" | "on" => {
+                self.set_model_router_session_enabled_override(/*enabled*/ Some(true));
+            }
+            "disable" | "off" => {
+                self.set_model_router_session_enabled_override(/*enabled*/ Some(false));
+            }
+            "inherit" | "default" | "clear" => {
+                self.set_model_router_session_enabled_override(/*enabled*/ None);
+            }
+            _ => self.add_error_message(MODEL_ROUTER_USAGE.to_string()),
+        }
+    }
+
+    fn set_model_router_session_enabled_override(&mut self, enabled: Option<bool>) {
+        if enabled == Some(true) && self.config.model_router.is_none() {
+            self.add_error_message(
+                "Cannot enable model router: no [model_router] is configured.".to_string(),
+            );
+            return;
+        }
+
+        self.model_router_session_enabled_override = enabled;
+        self.submit_op(AppCommand::SetModelRouterSessionConfig { enabled });
+        let status = match enabled {
+            Some(true) => "enabled",
+            Some(false) => "disabled",
+            None => "inheriting the configured default",
+        };
+        self.add_info_message(
+            format!("Model router is {status} for this thread."),
+            /*hint*/ None,
+        );
+    }
+
+    fn add_model_router_status(&mut self) {
+        let status = match self.model_router_session_enabled_override {
+            Some(true) => "enabled for this thread",
+            Some(false) => "disabled for this thread",
+            None => match self
+                .config
+                .model_router
+                .as_ref()
+                .map(|router| router.enabled)
+            {
+                Some(true) => "inheriting enabled config",
+                Some(false) => "inheriting disabled config",
+                None => "not configured",
+            },
+        };
+        self.add_info_message(format!("Model router is {status}."), /*hint*/ None);
+    }
+
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
             return;
@@ -249,6 +305,9 @@ impl ChatWidget {
             }
             SlashCommand::Model => {
                 self.open_model_popup();
+            }
+            SlashCommand::ModelRouter => {
+                self.handle_model_router_command_args("");
             }
             SlashCommand::Fast => {
                 self.toggle_fast_mode_from_ui();
@@ -685,6 +744,9 @@ impl ChatWidget {
                     }
                 }
             }
+            SlashCommand::ModelRouter => {
+                self.handle_model_router_command_args(trimmed);
+            }
             SlashCommand::Ide => {
                 self.handle_ide_command_args(trimmed);
             }
@@ -1058,6 +1120,7 @@ impl ChatWidget {
         }
         match cmd {
             SlashCommand::Fast
+            | SlashCommand::ModelRouter
             | SlashCommand::Ide
             | SlashCommand::Status
             | SlashCommand::DebugConfig

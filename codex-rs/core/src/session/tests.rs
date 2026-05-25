@@ -96,6 +96,7 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ConversationAudioParams;
@@ -135,6 +136,7 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -1703,6 +1705,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         network: None,
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
+        model_provider: None,
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         realtime_active: Some(turn_context.realtime_active),
@@ -2081,6 +2084,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
         RolloutItem::TurnContext(TurnContextItem {
             turn_id: Some(rolled_back_turn_id.clone()),
             model: "rolled-back-model".to_string(),
+            model_provider: None,
             ..first_context_item.clone()
         }),
         RolloutItem::ResponseItem(user_message("turn 2 user")),
@@ -2903,6 +2907,79 @@ async fn model_router_enable_requires_configured_router() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_router_session_override_controls_chat_turn_routing() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let responses = core_test_support::responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "first"),
+                ev_completed_with_tokens("resp-1", /*total_tokens*/ 100),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "second"),
+                ev_completed_with_tokens("resp-2", /*total_tokens*/ 100),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-3", "third"),
+                ev_completed_with_tokens("resp-3", /*total_tokens*/ 100),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.model_router = Some(codex_config::config_toml::ModelRouterToml {
+            enabled: false,
+            candidates: vec![codex_config::config_toml::ModelRouterCandidateToml {
+                id: Some("chat-fast".to_string()),
+                model: Some("gpt-5.3-codex-spark".to_string()),
+                ..Default::default()
+            }],
+            models: Some(codex_config::config_toml::ModelRouterModelsToml {
+                rules: vec![codex_config::config_toml::ModelRouterModelRuleToml {
+                    id: Some("chat-default-fast".to_string()),
+                    rule_type: codex_config::config_toml::ModelRouterModelRuleTypeToml::Require,
+                    tasks: vec!["chat.default".to_string()],
+                    except_tasks: Vec::new(),
+                    models: vec![codex_config::config_toml::ModelRouterModelSelectorToml {
+                        provider: Some("openai".to_string()),
+                        model: Some("gpt-5.3-codex-spark".to_string()),
+                    }],
+                }],
+            }),
+            ..Default::default()
+        });
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("first").await?;
+    test.codex
+        .submit(Op::SetModelRouterSessionConfig {
+            enabled: Some(true),
+        })
+        .await?;
+    test.submit_turn("second").await?;
+    test.codex
+        .submit(Op::SetModelRouterSessionConfig { enabled: None })
+        .await?;
+    test.submit_turn("third").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].body_json()["model"].as_str(), Some("gpt-5.4"));
+    assert_eq!(
+        requests[1].body_json()["model"].as_str(),
+        Some("gpt-5.3-codex-spark")
+    );
+    assert_eq!(requests[2].body_json()["model"].as_str(), Some("gpt-5.4"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn normal_chat_turn_applies_model_router_and_records_usage() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let response = mount_sse_once(
@@ -3056,6 +3133,10 @@ async fn routed_bedrock_cmb_turn_uses_candidate_provider_client() -> anyhow::Res
         response.single_request().body_json()["model"].as_str(),
         Some(BEDROCK_CMB_MODEL)
     );
+    assert_eq!(
+        response.single_request().header("authorization").as_deref(),
+        Some("Bearer routed-provider-token")
+    );
 
     let primary_response_request_count = primary_server
         .received_requests()
@@ -3083,6 +3164,125 @@ async fn routed_bedrock_cmb_turn_uses_candidate_provider_client() -> anyhow::Res
     assert_eq!(summary.totals.request_count, 1);
     assert_eq!(summary.totals.production_request_count, 1);
     assert_eq!(summary.totals.token_usage.total_tokens, 150);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn routed_turn_execution_never_uses_provider_with_broken_catalog() -> anyhow::Result<()> {
+    const BROKEN_PROVIDER_ID: &str = "aaa-broken-responses";
+    const WORKING_PROVIDER_ID: &str = "zzz-working-responses";
+
+    let openai_server = start_mock_server().await;
+    let broken_server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/models"))
+        .respond_with(wiremock::ResponseTemplate::new(500))
+        .mount(&broken_server)
+        .await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path_regex(".*/responses$"))
+        .respond_with(wiremock::ResponseTemplate::new(500))
+        .mount(&broken_server)
+        .await;
+
+    let working_server = wiremock::MockServer::start().await;
+    mount_models_once(
+        &working_server,
+        ModelsResponse {
+            models: vec![model_info::model_info_from_slug("working-chat")],
+        },
+    )
+    .await;
+    let working_response = mount_sse_once(
+        &working_server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed_with_tokens("resp-1", 150),
+        ]),
+    )
+    .await;
+
+    let broken_base_url = broken_server.uri();
+    let working_base_url = working_server.uri();
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(move |config| {
+            let mut broken_provider =
+                codex_model_provider_info::create_oss_provider_with_base_url(&broken_base_url);
+            broken_provider.name = "Broken Responses".to_string();
+            let mut working_provider =
+                codex_model_provider_info::create_oss_provider_with_base_url(&working_base_url);
+            working_provider.name = "Working Responses".to_string();
+            working_provider.experimental_bearer_token = Some("working-token".to_string());
+            config
+                .model_providers
+                .insert(BROKEN_PROVIDER_ID.to_string(), broken_provider);
+            config
+                .model_providers
+                .insert(WORKING_PROVIDER_ID.to_string(), working_provider);
+            config.model_router = Some(codex_config::config_toml::ModelRouterToml {
+                enabled: true,
+                candidates: Vec::new(),
+                models: Some(codex_config::config_toml::ModelRouterModelsToml {
+                    rules: vec![codex_config::config_toml::ModelRouterModelRuleToml {
+                        id: Some("chat-provider-candidates".to_string()),
+                        rule_type: codex_config::config_toml::ModelRouterModelRuleTypeToml::Require,
+                        tasks: vec!["chat.default".to_string()],
+                        except_tasks: Vec::new(),
+                        models: vec![
+                            codex_config::config_toml::ModelRouterModelSelectorToml {
+                                provider: Some(BROKEN_PROVIDER_ID.to_string()),
+                                model: Some("broken-chat".to_string()),
+                            },
+                            codex_config::config_toml::ModelRouterModelSelectorToml {
+                                provider: Some(WORKING_PROVIDER_ID.to_string()),
+                                model: Some("working-chat".to_string()),
+                            },
+                        ],
+                    }],
+                }),
+                bias: Some(codex_config::config_toml::ModelRouterBiasToml {
+                    rules: vec![codex_config::config_toml::ModelRouterBiasRuleToml {
+                        id: Some("prefer-broken-if-present".to_string()),
+                        tasks: vec!["chat.default".to_string()],
+                        except_tasks: Vec::new(),
+                        models: vec![codex_config::config_toml::ModelRouterModelSelectorToml {
+                            provider: Some(BROKEN_PROVIDER_ID.to_string()),
+                            model: Some("broken-chat".to_string()),
+                        }],
+                        score_bias: 1000.0,
+                    }],
+                }),
+                ..Default::default()
+            });
+        });
+    let test = builder.build(&openai_server).await?;
+
+    test.submit_turn("hello").await?;
+
+    assert_eq!(
+        working_response.single_request().body_json()["model"].as_str(),
+        Some("working-chat")
+    );
+    assert_eq!(
+        working_response
+            .single_request()
+            .header("authorization")
+            .as_deref(),
+        Some("Bearer working-token")
+    );
+    let broken_execution_requests = broken_server
+        .received_requests()
+        .await
+        .expect("mock server should not fail")
+        .into_iter()
+        .filter(|request| {
+            request.method == wiremock::http::Method::POST
+                && request.url.path().ends_with("/responses")
+        })
+        .count();
+    assert_eq!(broken_execution_requests, 0);
     Ok(())
 }
 

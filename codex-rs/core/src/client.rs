@@ -166,6 +166,7 @@ struct ModelClientState {
     thread_id: ThreadId,
     window_generation: AtomicU64,
     installation_id: String,
+    provider_id: String,
     provider: SharedModelProvider,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
@@ -336,6 +337,7 @@ impl ModelClient {
                 thread_id,
                 window_generation: AtomicU64::new(0),
                 installation_id,
+                provider_id: provider_id.to_string(),
                 provider: model_provider,
                 auth_env_telemetry,
                 session_source,
@@ -379,6 +381,14 @@ impl ModelClient {
             Ordering::Relaxed,
         );
         client
+    }
+
+    pub(crate) fn matches_provider_info(
+        &self,
+        provider_id: &str,
+        provider_info: &ModelProviderInfo,
+    ) -> bool {
+        self.state.provider_id == provider_id && self.state.provider.info() == provider_info
     }
 
     /// Creates a fresh turn-scoped streaming session.

@@ -528,26 +528,179 @@ async fn model_router_tune_persists_shadow_rows_and_cli_report() -> Result<()> {
     assert_eq!(usage_group_counts.get("judge"), Some(&4));
     assert_eq!(usage_group_counts.get("shadow"), Some(&4));
 
-    let cli_output = Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
-        .env("CODEX_HOME", test.codex_home_path())
-        .env("CODEX_SQLITE_HOME", test.codex_home_path())
-        .arg("model-router")
-        .arg("shadows")
-        .arg("--json")
-        .output()?;
+    let mut cli_candidates_toml = String::new();
+    for candidate in [spark_candidate, &deepseek_candidate] {
+        cli_candidates_toml.push_str("\n[[model_router.candidates]]\n");
+        if let Some(id) = &candidate.id {
+            cli_candidates_toml.push_str(&format!("id = \"{}\"\n", toml_escape(id)));
+        }
+        if let Some(model) = &candidate.model {
+            cli_candidates_toml.push_str(&format!("model = \"{}\"\n", toml_escape(model)));
+        }
+        if let Some(model_provider) = &candidate.model_provider {
+            cli_candidates_toml.push_str(&format!(
+                "model_provider = \"{}\"\n",
+                toml_escape(model_provider)
+            ));
+        }
+        if let Some(account_pool) = &candidate.account_pool {
+            cli_candidates_toml.push_str(&format!(
+                "account_pool = \"{}\"\n",
+                toml_escape(account_pool)
+            ));
+        }
+        if let Some(account) = &candidate.account {
+            cli_candidates_toml.push_str(&format!("account = \"{}\"\n", toml_escape(account)));
+        }
+    }
+    fs::write(
+        test.codex_home_path().join("config.toml"),
+        format!(
+            r#"
+model = "{incumbent_model}"
+model_provider = "{default_provider_id}"
+approval_policy = "never"
+
+[model_router]
+enabled = true
+discovery = "manual"
+{cli_candidates_toml}
+"#
+        ),
+    )?;
+
+    let cli_policy = run_model_router_cli_json(
+        test.codex_home_path(),
+        &["policy", "--task-key", "history.cli", "--json"],
+    )?;
+    assert_eq!(cli_policy["enabled"].as_bool(), Some(true));
     assert!(
-        cli_output.status.success(),
-        "model-router shadows command failed:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&cli_output.stdout),
-        String::from_utf8_lossy(&cli_output.stderr)
+        cli_policy["candidates"]
+            .as_array()
+            .expect("policy candidates should be an array")
+            .iter()
+            .any(|candidate| candidate["identityKey"].as_str() == Some(&spark_identity_key))
     );
 
-    let mut cli_report: ShadowReportView = serde_json::from_slice(&cli_output.stdout)?;
+    let cli_usage = run_model_router_cli_json(
+        test.codex_home_path(),
+        &[
+            "usage",
+            "--window",
+            "all",
+            "--task-key",
+            "history.cli",
+            "--group-by",
+            "request-kind",
+            "--json",
+        ],
+    )?;
+    assert_eq!(
+        cli_usage["summary"]["totals"]["requestCount"].as_i64(),
+        Some(8)
+    );
+    assert!(
+        cli_usage["summary"]["groups"]
+            .as_array()
+            .expect("usage groups should be an array")
+            .iter()
+            .any(|group| group["key"].as_str() == Some("shadow"))
+    );
+
+    let cli_lifecycle = run_model_router_cli_json(
+        test.codex_home_path(),
+        &[
+            "lifecycle",
+            "--task-key",
+            "history.cli",
+            "--events",
+            "--json",
+        ],
+    )?;
+    assert!(
+        cli_lifecycle["promotions"]
+            .as_array()
+            .expect("lifecycle promotions should be an array")
+            .iter()
+            .any(|promotion| {
+                promotion["candidateIdentity"].as_str() == Some(&spark_identity_key)
+                    && promotion["status"].as_str() == Some("promoted")
+            })
+    );
+
+    let cli_report_value =
+        run_model_router_cli_json(test.codex_home_path(), &["shadows", "--json"])?;
+    let mut cli_report: ShadowReportView = serde_json::from_value(cli_report_value)?;
     assert_eq!(cli_report.task_key, None);
     sort_summary_views(&mut cli_report.summaries);
     sort_record_views(&mut cli_report.recent);
     assert_eq!(cli_report.summaries, shadow_summary_views);
     assert_eq!(cli_report.recent, shadow_recent_views);
+
+    let report_path = test.codex_home_path().join("model-router-report.json");
+    fs::write(&report_path, serde_json::to_vec_pretty(&report)?)?;
+    let report_path_arg = report_path.to_string_lossy().into_owned();
+    let cli_report_show = run_model_router_cli_json(
+        test.codex_home_path(),
+        &["report", "show", &report_path_arg, "--json"],
+    )?;
+    assert_eq!(cli_report_show["evaluatedCount"].as_i64(), Some(2));
+
+    let cli_report_apply = run_model_router_cli_json(
+        test.codex_home_path(),
+        &["report", "apply", &report_path_arg, "--dry-run", "--json"],
+    )?;
+    assert_eq!(cli_report_apply["dryRun"].as_bool(), Some(true));
+    assert!(
+        cli_report_apply["appliedRecommendations"]
+            .as_i64()
+            .is_some()
+    );
+
+    let cli_promote = run_model_router_cli_json(
+        test.codex_home_path(),
+        &[
+            "promote",
+            "--task-key",
+            "history.cli",
+            "--candidate-identity",
+            &deepseek_identity_key,
+            "--base-candidate-identity",
+            &historical_identity_key,
+            "--reason",
+            "cli test promotion",
+            "--json",
+        ],
+    )?;
+    assert_eq!(
+        cli_promote["candidateIdentity"].as_str(),
+        Some(deepseek_identity_key.as_str())
+    );
+    assert_eq!(cli_promote["status"].as_str(), Some("promoted"));
+
+    let cli_demote = run_model_router_cli_json(
+        test.codex_home_path(),
+        &[
+            "demote",
+            "--task-key",
+            "history.cli",
+            "--candidate-identity",
+            &deepseek_identity_key,
+            "--reason",
+            "cli test demotion",
+            "--json",
+        ],
+    )?;
+    assert!(
+        cli_demote
+            .as_array()
+            .expect("demote should print promotion rows")
+            .iter()
+            .any(|promotion| {
+                promotion["candidateIdentity"].as_str() == Some(&deepseek_identity_key)
+                    && promotion["status"].as_str() == Some("demoted")
+            })
+    );
 
     Ok(())
 }
@@ -566,6 +719,26 @@ fn request_model_counts(requests: &[responses::ResponsesRequest]) -> BTreeMap<St
         *counts.entry(model).or_insert(0) += 1;
     }
     counts
+}
+
+fn run_model_router_cli_json(codex_home: &Path, args: &[&str]) -> Result<Value> {
+    let output = Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
+        .env("CODEX_HOME", codex_home)
+        .env("CODEX_SQLITE_HOME", codex_home)
+        .arg("model-router")
+        .args(args)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "model-router command failed with args {args:?}:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+fn toml_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn sort_summary_views(values: &mut [ShadowSummaryView]) {

@@ -279,6 +279,7 @@ mod tests {
         assert_eq!(
             commands,
             vec![
+                SlashCommand::ModelRouter,
                 SlashCommand::Ide,
                 SlashCommand::Copy,
                 SlashCommand::Raw,

@@ -1248,6 +1248,12 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
             .await?;
     }
 
+    test.codex.submit(Op::ListMcpTools).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::McpListToolsResponse(_))
+    })
+    .await;
+
     let _ = gate_completed_tx.send(());
 
     let hook_inputs = wait_for_hook_inputs(

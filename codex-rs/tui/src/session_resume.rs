@@ -25,6 +25,12 @@ struct RolloutResumeState {
     thread_id: Option<ThreadId>,
     cwd: Option<PathBuf>,
     model: Option<String>,
+    model_provider: Option<String>,
+}
+
+pub(crate) struct SessionModelSelection {
+    pub(crate) model: String,
+    pub(crate) model_provider: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -37,6 +43,8 @@ struct SessionMetadata {
 struct TurnContextResumeState {
     cwd: PathBuf,
     model: String,
+    #[serde(default)]
+    model_provider: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -64,23 +72,28 @@ pub(crate) async fn resolve_session_thread_id(
     }
 }
 
-pub(crate) async fn read_session_model(
+pub(crate) async fn read_session_model_selection(
     state_db_ctx: Option<&StateRuntime>,
     thread_id: ThreadId,
     path: Option<&Path>,
-) -> Option<String> {
+) -> Option<SessionModelSelection> {
     if let Some(state_db_ctx) = state_db_ctx
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
         && let Some(model) = metadata.model
     {
-        return Some(model);
+        return Some(SessionModelSelection {
+            model,
+            model_provider: (!metadata.model_provider.is_empty())
+                .then_some(metadata.model_provider),
+        });
     }
 
     let path = path?;
-    read_rollout_resume_state(path)
-        .await
-        .ok()
-        .and_then(|state| state.model)
+    let state = read_rollout_resume_state(path).await.ok()?;
+    state.model.map(|model| SessionModelSelection {
+        model,
+        model_provider: state.model_provider,
+    })
 }
 
 pub(crate) async fn resolve_cwd_for_resume_or_fork(
@@ -173,6 +186,7 @@ async fn read_rollout_resume_state(path: &Path) -> io::Result<RolloutResumeState
                 {
                     state.cwd = Some(turn_context.cwd);
                     state.model = Some(turn_context.model);
+                    state.model_provider = turn_context.model_provider;
                 }
             }
             _ => {}
@@ -239,12 +253,20 @@ mod tests {
                 rollout_line(
                     "t1",
                     "turn_context",
-                    serde_json::json!({ "cwd": temp_dir.path().join("middle"), "model": "middle" }),
+                    serde_json::json!({
+                        "cwd": temp_dir.path().join("middle"),
+                        "model": "middle",
+                        "model_provider": "middle-provider"
+                    }),
                 ),
                 rollout_line(
                     "t2",
                     "turn_context",
-                    serde_json::json!({ "cwd": latest.clone(), "model": "latest" }),
+                    serde_json::json!({
+                        "cwd": latest.clone(),
+                        "model": "latest",
+                        "model_provider": "latest-provider"
+                    }),
                 ),
             ],
         )?;
@@ -254,6 +276,7 @@ mod tests {
         assert_eq!(state.thread_id, Some(thread_id));
         assert_eq!(state.cwd, Some(latest));
         assert_eq!(state.model, Some("latest".to_string()));
+        assert_eq!(state.model_provider, Some("latest-provider".to_string()));
         Ok(())
     }
 
@@ -282,6 +305,7 @@ mod tests {
         assert_eq!(state.thread_id, Some(thread_id));
         assert_eq!(state.cwd, Some(cwd));
         assert_eq!(state.model, None);
+        assert_eq!(state.model_provider, None);
         Ok(())
     }
 

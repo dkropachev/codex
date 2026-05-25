@@ -1,5 +1,5 @@
 use super::App;
-use crate::session_resume::read_session_model;
+use crate::session_resume::read_session_model_selection;
 use crate::session_state::ThreadSessionState;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::Thread;
@@ -86,10 +86,17 @@ impl App {
         session.active_permission_profile = active_permission_profile;
         session.instruction_source_paths = Vec::new();
         session.rollout_path = thread.path.clone();
-        if let Some(model) =
-            read_session_model(self.state_db.as_deref(), thread_id, thread.path.as_deref()).await
+        if let Some(selection) = read_session_model_selection(
+            self.state_db.as_deref(),
+            thread_id,
+            thread.path.as_deref(),
+        )
+        .await
         {
-            session.model = model;
+            session.model = selection.model;
+            if let Some(model_provider) = selection.model_provider {
+                session.model_provider_id = model_provider;
+            }
         } else if thread.path.is_some() {
             session.model.clear();
         }

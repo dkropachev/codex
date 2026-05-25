@@ -3059,6 +3059,8 @@ pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_system_sandbox_policy: Option<FileSystemSandboxPolicy>,
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5262,6 +5264,7 @@ mod tests {
                 },
             ])),
             model: "gpt-5".to_string(),
+            model_provider: None,
             personality: None,
             collaboration_mode: None,
             realtime_active: None,

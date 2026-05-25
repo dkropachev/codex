@@ -64,6 +64,9 @@ pub(crate) enum AppCommand {
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
     },
+    SetModelRouterSessionConfig {
+        enabled: Option<bool>,
+    },
     ExecApproval {
         id: String,
         turn_id: Option<String>,

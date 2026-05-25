@@ -2352,6 +2352,82 @@ async fn slash_rollout_handles_missing_path() {
 }
 
 #[tokio::test]
+async fn model_router_slash_command_updates_thread_override() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.model_router = Some(codex_config::config_toml::ModelRouterToml {
+        enabled: false,
+        ..Default::default()
+    });
+
+    chat.dispatch_command_with_args(SlashCommand::ModelRouter, "enable".to_string(), Vec::new());
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::SetModelRouterSessionConfig {
+            enabled: Some(true)
+        })
+    );
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let enabled_message = lines_to_single_string(&cells[0]);
+    assert!(enabled_message.contains("enabled for this thread"));
+
+    chat.dispatch_command_with_args(SlashCommand::ModelRouter, "disable".to_string(), Vec::new());
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::SetModelRouterSessionConfig {
+            enabled: Some(false)
+        })
+    );
+    let _ = drain_insert_history(&mut rx);
+
+    chat.dispatch_command_with_args(SlashCommand::ModelRouter, "inherit".to_string(), Vec::new());
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::SetModelRouterSessionConfig { enabled: None })
+    );
+    let _ = drain_insert_history(&mut rx);
+
+    chat.dispatch_command_with_args(SlashCommand::ModelRouter, "status".to_string(), Vec::new());
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert_snapshot!("model_router_slash_status_message", rendered);
+}
+
+#[tokio::test]
+async fn model_router_slash_command_rejects_enable_without_config() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::ModelRouter, "enable".to_string(), Vec::new());
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("no [model_router] is configured"),
+        "expected missing config error, got: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn model_router_slash_command_rejects_unknown_args() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::ModelRouter, "maybe".to_string(), Vec::new());
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Usage: /model-router"),
+        "expected usage error, got: {rendered}"
+    );
+}
+
+#[tokio::test]
 async fn fast_slash_command_updates_and_persists_local_service_tier() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);

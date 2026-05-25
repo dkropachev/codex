@@ -77,6 +77,9 @@ fn apply_turn_context(metadata: &mut ThreadMetadata, turn_ctx: &TurnContextItem)
         metadata.cwd = turn_ctx.cwd.clone();
     }
     metadata.model = Some(turn_ctx.model.clone());
+    if let Some(model_provider) = turn_ctx.model_provider.as_deref() {
+        metadata.model_provider = model_provider.to_string();
+    }
     metadata.reasoning_effort = turn_ctx.effort;
     metadata.sandbox_policy = enum_to_string(&turn_ctx.sandbox_policy);
     metadata.approval_mode = enum_to_string(&turn_ctx.approval_policy);
@@ -281,6 +284,7 @@ mod tests {
                 network: None,
                 file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
+                model_provider: None,
                 personality: None,
                 collaboration_mode: None,
                 realtime_active: None,
@@ -321,6 +325,7 @@ mod tests {
                 network: None,
                 file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
+                model_provider: None,
                 personality: None,
                 collaboration_mode: None,
                 realtime_active: None,
@@ -355,6 +360,7 @@ mod tests {
                 network: None,
                 file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
+                model_provider: Some("amazon-bedrock".to_string()),
                 personality: None,
                 collaboration_mode: None,
                 realtime_active: None,
@@ -369,6 +375,7 @@ mod tests {
         );
 
         assert_eq!(metadata.model.as_deref(), Some("gpt-5"));
+        assert_eq!(metadata.model_provider, "amazon-bedrock");
         assert_eq!(metadata.reasoning_effort, Some(ReasoningEffort::High));
     }
 

@@ -192,6 +192,7 @@ pub(super) async fn make_chatwidget_manual(
         raw_output_mode: cfg.tui_raw_output_mode,
         config: cfg,
         effective_service_tier,
+        model_router_session_enabled_override: None,
         current_collaboration_mode,
         active_collaboration_mask,
         codex_config_backup: None,

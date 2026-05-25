@@ -1065,6 +1065,7 @@ api:
             cmds,
             vec![
                 "model".to_string(),
+                "model-router".to_string(),
                 "memories".to_string(),
                 "mention".to_string(),
                 "mcp".to_string(),

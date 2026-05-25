@@ -7,7 +7,7 @@
 use super::*;
 use crate::legacy_core::ContextualUserFragment;
 use crate::legacy_core::WorkflowMarkdownHandoff;
-use crate::session_resume::read_session_model;
+use crate::session_resume::read_session_model_selection;
 
 impl App {
     pub(super) async fn shutdown_current_thread(&mut self, app_server: &mut AppServerSession) {
@@ -728,6 +728,12 @@ impl App {
                 self.refresh_in_memory_config_from_disk().await?;
                 Ok(true)
             }
+            AppCommand::SetModelRouterSessionConfig { enabled } => {
+                app_server
+                    .thread_model_router_session_config_set(thread_id, *enabled)
+                    .await?;
+                Ok(true)
+            }
             AppCommand::OverrideTurnContext { .. } => Ok(true),
             AppCommand::ApproveGuardianDeniedAction { event } => {
                 app_server
@@ -958,10 +964,17 @@ impl App {
         session.model_provider_id = notification.thread.model_provider.clone();
         session.cwd = notification.thread.cwd.clone();
         let rollout_path = notification.thread.path.clone();
-        if let Some(model) =
-            read_session_model(self.state_db.as_deref(), thread_id, rollout_path.as_deref()).await
+        if let Some(selection) = read_session_model_selection(
+            self.state_db.as_deref(),
+            thread_id,
+            rollout_path.as_deref(),
+        )
+        .await
         {
-            session.model = model;
+            session.model = selection.model;
+            if let Some(model_provider) = selection.model_provider {
+                session.model_provider_id = model_provider;
+            }
         } else if rollout_path.is_some() {
             session.model.clear();
         }
