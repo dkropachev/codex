@@ -14,17 +14,23 @@ use super::workflow_test_support::write_workflow_fixture;
 use super::workflow_test_support::write_workflow_fixture_with_metadata;
 
 #[derive(Clone, Copy)]
-enum WorkflowAutocompletePopupKey {
+pub(super) enum WorkflowAutocompletePopupKey {
+    Down,
     Enter,
+    Escape,
     Tab,
+    Up,
 }
 
-struct WorkflowAutocompleteScenario<'a> {
-    typed_prefix: &'a str,
-    completion_text: Option<&'a str>,
-    popup_snippets: &'a [&'a str],
-    run_snippets: &'a [&'a str],
-    popup_keys: &'a [WorkflowAutocompletePopupKey],
+pub(super) struct WorkflowAutocompleteScenario<'a> {
+    pub(super) typed_prefix: &'a str,
+    pub(super) completion_text: Option<&'a str>,
+    pub(super) popup_snippets: &'a [&'a str],
+    pub(super) ordered_popup_snippets: &'a [&'a str],
+    pub(super) run_snippets: &'a [&'a str],
+    pub(super) post_key_snippets: &'a [&'a str],
+    pub(super) forbidden_snippets: &'a [&'a str],
+    pub(super) popup_keys: &'a [WorkflowAutocompletePopupKey],
 }
 
 #[tokio::test]
@@ -50,11 +56,14 @@ async fn slash_workflow_autocomplete_completes_title_prefix_and_runs_workflow_en
             typed_prefix: "/jira",
             completion_text: None,
             popup_snippets: &["/summary", "Jira Summary"],
+            ordered_popup_snippets: &[],
             run_snippets: &[
                 "Workflow summary: starting",
                 "Workflow summary: reviewing",
                 "Workflow Result",
             ],
+            post_key_snippets: &[],
+            forbidden_snippets: &[],
             popup_keys: &[
                 WorkflowAutocompletePopupKey::Tab,
                 WorkflowAutocompletePopupKey::Enter,
@@ -87,11 +96,14 @@ async fn slash_workflow_autocomplete_completes_search_term_and_runs_workflow_end
             typed_prefix: "/report",
             completion_text: None,
             popup_snippets: &["/summary", "Jira Summary"],
+            ordered_popup_snippets: &[],
             run_snippets: &[
                 "Workflow summary: starting",
                 "Workflow summary: reviewing",
                 "Workflow Result",
             ],
+            post_key_snippets: &[],
+            forbidden_snippets: &[],
             popup_keys: &[
                 WorkflowAutocompletePopupKey::Tab,
                 WorkflowAutocompletePopupKey::Enter,
@@ -126,9 +138,15 @@ async fn slash_workflow_exact_command_shows_option_hints() -> Result<()> {
                 "/code-review",
                 "Code Review",
                 "--review-id <string>",
+                "required",
+                "Review identifier",
                 "--format <summary|full>",
+                "Output format",
             ],
+            ordered_popup_snippets: &[],
             run_snippets: &[],
+            post_key_snippets: &[],
+            forbidden_snippets: &[],
             popup_keys: &[],
         },
     )
@@ -156,8 +174,18 @@ async fn slash_workflow_autocomplete_shows_static_option_popup_for_argument_pref
         WorkflowAutocompleteScenario {
             typed_prefix: "/code-review --a",
             completion_text: None,
-            popup_snippets: &["--all-comments", "--archive", "--assignee <string>"],
+            popup_snippets: &[
+                "--all-comments",
+                "Include all comment bodies",
+                "--archive",
+                "Archive the reviewed branch",
+                "--assignee <string>",
+                "Reviewer assignment",
+            ],
+            ordered_popup_snippets: &[],
             run_snippets: &[],
+            post_key_snippets: &[],
+            forbidden_snippets: &[],
             popup_keys: &[],
         },
     )
@@ -186,8 +214,16 @@ async fn slash_workflow_autocomplete_completes_dynamic_argument_prefix_and_runs_
         WorkflowAutocompleteScenario {
             typed_prefix: "/code-review --reportId ",
             completion_text: Some("1034"),
-            popup_snippets: &["--reportId 1034", "--reportId 1035"],
+            popup_snippets: &[
+                "--reportId 1034",
+                "Primary report",
+                "--reportId 1035",
+                "Fallback report",
+            ],
+            ordered_popup_snippets: &[],
             run_snippets: &["Input argv: --reportId 1034", "Workflow Result"],
+            post_key_snippets: &[],
+            forbidden_snippets: &[],
             popup_keys: &[WorkflowAutocompletePopupKey::Enter],
         },
     )
@@ -217,11 +253,14 @@ async fn slash_workflow_autocomplete_commits_unique_dynamic_preview_and_runs_wor
             typed_prefix: "/code-review --reportId 1034",
             completion_text: None,
             popup_snippets: &["--format summary"],
+            ordered_popup_snippets: &[],
             run_snippets: &[
                 "Input text: --reportId 1034 --format summary",
                 "Input argv: --reportId 1034 --format summary",
                 "Workflow Result",
             ],
+            post_key_snippets: &[],
+            forbidden_snippets: &[],
             popup_keys: &[
                 WorkflowAutocompletePopupKey::Tab,
                 WorkflowAutocompletePopupKey::Enter,
@@ -231,7 +270,182 @@ async fn slash_workflow_autocomplete_commits_unique_dynamic_preview_and_runs_wor
     .await
 }
 
-async fn run_workflow_autocomplete_session(
+#[tokio::test]
+async fn slash_workflow_exact_command_with_args_enter_runs_workflow_without_committing_preview()
+-> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex = ensure_codex_binary(&repo_root)?;
+    let codex_home = tempdir()?;
+    let workspace = tempdir()?;
+    write_trusted_workspace_config(codex_home.path(), workspace.path())?;
+    write_review_workflow(&codex_home.path().join("workflows/code-review"))?;
+
+    run_workflow_autocomplete_session(
+        &repo_root,
+        &codex,
+        codex_home.path(),
+        workspace.path(),
+        WorkflowAutocompleteScenario {
+            typed_prefix: "/code-review --reportId 1034",
+            completion_text: None,
+            popup_snippets: &["--format summary"],
+            ordered_popup_snippets: &[],
+            run_snippets: &[
+                "Input text: --reportId 1034",
+                "Input argv: --reportId 1034",
+                "Workflow Result",
+            ],
+            post_key_snippets: &[],
+            forbidden_snippets: &[
+                "Input text: --reportId 1034 --format summary",
+                "Input argv: --reportId 1034 --format summary",
+            ],
+            popup_keys: &[WorkflowAutocompletePopupKey::Enter],
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn slash_workflow_search_term_enter_without_selection_does_not_run_workflow() -> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex = ensure_codex_binary(&repo_root)?;
+    let codex_home = tempdir()?;
+    let workspace = tempdir()?;
+    write_trusted_workspace_config(codex_home.path(), workspace.path())?;
+    write_autocomplete_workflow(&codex_home.path().join("workflows/reports/jira-summary"))?;
+
+    run_workflow_autocomplete_session(
+        &repo_root,
+        &codex,
+        codex_home.path(),
+        workspace.path(),
+        WorkflowAutocompleteScenario {
+            typed_prefix: "/report",
+            completion_text: None,
+            popup_snippets: &["/summary", "Jira Summary"],
+            ordered_popup_snippets: &[],
+            run_snippets: &[],
+            post_key_snippets: &[r#"Unrecognized command '/report'"#],
+            forbidden_snippets: &[
+                "Workflow summary: starting",
+                "Workflow summary: reviewing",
+                "Workflow Result",
+            ],
+            popup_keys: &[WorkflowAutocompletePopupKey::Enter],
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn slash_workflow_search_term_enter_after_explicit_selection_runs_workflow() -> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex = ensure_codex_binary(&repo_root)?;
+    let codex_home = tempdir()?;
+    let workspace = tempdir()?;
+    write_trusted_workspace_config(codex_home.path(), workspace.path())?;
+    write_autocomplete_workflow(&codex_home.path().join("workflows/reports/jira-summary"))?;
+
+    run_workflow_autocomplete_session(
+        &repo_root,
+        &codex,
+        codex_home.path(),
+        workspace.path(),
+        WorkflowAutocompleteScenario {
+            typed_prefix: "/report",
+            completion_text: None,
+            popup_snippets: &["/summary", "Jira Summary"],
+            ordered_popup_snippets: &[],
+            run_snippets: &[
+                "Workflow summary: starting",
+                "Workflow summary: reviewing",
+                "Workflow Result",
+            ],
+            post_key_snippets: &[],
+            forbidden_snippets: &[r#"Unrecognized command '/report'"#],
+            popup_keys: &[
+                WorkflowAutocompletePopupKey::Down,
+                WorkflowAutocompletePopupKey::Enter,
+            ],
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn slash_workflow_search_term_orders_multiple_matches_and_runs_selected_workflow()
+-> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex = ensure_codex_binary(&repo_root)?;
+    let codex_home = tempdir()?;
+    let workspace = tempdir()?;
+    write_trusted_workspace_config(codex_home.path(), workspace.path())?;
+    write_report_workflow(
+        &codex_home.path().join("workflows/reports/alpha-report"),
+        "reports/alpha-report",
+        "alpha-report",
+        "Alpha Report",
+        "drafting",
+        "Alpha Workflow Result",
+    )?;
+    write_report_workflow(
+        &codex_home.path().join("workflows/reports/beta-report"),
+        "reports/beta-report",
+        "beta-report",
+        "Beta Report",
+        "publishing",
+        "Beta Workflow Result",
+    )?;
+
+    run_workflow_autocomplete_session(
+        &repo_root,
+        &codex,
+        codex_home.path(),
+        workspace.path(),
+        WorkflowAutocompleteScenario {
+            typed_prefix: "/report",
+            completion_text: None,
+            popup_snippets: &[
+                "/alpha-report",
+                "Alpha Report",
+                "/beta-report",
+                "Beta Report",
+            ],
+            ordered_popup_snippets: &["/alpha-report", "/beta-report"],
+            run_snippets: &[
+                "Workflow beta-report: starting",
+                "Workflow beta-report: publishing",
+                "Beta Workflow Result",
+            ],
+            post_key_snippets: &[],
+            forbidden_snippets: &["Alpha Workflow Result"],
+            popup_keys: &[
+                WorkflowAutocompletePopupKey::Down,
+                WorkflowAutocompletePopupKey::Enter,
+            ],
+        },
+    )
+    .await
+}
+
+pub(super) async fn run_workflow_autocomplete_session(
     repo_root: &Path,
     codex: &Path,
     codex_home: &Path,
@@ -294,8 +508,11 @@ async fn run_workflow_autocomplete_session(
     let mut scheduled_completion = false;
     let mut sent_interrupts = false;
     let mut saw_popup = vec![false; scenario.popup_snippets.len()];
+    let mut saw_ordered_popup = scenario.ordered_popup_snippets.is_empty();
     let mut saw_run = vec![false; scenario.run_snippets.len()];
+    let mut saw_post_key = vec![false; scenario.post_key_snippets.len()];
     let should_run = !scenario.run_snippets.is_empty();
+    let should_wait_for_post_key = !scenario.post_key_snippets.is_empty();
 
     let exit_code_result = timeout(Duration::from_secs(90), async {
         loop {
@@ -327,6 +544,8 @@ async fn run_workflow_autocomplete_session(
                         for (seen, snippet) in saw_popup.iter_mut().zip(scenario.popup_snippets.iter()) {
                             *seen |= output_text.contains(snippet) || screen.contains(snippet);
                         }
+                        saw_ordered_popup |= snippets_in_order(&output_text, scenario.ordered_popup_snippets)
+                            || snippets_in_order(&screen, scenario.ordered_popup_snippets);
 
                         if saw_popup.iter().all(|seen| *seen) && !scheduled_completion {
                             scheduled_completion = true;
@@ -341,8 +560,11 @@ async fn run_workflow_autocomplete_session(
                                 for key in popup_keys {
                                     sleep(Duration::from_millis(500)).await;
                                     let payload = match key {
+                                        WorkflowAutocompletePopupKey::Down => b"\x1b[B".to_vec(),
                                         WorkflowAutocompletePopupKey::Enter => b"\r".to_vec(),
+                                        WorkflowAutocompletePopupKey::Escape => b"\x1b".to_vec(),
                                         WorkflowAutocompletePopupKey::Tab => b"\t".to_vec(),
+                                        WorkflowAutocompletePopupKey::Up => b"\x1b[A".to_vec(),
                                     };
                                     let _ = complete_writer.send(payload).await;
                                 }
@@ -353,10 +575,29 @@ async fn run_workflow_autocomplete_session(
                             *seen |= output_text.contains(snippet) || screen.contains(snippet);
                         }
 
+                        for (seen, snippet) in saw_post_key.iter_mut().zip(scenario.post_key_snippets.iter()) {
+                            *seen |= output_text.contains(snippet) || screen.contains(snippet);
+                        }
+
                         if should_run {
                             if saw_run.iter().all(|seen| *seen) && !sent_interrupts {
                                 sent_interrupts = true;
                                 session.terminate();
+                            }
+                        } else if should_wait_for_post_key {
+                            if scheduled_completion
+                                && saw_post_key.iter().all(|seen| *seen)
+                                && !sent_interrupts
+                            {
+                                sent_interrupts = true;
+                                let interrupt_writer = writer_tx.clone();
+                                tokio::spawn(async move {
+                                    sleep(Duration::from_millis(500)).await;
+                                    for _ in 0..4 {
+                                        let _ = interrupt_writer.send(vec![3]).await;
+                                        sleep(Duration::from_millis(150)).await;
+                                    }
+                                });
                             }
                         } else if scheduled_completion
                             && saw_popup.iter().all(|seen| *seen)
@@ -422,6 +663,13 @@ async fn run_workflow_autocomplete_session(
         parser.screen().contents(),
         output_text,
     );
+    anyhow::ensure!(
+        saw_ordered_popup,
+        "workflow autocomplete test did not see ordered popup snippets {:?}; screen: {}\noutput: {}",
+        scenario.ordered_popup_snippets,
+        parser.screen().contents(),
+        output_text,
+    );
 
     let missing_run = scenario
         .run_snippets
@@ -437,6 +685,20 @@ async fn run_workflow_autocomplete_session(
         output_text,
     );
 
+    let missing_post_key = scenario
+        .post_key_snippets
+        .iter()
+        .zip(saw_post_key.iter())
+        .filter_map(|(snippet, seen)| (!seen).then_some((*snippet).to_string()))
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        missing_post_key.is_empty(),
+        "workflow autocomplete test missed post-key snippets {:?}; screen: {}\noutput: {}",
+        missing_post_key,
+        parser.screen().contents(),
+        output_text,
+    );
+
     anyhow::ensure!(
         exit_code == 0
             || exit_code == 130
@@ -444,7 +706,26 @@ async fn run_workflow_autocomplete_session(
         "unexpected exit code from workflow autocomplete test: {exit_code}; output: {output_text}",
     );
 
+    let final_screen = parser.screen().contents();
+    for snippet in scenario.forbidden_snippets {
+        anyhow::ensure!(
+            !output_text.contains(snippet) && !final_screen.contains(snippet),
+            "workflow autocomplete test saw forbidden snippet `{snippet}`; screen: {final_screen}\noutput: {output_text}",
+        );
+    }
+
     Ok(())
+}
+
+fn snippets_in_order(haystack: &str, snippets: &[&str]) -> bool {
+    let mut remainder = haystack;
+    for snippet in snippets {
+        let Some(index) = remainder.find(snippet) else {
+            return false;
+        };
+        remainder = &remainder[index + snippet.len()..];
+    }
+    true
 }
 
 fn write_autocomplete_workflow(workflow_dir: &Path) -> Result<()> {
@@ -468,7 +749,32 @@ export default workflow;
     )
 }
 
-fn write_review_workflow(workflow_dir: &Path) -> Result<()> {
+pub(super) fn write_report_workflow(
+    workflow_dir: &Path,
+    id: &str,
+    command: &str,
+    title: &str,
+    status: &str,
+    result: &str,
+) -> Result<()> {
+    let workflow_source = format!(
+        r##"const workflow = {{
+  async run(ctx) {{
+    ctx.status({{ workflowName: "{command}", workflowStatus: "{status}" }});
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    ctx.reportToUserMarkdown("# Workflow Result\n\n{result}\n");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    return {{ workflowStatus: "done" }};
+  }},
+}};
+
+export default workflow;
+"##
+    );
+    write_workflow_fixture(workflow_dir, id, command, title, &workflow_source)
+}
+
+pub(super) fn write_review_workflow(workflow_dir: &Path) -> Result<()> {
     write_workflow_fixture_with_metadata(
         workflow_dir,
         "code-review",
@@ -516,10 +822,12 @@ fn write_review_workflow(workflow_dir: &Path) -> Result<()> {
   async run(ctx, input) {
     ctx.status({ workflowName: "code-review", workflowStatus: "reviewing" });
     await new Promise((resolve) => setTimeout(resolve, 250));
-    const argv = Array.isArray(input?.argv) ? input.argv.join(" ") : "";
+    const argvArray = Array.isArray(input?.argv) ? input.argv : [];
+    const argv = argvArray.join(" ");
+    const argvJson = JSON.stringify(argvArray);
     const text = typeof input?.text === "string" ? input.text : "";
     ctx.reportToUserMarkdown(
-      `# Workflow Result\n\nInput text: ${text}\nInput argv: ${argv}\n\nCode review complete.\n`,
+      `# Workflow Result\n\nInput text: ${text}\nInput argv: ${argv}\nInput argv json: ${argvJson}\n\nCode review complete.\n`,
     );
     await new Promise((resolve) => setTimeout(resolve, 250));
     return { workflowStatus: "done" };
