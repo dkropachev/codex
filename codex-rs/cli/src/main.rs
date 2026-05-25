@@ -801,7 +801,7 @@ enum Subcommand {
     /// Manage Codex workflows.
     Workflow(WorkflowCli),
 
-    /// Internal: verify workflow quality after mutating tool calls.
+    /// Internal: run workflow quality validation.
     #[clap(hide = true, name = "workflow-quality-hook")]
     WorkflowQualityHook,
 

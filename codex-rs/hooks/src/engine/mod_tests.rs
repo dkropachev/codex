@@ -176,7 +176,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
 }
 
 #[test]
-fn builtin_workflow_quality_hook_is_discovered_for_post_tool_use() {
+fn builtin_workflow_quality_hook_is_not_discovered_for_post_tool_use() {
     let config_layer_stack = ConfigLayerStack::new(
         Vec::new(),
         ConfigRequirements::default(),
@@ -196,20 +196,7 @@ fn builtin_workflow_quality_hook_is_discovered_for_post_tool_use() {
         ..crate::HooksConfig::default()
     });
 
-    assert_eq!(listed.hooks.len(), 1);
-    assert_eq!(
-        listed.hooks[0].event_name,
-        codex_protocol::protocol::HookEventName::PostToolUse
-    );
-    assert_eq!(listed.hooks[0].matcher.as_deref(), Some("Bash|apply_patch"));
-    assert_eq!(listed.hooks[0].source, HookSource::System);
-    assert!(listed.hooks[0].is_managed);
-    assert!(
-        listed.hooks[0]
-            .command
-            .as_deref()
-            .is_some_and(|command| command.contains("workflow-quality-hook"))
-    );
+    assert_eq!(listed.hooks, Vec::new());
 }
 
 #[test]
