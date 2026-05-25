@@ -20941,6 +20941,16 @@
           "description": {
             "type": "string"
           },
+          "runtime": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/WorkflowRuntimeKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "stageSessionId": {
             "type": [
               "string",
@@ -21462,6 +21472,28 @@
         "title": "WorkflowRunResponse",
         "type": "object"
       },
+      "WorkflowRuntimeInfo": {
+        "properties": {
+          "entrypoint": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/definitions/v2/WorkflowRuntimeKind"
+          }
+        },
+        "required": [
+          "entrypoint",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "WorkflowRuntimeKind": {
+        "enum": [
+          "rune",
+          "typescript"
+        ],
+        "type": "string"
+      },
       "WorkflowStageSessionActionParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -21539,6 +21571,9 @@
           "rootPath": {
             "type": "string"
           },
+          "runtime": {
+            "$ref": "#/definitions/v2/WorkflowRuntimeInfo"
+          },
           "searchTerms": {
             "items": {
               "type": "string"
@@ -21573,6 +21608,7 @@
           "rootKind",
           "rootLabel",
           "rootPath",
+          "runtime",
           "searchTerms",
           "validation",
           "workflowYamlPath"

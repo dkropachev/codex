@@ -164,11 +164,28 @@ pub struct WorkflowCommandOptionHint {
     pub description: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum WorkflowRuntimeKind {
+    Rune,
+    Typescript,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowRuntimeInfo {
+    pub kind: WorkflowRuntimeKind,
+    pub entrypoint: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct WorkflowSummary {
     pub id: String,
+    pub runtime: WorkflowRuntimeInfo,
     pub command: Option<String>,
     pub title: Option<String>,
     pub user_description: Option<String>,
@@ -265,6 +282,8 @@ pub struct WorkflowImpactResponse {
 #[ts(export_to = "v2/")]
 pub struct WorkflowDevelopParams {
     pub description: String,
+    #[ts(optional = nullable)]
+    pub runtime: Option<WorkflowRuntimeKind>,
     #[ts(optional = nullable)]
     pub stage_session_id: Option<String>,
 }

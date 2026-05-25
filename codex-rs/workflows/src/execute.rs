@@ -37,7 +37,10 @@ use crate::registry::validate_workflow_dir;
 use crate::registry::workflow_impact;
 use crate::registry::workflow_roots;
 use crate::repair::repair_workflow_command;
+use crate::spec::RUNE_WORKFLOW_ENTRYPOINT;
+use crate::spec::TYPESCRIPT_WORKFLOW_ENTRYPOINT;
 use crate::spec::WORKFLOW_YAML;
+use crate::spec::WorkflowRuntimeKind;
 use crate::spec::read_workflow_spec;
 use crate::spec::scaffold_workflow_spec;
 use crate::spec::write_workflow_spec;
@@ -128,7 +131,10 @@ async fn execute_workflow_command_async(
 ) -> Result<WorkflowCommandOutput> {
     match command {
         WorkflowCommand::Mode => show_mode(ctx),
-        WorkflowCommand::Develop { description } => develop(ctx, &description),
+        WorkflowCommand::Develop {
+            runtime,
+            description,
+        } => develop(ctx, runtime, &description),
         WorkflowCommand::Describe { id, description } => describe(ctx, &id, &description),
         WorkflowCommand::Docs { id, instruction } => docs(ctx, &id, &instruction),
         WorkflowCommand::Edit { id, instruction } => edit(ctx, &id, &instruction),
@@ -308,7 +314,11 @@ fn status(ctx: WorkflowCommandContext<'_>, id: Option<&str>) -> Result<WorkflowC
     })
 }
 
-fn develop(ctx: WorkflowCommandContext<'_>, description: &str) -> Result<WorkflowCommandOutput> {
+fn develop(
+    ctx: WorkflowCommandContext<'_>,
+    runtime: WorkflowRuntimeKind,
+    description: &str,
+) -> Result<WorkflowCommandOutput> {
     let live_root = default_workflow_root(ctx.codex_home, ctx.cwd, ctx.config);
     fs::create_dir_all(&live_root.path).with_context(|| {
         format!(
@@ -342,10 +352,11 @@ fn develop(ctx: WorkflowCommandContext<'_>, description: &str) -> Result<Workflo
         id.clone(),
         title.clone(),
         description.to_string(),
+        runtime,
         ctx.config,
     );
     write_workflow_spec(&path.join(WORKFLOW_YAML), &spec)?;
-    write_scaffold_files(&path, &id, &title, description)?;
+    write_scaffold_files(&path, &id, &title, description, runtime)?;
     let live_path = live_root.path.join(&id);
     let staged = StagedWorkflow {
         _guard: ctx
@@ -450,7 +461,8 @@ async fn run(
         ctx.codex_home,
         ctx.cwd,
         &workflow.path,
-        &workflow.path.join("src/workflow.ts"),
+        &workflow.runtime,
+        &workflow.path.join(&workflow.runtime.entrypoint),
         &input,
         &workflows,
     )
@@ -759,7 +771,27 @@ fn title_from_description(description: &str) -> String {
         .to_string()
 }
 
-fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -> Result<()> {
+fn write_scaffold_files(
+    path: &Path,
+    id: &str,
+    title: &str,
+    description: &str,
+    runtime: WorkflowRuntimeKind,
+) -> Result<()> {
+    match runtime {
+        WorkflowRuntimeKind::Rune => write_rune_scaffold_files(path, id, title, description),
+        WorkflowRuntimeKind::Typescript => {
+            write_typescript_scaffold_files(path, id, title, description)
+        }
+    }
+}
+
+fn write_typescript_scaffold_files(
+    path: &Path,
+    id: &str,
+    title: &str,
+    description: &str,
+) -> Result<()> {
     let command_label = id
         .split('/')
         .next_back()
@@ -817,7 +849,7 @@ fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -
 "#,
     )?;
     fs::write(
-        path.join("src/workflow.ts"),
+        path.join(TYPESCRIPT_WORKFLOW_ENTRYPOINT),
         format!(
             r#"import type {{ WorkflowContext }} from "@openai/codex-sdk/workflow";
 
@@ -964,6 +996,68 @@ test("workflow rejects invalid input", async () => {
     Ok(())
 }
 
+fn write_rune_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -> Result<()> {
+    let command_label = id
+        .split('/')
+        .next_back()
+        .filter(|command| !command.is_empty())
+        .unwrap_or(id);
+    fs::write(
+        path.join(".gitignore"),
+        "node_modules/\ndist/\n.DS_Store\nartifacts/\nstate/*\n!state/.gitkeep\n",
+    )?;
+    fs::write(
+        path.join("README.md"),
+        format!(
+            "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nThis workflow runs on the embedded Rune runtime. Implement `pub async fn run(ctx, input)` in `{RUNE_WORKFLOW_ENTRYPOINT}` and keep the returned value as the canonical JSON result. Use `ctx.status(#{{ workflowName, workflowStatus, threads? }})` while the workflow is running so the TUI can render workflow progress. `ctx.progress(message, data)` remains available as a legacy shorthand. `ctx.runWorkflow(workflow, input, #{{ onStatusUpdate }})` can intercept child workflow status updates and either forward, transform, bundle, or suppress them. Add an optional `pub async fn complete(ctx, input)` for command completion and an optional `pub fn to_tui_markdown(result)` for the markdown view when the workflow has a user-facing result.\n\n## Dependencies\n\nRune workflows use the embedded runtime shipped with Codex. Do not rely on a global `rune` binary. Keep any file, process, or network assumptions documented here and encoded in validation commands.\n\n## Validation\n\nRun `codex workflow validate {id}` after changes and keep `workflow.yaml` API schemas, validation commands, docs, and coverage markers aligned with the workflow implementation.\n\n## Maintenance\n\nKeep `README.md`, `DESIGN.md`, `workflow.yaml`, and the test coverage markers in sync when workflow behavior changes. Update both docs together when the workflow contract changes. Keep generated or persistent runtime files under ignored `state/` or `artifacts/` paths.\n"
+        ),
+    )?;
+    fs::write(
+        path.join("DESIGN.md"),
+        format!(
+            "# {title} Design\n\n## Overview\n\nThis workflow is a local Rune workflow executed by Codex's embedded workflow runtime and validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `{RUNE_WORKFLOW_ENTRYPOINT}` owns the `run(ctx, input)` entrypoint, autocomplete hook, and optional markdown formatter.\n- `src/tests/` carries coverage markers for positive, load, autocomplete, negative, and recovery paths.\n- `workflow.yaml` records the Rune runtime metadata, manifest-defined API contract, validation commands, and coverage expectations.\n- `state/` holds persistent runtime data; `artifacts/` holds generated run artifacts. Both are ignored except for `state/.gitkeep`.\n\n## Data Flow\n\n1. A registered workflow command loads the Rune source from the manifest runtime entrypoint.\n2. The workflow validates input, emits progress, and returns the canonical JSON result.\n3. `to_tui_markdown(result)` provides the markdown view for the TUI and workflow-to-workflow callers.\n4. `codex workflow validate {id}` runs the local validation commands, checks docs/layout/coverage markers, smoke-tests the output contract when configured, and publishes the manifest contract only after validation passes.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors. When the workflow cannot satisfy its output contract, fail with a specific error before returning partial data.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.rn`: positive path, progress, JSON result, and markdown companion coverage.\n- `src/tests/workflow.load.test.rn`: loadability smoke.\n- `src/tests/workflow.autocomplete.test.rn`: registry and command-completion readiness smoke.\n- `src/tests/workflow.negative.test.rn`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.rn`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep `// workflow-covers:` markers aligned with `validation.coverage`, including load and autocomplete. Update this file when the workflow behavior or review expectations change. Keep runtime state and generated artifacts out of git.\n"
+        ),
+    )?;
+    fs::write(
+        path.join(RUNE_WORKFLOW_ENTRYPOINT),
+        format!(
+            r#"pub async fn run(ctx, input) {{
+    ctx.status(#{{ workflowName: "{title}", workflowStatus: "running", threads: [] }});
+    #{{ ok: true, input }}
+}}
+
+pub async fn complete(_ctx, _input) {{
+    []
+}}
+
+pub fn to_tui_markdown(_result) {{
+    #{{ markdown: "{markdown}" }}
+}}
+"#,
+            title = escape_rune_string(title),
+            markdown = escape_rune_string(&format!("# {title}\n\nWorkflow complete.")),
+        ),
+    )?;
+    fs::write(
+        path.join("src/tests/workflow.positive.test.rn"),
+        "// workflow-covers: positive progress finalResult\n",
+    )?;
+    fs::write(
+        path.join("src/tests/workflow.load.test.rn"),
+        "// workflow-covers: load\n",
+    )?;
+    fs::write(
+        path.join("src/tests/workflow.autocomplete.test.rn"),
+        "// workflow-covers: autocomplete\n",
+    )?;
+    fs::write(
+        path.join("src/tests/workflow.negative.test.rn"),
+        "// workflow-covers: negative failureUx\n",
+    )?;
+    fs::write(path.join("state/.gitkeep"), "")?;
+    Ok(())
+}
+
 fn write_scaffold_runtime_stubs(path: &Path) -> Result<()> {
     let node_modules = path.join("node_modules");
     let bin_dir = node_modules.join(".bin");
@@ -1073,6 +1167,10 @@ fn escape_ts_string(value: &str) -> String {
         .replace('\n', "\\n")
         .replace('\r', "\\r")
         .replace('"', "\\\"")
+}
+
+fn escape_rune_string(value: &str) -> String {
+    escape_ts_string(value)
 }
 
 fn append_readme_note(path: &Path, heading: &str, instruction: &str) -> Result<()> {
@@ -1499,6 +1597,7 @@ mod tests {
                 progress: None,
             },
             WorkflowCommand::Develop {
+                runtime: WorkflowRuntimeKind::Rune,
                 description: "Jira Summary".to_string(),
             },
         )
@@ -1524,8 +1623,13 @@ mod tests {
                 .is_file()
         );
         assert!(
-            cwd.path()
+            !cwd.path()
                 .join(".codex/workflows/jira-summary/package.json")
+                .exists()
+        );
+        assert!(
+            cwd.path()
+                .join(".codex/workflows/jira-summary/src/workflow.rn")
                 .is_file()
         );
         assert!(
@@ -1535,22 +1639,22 @@ mod tests {
         );
         assert!(
             cwd.path()
-                .join(".codex/workflows/jira-summary/src/tests/workflow.positive.test.ts")
+                .join(".codex/workflows/jira-summary/src/tests/workflow.positive.test.rn")
                 .is_file()
         );
         assert!(
             cwd.path()
-                .join(".codex/workflows/jira-summary/src/tests/workflow.load.test.ts")
+                .join(".codex/workflows/jira-summary/src/tests/workflow.load.test.rn")
                 .is_file()
         );
         assert!(
             cwd.path()
-                .join(".codex/workflows/jira-summary/src/tests/workflow.autocomplete.test.ts")
+                .join(".codex/workflows/jira-summary/src/tests/workflow.autocomplete.test.rn")
                 .is_file()
         );
         assert!(
             cwd.path()
-                .join(".codex/workflows/jira-summary/src/tests/workflow.negative.test.ts")
+                .join(".codex/workflows/jira-summary/src/tests/workflow.negative.test.rn")
                 .is_file()
         );
         assert!(
@@ -1574,6 +1678,11 @@ mod tests {
                 .join(".codex/workflows/jira-summary/workflow.yaml"),
         )
         .unwrap();
+        assert_eq!(spec.runtime.unwrap().kind, WorkflowRuntimeKind::Rune);
+        assert_eq!(
+            spec.validation["commands"][0],
+            JsonValue::String("true".to_string())
+        );
         assert_eq!(
             spec.validation["coverage"]["positive"],
             JsonValue::Bool(true)
@@ -1603,6 +1712,45 @@ mod tests {
             spec.validation["coverage"]["recovery"],
             JsonValue::Bool(false)
         );
+        assert!(spec.validation.get("contractSmoke").is_none());
+    }
+
+    #[test]
+    fn develop_can_scaffold_typescript_workflow() {
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let config = WorkflowsConfigToml {
+            default_location: Some(WorkflowDefaultLocation::Project),
+            commit_policy: Some("manual".to_string()),
+            ..Default::default()
+        };
+
+        execute_workflow_command(
+            WorkflowCommandContext {
+                codex_home: home.path(),
+                cwd: cwd.path(),
+                config: &config,
+                codex_self_exe: None,
+                stage_session_id: None,
+                progress: None,
+            },
+            WorkflowCommand::Develop {
+                runtime: WorkflowRuntimeKind::Typescript,
+                description: "Jira Summary".to_string(),
+            },
+        )
+        .unwrap();
+
+        let workflow_dir = cwd.path().join(".codex/workflows/jira-summary");
+        assert!(workflow_dir.join("package.json").is_file());
+        assert!(workflow_dir.join("src/workflow.ts").is_file());
+        assert!(
+            workflow_dir
+                .join("src/tests/workflow.positive.test.ts")
+                .is_file()
+        );
+        let spec = read_workflow_spec(&workflow_dir.join(WORKFLOW_YAML)).unwrap();
+        assert_eq!(spec.runtime.unwrap().kind, WorkflowRuntimeKind::Typescript);
         assert_eq!(
             spec.validation["contractSmoke"]["input"]["input"],
             JsonValue::String("example".to_string())
@@ -1616,6 +1764,7 @@ mod tests {
         write_validation_fixture(&workflow_dir, json!(["echo ok", "exit 0"]));
         let workflow = crate::registry::WorkflowSummary {
             id: "review/fix".to_string(),
+            runtime: crate::spec::WorkflowRuntimeInfo::legacy_typescript(),
             command: Some("fix".to_string()),
             title: Some("Fix".to_string()),
             user_description: Some("Fix workflow".to_string()),
@@ -1655,6 +1804,7 @@ mod tests {
         write_validation_fixture(&workflow_dir, json!(["exit 1", "echo skipped"]));
         let workflow = crate::registry::WorkflowSummary {
             id: "review/fix".to_string(),
+            runtime: crate::spec::WorkflowRuntimeInfo::legacy_typescript(),
             command: Some("fix".to_string()),
             title: Some("Fix".to_string()),
             user_description: Some("Fix workflow".to_string()),

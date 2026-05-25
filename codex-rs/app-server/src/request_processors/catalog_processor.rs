@@ -760,6 +760,17 @@ fn api_catalog_workflow_to_info(
 ) -> codex_app_server_protocol::WorkflowSummary {
     codex_app_server_protocol::WorkflowSummary {
         id: workflow.id,
+        runtime: codex_app_server_protocol::WorkflowRuntimeInfo {
+            kind: match workflow.runtime.kind {
+                codex_workflows::WorkflowRuntimeKind::Rune => {
+                    codex_app_server_protocol::WorkflowRuntimeKind::Rune
+                }
+                codex_workflows::WorkflowRuntimeKind::Typescript => {
+                    codex_app_server_protocol::WorkflowRuntimeKind::Typescript
+                }
+            },
+            entrypoint: workflow.runtime.entrypoint,
+        },
         command: workflow.command,
         title: workflow.title,
         user_description: workflow.user_description,

@@ -101,7 +101,8 @@ impl App {
                     let suggestions = codex_workflows::complete_workflow(
                         &workflow.path,
                         working_directory.as_path(),
-                        &workflow.path.join("src/workflow.ts"),
+                        &workflow.runtime,
+                        &workflow.path.join(&workflow.runtime.entrypoint),
                         &input,
                     )
                     .await

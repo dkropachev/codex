@@ -539,6 +539,8 @@ export type { WorkflowRootInfo } from "./WorkflowRootInfo";
 export type { WorkflowRootKind } from "./WorkflowRootKind";
 export type { WorkflowRunParams } from "./WorkflowRunParams";
 export type { WorkflowRunResponse } from "./WorkflowRunResponse";
+export type { WorkflowRuntimeInfo } from "./WorkflowRuntimeInfo";
+export type { WorkflowRuntimeKind } from "./WorkflowRuntimeKind";
 export type { WorkflowStageSessionActionParams } from "./WorkflowStageSessionActionParams";
 export type { WorkflowStatusUpdate } from "./WorkflowStatusUpdate";
 export type { WorkflowSummary } from "./WorkflowSummary";

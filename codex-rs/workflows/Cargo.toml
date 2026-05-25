@@ -23,6 +23,8 @@ serde_yaml = { workspace = true }
 sha2 = { workspace = true }
 shlex = { workspace = true }
 regex = { workspace = true }
+rune = { workspace = true }
+rune-modules = { workspace = true, features = ["full"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread"] }
 toml_edit = { workspace = true }

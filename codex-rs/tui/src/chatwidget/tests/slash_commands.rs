@@ -52,6 +52,7 @@ fn workflow_summary(id: &str, command: &str) -> codex_workflows::WorkflowSummary
         .fold(root.clone(), |path, component| path.join(component));
     codex_workflows::WorkflowSummary {
         id: id.to_string(),
+        runtime: codex_workflows::WorkflowRuntimeInfo::legacy_typescript(),
         command: Some(command.to_string()),
         title: Some("Jira Summary".to_string()),
         user_description: Some("Prepare a focused workflow report".to_string()),

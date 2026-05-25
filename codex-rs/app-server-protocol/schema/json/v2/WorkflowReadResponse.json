@@ -26,6 +26,28 @@
       ],
       "type": "string"
     },
+    "WorkflowRuntimeInfo": {
+      "properties": {
+        "entrypoint": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/WorkflowRuntimeKind"
+        }
+      },
+      "required": [
+        "entrypoint",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "WorkflowRuntimeKind": {
+      "enum": [
+        "rune",
+        "typescript"
+      ],
+      "type": "string"
+    },
     "WorkflowSummary": {
       "properties": {
         "command": {
@@ -61,6 +83,9 @@
         "rootPath": {
           "type": "string"
         },
+        "runtime": {
+          "$ref": "#/definitions/WorkflowRuntimeInfo"
+        },
         "searchTerms": {
           "items": {
             "type": "string"
@@ -95,6 +120,7 @@
         "rootKind",
         "rootLabel",
         "rootPath",
+        "runtime",
         "searchTerms",
         "validation",
         "workflowYamlPath"

@@ -204,6 +204,17 @@ fn api_catalog_workflow_to_info(
         path: workflow.path,
         workflow_yaml_path: workflow.workflow_yaml_path,
         mention_target: workflow.mention_target,
+        runtime: codex_app_server_protocol::WorkflowRuntimeInfo {
+            kind: match workflow.runtime.kind {
+                codex_workflows::WorkflowRuntimeKind::Rune => {
+                    codex_app_server_protocol::WorkflowRuntimeKind::Rune
+                }
+                codex_workflows::WorkflowRuntimeKind::Typescript => {
+                    codex_app_server_protocol::WorkflowRuntimeKind::Typescript
+                }
+            },
+            entrypoint: workflow.runtime.entrypoint,
+        },
         validation: codex_app_server_protocol::WorkflowValidationInfo {
             status: match workflow.validation.status {
                 codex_workflows::WorkflowValidationStatus::Valid => {

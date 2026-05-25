@@ -6,6 +6,7 @@ use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
+use crate::spec::WorkflowRuntimeKind;
 use crate::validation_finding::WorkflowValidationFinding;
 use crate::validation_finding::finding_messages;
 
@@ -125,7 +126,10 @@ fn validation_commands(spec: &crate::spec::WorkflowSpec) -> Vec<String> {
         })
         .unwrap_or_default();
     if commands.is_empty() {
-        vec!["npm test".to_string()]
+        match spec.resolved_runtime().kind {
+            WorkflowRuntimeKind::Rune => vec!["true".to_string()],
+            WorkflowRuntimeKind::Typescript => vec!["npm test".to_string()],
+        }
     } else {
         commands
     }

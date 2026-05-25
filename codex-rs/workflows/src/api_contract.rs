@@ -563,9 +563,10 @@ pub(crate) fn publish_validated_workflow_api_contract(
 
 pub(crate) fn extract_workflow_source_contract_from_typescript(
     workflow_dir: &Path,
+    entrypoint: &str,
 ) -> Result<WorkflowSourceContract> {
     ensure_repo_typescript_shim(workflow_dir)?;
-    let workflow_path = workflow_dir.join("src/workflow.ts");
+    let workflow_path = workflow_dir.join(entrypoint);
     let output = Command::new("node")
         .current_dir(workflow_dir)
         .args([
@@ -899,6 +900,7 @@ mod tests {
 
         let workflow = WorkflowSummary {
             id: "review/fix".to_string(),
+            runtime: crate::spec::WorkflowRuntimeInfo::legacy_typescript(),
             command: Some("fix".to_string()),
             title: Some("Fix".to_string()),
             user_description: Some("Fix workflow".to_string()),
@@ -965,8 +967,11 @@ export default async function codeReview(_ctx: unknown, input: WorkflowInput): P
             return;
         }
 
-        let contract = extract_workflow_source_contract_from_typescript(workflow_dir.path())
-            .expect("workflow source contract");
+        let contract = extract_workflow_source_contract_from_typescript(
+            workflow_dir.path(),
+            crate::spec::TYPESCRIPT_WORKFLOW_ENTRYPOINT,
+        )
+        .expect("workflow source contract");
 
         assert_eq!(contract.callable_name.as_deref(), Some("codeReview"));
         assert_eq!(
@@ -1035,8 +1040,11 @@ export default async function (_ctx: unknown, input: WorkflowInput): Promise<Wor
             return;
         }
 
-        let err = extract_workflow_source_contract_from_typescript(workflow_dir.path())
-            .expect_err("anonymous default export should be rejected");
+        let err = extract_workflow_source_contract_from_typescript(
+            workflow_dir.path(),
+            crate::spec::TYPESCRIPT_WORKFLOW_ENTRYPOINT,
+        )
+        .expect_err("anonymous default export should be rejected");
         assert!(
             err.to_string()
                 .contains("workflow default export must be a named function")
@@ -1072,8 +1080,11 @@ export default async function codeReview(_ctx: unknown, input: WorkflowInput): P
             return;
         }
 
-        let err = extract_workflow_source_contract_from_typescript(workflow_dir.path())
-            .expect_err("recursive types should be rejected");
+        let err = extract_workflow_source_contract_from_typescript(
+            workflow_dir.path(),
+            crate::spec::TYPESCRIPT_WORKFLOW_ENTRYPOINT,
+        )
+        .expect_err("recursive types should be rejected");
         assert!(
             err.to_string()
                 .contains("recursive workflow API types are not supported")
@@ -1108,8 +1119,11 @@ export default async function codeReview(_ctx: unknown, input: WorkflowInput): P
             return;
         }
 
-        let err = extract_workflow_source_contract_from_typescript(workflow_dir.path())
-            .expect_err("invalid formatter return shape should be rejected");
+        let err = extract_workflow_source_contract_from_typescript(
+            workflow_dir.path(),
+            crate::spec::TYPESCRIPT_WORKFLOW_ENTRYPOINT,
+        )
+        .expect_err("invalid formatter return shape should be rejected");
         assert!(
             err.to_string()
                 .contains("WorkflowOutput.toTuiMarkdown(result) must return { markdown: string }")
