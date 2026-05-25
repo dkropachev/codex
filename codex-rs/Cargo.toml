@@ -144,6 +144,7 @@ codex-artifactory = { path = "artifactory" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
+codex-builtin-mcps = { path = "builtin-mcps" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cicd-artifacts = { path = "cicd-artifacts" }
 codex-cli = { path = "cli" }
@@ -177,6 +178,7 @@ codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
+codex-message-history = { path = "message-history" }
 codex-memories-mcp = { path = "memories/mcp" }
 codex-memories-read = { path = "memories/read" }
 codex-memories-write = { path = "memories/write" }
@@ -474,6 +476,8 @@ unwrap_used = "deny"
 [workspace.metadata.cargo-shear]
 ignored = [
     "codex-agent-graph-store",
+    "codex-builtin-mcps",
+    "codex-message-history",
     "codex-memories-mcp",
     "icu_provider",
     "openssl-sys",
