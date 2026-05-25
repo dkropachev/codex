@@ -15,8 +15,10 @@ use codex_app_server_protocol::WorkflowEditResponse;
 use codex_app_server_protocol::WorkflowListResponse;
 use codex_app_server_protocol::WorkflowPublishResponse;
 use codex_app_server_protocol::WorkflowReadResponse;
+use codex_app_server_protocol::WorkflowRepairActionKind;
 use codex_app_server_protocol::WorkflowRepairResponse;
 use codex_app_server_protocol::WorkflowRepairStopReason;
+use codex_app_server_protocol::WorkflowValidationFindingInfo;
 use codex_app_server_protocol::WorkflowValidationStatus;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -42,6 +44,10 @@ fn write_valid_workflow(
     fs::create_dir_all(workflow_dir.join("src/tests"))?;
     fs::create_dir_all(workflow_dir.join("state"))?;
     fs::create_dir_all(workflow_dir.join(".git"))?;
+    fs::write(
+        workflow_dir.join(".gitignore"),
+        "node_modules/\nartifacts/\nstate/*\n!state/.gitkeep\n",
+    )?;
     fs::write(
         workflow_dir.join("workflow.yaml"),
         format!(
@@ -174,6 +180,40 @@ fn write_unsupported_command_fixture(workflow_dir: &Path) -> Result<()> {
         "// workflow-covers: negative failureUx\nexport {};\n",
     )?;
     fs::write(workflow_dir.join("state/.gitkeep"), "")?;
+    Ok(())
+}
+
+fn write_schema_repair_fixture(
+    workflow_dir: &Path,
+    id: &str,
+    api: serde_json::Value,
+    tool: Option<codex_workflows::WorkflowToolSpec>,
+) -> Result<()> {
+    write_valid_workflow(workflow_dir, id, "Schema Repair", "Repair schema metadata")?;
+    codex_workflows::write_workflow_spec(
+        &workflow_dir.join("workflow.yaml"),
+        &codex_workflows::WorkflowSpec {
+            id: id.to_string(),
+            title: Some("Schema Repair".to_string()),
+            user_description: Some("Repair schema metadata".to_string()),
+            api,
+            tool,
+            validation: json!({
+                "commands": ["exit 0"],
+                "coverage": {
+                    "positive": true,
+                    "negative": true,
+                    "progress": true,
+                    "finalResult": true,
+                    "failureUx": true,
+                    "load": true,
+                    "autocomplete": true,
+                    "recovery": false,
+                }
+            }),
+            ..Default::default()
+        },
+    )?;
     Ok(())
 }
 
@@ -361,6 +401,201 @@ async fn workflow_repair_returns_unsupported_command_result() -> Result<()> {
             .stderr
             .contains("err")
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_repair_repairs_missing_design_and_schema_e2e() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    append_workflows_config(&codex_home, "\n[workflows]\ncommit_policy = \"manual\"\n")?;
+    let workflow_dir = codex_home.path().join("workflows/broken/schema");
+    write_schema_repair_fixture(
+        &workflow_dir,
+        "broken/schema",
+        json!({
+            "inputSchema": { "type": "object", "additionalProperties": true },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "nested": { "type": "object" }
+                }
+            }
+        }),
+        Some(codex_workflows::WorkflowToolSpec {
+            description: "Run broken/schema".to_string(),
+            input_schema: json!({ "type": "object", "additionalProperties": true }),
+            output_schema: json!({ "type": "object" }),
+            ..Default::default()
+        }),
+    )?;
+    fs::remove_file(workflow_dir.join("DESIGN.md"))?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request("workflow/repair", Some(json!({ "id": "broken/schema" })))
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: WorkflowRepairResponse = to_response(response)?;
+
+    assert_eq!(response.repair.stop_reason, WorkflowRepairStopReason::Valid);
+    assert!(response.repair.changed);
+    assert_eq!(response.validation.status, WorkflowValidationStatus::Valid);
+    assert!(response.validation.findings.is_empty());
+    assert!(
+        response
+            .repair
+            .applied_fixes
+            .iter()
+            .any(|fix| { fix.kind == WorkflowRepairActionKind::RepairDesign })
+    );
+    assert!(
+        response
+            .repair
+            .applied_fixes
+            .iter()
+            .any(|fix| { fix.kind == WorkflowRepairActionKind::NormalizeValidationMetadata })
+    );
+    assert!(workflow_dir.join("DESIGN.md").is_file());
+
+    let spec = codex_workflows::read_workflow_spec(&workflow_dir.join("workflow.yaml"))?;
+    assert_eq!(
+        spec.api["outputSchema"]["properties"]["nested"]["additionalProperties"],
+        true
+    );
+    assert_eq!(
+        spec.tool.unwrap().output_schema["additionalProperties"],
+        true
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_repair_blocked_schema_finding_round_trips_e2e() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    append_workflows_config(
+        &codex_home,
+        "\n[workflows]\ncommit_policy = \"manual\"\nrepair_mode = \"none\"\n",
+    )?;
+    let workflow_dir = codex_home.path().join("workflows/broken/schema");
+    write_schema_repair_fixture(
+        &workflow_dir,
+        "broken/schema",
+        json!({
+            "inputSchema": { "type": "object", "additionalProperties": true },
+            "outputSchema": { "type": "object" }
+        }),
+        None,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request("workflow/repair", Some(json!({ "id": "broken/schema" })))
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: WorkflowRepairResponse = to_response(response)?;
+
+    assert_eq!(
+        response.repair.stop_reason,
+        WorkflowRepairStopReason::BlockedByRepairMode
+    );
+    assert!(response.repair.blocked_findings.iter().any(|finding| {
+        matches!(
+            finding,
+            WorkflowValidationFindingInfo::AmbiguousWorkflowOutputSchema { schema_path, .. }
+                if schema_path == "api.outputSchema"
+        )
+    }));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_repair_blocked_runtime_state_finding_round_trips_e2e() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    append_workflows_config(
+        &codex_home,
+        "\n[workflows]\ncommit_policy = \"manual\"\nrepair_mode = \"metadata\"\n",
+    )?;
+    let workflow_dir = codex_home.path().join("workflows/broken/runtime-state");
+    write_valid_workflow(
+        &workflow_dir,
+        "broken/runtime-state",
+        "Runtime State",
+        "Repair runtime state metadata",
+    )?;
+    fs::remove_file(workflow_dir.join(".gitignore"))?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request(
+            "workflow/repair",
+            Some(json!({ "id": "broken/runtime-state" })),
+        )
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: WorkflowRepairResponse = to_response(response)?;
+
+    assert_eq!(
+        response.repair.stop_reason,
+        WorkflowRepairStopReason::BlockedByRepairMode
+    );
+    assert!(response.repair.blocked_findings.iter().any(|finding| {
+        matches!(
+            finding,
+            WorkflowValidationFindingInfo::RuntimeStateGitignoreMissing { patterns, .. }
+                if patterns.iter().any(|pattern| pattern == "state/*")
+        )
+    }));
 
     Ok(())
 }

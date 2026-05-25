@@ -17,6 +17,8 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
 
+mod schema_and_docs;
+
 fn write_runtime_gitignore(workflow_dir: &Path) {
     fs::write(
         workflow_dir.join(".gitignore"),
