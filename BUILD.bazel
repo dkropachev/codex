@@ -77,9 +77,12 @@ exports_files([
 
 filegroup(
     name = "typescript_lib_data",
-    srcs = glob([
-        "node_modules/typescript/lib/lib*.d.ts",
-        "node_modules/typescript/lib/typescript.js",
-    ]),
+    srcs = glob(
+        [
+            "node_modules/typescript/lib/lib*.d.ts",
+            "node_modules/typescript/lib/typescript.js",
+        ],
+        allow_empty = True,
+    ),
     visibility = ["//visibility:public"],
 )
