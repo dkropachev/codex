@@ -2209,7 +2209,6 @@ dependencies = [
  "chrono",
  "clap",
  "clap_complete",
- "codex-api",
  "codex-app-server",
  "codex-app-server-protocol",
  "codex-app-server-test-client",
@@ -3018,7 +3017,6 @@ dependencies = [
  "codex-terminal-detection",
  "codex-utils-template",
  "core_test_support",
- "jsonwebtoken",
  "keyring",
  "once_cell",
  "os_info",
@@ -3049,7 +3047,6 @@ dependencies = [
  "async-channel",
  "codex-api",
  "codex-async-utils",
- "codex-builtin-mcps",
  "codex-config",
  "codex-exec-server",
  "codex-git-utils",
@@ -3171,19 +3168,6 @@ dependencies = [
  "tracing",
  "uuid",
  "wiremock",
-]
-
-[[package]]
-name = "codex-message-history"
-version = "0.129.0"
-dependencies = [
- "codex-config",
- "pretty_assertions",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -3742,7 +3726,6 @@ dependencies = [
  "codex-install-context",
  "codex-login",
  "codex-mcp",
- "codex-message-history",
  "codex-model-provider",
  "codex-model-provider-info",
  "codex-models-manager",
@@ -4084,16 +4067,12 @@ name = "codex-workflows"
 version = "0.129.0"
 dependencies = [
  "anyhow",
- "chrono",
- "codex-app-server-protocol",
  "codex-artifactory",
  "codex-config",
  "codex-protocol",
  "codex-utils-absolute-path",
- "futures",
  "pretty_assertions",
  "regex",
- "schemars 0.8.22",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -4103,7 +4082,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tokio-tungstenite",
  "toml_edit 0.24.0+spec-1.1.0",
 ]
 

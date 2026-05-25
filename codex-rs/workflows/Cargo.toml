@@ -13,14 +13,10 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-chrono = { workspace = true }
-codex-app-server-protocol = { workspace = true }
 codex-artifactory = { workspace = true }
 codex-config = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
-futures = { workspace = true }
-schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
@@ -29,7 +25,6 @@ shlex = { workspace = true }
 regex = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread"] }
-tokio-tungstenite = { workspace = true }
 toml_edit = { workspace = true }
 
 [dev-dependencies]

@@ -16,7 +16,6 @@ anyhow = { workspace = true }
 async-channel = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-api = { workspace = true }
-codex-builtin-mcps = { workspace = true }
 codex-config = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-git-utils = { workspace = true }
