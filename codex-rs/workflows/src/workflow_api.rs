@@ -567,7 +567,7 @@ mod tests {
             .expect("workflow yaml");
         spec.runtime = Some(crate::spec::WorkflowRuntimeInfo::new(
             crate::spec::WorkflowRuntimeKind::Rune,
-            None,
+            /*entrypoint*/ None,
         ));
         crate::spec::write_workflow_spec(&workflow_dir.join("workflow.yaml"), &spec)
             .expect("workflow yaml");
@@ -586,8 +586,10 @@ mod tests {
             "rune/report",
         );
         let mut workflow = workflow;
-        workflow.runtime =
-            crate::spec::WorkflowRuntimeInfo::new(crate::spec::WorkflowRuntimeKind::Rune, None);
+        workflow.runtime = crate::spec::WorkflowRuntimeInfo::new(
+            crate::spec::WorkflowRuntimeKind::Rune,
+            /*entrypoint*/ None,
+        );
 
         let contract = resolved_workflow_source_contract(&workflow).expect("rune contract");
         assert_eq!(contract.callable_name, Some("runeReport".to_string()));

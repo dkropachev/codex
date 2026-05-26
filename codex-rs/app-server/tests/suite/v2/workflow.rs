@@ -512,7 +512,7 @@ async fn workflow_repair_blocked_schema_finding_round_trips_e2e() -> Result<()> 
             "inputSchema": { "type": "object", "additionalProperties": true },
             "outputSchema": { "type": "object" }
         }),
-        None,
+        /*tool*/ None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;

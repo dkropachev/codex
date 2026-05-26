@@ -1035,7 +1035,7 @@ test("workflow rejects invalid input", async () => {
                 id: "example".to_string(),
                 runtime: Some(crate::spec::WorkflowRuntimeInfo::new(
                     crate::spec::WorkflowRuntimeKind::Rune,
-                    None,
+                    /*entrypoint*/ None,
                 )),
                 validation: json!({
                     "commands": ["true"],

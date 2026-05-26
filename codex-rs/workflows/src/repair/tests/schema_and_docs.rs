@@ -68,7 +68,12 @@ fn repair_workflow_command_recreates_missing_design_doc() {
     let cwd = TempDir::new().unwrap();
     let workflow_dir = home.path().join("workflows/broken/no-design");
     fs::create_dir_all(&workflow_dir).unwrap();
-    write_repairable_workflow_fixture(&workflow_dir, "broken/no-design", JsonValue::Null, None);
+    write_repairable_workflow_fixture(
+        &workflow_dir,
+        "broken/no-design",
+        JsonValue::Null,
+        /*tool*/ None,
+    );
     fs::remove_file(workflow_dir.join("DESIGN.md")).unwrap();
 
     let output = run_repair(&home, &cwd, "broken/no-design");

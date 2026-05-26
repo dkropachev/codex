@@ -46,13 +46,13 @@ impl WorkflowRuntimeInfo {
     }
 
     pub fn legacy_typescript() -> Self {
-        Self::new(WorkflowRuntimeKind::Typescript, None)
+        Self::new(WorkflowRuntimeKind::Typescript, /*entrypoint*/ None)
     }
 }
 
 impl Default for WorkflowRuntimeInfo {
     fn default() -> Self {
-        Self::new(WorkflowRuntimeKind::Rune, None)
+        Self::new(WorkflowRuntimeKind::Rune, /*entrypoint*/ None)
     }
 }
 
@@ -174,7 +174,7 @@ pub fn scaffold_workflow_spec(
         .unwrap_or_else(|| "full".to_string());
     let mut spec = WorkflowSpec {
         id,
-        runtime: Some(WorkflowRuntimeInfo::new(runtime, None)),
+        runtime: Some(WorkflowRuntimeInfo::new(runtime, /*entrypoint*/ None)),
         title: Some(title),
         user_description: Some(user_description),
         search_terms: Vec::new(),
