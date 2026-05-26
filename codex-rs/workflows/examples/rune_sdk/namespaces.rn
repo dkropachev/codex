@@ -1,0 +1,23 @@
+pub async fn run(ctx, input) {
+    let api = ctx.api.read(#{}).await;
+    let workflows = ctx.workflows.registry.list(#{}).await;
+    let servers = ctx.mcp.listServers(#{}).await;
+    let files = ctx.fs.readDirectory(#{ path: ctx.cwd }).await;
+    let command = ctx.tools.exec(["pwd"], #{}).await;
+
+    if input.cacheKey != () {
+        ctx.artifacts.writeCacheEntry(#{
+            namespace: "example",
+            key: input.cacheKey,
+            value: #{ cwd: ctx.cwd },
+        }).await;
+    }
+
+    #{
+        api,
+        workflows,
+        servers,
+        files,
+        command,
+    }
+}

@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -21,6 +22,7 @@ use rune::Vm;
 use rune::runtime::Function;
 use rune::runtime::Object;
 use rune::runtime::Protocol;
+use rune::runtime::Ref;
 use rune::runtime::Value;
 use rune::runtime::VmResult;
 use serde_json::Value as JsonValue;
@@ -28,6 +30,18 @@ use serde_json::json;
 
 use crate::command::WorkflowCommandInput;
 use crate::command_completion::WorkflowCommandCompletionSuggestion;
+use crate::rune_agent::WorkflowRuneAgentHandle;
+use crate::rune_api::WorkflowRuneApiNamespace;
+use crate::rune_api::WorkflowRuneArtifactsNamespace;
+use crate::rune_api::WorkflowRuneFsNamespace;
+use crate::rune_api::WorkflowRuneMcpNamespace;
+use crate::rune_api::WorkflowRuneProcessNamespace;
+use crate::rune_api::WorkflowRuneToolsNamespace;
+use crate::rune_api::WorkflowRuneWorkflowsNamespace;
+use crate::rune_app_server;
+use crate::rune_app_server::WorkflowRuneAppServer;
+use crate::rune_input::WorkflowRuneInputHelpers;
+use crate::rune_tool::WorkflowRuneDynamicTool;
 use crate::workflow_runtime::WORKFLOW_NAME_ENV;
 use crate::workflow_runtime::WORKFLOW_OUTPUT_FORMAT_ENV;
 use crate::workflow_runtime::WORKFLOW_RUNTIME_EVENT_PREFIX;
@@ -168,11 +182,12 @@ async fn complete_workflow_inner(
 }
 
 fn run_rune_on_current_thread<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
-    tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .context("failed to create Rune runtime task executor")?
-        .block_on(future)
+        .context("failed to create Rune runtime task executor")?;
+    let local = tokio::task::LocalSet::new();
+    local.block_on(&runtime, future)
 }
 
 struct CompiledRuneWorkflow {
@@ -265,13 +280,14 @@ impl CompiledRuneWorkflow {
 #[derive(Clone, Any)]
 #[rune(item = ::codex)]
 struct WorkflowRuneContext {
-    inner: Arc<WorkflowRuneContextInner>,
+    inner: Rc<WorkflowRuneContextInner>,
 }
 
 struct WorkflowRuneContextInner {
     workflow_name: String,
     working_directory: String,
     self_exe: String,
+    app_server: WorkflowRuneAppServer,
 }
 
 impl WorkflowRuneContext {
@@ -291,11 +307,13 @@ impl WorkflowRuneContext {
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
+        let app_server = WorkflowRuneAppServer::new(self_exe.clone(), working_directory.clone());
         Self {
-            inner: Arc::new(WorkflowRuneContextInner {
+            inner: Rc::new(WorkflowRuneContextInner {
                 workflow_name,
                 working_directory,
                 self_exe,
+                app_server,
             }),
         }
     }
@@ -390,6 +408,85 @@ impl WorkflowRuneContext {
     fn working_directory(&self) -> String {
         self.inner.working_directory.clone()
     }
+
+    fn app_server(&self) -> WorkflowRuneAppServer {
+        self.inner.app_server.clone()
+    }
+
+    #[rune::function(keep, instance, path = Self::createAgent)]
+    async fn create_agent(this: Ref<Self>, options: Value) -> VmResult<WorkflowRuneAgentHandle> {
+        rune_app_server::vm_result_from_future(async {
+            WorkflowRuneAgentHandle::create(this.inner.app_server.clone(), options).await
+        })
+        .await
+    }
+
+    #[rune::function(keep, instance, path = Self::startAgent)]
+    async fn start_agent(this: Ref<Self>, options: Value) -> VmResult<WorkflowRuneAgentHandle> {
+        Self::create_agent(this, options).await
+    }
+
+    #[rune::function(keep, instance, path = Self::resumeAgent)]
+    async fn resume_agent(
+        this: Ref<Self>,
+        thread_id: Ref<str>,
+        options: Value,
+    ) -> VmResult<WorkflowRuneAgentHandle> {
+        rune_app_server::vm_result_from_future(async {
+            WorkflowRuneAgentHandle::resume(
+                this.inner.app_server.clone(),
+                thread_id.to_string(),
+                options,
+            )
+            .await
+        })
+        .await
+    }
+
+    #[rune::function(keep, instance, path = Self::defineTool)]
+    fn define_tool(
+        this: Ref<Self>,
+        spec: Value,
+        handler: Function,
+    ) -> VmResult<WorkflowRuneDynamicTool> {
+        rune_app_server::vm_result_from_result(WorkflowRuneDynamicTool::define(
+            this.inner.app_server.clone(),
+            spec,
+            handler,
+        ))
+    }
+
+    fn input(&self) -> WorkflowRuneInputHelpers {
+        WorkflowRuneInputHelpers
+    }
+
+    fn api(&self) -> WorkflowRuneApiNamespace {
+        WorkflowRuneApiNamespace::new(self.inner.app_server.clone())
+    }
+
+    fn artifacts(&self) -> WorkflowRuneArtifactsNamespace {
+        WorkflowRuneArtifactsNamespace::new(self.inner.app_server.clone())
+    }
+
+    fn workflows(&self) -> WorkflowRuneWorkflowsNamespace {
+        WorkflowRuneWorkflowsNamespace::new(self.inner.app_server.clone())
+    }
+
+    fn mcp(&self) -> WorkflowRuneMcpNamespace {
+        WorkflowRuneMcpNamespace::new(self.inner.app_server.clone())
+    }
+
+    fn tools(&self) -> WorkflowRuneToolsNamespace {
+        WorkflowRuneToolsNamespace::new(self.inner.app_server.clone())
+    }
+
+    fn fs(&self) -> WorkflowRuneFsNamespace {
+        WorkflowRuneFsNamespace::new(self.inner.app_server.clone())
+    }
+
+    fn process(&self) -> WorkflowRuneProcessNamespace {
+        WorkflowRuneProcessNamespace::new(self.inner.app_server.clone())
+    }
 }
 
 #[derive(Clone, Any)]
@@ -449,6 +546,21 @@ fn codex_module() -> Result<Module, rune::ContextError> {
         WorkflowRuneContext::report_to_user_markdown,
     )?;
     module.associated_function("runWorkflow", WorkflowRuneContext::run_workflow)?;
+    module.function_meta(WorkflowRuneContext::create_agent__meta)?;
+    module.function_meta(WorkflowRuneContext::start_agent__meta)?;
+    module.function_meta(WorkflowRuneContext::resume_agent__meta)?;
+    module.function_meta(WorkflowRuneContext::define_tool__meta)?;
+    WorkflowRuneAgentHandle::install(&mut module)?;
+    WorkflowRuneDynamicTool::install(&mut module)?;
+    WorkflowRuneInputHelpers::install(&mut module)?;
+    WorkflowRuneApiNamespace::install(&mut module)?;
+    WorkflowRuneArtifactsNamespace::install(&mut module)?;
+    WorkflowRuneWorkflowsNamespace::install(&mut module)?;
+    WorkflowRuneMcpNamespace::install(&mut module)?;
+    WorkflowRuneToolsNamespace::install(&mut module)?;
+    WorkflowRuneFsNamespace::install(&mut module)?;
+    WorkflowRuneProcessNamespace::install(&mut module)?;
+    WorkflowRuneAppServer::install(&mut module)?;
     module.field_function(
         &Protocol::GET,
         "cwd",
@@ -469,6 +581,15 @@ fn codex_module() -> Result<Module, rune::ContextError> {
         "workingDirectory",
         WorkflowRuneContext::working_directory,
     )?;
+    module.field_function(&Protocol::GET, "appServer", WorkflowRuneContext::app_server)?;
+    module.field_function(&Protocol::GET, "input", WorkflowRuneContext::input)?;
+    module.field_function(&Protocol::GET, "api", WorkflowRuneContext::api)?;
+    module.field_function(&Protocol::GET, "artifacts", WorkflowRuneContext::artifacts)?;
+    module.field_function(&Protocol::GET, "workflows", WorkflowRuneContext::workflows)?;
+    module.field_function(&Protocol::GET, "mcp", WorkflowRuneContext::mcp)?;
+    module.field_function(&Protocol::GET, "tools", WorkflowRuneContext::tools)?;
+    module.field_function(&Protocol::GET, "fs", WorkflowRuneContext::fs)?;
+    module.field_function(&Protocol::GET, "process", WorkflowRuneContext::process)?;
 
     module.ty::<WorkflowRuneChildStatusHelpers>()?;
     module.associated_function(
@@ -795,15 +916,66 @@ fn is_missing_rune_function(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
 
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use serial_test::serial;
     use tempfile::TempDir;
 
     use super::complete_workflow;
     use super::run_workflow;
     use crate::WorkflowCommandCompletionSuggestion;
     use crate::WorkflowCommandInput;
+    use crate::workflow_runtime::WORKFLOW_SELF_EXE_ENV;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.previous {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
+    fn write_workflow(
+        temp: &TempDir,
+        name: &str,
+        source: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        let workflow_dir = temp.path().join(name);
+        fs::create_dir_all(workflow_dir.join("src")).expect("workflow src");
+        let workflow_path = workflow_dir.join("src/workflow.rn");
+        fs::write(&workflow_path, source).expect("workflow source");
+        (workflow_dir, workflow_path)
+    }
+
+    #[cfg(unix)]
+    fn write_executable(path: &Path, source: &str) {
+        fs::write(path, source).expect("fake executable");
+        let mut permissions = fs::metadata(path).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).expect("chmod");
+    }
 
     #[tokio::test]
     async fn run_workflow_executes_rune_entrypoint() {
@@ -893,5 +1065,463 @@ pub async fn complete(_ctx, input) {
                 },
             ]
         );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    #[serial]
+    async fn run_workflow_exercises_agent_handles_tools_and_ux_calls_e2e() {
+        let temp = TempDir::new().expect("temp dir");
+        let fake_codex = temp.path().join("fake-codex-agent");
+        write_executable(
+            &fake_codex,
+            r#"#!/usr/bin/env python3
+import json
+import sys
+
+pending_turns = {}
+thread_counter = 0
+turn_counter = 0
+
+def send(payload):
+    print(json.dumps(payload, separators=(",", ":")), flush=True)
+
+for line in sys.stdin:
+    message = json.loads(line)
+    method = message.get("method")
+    request_id = message.get("id")
+
+    if method == "initialize":
+        send({"id": request_id, "result": {"userAgent": "fake/1", "serverInfo": {"name": "fake", "version": "1"}}})
+    elif method == "initialized":
+        pass
+    elif method == "thread/start":
+        thread_counter += 1
+        if not message.get("params", {}).get("dynamicTools"):
+            send({"id": request_id, "error": {"code": -32000, "message": "missing dynamicTools"}})
+        else:
+            send({"id": request_id, "result": {"thread": {"id": f"thread-{thread_counter}"}}})
+    elif method == "thread/resume":
+        send({"id": request_id, "result": {"thread": {"id": message["params"]["threadId"]}}})
+    elif method == "thread/fork":
+        send({"id": request_id, "result": {"thread": {"id": "thread-fork"}}})
+    elif method == "thread/read":
+        send({"id": request_id, "result": {"thread": {"id": message["params"]["threadId"], "status": "idle"}}})
+    elif method == "thread/unsubscribe":
+        send({"id": request_id, "result": {"unsubscribed": message["params"]["threadId"]}})
+    elif method == "turn/start":
+        turn_counter += 1
+        turn_id = f"turn-{turn_counter}"
+        tool_request_id = f"tool-call-{turn_counter}"
+        pending_turns[tool_request_id] = {
+            "request_id": request_id,
+            "thread_id": message["params"]["threadId"],
+            "turn_id": turn_id,
+        }
+        send({
+            "id": tool_request_id,
+            "method": "item/tool/call",
+            "params": {
+                "tool": "echo_context",
+                "arguments": {"text": f"tool-input-{turn_counter}"},
+                "callId": f"call-{turn_counter}",
+                "threadId": message["params"]["threadId"],
+                "turnId": turn_id,
+            },
+        })
+    elif method == "turn/steer":
+        send({"id": request_id, "result": {"steered": True, "input": message["params"]["input"]}})
+    elif method == "turn/interrupt":
+        send({"id": request_id, "result": {"interrupted": message["params"]["turnId"]}})
+    elif request_id in pending_turns:
+        pending = pending_turns.pop(request_id)
+        result = message.get("result", {})
+        content_items = result.get("contentItems") or [{}]
+        tool_text = content_items[0].get("text", "missing-tool-result")
+        thread_id = pending["thread_id"]
+        turn_id = pending["turn_id"]
+        send({
+            "method": "item/completed",
+            "params": {
+                "threadId": thread_id,
+                "turnId": turn_id,
+                "item": {"type": "agentMessage", "id": f"item-{turn_id}", "text": f"agent saw {tool_text}"},
+            },
+        })
+        send({"method": "thread/tokenUsage/updated", "params": {"threadId": thread_id, "tokenUsage": {"last": {"totalTokens": 42}}}})
+        send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": {"id": turn_id, "items": [], "status": "completed"}}})
+        send({"id": pending["request_id"], "result": {"turn": {"id": turn_id, "items": [], "status": "inProgress"}}})
+"#,
+        );
+        let _env = EnvVarGuard::set(WORKFLOW_SELF_EXE_ENV, &fake_codex);
+        let (workflow_dir, workflow_path) = write_workflow(
+            &temp,
+            "rune-agent-e2e",
+            r##"
+pub async fn run(ctx, input) {
+    ctx.appServer.configure(#{ connection: "spawn" });
+    ctx.status(#{
+        workflowName: "Rune Agent E2E",
+        workflowStatus: "starting",
+        threads: [
+            #{ name: "planner", status: "running" },
+            #{ name: "executor", status: "waiting" },
+        ],
+    });
+    ctx.progress("Preparing agent", #{ stage: "setup", step: 1, total: 2 });
+    ctx.reportToUserMarkdown("# Rune Agent E2E");
+
+    let echo = ctx.defineTool(#{
+        name: "echo_context",
+        description: "Echoes text to prove dynamic tool calls are routed through Rune.",
+        inputSchema: #{
+            type: "object",
+            properties: #{ text: #{ type: "string" } },
+            required: ["text"],
+        },
+    }, async |args, _call| {
+        args.text
+    });
+
+    let agent = ctx.startAgent(#{ tools: [echo] }).await;
+    let forked = agent.fork(#{ tools: [echo] }).await;
+    let spawned = agent.spawnAgent(#{ tools: [echo] }).await;
+    let created = agent.createAgent(#{ tools: [echo] }).await;
+    let resumed = ctx.resumeAgent("thread-resumed", #{ tools: [echo] }).await;
+    let wait_result = agent.wait().await;
+
+    let turn = agent.turn([
+        ctx.input.text(input.prompt),
+        ctx.input.image("https://example.com/image.png"),
+        ctx.input.localImage("local.png"),
+        ctx.input.skill("review", "/skills/review"),
+        ctx.input.mention("file", "/tmp/file.txt"),
+    ], #{}).await;
+    let steer_result = turn.steer("steer this turn").await;
+    let interrupt_result = turn.interrupt().await;
+    let run_result = turn.run().await;
+
+    let stream = forked.runStreamed("stream this turn", #{}).await;
+    let stream_item = stream.next().await;
+    let stream_usage = stream.next().await;
+    let stream_done = stream.next().await;
+    stream.close().await;
+
+    let send_turn = resumed.sendInput("send input turn", #{}).await;
+    let send_result = send_turn.run().await;
+    let unsubscribe_result = agent.unsubscribe().await;
+    let close_result = spawned.close().await;
+    let created_close_result = created.close().await;
+
+    #{
+        agentThreadId: agent.threadId,
+        forkedThreadId: forked.threadId,
+        spawnedThreadId: spawned.threadId,
+        createdThreadId: created.threadId,
+        resumedThreadId: resumed.threadId,
+        waitResult: wait_result,
+        steerResult: steer_result,
+        interruptResult: interrupt_result,
+        runResult: run_result,
+        streamMethods: [stream_item.method, stream_usage.method, stream_done.method],
+        streamFinal: stream_item.params.item.text,
+        sendResult: send_result,
+        unsubscribeResult: unsubscribe_result,
+        closeResult: close_result,
+        createdCloseResult: created_close_result,
+    }
+}
+"##,
+        );
+
+        let output = run_workflow(
+            temp.path(),
+            &workflow_dir,
+            &workflow_path,
+            r#"{ "prompt": "inspect everything" }"#,
+        )
+        .await
+        .expect("run workflow");
+
+        assert!(output.success, "stderr: {}", output.stderr);
+        let result: serde_json::Value = serde_json::from_str(&output.stdout).expect("json stdout");
+        assert_eq!(result["agentThreadId"], json!("thread-1"));
+        assert_eq!(result["forkedThreadId"], json!("thread-fork"));
+        assert_eq!(result["spawnedThreadId"], json!("thread-2"));
+        assert_eq!(result["createdThreadId"], json!("thread-3"));
+        assert_eq!(result["resumedThreadId"], json!("thread-resumed"));
+        assert_eq!(result["waitResult"]["thread"]["status"], json!("idle"));
+        assert_eq!(result["steerResult"]["steered"], json!(true));
+        assert_eq!(result["interruptResult"]["interrupted"], json!("turn-1"));
+        assert_eq!(
+            result["runResult"]["finalResponse"],
+            json!("agent saw tool-input-1")
+        );
+        assert_eq!(
+            result["runResult"]["usage"]["last"]["totalTokens"],
+            json!(42)
+        );
+        assert_eq!(
+            result["streamMethods"],
+            json!([
+                "item/completed",
+                "thread/tokenUsage/updated",
+                "turn/completed"
+            ])
+        );
+        assert_eq!(result["streamFinal"], json!("agent saw tool-input-2"));
+        assert_eq!(
+            result["sendResult"]["finalResponse"],
+            json!("agent saw tool-input-3")
+        );
+        assert_eq!(
+            result["unsubscribeResult"]["unsubscribed"],
+            json!("thread-1")
+        );
+        assert_eq!(result["closeResult"]["unsubscribed"], json!("thread-2"));
+        assert_eq!(
+            result["createdCloseResult"]["unsubscribed"],
+            json!("thread-3")
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    #[serial]
+    async fn run_workflow_exercises_app_server_namespaces_e2e() {
+        let temp = TempDir::new().expect("temp dir");
+        let fake_codex = temp.path().join("fake-codex-api");
+        write_executable(
+            &fake_codex,
+            r#"#!/usr/bin/env python3
+import json
+import sys
+
+pending_approval_request = None
+overload_attempts = 0
+
+def send(payload):
+    print(json.dumps(payload, separators=(",", ":")), flush=True)
+
+for line in sys.stdin:
+    message = json.loads(line)
+    method = message.get("method")
+    request_id = message.get("id")
+
+    if method == "initialize":
+        send({"id": request_id, "result": {"userAgent": "fake/1", "serverInfo": {"name": "fake", "version": "1"}}})
+    elif method == "initialized":
+        pass
+    elif method == "test/notify":
+        send({"method": "test/notification", "params": {"seen": True}})
+    elif method == "test/error":
+        send({"id": request_id, "error": {"code": 429, "message": "overloaded"}})
+    elif method == "test/overload":
+        overload_attempts += 1
+        if overload_attempts == 1:
+            send({"id": request_id, "error": {"code": 429, "message": "overloaded"}})
+        else:
+            send({"id": request_id, "result": {"method": method, "attempts": overload_attempts}})
+    elif method == "test/approval":
+        pending_approval_request = request_id
+        send({
+            "id": "approval-request-1",
+            "method": "item/commandExecution/requestApproval",
+            "params": {"command": ["echo", "ok"]},
+        })
+    elif request_id == "approval-request-1":
+        send({"id": pending_approval_request, "result": {"approval": message.get("result")}})
+        pending_approval_request = None
+    elif request_id is not None:
+        send({"id": request_id, "result": {"method": method, "params": message.get("params", {})}})
+"#,
+        );
+        let _env = EnvVarGuard::set(WORKFLOW_SELF_EXE_ENV, &fake_codex);
+        let (workflow_dir, workflow_path) = write_workflow(
+            &temp,
+            "rune-api-e2e",
+            r##"
+pub async fn run(ctx, _input) {
+    ctx.appServer.configure(#{ connection: "spawn" });
+
+    let api = ctx.api.read(#{}).await;
+    let artifact_register = ctx.artifacts.registerState(#{ id: "state-1" }).await;
+    let artifact_read = ctx.artifacts.readState(#{ id: "state-1" }).await;
+    let artifact_list = ctx.artifacts.listStates(#{}).await;
+    let artifact_hit = ctx.artifacts.recordStateHit(#{ id: "state-1" }).await;
+    let artifact_prune = ctx.artifacts.pruneStates(#{}).await;
+    let artifact_index = ctx.artifacts.indexFile(#{ path: "README.md" }).await;
+    let artifact_find = ctx.artifacts.findFile(#{ path: "README.md" }).await;
+    let cache_read = ctx.artifacts.readCacheEntry(#{ key: "cache-1" }).await;
+    let cache_write = ctx.artifacts.writeCacheEntry(#{ key: "cache-1", value: #{ ok: true } }).await;
+    let cache_delete = ctx.artifacts.deleteCacheEntry(#{ key: "cache-1" }).await;
+
+    let workflow_list = ctx.workflows.registry.list(#{}).await;
+    let workflow_read = ctx.workflows.registry.read(#{ id: "demo" }).await;
+    let workflow_impact = ctx.workflows.registry.impact(#{ id: "demo" }).await;
+    let workflow_develop = ctx.workflows.registry.develop(#{ description: "demo" }).await;
+    let workflow_edit = ctx.workflows.registry.edit(#{ id: "demo" }).await;
+    let workflow_validate = ctx.workflows.registry.validate(#{ id: "demo" }).await;
+    let workflow_repair = ctx.workflows.registry.repair(#{ id: "demo" }).await;
+    let workflow_author = ctx.workflows.registry.authoringContextPrepare(#{ id: "demo" }).await;
+    let workflow_config_read = ctx.workflows.config.read(#{}).await;
+    let workflow_config_write = ctx.workflows.config.write(#{ key: "default_location" }).await;
+    let workflow_command = ctx.workflows.command.execute(#{ argv: ["list"] }).await;
+    let workflow_run = ctx.workflows.run("demo", #{ prompt: "hello" }).await;
+
+    let mcp_servers = ctx.mcp.listServers(#{}).await;
+    let mcp_resource = ctx.mcp.readResource(#{ server: "s", uri: "file://demo" }).await;
+    let mcp_tool = ctx.mcp.callTool(#{ server: "s", tool: "t", arguments: #{} }).await;
+    let exec = ctx.tools.exec(["echo", "hi"], #{ cwd: ctx.cwd }).await;
+
+    let fs_read = ctx.fs.readFile(#{ path: "README.md" }).await;
+    let fs_write = ctx.fs.writeFile(#{ path: "out.txt", content: "hi" }).await;
+    let fs_dir = ctx.fs.readDirectory(#{ path: ctx.cwd }).await;
+    let fs_mkdir = ctx.fs.createDirectory(#{ path: "tmp" }).await;
+    let fs_remove = ctx.fs.remove(#{ path: "tmp" }).await;
+    let fs_copy = ctx.fs.copy(#{ from: "a", to: "b" }).await;
+    let fs_watch = ctx.fs.watch(#{ path: ctx.cwd }).await;
+    let fs_unwatch = ctx.fs.unwatch(#{ watchId: "watch-1" }).await;
+
+    let process_spawn = ctx.process.spawn(#{ command: ["cat"] }).await;
+    let process_stdin = ctx.process.writeStdin(#{ processId: "p", data: "hi" }).await;
+    let process_kill = ctx.process.kill(#{ processId: "p" }).await;
+    let process_resize = ctx.process.resizePty(#{ processId: "p", cols: 80, rows: 24 }).await;
+
+    let raw = ctx.appServer.request("test/raw", #{ value: 1 }).await;
+    let try_ok = ctx.appServer.tryRequest("test/raw", #{ value: 2 }).await;
+    let try_err = ctx.appServer.tryRequest("test/error", #{}).await;
+    ctx.appServer.notify("test/notify", #{ value: 3 }).await;
+    let notification = ctx.appServer.nextNotification().await;
+    let retry = ctx.appServer.retryOnOverload(async || {
+        ctx.appServer.request("test/overload", #{}).await
+    }, #{ maxRetries: 2, maxDelayMs: 1 }).await;
+    ctx.appServer.setApprovals(#{
+        mode: "handler",
+        onApproval: async |approval| {
+            #{ decision: "approved", type: approval.type, method: approval.method }
+        },
+    });
+    let approval = ctx.appServer.request("test/approval", #{}).await;
+    let connected = ctx.appServer.connected;
+    ctx.appServer.close().await;
+
+    #{
+        methods: [
+            api.method,
+            artifact_register.method,
+            artifact_read.method,
+            artifact_list.method,
+            artifact_hit.method,
+            artifact_prune.method,
+            artifact_index.method,
+            artifact_find.method,
+            cache_read.method,
+            cache_write.method,
+            cache_delete.method,
+            workflow_list.method,
+            workflow_read.method,
+            workflow_impact.method,
+            workflow_develop.method,
+            workflow_edit.method,
+            workflow_validate.method,
+            workflow_repair.method,
+            workflow_author.method,
+            workflow_config_read.method,
+            workflow_config_write.method,
+            workflow_command.method,
+            workflow_run.method,
+            mcp_servers.method,
+            mcp_resource.method,
+            mcp_tool.method,
+            exec.method,
+            fs_read.method,
+            fs_write.method,
+            fs_dir.method,
+            fs_mkdir.method,
+            fs_remove.method,
+            fs_copy.method,
+            fs_watch.method,
+            fs_unwatch.method,
+            process_spawn.method,
+            process_stdin.method,
+            process_kill.method,
+            process_resize.method,
+            raw.method,
+        ],
+        execParams: exec.params,
+        tryOk: try_ok,
+        tryErr: try_err,
+        notification: notification,
+        retry: retry,
+        approval: approval,
+        connected: connected,
+    }
+}
+"##,
+        );
+
+        let output = run_workflow(temp.path(), &workflow_dir, &workflow_path, "{}")
+            .await
+            .expect("run workflow");
+
+        assert!(output.success, "stderr: {}", output.stderr);
+        let result: serde_json::Value = serde_json::from_str(&output.stdout).expect("json stdout");
+        assert_eq!(
+            result["methods"],
+            json!([
+                "apiCatalog/read",
+                "artifact/state/register",
+                "artifact/state/read",
+                "artifact/state/list",
+                "artifact/state/hit",
+                "artifact/state/prune",
+                "artifact/file/index",
+                "artifact/file/find",
+                "artifact/cache/read",
+                "artifact/cache/write",
+                "artifact/cache/delete",
+                "workflow/list",
+                "workflow/read",
+                "workflow/impact",
+                "workflow/develop",
+                "workflow/edit",
+                "workflow/validate",
+                "workflow/repair",
+                "workflow/authoringContext/prepare",
+                "workflow/config/read",
+                "workflow/config/write",
+                "workflow/command/execute",
+                "workflow/run",
+                "mcpServerStatus/list",
+                "mcpServer/resource/read",
+                "mcpServer/tool/call",
+                "command/exec",
+                "fs/readFile",
+                "fs/writeFile",
+                "fs/readDirectory",
+                "fs/createDirectory",
+                "fs/remove",
+                "fs/copy",
+                "fs/watch",
+                "fs/unwatch",
+                "process/spawn",
+                "process/writeStdin",
+                "process/kill",
+                "process/resizePty",
+                "test/raw",
+            ])
+        );
+        assert_eq!(result["execParams"]["command"], json!(["echo", "hi"]));
+        assert_eq!(result["tryOk"]["ok"], json!(true));
+        assert_eq!(result["tryErr"]["ok"], json!(false));
+        assert_eq!(result["notification"]["method"], json!("test/notification"));
+        assert_eq!(result["retry"]["attempts"], json!(2));
+        assert_eq!(
+            result["approval"]["approval"]["decision"],
+            json!("approved")
+        );
+        assert_eq!(result["approval"]["approval"]["type"], json!("command"));
+        assert_eq!(result["connected"], json!(true));
     }
 }
