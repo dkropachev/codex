@@ -454,6 +454,7 @@ mod git_processor;
 mod initialize_processor;
 mod marketplace_processor;
 mod mcp_processor;
+mod model_history_limits;
 mod plugins;
 mod process_exec_processor;
 mod search;

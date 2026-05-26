@@ -5023,6 +5023,47 @@ mod tests {
     }
 
     #[test]
+    fn sandbox_linux_accepts_config_compatibility_flags() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "sandbox",
+            "linux",
+            "--permissions-profile",
+            "workspace",
+            "-C",
+            "/tmp/work",
+            "--include-managed-config",
+            "echo",
+            "hi",
+        ])
+        .expect("parse should succeed");
+        let Some(Subcommand::Sandbox(sandbox_args)) = cli.subcommand else {
+            panic!("expected sandbox subcommand");
+        };
+        let SandboxCommand::Linux(cmd) = sandbox_args.cmd else {
+            panic!("expected linux sandbox command");
+        };
+
+        assert_eq!(
+            cmd.sandbox_overrides.permissions_profile.as_deref(),
+            Some("workspace")
+        );
+        assert_eq!(cmd.sandbox_overrides.cwd, Some(PathBuf::from("/tmp/work")));
+        assert!(cmd.sandbox_overrides.include_managed_config);
+        assert_eq!(cmd.command, vec!["echo".to_string(), "hi".to_string()]);
+    }
+
+    #[test]
+    fn interactive_prompt_stops_before_following_flags() {
+        let cli = MultitoolCli::try_parse_from(["codex", "hello", "--search"])
+            .expect("parse should succeed");
+
+        assert_eq!(cli.interactive.prompt, vec!["hello".to_string()]);
+        assert!(cli.interactive.web_search);
+        assert!(cli.subcommand.is_none());
+    }
+
+    #[test]
     fn workflow_quality_hook_hidden_subcommand_parses() {
         let cli = MultitoolCli::try_parse_from(["codex", "workflow-quality-hook"])
             .expect("parse should succeed");

@@ -110,6 +110,8 @@ impl App {
                         })
                     });
 
+                    let wait_result = child.wait().await;
+
                     let stdout = match stdout_task {
                         Some(task) => match task.await {
                             Ok(output) => output,
@@ -117,19 +119,17 @@ impl App {
                         },
                         None => String::new(),
                     };
+                    let stderr_output = match stderr_task {
+                        Some(task) => match task.await {
+                            Ok(output) => output,
+                            Err(err) => format!("failed to join workflow stderr task: {err}"),
+                        },
+                        None => String::new(),
+                    };
 
-                    let result = match child.wait().await {
+                    let result = match wait_result {
                         Ok(status) if status.success() => Ok(()),
                         Ok(status) => {
-                            let stderr_output = match stderr_task {
-                                Some(task) => match task.await {
-                                    Ok(output) => output,
-                                    Err(err) => {
-                                        format!("failed to join workflow stderr task: {err}")
-                                    }
-                                },
-                                None => String::new(),
-                            };
                             let stderr_output = stderr_output.trim();
                             if stderr_output.is_empty() {
                                 Err(format!("workflow exited with {status}"))

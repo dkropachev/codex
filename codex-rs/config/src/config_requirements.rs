@@ -622,24 +622,105 @@ pub(crate) fn merge_enablement_settings_descending(
 }
 
 /// Base config deserialized from system `requirements.toml` or MDM.
-#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
     pub remote_sandbox_config: Option<Vec<RemoteSandboxConfigToml>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
-    #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
     pub hooks: Option<ManagedHooksRequirementsToml>,
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
     pub apps: Option<AppsRequirementsToml>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
-    #[serde(rename = "experimental_network")]
     pub network: Option<NetworkRequirementsToml>,
     pub permissions: Option<PermissionsRequirementsToml>,
     pub guardian_policy_config: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+struct ConfigRequirementsTomlWire {
+    allowed_approval_policies: Option<Vec<AskForApproval>>,
+    allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
+    allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
+    remote_sandbox_config: Option<Vec<RemoteSandboxConfigToml>>,
+    allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
+    #[serde(rename = "features", alias = "feature_requirements")]
+    feature_requirements: Option<FeatureRequirementsToml>,
+    hooks: Option<ManagedHooksRequirementsToml>,
+    mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
+    plugins: Option<BTreeMap<String, PluginRequirementsToml>>,
+    apps: Option<AppsRequirementsToml>,
+    rules: Option<RequirementsExecPolicyToml>,
+    enforce_residency: Option<ResidencyRequirement>,
+    #[serde(rename = "experimental_network")]
+    network: Option<NetworkRequirementsToml>,
+    permissions: Option<PermissionsRequirementsToml>,
+    guardian_policy_config: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct PluginRequirementsToml {
+    pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
+}
+
+impl<'de> Deserialize<'de> for ConfigRequirementsToml {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = ConfigRequirementsTomlWire::deserialize(deserializer)?;
+        Ok(wire.into())
+    }
+}
+
+impl From<ConfigRequirementsTomlWire> for ConfigRequirementsToml {
+    fn from(mut wire: ConfigRequirementsTomlWire) -> Self {
+        fold_plugin_mcp_server_requirements(&mut wire.mcp_servers, wire.plugins.take());
+
+        Self {
+            allowed_approval_policies: wire.allowed_approval_policies,
+            allowed_approvals_reviewers: wire.allowed_approvals_reviewers,
+            allowed_sandbox_modes: wire.allowed_sandbox_modes,
+            remote_sandbox_config: wire.remote_sandbox_config,
+            allowed_web_search_modes: wire.allowed_web_search_modes,
+            feature_requirements: wire.feature_requirements,
+            hooks: wire.hooks,
+            mcp_servers: wire.mcp_servers,
+            apps: wire.apps,
+            rules: wire.rules,
+            enforce_residency: wire.enforce_residency,
+            network: wire.network,
+            permissions: wire.permissions,
+            guardian_policy_config: wire.guardian_policy_config,
+        }
+    }
+}
+
+fn fold_plugin_mcp_server_requirements(
+    mcp_servers: &mut Option<BTreeMap<String, McpServerRequirement>>,
+    plugins: Option<BTreeMap<String, PluginRequirementsToml>>,
+) {
+    let Some(plugins) = plugins else {
+        return;
+    };
+    let mut plugin_mcp_servers = BTreeMap::new();
+    for plugin in plugins.into_values() {
+        if let Some(plugin_servers) = plugin.mcp_servers {
+            for (server_name, requirement) in plugin_servers {
+                plugin_mcp_servers.entry(server_name).or_insert(requirement);
+            }
+        }
+    }
+    if plugin_mcp_servers.is_empty() {
+        return;
+    }
+    let mcp_servers = mcp_servers.get_or_insert_with(BTreeMap::new);
+    for (server_name, requirement) in plugin_mcp_servers {
+        mcp_servers.entry(server_name).or_insert(requirement);
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -703,6 +784,8 @@ impl ConfigRequirementsWithSources {
             };
         }
 
+        let mut other = other;
+
         // Destructure without `..` so adding fields to `ConfigRequirementsToml`
         // forces this merge logic to be updated.
         let ConfigRequirementsToml {
@@ -722,7 +805,6 @@ impl ConfigRequirementsWithSources {
             guardian_policy_config: _,
         } = &other;
 
-        let mut other = other;
         if other
             .guardian_policy_config
             .as_deref()
@@ -2694,6 +2776,32 @@ command = "python3 /enterprise/hooks/pre.py"
                         },
                     ),
                 ]),
+                RequirementSource::Unknown,
+            ))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_plugin_scoped_mcp_server_requirements() -> Result<()> {
+        let toml_str = r#"
+            [plugins."sample@test".mcp_servers.docs.identity]
+            command = "codex-mcp"
+        "#;
+        let requirements: ConfigRequirements =
+            with_unknown_source(from_str(toml_str)?).try_into()?;
+
+        assert_eq!(
+            requirements.mcp_servers,
+            Some(Sourced::new(
+                BTreeMap::from([(
+                    "docs".to_string(),
+                    McpServerRequirement {
+                        identity: McpServerIdentity::Command {
+                            command: "codex-mcp".to_string(),
+                        },
+                    },
+                )]),
                 RequirementSource::Unknown,
             ))
         );

@@ -18,7 +18,7 @@ const PLAN_MODE_GUIDE: &str =
     include_str!("../../../collaboration-mode-templates/templates/plan.md");
 const HELP_TIMEOUT: Duration = Duration::from_millis(750);
 const MAX_HELP_SECTION_CHARS: usize = 4_000;
-const MAX_RUNTIME_CONTEXT_CHARS: usize = 96_000;
+const MAX_RUNTIME_CONTEXT_CHARS: usize = 32_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CodexConfigIntentMode {
@@ -308,6 +308,17 @@ mod tests {
         assert!(instructions.contains("you may write only under the Codex config directory"));
         assert!(instructions.contains("<proposed_plan>"));
         assert!(!instructions.contains("User request:"));
+    }
+
+    #[test]
+    fn runtime_context_cap_stays_under_single_item_budget() {
+        let truncated = truncate_chars(
+            &"x".repeat(MAX_RUNTIME_CONTEXT_CHARS + 10),
+            MAX_RUNTIME_CONTEXT_CHARS,
+        );
+
+        assert!(truncated.len() <= MAX_RUNTIME_CONTEXT_CHARS + "\n[truncated]".len());
+        assert!(truncated.ends_with("[truncated]"));
     }
 
     #[test]

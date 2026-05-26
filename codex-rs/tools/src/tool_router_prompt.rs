@@ -6,6 +6,7 @@ pub const TOOL_ROUTER_SCHEMA_VERSION: i64 = 1;
 pub const TOOL_ROUTER_DEFAULT_GUIDANCE_VERSION: i64 = 2;
 pub const TOOL_ROUTER_DEFAULT_GUIDANCE_TOKEN_CAP: usize = 600;
 pub const TOOL_ROUTER_HARD_GUIDANCE_TOKEN_CAP: usize = 1200;
+pub const TOOL_ROUTER_MAX_CATALOG_TOOLS: usize = 64;
 
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
@@ -95,8 +96,26 @@ pub fn tool_router_format_description(router_spec: &ToolSpec, routed_tools: &[To
         "Active routed tool catalog:".to_string(),
     ];
 
+    let total_catalog_entries = routed_tools
+        .iter()
+        .map(tool_catalog_entry_count)
+        .sum::<usize>();
+    let mut appended_catalog_entries = 0usize;
     for spec in routed_tools {
-        append_tool_catalog_lines(&mut lines, spec);
+        if appended_catalog_entries >= TOOL_ROUTER_MAX_CATALOG_TOOLS {
+            break;
+        }
+        appended_catalog_entries += append_tool_catalog_lines(
+            &mut lines,
+            spec,
+            TOOL_ROUTER_MAX_CATALOG_TOOLS - appended_catalog_entries,
+        );
+    }
+    if total_catalog_entries > appended_catalog_entries {
+        lines.push(format!(
+            "- ... {} additional routed tools omitted; use `tool_search` when you need more.",
+            total_catalog_entries - appended_catalog_entries
+        ));
     }
     lines.push("</tool_router_format>".to_string());
     lines.join("\n")
@@ -112,7 +131,11 @@ pub fn toolset_hash_from_specs(specs: &[ToolSpec]) -> String {
     format!("{hash:016x}")
 }
 
-fn append_tool_catalog_lines(lines: &mut Vec<String>, spec: &ToolSpec) {
+fn append_tool_catalog_lines(lines: &mut Vec<String>, spec: &ToolSpec, remaining: usize) -> usize {
+    if remaining == 0 {
+        return 0;
+    }
+
     match spec {
         ToolSpec::Function(tool) => {
             if tool.name != TOOL_ROUTER_TOOL_NAME {
@@ -121,6 +144,9 @@ fn append_tool_catalog_lines(lines: &mut Vec<String>, spec: &ToolSpec) {
                     tool.name,
                     compact_description(&tool.description)
                 ));
+                1
+            } else {
+                0
             }
         }
         ToolSpec::Freeform(tool) => {
@@ -129,9 +155,11 @@ fn append_tool_catalog_lines(lines: &mut Vec<String>, spec: &ToolSpec) {
                 tool.name,
                 compact_description(&tool.description)
             ));
+            1
         }
         ToolSpec::Namespace(namespace) => {
-            for tool in &namespace.tools {
+            let mut appended = 0usize;
+            for tool in namespace.tools.iter().take(remaining) {
                 match tool {
                     ResponsesApiNamespaceTool::Function(tool) => lines.push(format!(
                         "- `{}.{}`: {}",
@@ -140,23 +168,41 @@ fn append_tool_catalog_lines(lines: &mut Vec<String>, spec: &ToolSpec) {
                         compact_description(&tool.description)
                     )),
                 }
+                appended += 1;
             }
+            appended
         }
         ToolSpec::ToolSearch { description, .. } => {
             lines.push(format!(
                 "- `tool_search`: {}",
                 compact_description(description)
             ));
+            1
         }
         ToolSpec::LocalShell {} => {
             lines.push("- `local_shell`: execute a local shell action.".to_string());
+            1
         }
         ToolSpec::ImageGeneration { .. } => {
             lines.push("- `image_generation`: generate or edit bitmap images.".to_string());
+            1
         }
         ToolSpec::WebSearch { .. } => {
             lines.push("- `web_search`: search the web.".to_string());
+            1
         }
+    }
+}
+
+fn tool_catalog_entry_count(spec: &ToolSpec) -> usize {
+    match spec {
+        ToolSpec::Function(tool) => usize::from(tool.name != TOOL_ROUTER_TOOL_NAME),
+        ToolSpec::Namespace(namespace) => namespace.tools.len(),
+        ToolSpec::Freeform(_)
+        | ToolSpec::ToolSearch { .. }
+        | ToolSpec::LocalShell {}
+        | ToolSpec::ImageGeneration { .. }
+        | ToolSpec::WebSearch { .. } => 1,
     }
 }
 

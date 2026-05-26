@@ -2,6 +2,9 @@ pub(crate) mod debug_sandbox;
 mod exit_status;
 pub(crate) mod login;
 
+use std::path::PathBuf;
+
+use clap::Args;
 use clap::Parser;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
@@ -38,6 +41,9 @@ pub struct SeatbeltCommand {
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 
+    #[clap(flatten)]
+    pub sandbox_overrides: SandboxConfigOverrides,
+
     /// Full command args to run under seatbelt.
     #[arg(trailing_var_arg = true)]
     pub command: Vec<String>,
@@ -57,6 +63,9 @@ pub struct LandlockCommand {
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 
+    #[clap(flatten)]
+    pub sandbox_overrides: SandboxConfigOverrides,
+
     /// Full command args to run under the Linux sandbox.
     #[arg(trailing_var_arg = true)]
     pub command: Vec<String>,
@@ -71,7 +80,25 @@ pub struct WindowsCommand {
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 
+    #[clap(flatten)]
+    pub sandbox_overrides: SandboxConfigOverrides,
+
     /// Full command args to run under Windows restricted token sandbox.
     #[arg(trailing_var_arg = true)]
     pub command: Vec<String>,
+}
+
+#[derive(Debug, Default, Clone, Args)]
+pub struct SandboxConfigOverrides {
+    /// Run the sandboxed command from this working directory.
+    #[arg(long = "cd", short = 'C', value_name = "DIR")]
+    pub cwd: Option<PathBuf>,
+
+    /// Select a configured permissions profile for the sandboxed command.
+    #[arg(long = "permissions-profile", value_name = "PROFILE")]
+    pub permissions_profile: Option<String>,
+
+    /// Accepted for compatibility; sandbox debug commands already load managed config.
+    #[arg(long = "include-managed-config", default_value_t = false)]
+    pub include_managed_config: bool,
 }

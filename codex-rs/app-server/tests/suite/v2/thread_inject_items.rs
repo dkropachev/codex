@@ -2,6 +2,7 @@ use anyhow::Context;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadInjectItemsParams;
@@ -22,6 +23,7 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test]
 async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Result<()> {
@@ -242,6 +244,58 @@ async fn thread_inject_items_adds_raw_response_items_after_a_turn() -> Result<()
     assert!(
         requests[1].input().contains(&injected_value),
         "injected item should be sent after being injected into existing history"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_inject_items_rejects_oversized_model_visible_items() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let oversized_item = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "x".repeat(40_001),
+        }],
+        phase: None,
+    };
+    let inject_req = mcp
+        .send_thread_inject_items_request(ThreadInjectItemsParams {
+            thread_id: thread.id,
+            items: vec![serde_json::to_value(&oversized_item)?],
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(inject_req)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert!(
+        error.error.message.contains("items[0] exceeds"),
+        "unexpected error: {}",
+        error.error.message
     );
 
     Ok(())

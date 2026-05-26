@@ -1,4 +1,6 @@
+use super::model_history_limits::validate_model_visible_json_values;
 use super::*;
+use codex_app_server_protocol::ServiceTier as ApiServiceTier;
 
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
@@ -422,7 +424,9 @@ impl TurnRequestProcessor {
         let model = params.model;
         let effort = params.effort.map(Some);
         let summary = params.summary;
-        let service_tier = params.service_tier;
+        let service_tier = params
+            .service_tier
+            .map(|tier| tier.map(ApiServiceTier::into_string));
         let service_tier_for_op = service_tier.as_ref().map(|tier| {
             tier.as_ref()
                 .and_then(|tier| ServiceTier::from_request_value(tier))
@@ -524,6 +528,7 @@ impl TurnRequestProcessor {
         params: ThreadInjectItemsParams,
     ) -> Result<ThreadInjectItemsResponse, JSONRPCErrorError> {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
+        validate_model_visible_json_values("items", &params.items)?;
 
         let items = params
             .items

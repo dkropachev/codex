@@ -16,11 +16,15 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_string::truncate_middle_chars;
 
 use crate::slash_command::built_in_slash_commands;
 
 const CODEX_GUIDE: &str = include_str!("../codex_guide.md");
 const PLAN_MODE_GUIDE: &str = include_str!("../../collaboration-mode-templates/templates/plan.md");
+const MAX_CODEX_CONFIG_CONTEXT_BYTES: usize = 32_000;
+const MAX_CODEX_GUIDE_BYTES: usize = 16_000;
+const MAX_CODEX_HELP_BYTES: usize = 8_000;
 
 pub(crate) fn codex_config_workspace_for_cwd(cwd: &Path) -> PathBuf {
     let mut hasher = DefaultHasher::new();
@@ -183,7 +187,7 @@ fn build_codex_config_plan_context(
     ];
 
     push_shared_context(&mut sections);
-    sections.join("\n\n")
+    bounded_context(sections.join("\n\n"))
 }
 
 fn build_codex_config_edit_context(
@@ -199,15 +203,18 @@ fn build_codex_config_edit_context(
     )];
 
     push_shared_context(&mut sections);
-    sections.join("\n\n")
+    bounded_context(sections.join("\n\n"))
 }
 
 fn push_shared_context(sections: &mut Vec<String>) {
-    sections.push(format!("Codex guide:\n```markdown\n{CODEX_GUIDE}\n```"));
+    sections.push(format!(
+        "Codex guide:\n```markdown\n{}\n```",
+        truncate_middle_chars(CODEX_GUIDE, MAX_CODEX_GUIDE_BYTES)
+    ));
 
     sections.push(format!(
         "CLI help generated from `codex --help`:\n```text\n{}\n```",
-        codex_help()
+        truncate_middle_chars(&codex_help(), MAX_CODEX_HELP_BYTES)
     ));
 
     sections.push(slash_command_context());
@@ -229,6 +236,10 @@ fn slash_command_context() -> String {
     lines.push("Bare /codex enters Codex config mode. /codex <request> switches to that same mode and submits the request. Codex config mode may read the target workspace, but may write only under the Codex config directory, its scratch workspace, or /tmp. It may emit a <proposed_plan> when planning is appropriate; accepting that plan starts a Codex config edit turn with the same filesystem limits.".to_string());
 
     lines.join("\n")
+}
+
+fn bounded_context(context: String) -> String {
+    truncate_middle_chars(&context, MAX_CODEX_CONFIG_CONTEXT_BYTES)
 }
 
 fn codex_help() -> String {
@@ -253,4 +264,23 @@ fn codex_help() -> String {
 
     "`codex --help` was unavailable from the current process and PATH; inspect CLI help with shell tools if needed."
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_config_plan_context_is_bounded() {
+        let codex_home =
+            AbsolutePathBuf::from_absolute_path("/codex-home").expect("absolute codex home");
+        let context = build_codex_config_plan_context(
+            Path::new("/target"),
+            Path::new("/scratch"),
+            &codex_home,
+        );
+
+        assert!(context.len() <= MAX_CODEX_CONFIG_CONTEXT_BYTES + 128);
+        assert!(context.contains("# Codex Config Mode"));
+    }
 }

@@ -11,9 +11,7 @@ pub struct Cli {
     /// Optional user prompt to start the session.
     #[arg(
         value_name = "PROMPT",
-        value_hint = clap::ValueHint::Other,
-        allow_hyphen_values = true,
-        trailing_var_arg = true
+        value_hint = clap::ValueHint::Other
     )]
     pub prompt: Vec<String>,
 

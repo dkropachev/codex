@@ -2,6 +2,7 @@ use super::ApprovalsReviewer;
 use super::AskForApproval;
 use super::PermissionProfileSelectionParams;
 use super::SandboxPolicy;
+use super::ServiceTier;
 use super::Turn;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::config_types::CollaborationMode;
@@ -93,7 +94,7 @@ pub struct TurnStartParams {
         skip_serializing_if = "Option::is_none"
     )]
     #[ts(optional = nullable)]
-    pub service_tier: Option<Option<String>>,
+    pub service_tier: Option<Option<ServiceTier>>,
     /// Override the reasoning effort for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub effort: Option<ReasoningEffort>,

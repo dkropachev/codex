@@ -3051,6 +3051,7 @@ pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timezone: Option<String>,
     pub approval_policy: AskForApproval,
+    #[serde(default = "default_session_sandbox_policy")]
     pub sandbox_policy: SandboxPolicy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_profile: Option<PermissionProfile>,
@@ -3734,6 +3735,7 @@ pub struct SessionConfiguredEvent {
     /// Consumers should prefer `permission_profile` when it is present. This
     /// field remains available as a compatibility fallback for older emitters
     /// and sessions that only expose legacy sandbox state.
+    #[serde(default = "default_session_sandbox_policy")]
     pub sandbox_policy: SandboxPolicy,
 
     /// Canonical effective permissions for commands executed in the session.
@@ -3749,9 +3751,11 @@ pub struct SessionConfiguredEvent {
     pub reasoning_effort: Option<ReasoningEffortConfig>,
 
     /// Identifier of the history log file (inode on Unix, 0 otherwise).
+    #[serde(default)]
     pub history_log_id: u64,
 
     /// Current number of entries in the history log.
+    #[serde(default)]
     pub history_entry_count: usize,
 
     /// Optional initial messages (as events) for resumed sessions.
@@ -3767,6 +3771,12 @@ pub struct SessionConfiguredEvent {
     /// Path in which the rollout is stored. Can be `None` for ephemeral threads
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rollout_path: Option<PathBuf>,
+}
+
+fn default_session_sandbox_policy() -> SandboxPolicy {
+    SandboxPolicy::ReadOnly {
+        network_access: false,
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -5349,6 +5359,32 @@ mod tests {
             }
         });
         assert_eq!(expected, serde_json::to_value(&event)?);
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_session_configured_defaults_missing_compatibility_fields() -> Result<()> {
+        let event: Event = serde_json::from_value(json!({
+            "id": "1234",
+            "msg": {
+                "type": "session_configured",
+                "session_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                "model": "codex-mini-latest",
+                "model_provider_id": "openai",
+                "approval_policy": "never",
+                "cwd": test_path_buf("/home/user/project"),
+            }
+        }))?;
+
+        let EventMsg::SessionConfigured(configured) = event.msg else {
+            panic!("expected session_configured event");
+        };
+        assert_eq!(
+            SandboxPolicy::new_read_only_policy(),
+            configured.sandbox_policy
+        );
+        assert_eq!(0, configured.history_log_id);
+        assert_eq!(0, configured.history_entry_count);
         Ok(())
     }
 

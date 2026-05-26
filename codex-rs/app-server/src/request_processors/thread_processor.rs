@@ -1,4 +1,6 @@
+use super::model_history_limits::validate_model_visible_response_items;
 use super::*;
+use codex_app_server_protocol::ServiceTier as ApiServiceTier;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -39,7 +41,8 @@ fn collect_resume_override_mismatches(
         ));
     }
     if let Some(requested_service_tier) = request.service_tier.as_ref()
-        && requested_service_tier.as_ref() != config_snapshot.service_tier.as_ref()
+        && requested_service_tier.as_ref().map(ApiServiceTier::as_str)
+            != config_snapshot.service_tier.as_deref()
     {
         mismatch_details.push(format!(
             "service_tier requested={:?} active={:?}",
@@ -836,7 +839,10 @@ impl ThreadRequestProcessor {
                 .await;
         }
         let environment_selections = self.parse_environment_selections(environments)?;
-        let requested_service_tier = service_tier.clone().flatten();
+        let requested_service_tier = service_tier
+            .clone()
+            .flatten()
+            .map(ApiServiceTier::into_string);
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -1207,7 +1213,7 @@ impl ThreadRequestProcessor {
         &self,
         model: Option<String>,
         model_provider: Option<String>,
-        service_tier: Option<Option<String>>,
+        service_tier: Option<Option<ApiServiceTier>>,
         cwd: Option<String>,
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
@@ -1221,7 +1227,7 @@ impl ThreadRequestProcessor {
             model,
             model_provider,
             service_tier: service_tier
-                .map(|tier| tier.and_then(|tier| ServiceTier::from_request_value(&tier))),
+                .map(|tier| tier.and_then(|tier| ServiceTier::from_request_value(tier.as_str()))),
             cwd: cwd.map(PathBuf::from),
             approval_policy: approval_policy
                 .map(codex_app_server_protocol::AskForApproval::to_core),
@@ -2784,6 +2790,7 @@ impl ThreadRequestProcessor {
         if history.is_empty() {
             return Err(invalid_request("history must not be empty"));
         }
+        validate_model_visible_response_items("history", history)?;
         Ok(InitialHistory::Forked(
             history
                 .iter()

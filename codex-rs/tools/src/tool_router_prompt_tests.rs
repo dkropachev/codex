@@ -1,5 +1,8 @@
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
 
+use crate::JsonSchema;
+use crate::ResponsesApiTool;
 use crate::create_list_dir_tool;
 use crate::create_tool_router_tool;
 
@@ -23,6 +26,21 @@ fn format_description_stays_within_budget() {
     let description = tool_router_format_description(&router, &[create_list_dir_tool()]);
 
     assert!(estimate_router_text_tokens(&description) < 140);
+}
+
+#[test]
+fn format_description_caps_large_tool_catalogs() {
+    let router = create_tool_router_tool();
+    let routed_tools = (0..(TOOL_ROUTER_MAX_CATALOG_TOOLS + 3))
+        .map(|index| test_tool(&format!("tool_{index}")))
+        .collect::<Vec<_>>();
+
+    let description = tool_router_format_description(&router, &routed_tools);
+
+    assert!(description.contains("additional routed tools omitted"));
+    assert!(description.contains("`tool_0`"));
+    assert!(description.contains(&format!("`tool_{}`", TOOL_ROUTER_MAX_CATALOG_TOOLS - 1)));
+    assert!(!description.contains(&format!("`tool_{TOOL_ROUTER_MAX_CATALOG_TOOLS}`")));
 }
 
 #[test]
@@ -70,4 +88,15 @@ fn strips_static_tool_guidelines_section_with_crlf_line_endings() {
 fn hard_guidance_cap_is_enforced() {
     assert!(validate_tool_router_guidance_cap(TOOL_ROUTER_HARD_GUIDANCE_TOKEN_CAP).is_ok());
     assert!(validate_tool_router_guidance_cap(TOOL_ROUTER_HARD_GUIDANCE_TOKEN_CAP + 1).is_err());
+}
+
+fn test_tool(name: &str) -> crate::ToolSpec {
+    crate::ToolSpec::Function(ResponsesApiTool {
+        name: name.to_string(),
+        description: "Test tool".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(BTreeMap::new(), Some(Vec::new()), Some(false.into())),
+        output_schema: None,
+    })
 }

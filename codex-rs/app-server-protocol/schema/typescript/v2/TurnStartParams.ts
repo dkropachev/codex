@@ -8,6 +8,7 @@ import type { JsonValue } from "../serde_json/JsonValue";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
+import type { ServiceTier } from "./ServiceTier";
 import type { UserInput } from "./UserInput";
 
 export type TurnStartParams = {threadId: string, input: Array<UserInput>, /**
@@ -29,7 +30,7 @@ sandboxPolicy?: SandboxPolicy | null, /**
 model?: string | null, /**
  * Override the service tier for this turn and subsequent turns.
  */
-serviceTier?: string | null | null, /**
+serviceTier?: ServiceTier | null | null, /**
  * Override the reasoning effort for this turn and subsequent turns.
  */
 effort?: ReasoningEffort | null, /**

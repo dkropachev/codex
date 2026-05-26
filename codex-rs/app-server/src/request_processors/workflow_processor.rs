@@ -57,7 +57,7 @@ use codex_workflows::WorkflowInputSource;
 use codex_workflows::discover_workflows_for_context;
 use codex_workflows::execute_workflow_command;
 use codex_workflows::parse_mention_target;
-use codex_workflows::parse_workflow_command;
+use codex_workflows::parse_workflow_command_with_workflows;
 use codex_workflows::resolve_workflow_for_context;
 use codex_workflows::workflow_impact;
 use serde::Deserialize;
@@ -300,7 +300,11 @@ impl WorkflowRequestProcessor {
         &self,
         params: WorkflowCommandExecuteParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let command = parse_workflow_command(&params.args)
+        let workflows = discover_workflows_for_context(
+            &self.workflow_command_context(params.stage_session_id.clone(), /*progress*/ None),
+        )
+        .map_err(|err| internal_error(format!("failed to discover workflows: {err}")))?;
+        let command = parse_workflow_command_with_workflows(&params.args, &workflows)
             .map_err(|err| invalid_params(format!("invalid workflow command: {err}")))?;
         self.execute(command, params.stage_session_id)
             .map(|response: WorkflowCommandExecuteResponse| Some(response.into()))

@@ -413,7 +413,7 @@ async fn thread_start_accepts_arbitrary_service_tier_id() -> Result<()> {
     let service_tier_id = "experimental-tier-id".to_string();
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            service_tier: Some(Some(service_tier_id.clone())),
+            service_tier: Some(Some(service_tier_id.clone().into())),
             ..Default::default()
         })
         .await?;

@@ -627,7 +627,7 @@ mod thread_processor_behavior_tests {
             path: None,
             model: None,
             model_provider: None,
-            service_tier: Some(Some("priority".to_string())),
+            service_tier: Some(Some("priority".into())),
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,

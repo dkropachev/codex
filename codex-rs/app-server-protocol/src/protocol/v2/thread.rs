@@ -5,6 +5,7 @@ use super::PermissionProfile;
 use super::PermissionProfileSelectionParams;
 use super::SandboxMode;
 use super::SandboxPolicy;
+use super::ServiceTier;
 use super::Thread;
 use super::ThreadSource;
 use super::Turn;
@@ -102,7 +103,7 @@ pub struct ThreadStartParams {
         skip_serializing_if = "Option::is_none"
     )]
     #[ts(optional = nullable)]
-    pub service_tier: Option<Option<String>>,
+    pub service_tier: Option<Option<ServiceTier>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
     #[experimental(nested)]
@@ -289,7 +290,7 @@ pub struct ThreadResumeParams {
         skip_serializing_if = "Option::is_none"
     )]
     #[ts(optional = nullable)]
-    pub service_tier: Option<Option<String>>,
+    pub service_tier: Option<Option<ServiceTier>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
     #[experimental(nested)]
@@ -395,7 +396,7 @@ pub struct ThreadForkParams {
         skip_serializing_if = "Option::is_none"
     )]
     #[ts(optional = nullable)]
-    pub service_tier: Option<Option<String>>,
+    pub service_tier: Option<Option<ServiceTier>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
     #[experimental(nested)]

@@ -607,7 +607,7 @@ impl AppServerSession {
                     permissions,
                     model: Some(model),
                     service_tier: service_tier.map(|service_tier| {
-                        service_tier.map(|service_tier| service_tier.request_value().to_string())
+                        service_tier.map(|service_tier| service_tier.request_value().into())
                     }),
                     effort,
                     summary,
