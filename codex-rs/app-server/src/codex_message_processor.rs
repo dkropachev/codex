@@ -10998,6 +10998,7 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let session_provider = ModelProviderInfo {
             name: "session".to_string(),
+            enabled: None,
             base_url: Some("http://127.0.0.1:8061/api/codex".to_string()),
             env_key: None,
             env_key_instructions: None,

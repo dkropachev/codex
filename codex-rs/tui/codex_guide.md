@@ -270,6 +270,7 @@ The temporary marketplace snapshot under `$CODEX_HOME/.tmp/plugins/plugins/` con
 - Description: Codex mirrors rollout metadata and runtime diagnostics into SQLite. The main DB is `state_5.sqlite`; tracing logs live in `logs_2.sqlite`. Both are opened from resolved `Config.sqlite_home`, which defaults to `sqlite_home` in `config.toml`, then `CODEX_SQLITE_HOME`, then `CODEX_HOME`.
 - Safety recipe: inspect live DBs read-only with `sqlite3 -readonly`. SQLite runs in WAL mode, so if you need a copy, use `.backup` or copy the `*.sqlite`, `*.sqlite-wal`, and `*.sqlite-shm` files together. Do not hand-edit production rows; add migrations and runtime APIs instead.
 - Schema recipe: start with `.tables`, then `PRAGMA table_info(threads);`, `.schema tool_router_ledger`, or the source migrations under `codex-rs/state/migrations/` and `codex-rs/state/logs_migrations/`.
+- Startup RPC hang recipe: TUI startup app-server calls (`account/read`, `model/list`, `thread/start`, `thread/resume`, `thread/fork`, `externalAgentConfig/detect`, and `externalAgentConfig/import`) time out after 30 seconds with the method-specific context. If startup appears wedged, inspect `logs_2.sqlite` for `app-server typed request` rows; the `method` and `request_id` fields identify the last startup RPC that entered the app-server path.
 - Thread lookup recipe:
 
 ```sql
@@ -368,6 +369,16 @@ ORDER BY ts DESC, ts_nanos DESC, id DESC
 LIMIT 50;
 ```
 
+- Startup RPC log recipe:
+
+```sql
+SELECT datetime(ts, 'unixepoch') AS ts, level, target, substr(feedback_log_body, 1, 300) AS body
+FROM logs
+WHERE feedback_log_body LIKE '%app-server typed request%'
+ORDER BY ts DESC, ts_nanos DESC, id DESC
+LIMIT 50;
+```
+
 - Memory SQL recipe:
 
 ```sql
@@ -388,7 +399,7 @@ WHERE kind LIKE 'memory_%'
 ORDER BY kind, job_key;
 ```
 
-- Source entrypoints: `codex-rs/state/src/runtime.rs`, `codex-rs/state/src/runtime/threads.rs`, `codex-rs/state/src/runtime/logs.rs`, `codex-rs/state/src/runtime/memories.rs`, `codex-rs/state/src/runtime/model_router.rs`, `codex-rs/state/src/runtime/tool_router.rs`, `codex-rs/state/src/lib.rs`.
+- Source entrypoints: `codex-rs/state/src/runtime.rs`, `codex-rs/state/src/runtime/threads.rs`, `codex-rs/state/src/runtime/logs.rs`, `codex-rs/state/src/runtime/memories.rs`, `codex-rs/state/src/runtime/model_router.rs`, `codex-rs/state/src/runtime/tool_router.rs`, `codex-rs/state/src/lib.rs`, TUI startup RPCs in `codex-rs/tui/src/app_server_session.rs`, startup timeout handling in `codex-rs/tui/src/app_server_session/startup_request_timeout.rs`, and app-server request logging in `codex-rs/app-server/src/message_processor.rs`.
 
 ## Token Usage Reporting
 

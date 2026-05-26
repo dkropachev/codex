@@ -3,6 +3,8 @@
 //! This module owns the typed JSON-RPC calls needed by the TUI and keeps
 //! request/response plumbing out of `App` and `ChatWidget`.
 
+mod startup_request_timeout;
+
 use crate::bottom_pane::FeedbackAudience;
 #[cfg(test)]
 use crate::legacy_core::append_message_history_entry;
@@ -120,12 +122,10 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
+use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::path::PathBuf;
-
-fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
-    color_eyre::eyre::eyre!("{context}: {err}")
-}
+use std::time::Duration;
 
 /// Data collected during the TUI bootstrap phase that the main event loop
 /// needs to configure the UI, telemetry, and initial rate-limit prefetch.
@@ -152,6 +152,7 @@ pub(crate) struct AppServerSession {
     client: AppServerClient,
     next_request_id: i64,
     remote_cwd_override: Option<PathBuf>,
+    startup_request_timeout: Duration,
 }
 
 #[derive(Clone, Copy)]
@@ -180,11 +181,21 @@ impl AppServerSession {
             client,
             next_request_id: 1,
             remote_cwd_override: None,
+            startup_request_timeout: startup_request_timeout::DEFAULT_TIMEOUT,
         }
     }
 
     pub(crate) fn with_remote_cwd_override(mut self, remote_cwd_override: Option<PathBuf>) -> Self {
         self.remote_cwd_override = remote_cwd_override;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_startup_request_timeout(
+        mut self,
+        startup_request_timeout: Duration,
+    ) -> Self {
+        self.startup_request_timeout = startup_request_timeout;
         self
     }
 
@@ -200,19 +211,18 @@ impl AppServerSession {
         let account = self.read_account().await?;
         let model_request_id = self.next_request_id();
         let models: ModelListResponse = self
-            .client
-            .request_typed(ClientRequest::ModelList {
-                request_id: model_request_id,
-                params: ModelListParams {
-                    cursor: None,
-                    limit: None,
-                    include_hidden: Some(true),
+            .startup_request(
+                "model/list failed during TUI bootstrap",
+                ClientRequest::ModelList {
+                    request_id: model_request_id,
+                    params: ModelListParams {
+                        cursor: None,
+                        limit: None,
+                        include_hidden: Some(true),
+                    },
                 },
-            })
-            .await
-            .map_err(|err| {
-                bootstrap_request_error("model/list failed during TUI bootstrap", err)
-            })?;
+            )
+            .await?;
         let available_models = models
             .data
             .into_iter()
@@ -312,15 +322,16 @@ impl AppServerSession {
     /// (to check auth mode without the overhead of a full bootstrap).
     pub(crate) async fn read_account(&mut self) -> Result<GetAccountResponse> {
         let account_request_id = self.next_request_id();
-        self.client
-            .request_typed(ClientRequest::GetAccount {
+        self.startup_request(
+            "account/read failed during TUI bootstrap",
+            ClientRequest::GetAccount {
                 request_id: account_request_id,
                 params: GetAccountParams {
                     refresh_token: false,
                 },
-            })
-            .await
-            .map_err(|err| bootstrap_request_error("account/read failed during TUI bootstrap", err))
+            },
+        )
+        .await
     }
 
     pub(crate) async fn external_agent_config_detect(
@@ -328,10 +339,11 @@ impl AppServerSession {
         params: ExternalAgentConfigDetectParams,
     ) -> Result<ExternalAgentConfigDetectResponse> {
         let request_id = self.next_request_id();
-        self.client
-            .request_typed(ClientRequest::ExternalAgentConfigDetect { request_id, params })
-            .await
-            .wrap_err("externalAgentConfig/detect failed during TUI startup")
+        self.startup_request(
+            "externalAgentConfig/detect failed during TUI startup",
+            ClientRequest::ExternalAgentConfigDetect { request_id, params },
+        )
+        .await
     }
 
     pub(crate) async fn external_agent_config_import(
@@ -339,13 +351,14 @@ impl AppServerSession {
         migration_items: Vec<ExternalAgentConfigMigrationItem>,
     ) -> Result<ExternalAgentConfigImportResponse> {
         let request_id = self.next_request_id();
-        self.client
-            .request_typed(ClientRequest::ExternalAgentConfigImport {
+        self.startup_request(
+            "externalAgentConfig/import failed during TUI startup",
+            ClientRequest::ExternalAgentConfigImport {
                 request_id,
                 params: ExternalAgentConfigImportParams { migration_items },
-            })
-            .await
-            .wrap_err("externalAgentConfig/import failed during TUI startup")
+            },
+        )
+        .await
     }
 
     pub(crate) async fn next_event(&mut self) -> Option<AppServerEvent> {
@@ -364,20 +377,19 @@ impl AppServerSession {
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadStartResponse = self
-            .client
-            .request_typed(ClientRequest::ThreadStart {
-                request_id,
-                params: thread_start_params_from_config(
-                    config,
-                    self.thread_params_mode(),
-                    self.remote_cwd_override.as_deref(),
-                    session_start_source,
-                ),
-            })
-            .await
-            .map_err(|err| {
-                bootstrap_request_error("thread/start failed during TUI bootstrap", err)
-            })?;
+            .startup_request(
+                "thread/start failed during TUI bootstrap",
+                ClientRequest::ThreadStart {
+                    request_id,
+                    params: thread_start_params_from_config(
+                        config,
+                        self.thread_params_mode(),
+                        self.remote_cwd_override.as_deref(),
+                        session_start_source,
+                    ),
+                },
+            )
+            .await?;
         started_thread_from_start_response(response, config, self.thread_params_mode()).await
     }
 
@@ -388,20 +400,19 @@ impl AppServerSession {
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadResumeResponse = self
-            .client
-            .request_typed(ClientRequest::ThreadResume {
-                request_id,
-                params: thread_resume_params_from_config(
-                    config.clone(),
-                    thread_id,
-                    self.thread_params_mode(),
-                    self.remote_cwd_override.as_deref(),
-                ),
-            })
-            .await
-            .map_err(|err| {
-                bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
-            })?;
+            .startup_request(
+                "thread/resume failed during TUI bootstrap",
+                ClientRequest::ThreadResume {
+                    request_id,
+                    params: thread_resume_params_from_config(
+                        config.clone(),
+                        thread_id,
+                        self.thread_params_mode(),
+                        self.remote_cwd_override.as_deref(),
+                    ),
+                },
+            )
+            .await?;
         let fork_parent_title = self
             .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
             .await;
@@ -419,20 +430,19 @@ impl AppServerSession {
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadForkResponse = self
-            .client
-            .request_typed(ClientRequest::ThreadFork {
-                request_id,
-                params: thread_fork_params_from_config(
-                    config.clone(),
-                    thread_id,
-                    self.thread_params_mode(),
-                    self.remote_cwd_override.as_deref(),
-                ),
-            })
-            .await
-            .map_err(|err| {
-                bootstrap_request_error("thread/fork failed during TUI bootstrap", err)
-            })?;
+            .startup_request(
+                "thread/fork failed during TUI bootstrap",
+                ClientRequest::ThreadFork {
+                    request_id,
+                    params: thread_fork_params_from_config(
+                        config.clone(),
+                        thread_id,
+                        self.thread_params_mode(),
+                        self.remote_cwd_override.as_deref(),
+                    ),
+                },
+            )
+            .await?;
         let fork_parent_title = self
             .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
             .await;
@@ -447,6 +457,19 @@ impl AppServerSession {
             AppServerClient::InProcess(_) => ThreadParamsMode::Embedded,
             AppServerClient::Remote(_) => ThreadParamsMode::Remote,
         }
+    }
+
+    async fn startup_request<T>(&self, context: &'static str, request: ClientRequest) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        startup_request_timeout::request_typed(
+            &self.client,
+            request,
+            self.startup_request_timeout,
+            context,
+        )
+        .await
     }
 
     async fn fork_parent_title_from_app_server(
@@ -1565,10 +1588,15 @@ mod tests {
     use super::*;
     use crate::legacy_core::config::ConfigBuilder;
     use crate::legacy_core::config::ConfigOverrides;
+    use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
+    use codex_app_server_client::RemoteAppServerClient;
+    use codex_app_server_client::RemoteAppServerConnectArgs;
     use codex_app_server_protocol::FileSystemAccessMode;
     use codex_app_server_protocol::FileSystemPath;
     use codex_app_server_protocol::FileSystemSandboxEntry;
     use codex_app_server_protocol::FileSystemSpecialPath;
+    use codex_app_server_protocol::JSONRPCMessage;
+    use codex_app_server_protocol::JSONRPCResponse;
     use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
     use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
     use codex_app_server_protocol::PermissionProfileNetworkPermissions;
@@ -1577,8 +1605,15 @@ mod tests {
     use codex_app_server_protocol::TurnStatus;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
+    use futures::SinkExt;
+    use futures::StreamExt;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+    use tokio_tungstenite::WebSocketStream;
+    use tokio_tungstenite::accept_async;
+    use tokio_tungstenite::tungstenite::Message;
 
     async fn build_config(temp_dir: &TempDir) -> Config {
         ConfigBuilder::default()
@@ -1586,6 +1621,130 @@ mod tests {
             .build()
             .await
             .expect("config should build")
+    }
+
+    async fn start_remote_app_server_that_never_answers(
+        expected_method: &'static str,
+    ) -> color_eyre::Result<(
+        AppServerClient,
+        oneshot::Receiver<String>,
+        oneshot::Sender<()>,
+    )> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let (observed_tx, observed_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let Ok(mut websocket) = accept_async(stream).await else {
+                return;
+            };
+
+            let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected initialize request");
+            };
+            assert_eq!(request.method, "initialize");
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::json!({}),
+                }),
+            )
+            .await;
+
+            let JSONRPCMessage::Notification(notification) =
+                read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected initialized notification");
+            };
+            assert_eq!(notification.method, "initialized");
+
+            let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected startup request");
+            };
+            assert_eq!(request.method, expected_method);
+            let _ = observed_tx.send(request.method);
+            let _ = release_rx.await;
+            let _ = websocket.close(None).await;
+        });
+
+        let remote = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            websocket_url: format!("ws://{addr}"),
+            auth_token: None,
+            client_name: "codex-tui-test".to_string(),
+            client_version: env!("CARGO_PKG_VERSION").to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await?;
+
+        Ok((AppServerClient::Remote(remote), observed_rx, release_tx))
+    }
+
+    async fn read_websocket_message(
+        websocket: &mut WebSocketStream<tokio::net::TcpStream>,
+    ) -> JSONRPCMessage {
+        loop {
+            let frame = websocket.next().await.expect("frame should be available");
+            let frame = frame.expect("frame should decode");
+            match frame {
+                Message::Text(text) => {
+                    return serde_json::from_str::<JSONRPCMessage>(&text)
+                        .expect("text frame should be valid JSON-RPC");
+                }
+                Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {
+                    continue;
+                }
+                Message::Close(_) => panic!("unexpected close frame"),
+            }
+        }
+    }
+
+    async fn write_websocket_message(
+        websocket: &mut WebSocketStream<tokio::net::TcpStream>,
+        message: JSONRPCMessage,
+    ) {
+        websocket
+            .send(Message::Text(
+                serde_json::to_string(&message)
+                    .expect("message should serialize")
+                    .into(),
+            ))
+            .await
+            .expect("message should send");
+    }
+
+    #[tokio::test]
+    async fn read_account_times_out_when_startup_rpc_never_answers() -> color_eyre::Result<()> {
+        let (client, observed_rx, release_tx) =
+            start_remote_app_server_that_never_answers("account/read").await?;
+        let mut app_server = AppServerSession::new(client)
+            .with_startup_request_timeout(Duration::from_millis(/*millis*/ 25));
+
+        let err = app_server
+            .read_account()
+            .await
+            .expect_err("unanswered startup RPC should time out");
+        let observed_method = tokio::time::timeout(Duration::from_secs(/*secs*/ 1), observed_rx)
+            .await
+            .expect("test server should observe the startup request")
+            .expect("test server should report the startup request method");
+        let _ = release_tx.send(());
+        let _ = app_server.shutdown().await;
+
+        assert_eq!(observed_method, "account/read");
+        assert_eq!(
+            err.to_string(),
+            "account/read failed during TUI bootstrap: timed out after 25ms waiting for app-server response"
+        );
+        Ok(())
     }
 
     #[tokio::test]

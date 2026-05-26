@@ -579,9 +579,11 @@ impl MessageProcessor {
             crate::app_server_tracing::typed_request_span(&request, connection_id, &session);
         let request_context =
             RequestContext::new(request_id.clone(), request_span, /*parent_trace*/ None);
+        let method = request.method();
         tracing::trace!(
             ?connection_id,
             request_id = ?request_id.request_id,
+            %method,
             "app-server typed request"
         );
         Self::run_request_with_context(
