@@ -39,6 +39,29 @@ use crate::workflow_runtime::WorkflowRuntimeOutput;
 use crate::workflow_runtime::WorkflowStatusUpdate;
 use crate::workflow_runtime::WorkflowThreadStatus;
 
+pub(crate) fn validate_workflow_source(workflow_path: &Path) -> Result<()> {
+    CompiledRuneWorkflow::compile(workflow_path).map(|_| ())
+}
+
+pub(crate) fn run_workflow_for_validation(
+    working_directory: &Path,
+    workflow_dir: &Path,
+    workflow_path: &Path,
+    input: &str,
+) -> Result<WorkflowRuntimeOutput> {
+    let working_directory = working_directory.to_path_buf();
+    let workflow_dir = workflow_dir.to_path_buf();
+    let workflow_path = workflow_path.to_path_buf();
+    let input = input.to_string();
+    std::thread::spawn(move || {
+        run_rune_on_current_thread(async {
+            run_workflow_inner(&working_directory, &workflow_dir, &workflow_path, &input).await
+        })
+    })
+    .join()
+    .map_err(|_| anyhow!("Rune workflow validation task panicked"))?
+}
+
 pub(crate) async fn run_workflow(
     working_directory: &Path,
     workflow_dir: &Path,

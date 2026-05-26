@@ -238,6 +238,9 @@ pub fn scaffold_workflow_spec(
                     }
                 }
             });
+            spec.validation["contractSmoke"] = json!({
+                "input": {}
+            });
         }
         WorkflowRuntimeKind::Typescript => {
             spec.dependencies = json!({

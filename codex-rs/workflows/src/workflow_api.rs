@@ -37,7 +37,7 @@ where
     F: FnMut(&str, &Path) -> Result<WorkflowValidationCommandResult>,
 {
     let (report, source_contract) =
-        validate_workflow_api_contract_inner(workflow, &mut command_runner)?;
+        validate_workflow_api_contract_inner(workflow, cwd, &mut command_runner)?;
     if report.status == WorkflowValidationStatus::Valid
         && let Some(source_contract) = source_contract
     {
@@ -57,11 +57,13 @@ pub(crate) fn validate_workflow_api_contract<F>(
 where
     F: FnMut(&str, &Path) -> Result<WorkflowValidationCommandResult>,
 {
-    validate_workflow_api_contract_inner(workflow, command_runner).map(|(report, _)| report)
+    validate_workflow_api_contract_inner(workflow, &workflow.path, command_runner)
+        .map(|(report, _)| report)
 }
 
 fn validate_workflow_api_contract_inner<F>(
     workflow: &WorkflowSummary,
+    working_directory: &Path,
     mut command_runner: F,
 ) -> Result<(WorkflowValidationReport, Option<WorkflowSourceContract>)>
 where
@@ -87,13 +89,24 @@ where
 
     let spec = crate::spec::read_workflow_spec(&workflow.workflow_yaml_path)?;
     match contract_smoke_command(&spec) {
-        Ok(Some(command)) => run_contract_smoke(
-            workflow,
-            &source_contract,
-            &command,
-            &mut command_runner,
-            &mut report,
-        )?,
+        Ok(Some(ContractSmokeCommand::Shell(command))) => {
+            run_contract_smoke_command(
+                workflow,
+                &source_contract,
+                &command,
+                &mut command_runner,
+                &mut report,
+            )?;
+        }
+        Ok(Some(ContractSmokeCommand::RuneInput(input))) => {
+            run_rune_contract_smoke(
+                workflow,
+                working_directory,
+                &source_contract,
+                &input,
+                &mut report,
+            )?;
+        }
         Ok(None) => {}
         Err(err) => {
             report.push_finding(WorkflowValidationFinding::WorkflowApiContractSmokeFailed {
@@ -110,7 +123,12 @@ where
     Ok((report, source_contract))
 }
 
-fn run_contract_smoke<F>(
+enum ContractSmokeCommand {
+    Shell(String),
+    RuneInput(JsonValue),
+}
+
+fn run_contract_smoke_command<F>(
     workflow: &WorkflowSummary,
     source_contract: &WorkflowSourceContract,
     command: &str,
@@ -165,7 +183,72 @@ where
     Ok(())
 }
 
-fn contract_smoke_command(spec: &WorkflowSpec) -> Result<Option<String>> {
+fn run_rune_contract_smoke(
+    workflow: &WorkflowSummary,
+    working_directory: &Path,
+    source_contract: &WorkflowSourceContract,
+    input: &JsonValue,
+    report: &mut WorkflowValidationReport,
+) -> Result<()> {
+    let command = "Rune validation.contractSmoke";
+    let input_json = serde_json::to_string(input)
+        .with_context(|| "failed to serialize validation.contractSmoke.input")?;
+    let output = crate::rune_runtime::run_workflow_for_validation(
+        working_directory,
+        &workflow.path,
+        &workflow.path.join(&workflow.runtime.entrypoint),
+        &input_json,
+    )?;
+    let succeeded = output.success;
+    let stdout = output.stdout;
+    let stderr = output.stderr;
+    let exit_status = output.exit_status;
+    report
+        .command_results
+        .push(WorkflowValidationCommandResult {
+            command: command.to_string(),
+            succeeded,
+            exit_code: None,
+            stdout: stdout.clone(),
+            stderr: stderr.clone(),
+        });
+
+    if !succeeded {
+        report.push_finding(WorkflowValidationFinding::WorkflowApiContractSmokeFailed {
+            command: command.to_string(),
+            error: format!("runtime exited with {exit_status}"),
+            stdout,
+            stderr,
+        });
+        return Ok(());
+    }
+
+    let output = match serde_json::from_str::<JsonValue>(stdout.trim()) {
+        Ok(output) => output,
+        Err(err) => {
+            report.push_finding(WorkflowValidationFinding::WorkflowApiContractSmokeFailed {
+                command: command.to_string(),
+                error: format!("stdout was not valid JSON: {err}"),
+                stdout,
+                stderr,
+            });
+            return Ok(());
+        }
+    };
+
+    if let Err(err) = validate_json_against_schema(&source_contract.output_schema, &output) {
+        report.push_finding(WorkflowValidationFinding::WorkflowApiContractSmokeFailed {
+            command: command.to_string(),
+            error: format!("output did not match the workflow contract: {err}"),
+            stdout,
+            stderr,
+        });
+    }
+
+    Ok(())
+}
+
+fn contract_smoke_command(spec: &WorkflowSpec) -> Result<Option<ContractSmokeCommand>> {
     let Some(smoke) = spec.validation.get("contractSmoke") else {
         return Ok(None);
     };
@@ -175,13 +258,15 @@ fn contract_smoke_command(spec: &WorkflowSpec) -> Result<Option<String>> {
         JsonValue::Bool(true) => {
             default_contract_smoke_command(spec, &JsonValue::Object(Default::default())).map(Some)
         }
-        JsonValue::String(command) => non_empty_contract_smoke_command(command),
+        JsonValue::String(command) => non_empty_contract_smoke_command(command)
+            .map(|command| command.map(ContractSmokeCommand::Shell)),
         JsonValue::Object(object) => {
             if object.get("enabled") == Some(&JsonValue::Bool(false)) {
                 return Ok(None);
             }
             if let Some(command) = object.get("command").and_then(JsonValue::as_str) {
-                return non_empty_contract_smoke_command(command);
+                return non_empty_contract_smoke_command(command)
+                    .map(|command| command.map(ContractSmokeCommand::Shell));
             }
             let input = object
                 .get("input")
@@ -205,16 +290,19 @@ fn non_empty_contract_smoke_command(command: &str) -> Result<Option<String>> {
     Ok(Some(command.to_string()))
 }
 
-fn default_contract_smoke_command(spec: &WorkflowSpec, input: &JsonValue) -> Result<String> {
+fn default_contract_smoke_command(
+    spec: &WorkflowSpec,
+    input: &JsonValue,
+) -> Result<ContractSmokeCommand> {
     if spec.resolved_runtime().kind == WorkflowRuntimeKind::Rune {
-        anyhow::bail!("Rune workflows must set validation.contractSmoke.command explicitly");
+        return Ok(ContractSmokeCommand::RuneInput(input.clone()));
     }
     let input_json = serde_json::to_string(input)
         .with_context(|| "failed to serialize validation.contractSmoke.input")?;
-    Ok(format!(
+    Ok(ContractSmokeCommand::Shell(format!(
         "npm run --silent run -- --input {}",
         shell_quote(&input_json)
-    ))
+    )))
 }
 
 fn shell_quote(value: &str) -> String {
@@ -598,6 +686,156 @@ mod tests {
     }
 
     #[test]
+    fn validate_and_publish_workflow_api_runs_rune_contract_smoke() {
+        let codex_home = TempDir::new().expect("codex home");
+        let cwd = TempDir::new().expect("cwd");
+        let config = codex_config::types::WorkflowsConfigToml::default();
+        let workflow_dir = codex_home.path().join("workflows/rune/smoke");
+        write_workflow_yaml(
+            &workflow_dir,
+            "rune/smoke",
+            json!({
+                "inputSchema": { "type": "object", "additionalProperties": true },
+                "outputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "ok": { "type": "boolean" },
+                        "input": { "type": "object", "additionalProperties": true }
+                    },
+                    "required": ["ok", "input"],
+                    "additionalProperties": false
+                }
+            }),
+            json!({
+                "commands": ["true"],
+                "contractSmoke": { "input": { "value": "ok" } }
+            }),
+        );
+        let mut spec = crate::spec::read_workflow_spec(&workflow_dir.join("workflow.yaml"))
+            .expect("workflow yaml");
+        spec.runtime = Some(crate::spec::WorkflowRuntimeInfo::new(
+            crate::spec::WorkflowRuntimeKind::Rune,
+            /*entrypoint*/ None,
+        ));
+        crate::spec::write_workflow_spec(&workflow_dir.join("workflow.yaml"), &spec)
+            .expect("workflow yaml");
+        fs::create_dir_all(workflow_dir.join("src")).expect("src");
+        fs::write(
+            workflow_dir.join("src/workflow.rn"),
+            "pub async fn run(_ctx, input) { #{ ok: true, input } }\n",
+        )
+        .expect("workflow rn");
+
+        let mut workflow = workflow_summary(
+            "global",
+            WorkflowRootKind::Global,
+            &codex_home.path().join("workflows"),
+            &workflow_dir,
+            "rune/smoke",
+        );
+        workflow.runtime = crate::spec::WorkflowRuntimeInfo::new(
+            crate::spec::WorkflowRuntimeKind::Rune,
+            /*entrypoint*/ None,
+        );
+
+        let report = validate_and_publish_workflow_api(
+            codex_home.path(),
+            cwd.path(),
+            &config,
+            &workflow,
+            |command, _cwd| Ok(success_result(command)),
+        )
+        .expect("workflow API validation should pass");
+
+        assert_eq!(report.status, WorkflowValidationStatus::Valid);
+        assert_eq!(report.command_results.len(), 2);
+        assert_eq!(
+            report.command_results[1].command,
+            "Rune validation.contractSmoke"
+        );
+        assert!(
+            read_published_workflow_source_contract(codex_home.path(), &workflow)
+                .expect("read published workflow contract")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn validate_and_publish_workflow_api_rejects_rune_contract_smoke_output_mismatch() {
+        let codex_home = TempDir::new().expect("codex home");
+        let cwd = TempDir::new().expect("cwd");
+        let config = codex_config::types::WorkflowsConfigToml::default();
+        let workflow_dir = codex_home.path().join("workflows/rune/smoke-bad");
+        write_workflow_yaml(
+            &workflow_dir,
+            "rune/smoke-bad",
+            json!({
+                "inputSchema": { "type": "object", "additionalProperties": true },
+                "outputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "status": { "type": "string" }
+                    },
+                    "required": ["status"],
+                    "additionalProperties": false
+                }
+            }),
+            json!({
+                "commands": ["true"],
+                "contractSmoke": { "input": {} }
+            }),
+        );
+        let mut spec = crate::spec::read_workflow_spec(&workflow_dir.join("workflow.yaml"))
+            .expect("workflow yaml");
+        spec.runtime = Some(crate::spec::WorkflowRuntimeInfo::new(
+            crate::spec::WorkflowRuntimeKind::Rune,
+            /*entrypoint*/ None,
+        ));
+        crate::spec::write_workflow_spec(&workflow_dir.join("workflow.yaml"), &spec)
+            .expect("workflow yaml");
+        fs::create_dir_all(workflow_dir.join("src")).expect("src");
+        fs::write(
+            workflow_dir.join("src/workflow.rn"),
+            "pub async fn run(_ctx, _input) { #{ status: 1 } }\n",
+        )
+        .expect("workflow rn");
+
+        let mut workflow = workflow_summary(
+            "global",
+            WorkflowRootKind::Global,
+            &codex_home.path().join("workflows"),
+            &workflow_dir,
+            "rune/smoke-bad",
+        );
+        workflow.runtime = crate::spec::WorkflowRuntimeInfo::new(
+            crate::spec::WorkflowRuntimeKind::Rune,
+            /*entrypoint*/ None,
+        );
+
+        let report = validate_and_publish_workflow_api(
+            codex_home.path(),
+            cwd.path(),
+            &config,
+            &workflow,
+            |command, _cwd| Ok(success_result(command)),
+        )
+        .expect("workflow API validation should complete");
+
+        assert_eq!(report.status, WorkflowValidationStatus::Invalid);
+        assert_eq!(
+            crate::validation_finding::finding_messages(&report.findings),
+            vec![
+                "workflow contract smoke command `Rune validation.contractSmoke` failed: output did not match the workflow contract: workflow contract violation at $.status: expected string".to_string()
+            ]
+        );
+        assert_eq!(
+            read_published_workflow_source_contract(codex_home.path(), &workflow)
+                .expect("read published workflow contract"),
+            None
+        );
+    }
+
+    #[test]
     fn validate_and_publish_workflow_api_keeps_previous_contract_when_generation_fails() {
         let codex_home = TempDir::new().expect("codex home");
         let cwd = TempDir::new().expect("cwd");
@@ -886,14 +1124,16 @@ export default async function smokeOkReview(_ctx: unknown, input: WorkflowInput)
 
         assert_eq!(report.status, WorkflowValidationStatus::Valid);
         assert_eq!(report.command_results.len(), 2);
-        assert_eq!(
-            report.command_results[1].command,
-            super::default_contract_smoke_command(
-                &crate::spec::WorkflowSpec::default(),
-                &json!({ "value": "ok" }),
-            )
-            .unwrap()
-        );
+        let expected_command = match super::default_contract_smoke_command(
+            &crate::spec::WorkflowSpec::default(),
+            &json!({ "value": "ok" }),
+        )
+        .unwrap()
+        {
+            super::ContractSmokeCommand::Shell(command) => command,
+            super::ContractSmokeCommand::RuneInput(_) => panic!("expected shell contract smoke"),
+        };
+        assert_eq!(report.command_results[1].command, expected_command);
         assert!(
             read_published_workflow_source_contract(codex_home.path(), &workflow)
                 .expect("read published workflow contract")

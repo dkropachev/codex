@@ -116,6 +116,10 @@ pub enum WorkflowValidationFindingInfo {
         stdout: String,
         stderr: String,
     },
+    WorkflowRuntimeCompileFailed {
+        path: PathBuf,
+        error: String,
+    },
     WorkflowApiContractExtractionFailed {
         path: PathBuf,
         error: String,

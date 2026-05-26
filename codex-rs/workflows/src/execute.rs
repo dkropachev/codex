@@ -1040,19 +1040,35 @@ pub fn to_tui_markdown(_result) {{
     )?;
     fs::write(
         path.join("src/tests/workflow.positive.test.rn"),
-        "// workflow-covers: positive progress finalResult\n",
+        r#"// workflow-covers: positive progress finalResult
+pub fn covers_positive_progress_final_result() {
+    true
+}
+"#,
     )?;
     fs::write(
         path.join("src/tests/workflow.load.test.rn"),
-        "// workflow-covers: load\n",
+        r#"// workflow-covers: load
+pub fn covers_load() {
+    true
+}
+"#,
     )?;
     fs::write(
         path.join("src/tests/workflow.autocomplete.test.rn"),
-        "// workflow-covers: autocomplete\n",
+        r#"// workflow-covers: autocomplete
+pub fn covers_autocomplete() {
+    true
+}
+"#,
     )?;
     fs::write(
         path.join("src/tests/workflow.negative.test.rn"),
-        "// workflow-covers: negative failureUx\n",
+        r#"// workflow-covers: negative failureUx
+pub fn covers_negative_failure_ux() {
+    true
+}
+"#,
     )?;
     fs::write(path.join("state/.gitkeep"), "")?;
     Ok(())
@@ -1643,6 +1659,14 @@ mod tests {
                 .is_file()
         );
         assert!(
+            fs::read_to_string(
+                cwd.path()
+                    .join(".codex/workflows/jira-summary/src/tests/workflow.positive.test.rn")
+            )
+            .unwrap()
+            .contains("pub fn covers_positive_progress_final_result")
+        );
+        assert!(
             cwd.path()
                 .join(".codex/workflows/jira-summary/src/tests/workflow.load.test.rn")
                 .is_file()
@@ -1712,7 +1736,7 @@ mod tests {
             spec.validation["coverage"]["recovery"],
             JsonValue::Bool(false)
         );
-        assert!(spec.validation.get("contractSmoke").is_none());
+        assert_eq!(spec.validation["contractSmoke"]["input"], json!({}));
     }
 
     #[test]
@@ -1830,6 +1854,105 @@ mod tests {
         assert_eq!(
             crate::validation_finding::finding_messages(&report.findings),
             vec!["validation command `exit 1` failed with exit code 1".to_string()]
+        );
+    }
+
+    #[test]
+    fn validate_workflow_reports_rune_compile_failure() {
+        let temp_dir = TempDir::new().unwrap();
+        let workflow_dir = temp_dir.path().join("review/rune");
+        fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
+        fs::create_dir_all(workflow_dir.join("state")).unwrap();
+        fs::create_dir_all(workflow_dir.join(".git")).unwrap();
+        fs::write(
+            workflow_dir.join(".gitignore"),
+            "artifacts/\nstate/*\n!state/.gitkeep\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("README.md"),
+            "# Test\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("DESIGN.md"),
+            "# Test Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("src/workflow.rn"),
+            "pub async fn run(_ctx, input) { let = input }\n",
+        )
+        .unwrap();
+        for (name, marker) in [
+            ("workflow.positive.test.rn", "positive progress finalResult"),
+            ("workflow.load.test.rn", "load"),
+            ("workflow.autocomplete.test.rn", "autocomplete"),
+            ("workflow.negative.test.rn", "negative failureUx"),
+        ] {
+            fs::write(
+                workflow_dir.join("src/tests").join(name),
+                format!("// workflow-covers: {marker}\n"),
+            )
+            .unwrap();
+        }
+        fs::write(workflow_dir.join("state/.gitkeep"), "").unwrap();
+        write_workflow_spec(
+            &workflow_dir.join(WORKFLOW_YAML),
+            &crate::spec::WorkflowSpec {
+                id: "review/rune".to_string(),
+                runtime: Some(crate::spec::WorkflowRuntimeInfo::new(
+                    WorkflowRuntimeKind::Rune,
+                    /*entrypoint*/ None,
+                )),
+                validation: json!({
+                    "commands": ["true"],
+                    "coverage": {
+                        "positive": true,
+                        "negative": true,
+                        "progress": true,
+                        "finalResult": true,
+                        "failureUx": true,
+                        "load": true,
+                        "autocomplete": true,
+                        "recovery": false,
+                    }
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let workflow = crate::registry::WorkflowSummary {
+            id: "review/rune".to_string(),
+            runtime: crate::spec::WorkflowRuntimeInfo::new(
+                WorkflowRuntimeKind::Rune,
+                /*entrypoint*/ None,
+            ),
+            command: Some("rune".to_string()),
+            title: Some("Rune".to_string()),
+            user_description: Some("Rune workflow".to_string()),
+            search_terms: Vec::new(),
+            command_option_hints: Vec::new(),
+            root_label: "global".to_string(),
+            root_kind: crate::registry::WorkflowRootKind::Global,
+            root_path: temp_dir.path().to_path_buf(),
+            path: workflow_dir.clone(),
+            workflow_yaml_path: workflow_dir.join(WORKFLOW_YAML),
+            mention_target: "workflow:///tmp#review/rune".to_string(),
+            validation: validate_workflow_dir(temp_dir.path(), &workflow_dir, "review/rune"),
+            repair_mode: "threshold:3".to_string(),
+        };
+
+        let report = validate_workflow(&workflow, run_validation_command).unwrap();
+
+        assert_eq!(
+            report.status,
+            crate::registry::WorkflowValidationStatus::Invalid
+        );
+        assert!(
+            crate::validation_finding::finding_messages(&report.findings)
+                .iter()
+                .any(|message| message.contains("failed to compile workflow runtime source"))
         );
     }
 

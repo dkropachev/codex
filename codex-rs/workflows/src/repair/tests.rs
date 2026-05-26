@@ -850,6 +850,11 @@ fn repair_workflow_command_scaffolds_rune_layout_without_typescript_files() {
             .is_file()
     );
     assert!(
+        fs::read_to_string(workflow_dir.join("src/tests/workflow.positive.test.rn"))
+            .unwrap()
+            .contains("pub fn covers_positive_progress_final_result")
+    );
+    assert!(
         workflow_dir
             .join("src/tests/workflow.load.test.rn")
             .is_file()

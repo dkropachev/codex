@@ -705,6 +705,30 @@
             },
             "type": {
               "enum": [
+                "workflowRuntimeCompileFailed"
+              ],
+              "title": "WorkflowRuntimeCompileFailedWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "error",
+            "path",
+            "type"
+          ],
+          "title": "WorkflowRuntimeCompileFailedWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
                 "workflowApiContractExtractionFailed"
               ],
               "title": "WorkflowApiContractExtractionFailedWorkflowValidationFindingInfoType",

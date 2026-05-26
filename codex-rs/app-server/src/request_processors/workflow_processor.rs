@@ -638,6 +638,10 @@ pub(crate) fn validation_finding_to_api(
             stdout,
             stderr,
         },
+        codex_workflows::WorkflowValidationFinding::WorkflowRuntimeCompileFailed {
+            path,
+            error,
+        } => WorkflowValidationFindingInfo::WorkflowRuntimeCompileFailed { path, error },
         codex_workflows::WorkflowValidationFinding::WorkflowApiContractExtractionFailed {
             path,
             error,
@@ -762,6 +766,9 @@ fn validation_finding_from_api(
             stdout,
             stderr,
         },
+        WorkflowValidationFindingInfo::WorkflowRuntimeCompileFailed { path, error } => {
+            codex_workflows::WorkflowValidationFinding::WorkflowRuntimeCompileFailed { path, error }
+        }
         WorkflowValidationFindingInfo::WorkflowApiContractExtractionFailed { path, error } => {
             codex_workflows::WorkflowValidationFinding::WorkflowApiContractExtractionFailed {
                 path,

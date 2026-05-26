@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::Context as _;
@@ -62,6 +63,18 @@ where
     let mut command_results = Vec::new();
 
     if let Ok(spec) = crate::spec::read_workflow_spec(&workflow.workflow_yaml_path) {
+        if workflow.runtime.kind == WorkflowRuntimeKind::Rune {
+            let workflow_path = workflow.path.join(&workflow.runtime.entrypoint);
+            if workflow_path.is_file()
+                && let Err(err) = crate::rune_runtime::validate_workflow_source(&workflow_path)
+            {
+                findings.push(WorkflowValidationFinding::WorkflowRuntimeCompileFailed {
+                    path: PathBuf::from(&workflow.runtime.entrypoint),
+                    error: err.to_string(),
+                });
+            }
+        }
+
         for command in validation_commands(&spec) {
             let result = command_runner(&command, &workflow.path)?;
             let command_failed = !result.succeeded;

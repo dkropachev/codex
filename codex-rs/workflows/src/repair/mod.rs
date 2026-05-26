@@ -766,6 +766,11 @@ fn build_fix_plan(
                 plan.run_script = true;
                 plan.refresh_dependencies = dependency_install_fixable(stdout, stderr);
             }
+            WorkflowValidationFinding::WorkflowRuntimeCompileFailed { .. } => {
+                return Err(anyhow!(
+                    "workflow runtime compile failures are not repaired automatically"
+                ));
+            }
             WorkflowValidationFinding::WorkflowApiContractExtractionFailed { .. }
             | WorkflowValidationFinding::WorkflowApiContractSmokeFailed { .. } => {
                 return Err(anyhow!(
@@ -877,6 +882,9 @@ fn action_kinds_for_finding(
                 kinds.push(WorkflowRepairActionKind::RepairTsconfig);
             }
             kinds
+        }
+        WorkflowValidationFinding::WorkflowRuntimeCompileFailed { .. } => {
+            return None;
         }
         WorkflowValidationFinding::WorkflowPathEscapesRoot { .. }
         | WorkflowValidationFinding::WorkflowApiContractExtractionFailed { .. }
@@ -1453,10 +1461,15 @@ fn apply_coverage_marker_fix(
                 contents = format!("{marker_line}\n{contents}");
             }
         }
-        if contents.is_empty() {
-            contents = format!("// workflow-covers: {}\n", required_markers.join(" "));
+        if !has_non_comment_code(&contents) {
+            if contents.is_empty() {
+                contents = format!("// workflow-covers: {}\n", required_markers.join(" "));
+            }
+            ensure_trailing_newline(&mut contents);
             if workflow.runtime.kind == WorkflowRuntimeKind::Typescript {
                 contents.push_str("export {};\n");
+            } else {
+                contents.push_str(&rune_coverage_stub(&required_markers));
             }
         }
         fs::write(&path, contents)
@@ -1472,10 +1485,15 @@ fn apply_coverage_marker_fix(
         if !contents.contains(marker_line) {
             contents = format!("{marker_line}\n{contents}");
         }
-        if contents.is_empty() {
-            contents = format!("{marker_line}\n");
+        if !has_non_comment_code(&contents) {
+            if contents.is_empty() {
+                contents = format!("{marker_line}\n");
+            }
+            ensure_trailing_newline(&mut contents);
             if workflow.runtime.kind == WorkflowRuntimeKind::Typescript {
                 contents.push_str("export {};\n");
+            } else {
+                contents.push_str(&rune_coverage_stub(&["recovery"]));
             }
         }
         fs::write(&path, contents)
@@ -1490,6 +1508,27 @@ fn apply_coverage_marker_fix(
             marker_keys.len()
         ),
     })
+}
+
+fn ensure_trailing_newline(contents: &mut String) {
+    if !contents.ends_with('\n') {
+        contents.push('\n');
+    }
+}
+
+fn has_non_comment_code(contents: &str) -> bool {
+    contents.lines().any(|line| {
+        let line = line.trim();
+        !line.is_empty() && !line.starts_with("//")
+    })
+}
+
+fn rune_coverage_stub(markers: &[&str]) -> String {
+    let name = markers
+        .join("_")
+        .replace("finalResult", "final_result")
+        .replace("failureUx", "failure_ux");
+    format!("pub fn covers_{name}() {{\n    true\n}}\n")
 }
 
 fn apply_tsconfig_fix(workflow: &WorkflowSummary) -> Result<WorkflowRepairAction> {
