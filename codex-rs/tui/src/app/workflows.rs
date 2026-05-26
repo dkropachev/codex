@@ -16,6 +16,8 @@ const WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR_ENV: &str =
 const WORKFLOW_OUTPUT_FORMAT_ENV: &str = "CODEX_WORKFLOW_OUTPUT_FORMAT";
 const WORKFLOW_RUN_ID_ENV: &str = "CODEX_WORKFLOW_RUN_ID";
 const WORKFLOW_ORIGIN_THREAD_ID_ENV: &str = "CODEX_WORKFLOW_ORIGIN_THREAD_ID";
+const WORKFLOW_COMPLETION_DEBOUNCE: Duration = Duration::from_millis(150);
+const WORKFLOW_COMPLETION_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 pub(crate) struct WorkflowRunState {
@@ -30,6 +32,78 @@ pub(crate) struct QueuedWorkflowMarkdownHandoff {
 }
 
 impl App {
+    pub(crate) fn start_workflow_command_completion_request(
+        &mut self,
+        workflow: codex_workflows::WorkflowSummary,
+        input: codex_workflows::WorkflowCommandInput,
+    ) {
+        let command = workflow
+            .command
+            .clone()
+            .unwrap_or_else(|| workflow.id.clone());
+        self.next_workflow_completion_request_id =
+            self.next_workflow_completion_request_id.wrapping_add(1);
+        let request_id = self.next_workflow_completion_request_id;
+        if let Some((_request_id, task)) = self.pending_workflow_completion_tasks.remove(&command) {
+            task.abort();
+        }
+
+        let working_directory = self.chat_widget.config_ref().cwd.clone();
+        let tx = self.app_event_tx.clone();
+        let command_for_event = command.clone();
+        let input_for_event = input.clone();
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(WORKFLOW_COMPLETION_DEBOUNCE).await;
+            let entrypoint = workflow.path.join(&workflow.runtime.entrypoint);
+            let result = match tokio::time::timeout(
+                WORKFLOW_COMPLETION_TIMEOUT,
+                codex_workflows::complete_workflow(
+                    &workflow.path,
+                    working_directory.as_path(),
+                    &workflow.runtime,
+                    &entrypoint,
+                    &input,
+                ),
+            )
+            .await
+            {
+                Ok(Ok(suggestions)) => Ok(suggestions),
+                Ok(Err(err)) => Err(format!("{err:#}")),
+                Err(_) => Err("completion timed out".to_string()),
+            };
+            tx.send(AppEvent::WorkflowCommandCompletionResult {
+                request_id,
+                command: command_for_event,
+                input: input_for_event,
+                result,
+            });
+        });
+        self.pending_workflow_completion_tasks
+            .insert(command, (request_id, task));
+    }
+
+    pub(crate) fn handle_workflow_command_completion_result(
+        &mut self,
+        request_id: u64,
+        command: String,
+        input: codex_workflows::WorkflowCommandInput,
+        result: std::result::Result<
+            Vec<codex_workflows::WorkflowCommandCompletionSuggestion>,
+            String,
+        >,
+    ) {
+        if self
+            .pending_workflow_completion_tasks
+            .get(&command)
+            .is_none_or(|(pending_request_id, _task)| *pending_request_id != request_id)
+        {
+            return;
+        }
+        self.pending_workflow_completion_tasks.remove(&command);
+        self.chat_widget
+            .apply_workflow_command_completion_result(command, input, result);
+    }
+
     pub(crate) fn run_workflow_command(&mut self, command: Vec<String>) {
         if command.is_empty() {
             self.chat_widget
@@ -39,10 +113,22 @@ impl App {
 
         let display_command = shlex::try_join(command.iter().map(String::as_str))
             .unwrap_or_else(|_| command.join(" "));
-        let workflow_name = command
-            .last()
-            .cloned()
-            .unwrap_or_else(|| display_command.clone());
+        let workflow_name = if command.first().is_some_and(|value| value == "workflow") {
+            let target_index = match command.get(1).map(String::as_str) {
+                Some("fix" | "repair" | "show" | "validate" | "where") => 2,
+                Some(_) => 1,
+                None => 0,
+            };
+            command
+                .get(target_index)
+                .cloned()
+                .unwrap_or_else(|| display_command.clone())
+        } else {
+            command
+                .first()
+                .cloned()
+                .unwrap_or_else(|| display_command.clone())
+        };
         let origin_thread_id = self.current_displayed_thread_id();
         let origin_thread_id_for_events = origin_thread_id
             .as_ref()

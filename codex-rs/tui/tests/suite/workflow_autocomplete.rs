@@ -231,6 +231,44 @@ async fn slash_workflow_autocomplete_completes_dynamic_argument_prefix_and_runs_
 }
 
 #[tokio::test]
+async fn slash_workflow_static_option_tab_does_not_commit_placeholder() -> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex = ensure_codex_binary(&repo_root)?;
+    let codex_home = tempdir()?;
+    let workspace = tempdir()?;
+    write_trusted_workspace_config(codex_home.path(), workspace.path())?;
+    write_review_workflow(&codex_home.path().join("workflows/code-review"))?;
+
+    run_workflow_autocomplete_session(
+        &repo_root,
+        &codex,
+        codex_home.path(),
+        workspace.path(),
+        WorkflowAutocompleteScenario {
+            typed_prefix: "/code-review --a",
+            completion_text: None,
+            popup_snippets: &["--assignee <string>", "Reviewer assignment"],
+            ordered_popup_snippets: &[],
+            run_snippets: &["Input text: --a", "Input argv: --a", "Workflow Result"],
+            post_key_snippets: &[],
+            forbidden_snippets: &[
+                "Input text: --assignee <string>",
+                "Input argv: --assignee <string>",
+            ],
+            popup_keys: &[
+                WorkflowAutocompletePopupKey::Tab,
+                WorkflowAutocompletePopupKey::Enter,
+            ],
+        },
+    )
+    .await
+}
+
+#[tokio::test]
 async fn slash_workflow_autocomplete_commits_unique_dynamic_preview_and_runs_workflow_end_to_end()
 -> Result<()> {
     if cfg!(windows) {
@@ -257,6 +295,45 @@ async fn slash_workflow_autocomplete_commits_unique_dynamic_preview_and_runs_wor
             run_snippets: &[
                 "Input text: --reportId 1034 --format summary",
                 "Input argv: --reportId 1034 --format summary",
+                "Workflow Result",
+            ],
+            post_key_snippets: &[],
+            forbidden_snippets: &[],
+            popup_keys: &[
+                WorkflowAutocompletePopupKey::Tab,
+                WorkflowAutocompletePopupKey::Enter,
+            ],
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn slash_workflow_autocomplete_runs_rune_completion_end_to_end() -> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex = ensure_codex_binary(&repo_root)?;
+    let codex_home = tempdir()?;
+    let workspace = tempdir()?;
+    write_trusted_workspace_config(codex_home.path(), workspace.path())?;
+    write_rune_review_workflow(&codex_home.path().join("workflows/rune-review"))?;
+
+    run_workflow_autocomplete_session(
+        &repo_root,
+        &codex,
+        codex_home.path(),
+        workspace.path(),
+        WorkflowAutocompleteScenario {
+            typed_prefix: "/rune-review --reportId 2048",
+            completion_text: None,
+            popup_snippets: &["--format summary"],
+            ordered_popup_snippets: &[],
+            run_snippets: &[
+                "Workflow rune-review: starting",
+                "Rune autocomplete complete",
                 "Workflow Result",
             ],
             post_key_snippets: &[],
@@ -311,7 +388,7 @@ async fn slash_workflow_exact_command_with_args_enter_runs_workflow_without_comm
 }
 
 #[tokio::test]
-async fn slash_workflow_search_term_enter_without_selection_does_not_run_workflow() -> Result<()> {
+async fn slash_workflow_search_term_enter_runs_unambiguous_workflow() -> Result<()> {
     if cfg!(windows) {
         return Ok(());
     }
@@ -333,13 +410,13 @@ async fn slash_workflow_search_term_enter_without_selection_does_not_run_workflo
             completion_text: None,
             popup_snippets: &["/summary", "Jira Summary"],
             ordered_popup_snippets: &[],
-            run_snippets: &[],
-            post_key_snippets: &[r#"Unrecognized command '/report'"#],
-            forbidden_snippets: &[
+            run_snippets: &[
                 "Workflow summary: starting",
                 "Workflow summary: reviewing",
                 "Workflow Result",
             ],
+            post_key_snippets: &[],
+            forbidden_snippets: &[r#"Unrecognized command '/report'"#],
             popup_keys: &[WorkflowAutocompletePopupKey::Enter],
         },
     )
@@ -547,7 +624,13 @@ pub(super) async fn run_workflow_autocomplete_session(
                         saw_ordered_popup |= snippets_in_order(&output_text, scenario.ordered_popup_snippets)
                             || snippets_in_order(&screen, scenario.ordered_popup_snippets);
 
-                        if saw_popup.iter().all(|seen| *seen) && !scheduled_completion {
+                        let popup_ready_on_screen = scenario
+                            .popup_snippets
+                            .iter()
+                            .all(|snippet| screen.contains(snippet))
+                            && (scenario.ordered_popup_snippets.is_empty()
+                                || snippets_in_order(&screen, scenario.ordered_popup_snippets));
+                        if popup_ready_on_screen && !scheduled_completion {
                             scheduled_completion = true;
                             let complete_writer = complete_writer.clone();
                             let completion_text = scenario.completion_text.map(str::to_string);
@@ -772,6 +855,52 @@ export default workflow;
 "##
     );
     write_workflow_fixture(workflow_dir, id, command, title, &workflow_source)
+}
+
+fn write_rune_review_workflow(workflow_dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(workflow_dir.join("src"))?;
+    std::fs::create_dir_all(workflow_dir.join("state"))?;
+    std::fs::create_dir_all(workflow_dir.join(".git"))?;
+    std::fs::write(workflow_dir.join("README.md"), "# Rune Review\n")?;
+    std::fs::write(workflow_dir.join("state/.gitkeep"), "")?;
+    std::fs::write(
+        workflow_dir.join("workflow.yaml"),
+        r#"id: rune-review
+command: rune-review
+title: Rune Review
+userDescription: Rune autocomplete integration test.
+runtime:
+  kind: rune
+  entrypoint: src/workflow.rn
+api:
+  inputSchema:
+    type: object
+    additionalProperties: true
+"#,
+    )?;
+    std::fs::write(
+        workflow_dir.join("src/workflow.rn"),
+        r##"pub async fn run(ctx, input) {
+    ctx.status(#{ workflowName: "rune-review", workflowStatus: "reviewing", threads: [] });
+    #{ ok: true, input }
+}
+
+pub async fn complete(_ctx, input) {
+    if input.text == "--reportId 2048" {
+        [
+            #{ display: "--reportId 2048 --format summary", insertText: "--reportId 2048 --format summary", description: "Rune summary output" },
+        ]
+    } else {
+        []
+    }
+}
+
+pub fn to_tui_markdown(_result) {
+    #{ markdown: "# Workflow Result\n\nRune autocomplete complete.\n" }
+}
+"##,
+    )?;
+    Ok(())
 }
 
 pub(super) fn write_review_workflow(workflow_dir: &Path) -> Result<()> {

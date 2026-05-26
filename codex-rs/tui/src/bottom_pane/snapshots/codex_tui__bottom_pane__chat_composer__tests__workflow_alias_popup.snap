@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
-assertion_line: 5027
 expression: terminal.backend()
 ---
 "                                                                        "
@@ -10,5 +9,5 @@ expression: terminal.backend()
 "                                                                        "
 "                                                                        "
 "                                                                        "
-"                                                                        "
-"  /jira-summary  Jira Summary                                           "
+"  /jira-summary             Jira Summary                                "
+"    loading completions...                                              "

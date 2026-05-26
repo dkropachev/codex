@@ -481,6 +481,8 @@ pub(crate) struct App {
     remote_app_server_url: Option<String>,
     remote_app_server_auth_token: Option<String>,
     workflow_runs: HashMap<String, workflows::WorkflowRunState>,
+    pending_workflow_completion_tasks: HashMap<String, (u64, JoinHandle<()>)>,
+    next_workflow_completion_request_id: u64,
     pending_workflow_markdown_handoffs: VecDeque<workflows::QueuedWorkflowMarkdownHandoff>,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
@@ -905,6 +907,8 @@ See the Codex keymap documentation for supported actions and examples."
             remote_app_server_url,
             remote_app_server_auth_token,
             workflow_runs: HashMap::new(),
+            pending_workflow_completion_tasks: HashMap::new(),
+            next_workflow_completion_request_id: 0,
             pending_workflow_markdown_handoffs: VecDeque::new(),
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
@@ -1172,6 +1176,9 @@ See the Codex keymap documentation for supported actions and examples."
 
 impl Drop for App {
     fn drop(&mut self) {
+        for (_request_id, task) in self.pending_workflow_completion_tasks.values() {
+            task.abort();
+        }
         if let Err(err) = self.chat_widget.clear_managed_terminal_title() {
             tracing::debug!(error = %err, "failed to clear terminal title on app drop");
         }

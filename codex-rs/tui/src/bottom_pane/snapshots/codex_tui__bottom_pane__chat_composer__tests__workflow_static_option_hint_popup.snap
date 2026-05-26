@@ -1,14 +1,13 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
-assertion_line: 5375
 expression: terminal.backend()
 ---
 "                                                                        "
-"› /code-review --assignee <string>                                      "
+"› /code-review --a                                                      "
 "                                                                        "
 "                                                                        "
 "                                                                        "
 "                                                                        "
-"                                                                        "
-"                                                                        "
-"                                                     100% context left  "
+"  /code-review              Code Review                                 "
+"    --assignee <string>     Assign a reviewer                           "
+"    loading completions...                                              "

@@ -10377,10 +10377,10 @@ impl ChatWidget {
         &mut self,
         command: String,
         input: codex_workflows::WorkflowCommandInput,
-        suggestions: Vec<codex_workflows::WorkflowCommandCompletionSuggestion>,
+        result: Result<Vec<codex_workflows::WorkflowCommandCompletionSuggestion>, String>,
     ) {
         self.bottom_pane
-            .on_workflow_command_completion_result(command, input, suggestions);
+            .on_workflow_command_completion_result(command, input, result);
     }
 
     /// Handles a Ctrl+C press at the chat-widget layer.

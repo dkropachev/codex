@@ -91,39 +91,15 @@ impl App {
                 self.handle_workflow_process_finished(run_id, command, stdout, result);
             }
             AppEvent::WorkflowCommandCompletionStart { workflow, input } => {
-                let working_directory = self.chat_widget.config_ref().cwd.clone();
-                let tx = self.app_event_tx.clone();
-                tokio::spawn(async move {
-                    let command = workflow
-                        .command
-                        .clone()
-                        .unwrap_or_else(|| workflow.id.clone());
-                    let suggestions = codex_workflows::complete_workflow(
-                        &workflow.path,
-                        working_directory.as_path(),
-                        &workflow.runtime,
-                        &workflow.path.join(&workflow.runtime.entrypoint),
-                        &input,
-                    )
-                    .await
-                    .unwrap_or_default();
-                    tx.send(AppEvent::WorkflowCommandCompletionResult {
-                        command,
-                        input,
-                        suggestions,
-                    });
-                });
+                self.start_workflow_command_completion_request(workflow, input);
             }
             AppEvent::WorkflowCommandCompletionResult {
+                request_id,
                 command,
                 input,
-                suggestions,
+                result,
             } => {
-                self.chat_widget.apply_workflow_command_completion_result(
-                    command,
-                    input,
-                    suggestions,
-                );
+                self.handle_workflow_command_completion_result(request_id, command, input, result);
             }
             AppEvent::OpenResumePicker => {
                 let picker_app_server = match crate::start_app_server_for_picker(

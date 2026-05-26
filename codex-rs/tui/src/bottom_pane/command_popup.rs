@@ -36,6 +36,10 @@ pub(crate) enum CommandItem {
         command: String,
         suggestion: WorkflowCommandCompletionSuggestion,
     },
+    WorkflowCompletionStatus {
+        message: String,
+        description: Option<String>,
+    },
 }
 
 pub(crate) struct CommandPopup {
@@ -106,10 +110,12 @@ impl CommandPopup {
         self.sync_selection();
     }
 
-    pub(crate) fn set_workflow_suggestions(
+    pub(crate) fn set_workflow_completion(
         &mut self,
         command: &str,
         suggestions: Vec<WorkflowCommandCompletionSuggestion>,
+        error: Option<String>,
+        pending: bool,
     ) {
         if let Some(workflow) = self.workflows.iter_mut().find(|workflow| {
             workflow
@@ -119,6 +125,8 @@ impl CommandPopup {
                 .is_some_and(|workflow_command| workflow_command == command)
         }) {
             workflow.dynamic_suggestions = suggestions;
+            workflow.completion_error = error;
+            workflow.completion_pending = pending;
         }
         self.sync_selection();
     }
@@ -286,6 +294,23 @@ impl CommandPopup {
                                 ));
                             }
                         }
+                        if workflow.completion_pending {
+                            exact.push((
+                                CommandItem::WorkflowCompletionStatus {
+                                    message: "loading completions...".to_string(),
+                                    description: None,
+                                },
+                                None,
+                            ));
+                        } else if let Some(error) = workflow.completion_error.as_deref() {
+                            exact.push((
+                                CommandItem::WorkflowCompletionStatus {
+                                    message: "completion failed".to_string(),
+                                    description: Some(error.to_string()),
+                                },
+                                None,
+                            ));
+                        }
                     }
                 }
                 slash_commands::WorkflowMatchKind::Prefix => prefix.push((item, indices)),
@@ -352,6 +377,16 @@ impl CommandPopup {
                         None,
                         false,
                     ),
+                    CommandItem::WorkflowCompletionStatus {
+                        message,
+                        description,
+                    } => (
+                        message.clone(),
+                        description.clone(),
+                        vec!["  ".into()],
+                        None,
+                        true,
+                    ),
                 };
                 GenericDisplayRow {
                     name,
@@ -403,8 +438,20 @@ impl CommandPopup {
         self.selection_is_explicit
     }
 
+    pub(crate) fn selected_workflow_is_unambiguous(&self) -> bool {
+        let items = self.filtered_items();
+        let selectable_items = items
+            .iter()
+            .filter(|item| !Self::item_is_disabled(item))
+            .collect::<Vec<_>>();
+        selectable_items.len() == 1 && matches!(selectable_items[0], CommandItem::Workflow(_))
+    }
+
     fn item_is_disabled(item: &CommandItem) -> bool {
-        matches!(item, CommandItem::WorkflowOption(_))
+        matches!(
+            item,
+            CommandItem::WorkflowOption(_) | CommandItem::WorkflowCompletionStatus { .. }
+        )
     }
 
     fn first_selectable_index(items: &[CommandItem]) -> Option<usize> {
@@ -486,6 +533,7 @@ mod tests {
                 .unwrap_or_else(|| workflow.workflow.id.clone()),
             CommandItem::WorkflowOption(option) => option.display.clone(),
             CommandItem::WorkflowSuggestion { suggestion, .. } => suggestion.display.clone(),
+            CommandItem::WorkflowCompletionStatus { message, .. } => message.clone(),
         }
     }
 
@@ -558,6 +606,9 @@ mod tests {
                 panic!(
                     "expected builtin /init to be selected, got dynamic suggestion {suggestion:?}"
                 )
+            }
+            Some(CommandItem::WorkflowCompletionStatus { message, .. }) => {
+                panic!("expected builtin /init to be selected, got status {message:?}")
             }
             None => panic!("expected a selected command for exact match"),
         }
@@ -826,7 +877,7 @@ api:
             ..CommandPopupFlags::default()
         });
         popup.set_workflows(Some(std::slice::from_ref(&workflow)));
-        popup.set_workflow_suggestions(
+        popup.set_workflow_completion(
             "code-review",
             vec![
                 WorkflowCommandCompletionSuggestion {
@@ -840,6 +891,8 @@ api:
                     description: Some("Expanded report output".to_string()),
                 },
             ],
+            None,
+            false,
         );
         popup.on_composer_text_change("/code-review --reportId ".to_string());
 
@@ -888,7 +941,7 @@ api:
             ..CommandPopupFlags::default()
         });
         popup.set_workflows(Some(std::slice::from_ref(&workflow)));
-        popup.set_workflow_suggestions(
+        popup.set_workflow_completion(
             "code-review",
             vec![
                 WorkflowCommandCompletionSuggestion {
@@ -907,6 +960,8 @@ api:
                     ),
                 },
             ],
+            None,
+            false,
         );
         popup.on_composer_text_change("/code-review --reportId ".to_string());
         popup.move_down();
@@ -1050,6 +1105,9 @@ api:
             }
             Some(CommandItem::WorkflowSuggestion { suggestion, .. }) => {
                 panic!("expected builtin /model to be first, got dynamic suggestion {suggestion:?}")
+            }
+            Some(CommandItem::WorkflowCompletionStatus { message, .. }) => {
+                panic!("expected builtin /model to be first, got status {message:?}")
             }
             None => panic!("expected at least one match for '/mo'"),
         }

@@ -17,13 +17,18 @@ and `codex-rs/tui/src/bottom_pane/paste_burst.rs`.
 - The alias appears in the slash popup as `/<cmd>` when workflows are enabled.
 - When the alias is an exact match, the popup can append dimmed option hints from
   `workflow.yaml` (`usage.options`, then `api.inputSchema`) and live suggestions from an optional
-  workflow `complete(ctx, input)` hook. It filters those hints and suggestions by the typed
-  argument prefix, and when exactly one completion remains the composer shows the untyped suffix
-  inline in dimmed text instead of keeping the popup open.
-- Enter only commits a popup row when the typed command name is exact or the user has explicitly
-  moved the selection. Otherwise it falls back to normal submit handling and closes the popup,
-  so the top suggestion does not run just because the popup is visible.
-- Press `Tab` to accept the inline preview before submitting.
+  workflow `complete(ctx, input)` hook. It filters both by the typed argument prefix, but static
+  option hints are display-only and are never accepted by `Tab`.
+- Live completion requests are debounced and stale requests for the same command are cancelled.
+  Runtime failures are cached for the active prefix and rendered in the popup instead of silently
+  disappearing.
+- When exactly one live suggestion remains, the composer shows the untyped suffix inline in dimmed
+  text instead of keeping the popup open. Press `Tab` to accept that preview before submitting; the
+  replacement preserves any multiline draft tail and text elements after the command line.
+- Enter commits a workflow row when the typed command name is exact, the user has explicitly moved
+  the selection, or the visible search-term match is unambiguous. Otherwise it falls back to normal
+  submit handling and closes the popup, so a multi-match top suggestion does not run just because
+  the popup is visible.
 - The same alias is accepted by the shared workflow parser used by `codex workflow`, `codex <cmd>`, and `/<cmd>`.
 - Built-in slash commands still win on name collisions.
 - If `command` is omitted, workflows with simple ids that do not contain `/` fall back to an alias from the last id segment.
@@ -42,4 +47,4 @@ and `codex-rs/tui/src/bottom_pane/paste_burst.rs`.
 - For cached workflow option hints, inspect `codex-rs/workflows/src/command_completion.rs`.
 - For live workflow suggestions, inspect `codex-rs/workflows/src/workflow_runtime.rs` and the
   `WorkflowCommandCompletion*` flow in `codex-rs/tui/src/app_event.rs` plus
-  `codex-rs/tui/src/app/event_dispatch.rs`.
+  `codex-rs/tui/src/app/event_dispatch.rs` and `codex-rs/tui/src/app/workflows.rs`.

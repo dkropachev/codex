@@ -174,9 +174,10 @@ pub(crate) enum AppEvent {
 
     /// Result of an asynchronous workflow command completion request.
     WorkflowCommandCompletionResult {
+        request_id: u64,
         command: String,
         input: WorkflowCommandInput,
-        suggestions: Vec<WorkflowCommandCompletionSuggestion>,
+        result: Result<Vec<WorkflowCommandCompletionSuggestion>, String>,
     },
 
     /// Submit an op to the specified thread, regardless of current focus.
