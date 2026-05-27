@@ -1,22 +1,18 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use serde_json::Value as JsonValue;
 
 use crate::api_contract::WorkflowSourceContract;
-use crate::api_contract::extract_workflow_source_contract_from_typescript;
 use crate::api_contract::publish_validated_workflow_api_contract;
 use crate::api_contract::read_published_workflow_source_contract;
 use crate::api_contract::workflow_api_contract_from_spec_api;
 use crate::registry::WorkflowSummary;
 use crate::registry::WorkflowValidationStatus;
 use crate::registry::discover_workflows;
-use crate::spec::WorkflowRuntimeKind;
 use crate::spec::WorkflowSpec;
 use crate::spec::workflow_callable_name_from_id;
 use crate::validation_finding::WorkflowValidationFinding;
@@ -78,6 +74,13 @@ where
     if report.status != WorkflowValidationStatus::Valid {
         return Ok((report, None));
     }
+    let entrypoint_is_rune_source = Path::new(&workflow.runtime.entrypoint)
+        .extension()
+        .is_some_and(|extension| extension == "rn");
+    if workflow.runtime.kind != crate::spec::WorkflowRuntimeKind::Rune || !entrypoint_is_rune_source
+    {
+        return Ok((report, None));
+    }
 
     let source_contract = match resolved_workflow_source_contract(workflow) {
         Ok(source_contract) => source_contract,
@@ -128,7 +131,6 @@ where
         }
     }
     if report.status == WorkflowValidationStatus::Valid
-        && workflow.runtime.kind == WorkflowRuntimeKind::Rune
         && validation_coverage_enabled(&spec, "autocomplete")
     {
         run_rune_autocomplete_smoke(workflow, working_directory, &mut report)?;
@@ -143,80 +145,7 @@ pub(crate) fn resolved_workflow_source_contract(
     workflow: &WorkflowSummary,
 ) -> Result<WorkflowSourceContract> {
     let spec = crate::spec::read_workflow_spec(&workflow.workflow_yaml_path)?;
-    match workflow.runtime.kind {
-        WorkflowRuntimeKind::Rune => workflow_source_contract_from_manifest(workflow, &spec),
-        WorkflowRuntimeKind::Typescript => {
-            resolved_typescript_workflow_source_contract(workflow, &spec)
-        }
-    }
-}
-
-fn resolved_typescript_workflow_source_contract(
-    workflow: &WorkflowSummary,
-    spec: &WorkflowSpec,
-) -> Result<WorkflowSourceContract> {
-    let source_has_default_export_function = workflow_source_contains_default_export_function(
-        &workflow.path,
-        &workflow.runtime.entrypoint,
-    )?;
-
-    let extracted = match extract_workflow_source_contract_from_typescript(
-        &workflow.path,
-        &workflow.runtime.entrypoint,
-    ) {
-        Ok(extracted) => extracted,
-        Err(err) => {
-            if !source_has_default_export_function
-                && let Some(contract) = workflow_api_contract_from_spec_api(&spec.api)
-            {
-                return Ok(WorkflowSourceContract {
-                    callable_name: None,
-                    input_schema: contract.input_schema,
-                    output_schema: contract.output_schema,
-                    format_schemas: contract.format_schemas,
-                });
-            }
-            return Err(err);
-        }
-    };
-
-    let extracted_has_contract = !extracted.input_schema.is_null()
-        || !extracted.output_schema.is_null()
-        || !extracted.format_schemas.is_empty();
-    if extracted_has_contract {
-        if extracted.input_schema.is_null() {
-            anyhow::bail!(
-                "export WorkflowInput from {} when using TS-defined workflow contracts",
-                workflow.runtime.entrypoint
-            );
-        }
-        if extracted.output_schema.is_null() {
-            anyhow::bail!(
-                "export WorkflowOutput from {} when using TS-defined workflow contracts",
-                workflow.runtime.entrypoint
-            );
-        }
-        return Ok(extracted);
-    }
-
-    if !source_has_default_export_function {
-        return workflow_api_contract_from_spec_api(&spec.api)
-            .map(|contract| WorkflowSourceContract {
-                callable_name: None,
-                input_schema: contract.input_schema,
-                output_schema: contract.output_schema,
-                format_schemas: contract.format_schemas,
-            })
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "workflow must export WorkflowInput and WorkflowOutput from src/workflow.ts or define api.inputSchema/api.outputSchema in workflow.yaml"
-                )
-            });
-    }
-
-    anyhow::bail!(
-        "workflow default export must be a named async function with ctx and input parameters"
-    )
+    workflow_source_contract_from_manifest(workflow, &spec)
 }
 
 fn workflow_source_contract_from_manifest(
@@ -266,20 +195,6 @@ fn published_source_contracts(
         }
     }
     Ok(contracts)
-}
-
-fn workflow_source_contains_default_export_function(
-    workflow_dir: &Path,
-    entrypoint: &str,
-) -> Result<bool> {
-    let workflow_entrypoint = crate::spec::normalize_runtime_entrypoint(entrypoint)?;
-    let workflow_path = workflow_dir.join(workflow_entrypoint);
-    let contents = fs::read_to_string(&workflow_path)
-        .with_context(|| format!("failed to read workflow source {}", workflow_path.display()))?;
-    Ok(contents.contains("export default function")
-        || contents.contains("export default async function")
-        || contents.contains("export default (")
-        || contents.contains("export default async ("))
 }
 
 #[cfg(test)]
@@ -375,101 +290,6 @@ mod tests {
             "pub fn validates_positive_path() { true }\n",
         )
         .expect("workflow test");
-    }
-
-    #[test]
-    fn resolved_workflow_source_contract_falls_back_to_workflow_yaml_api_for_legacy_sources() {
-        let workflow_root = TempDir::new().expect("workflow root");
-        let workflow_dir = workflow_root.path().join("legacy/report");
-        fs::create_dir_all(&workflow_dir).expect("workflow dir");
-        crate::spec::write_workflow_spec(
-            &workflow_dir.join(crate::spec::WORKFLOW_YAML),
-            &crate::spec::WorkflowSpec {
-                id: "legacy/report".to_string(),
-                api: json!({
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "workflowId": { "type": "string" }
-                        },
-                        "required": ["workflowId"],
-                        "additionalProperties": false
-                    },
-                    "outputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "status": { "type": "string" }
-                        },
-                        "required": ["status"],
-                        "additionalProperties": false
-                    },
-                    "formatSchemas": {
-                        "tui.markdown.v1": {
-                            "type": "object",
-                            "properties": {
-                                "markdown": { "type": "string" }
-                            },
-                            "required": ["markdown"],
-                            "additionalProperties": false
-                        }
-                    }
-                }),
-                ..Default::default()
-            },
-        )
-        .expect("workflow yaml");
-        if !crate::api_contract::prepare_typescript_workflow_dir(&workflow_dir) {
-            return;
-        }
-        fs::write(
-            workflow_dir.join("src/workflow.ts"),
-            "export const helper = 1;\n",
-        )
-        .expect("workflow ts");
-
-        let mut workflow = workflow_summary(
-            "global",
-            WorkflowRootKind::Global,
-            workflow_root.path(),
-            &workflow_dir,
-            "legacy/report",
-        );
-        workflow.runtime = crate::spec::WorkflowRuntimeInfo::legacy_typescript();
-
-        let contract = resolved_workflow_source_contract(&workflow).expect("legacy fallback");
-        assert_eq!(
-            contract,
-            WorkflowSourceContract {
-                callable_name: None,
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "workflowId": { "type": "string" }
-                    },
-                    "required": ["workflowId"],
-                    "additionalProperties": false
-                }),
-                output_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "status": { "type": "string" }
-                    },
-                    "required": ["status"],
-                    "additionalProperties": false
-                }),
-                format_schemas: BTreeMap::from([(
-                    "tui.markdown.v1".to_string(),
-                    json!({
-                        "type": "object",
-                        "properties": {
-                            "markdown": { "type": "string" }
-                        },
-                        "required": ["markdown"],
-                        "additionalProperties": false
-                    }),
-                )]),
-            }
-        );
     }
 
     #[test]

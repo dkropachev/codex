@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(test)]
 use std::process::Command;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -18,6 +19,7 @@ use sha2::Sha256;
 use crate::registry::WorkflowSummary;
 
 const WORKFLOW_API_CONTRACTS_DIR: &str = "workflow-api-contracts";
+#[cfg(test)]
 const WORKFLOW_API_EXTRACTOR_SOURCE: &str = r#"
 import process from "node:process";
 import path from "node:path";
@@ -573,6 +575,7 @@ pub(crate) fn publish_validated_workflow_api_contract(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn extract_workflow_source_contract_from_typescript(
     workflow_dir: &Path,
     entrypoint: &str,

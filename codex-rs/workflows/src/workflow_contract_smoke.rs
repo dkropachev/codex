@@ -7,7 +7,6 @@ use serde_json::Value as JsonValue;
 use crate::WorkflowCommandInput;
 use crate::api_contract::WorkflowSourceContract;
 use crate::registry::WorkflowSummary;
-use crate::spec::WorkflowRuntimeKind;
 use crate::spec::WorkflowSpec;
 use crate::validation_finding::WorkflowValidationFinding;
 use crate::validation_runner::WorkflowValidationCommandResult;
@@ -431,18 +430,15 @@ pub(crate) fn run_rune_autocomplete_smoke(
 }
 
 pub(crate) fn contract_smoke_cases(spec: &WorkflowSpec) -> Result<Vec<ContractSmokeCase>> {
-    let runtime = spec.resolved_runtime().kind;
     let Some(smoke) = spec.validation.get("contractSmoke") else {
-        if runtime == WorkflowRuntimeKind::Typescript {
-            return Ok(Vec::new());
-        }
         anyhow::bail!("Rune workflows must define validation.contractSmoke");
     };
 
     match smoke {
-        JsonValue::Null | JsonValue::Bool(false) => disabled_contract_smoke_cases(runtime),
+        JsonValue::Null | JsonValue::Bool(false) => {
+            anyhow::bail!("Rune workflows must enable validation.contractSmoke");
+        }
         JsonValue::Bool(true) => default_contract_smoke_case(
-            runtime,
             "validation.contractSmoke".to_string(),
             JsonValue::Object(Default::default()),
             None,
@@ -460,31 +456,21 @@ pub(crate) fn contract_smoke_cases(spec: &WorkflowSpec) -> Result<Vec<ContractSm
         }),
         JsonValue::Object(object) => {
             if object.get("enabled") == Some(&JsonValue::Bool(false)) {
-                return disabled_contract_smoke_cases(runtime);
+                anyhow::bail!("Rune workflows must enable validation.contractSmoke");
             }
             if let Some(cases) = object.get("cases") {
-                return contract_smoke_cases_from_array(runtime, cases);
+                return contract_smoke_cases_from_array(cases);
             }
-            contract_smoke_case_from_object(runtime, "validation.contractSmoke".to_string(), object)
+            contract_smoke_case_from_object("validation.contractSmoke".to_string(), object)
                 .map(|case| vec![case])
         }
         _ => Err(anyhow::anyhow!(
-            "validation.contractSmoke must be false, true, a command string, or an object"
+            "validation.contractSmoke must be true, a command string, or an object"
         )),
     }
 }
 
-fn disabled_contract_smoke_cases(runtime: WorkflowRuntimeKind) -> Result<Vec<ContractSmokeCase>> {
-    if runtime == WorkflowRuntimeKind::Rune {
-        anyhow::bail!("Rune workflows must enable validation.contractSmoke");
-    }
-    Ok(Vec::new())
-}
-
-fn contract_smoke_cases_from_array(
-    runtime: WorkflowRuntimeKind,
-    cases: &JsonValue,
-) -> Result<Vec<ContractSmokeCase>> {
+fn contract_smoke_cases_from_array(cases: &JsonValue) -> Result<Vec<ContractSmokeCase>> {
     let Some(cases) = cases.as_array() else {
         anyhow::bail!("validation.contractSmoke.cases must be an array");
     };
@@ -506,13 +492,12 @@ fn contract_smoke_cases_from_array(
                 .filter(|name| !name.is_empty())
                 .map(ToString::to_string)
                 .unwrap_or_else(|| format!("case {}", index + 1));
-            contract_smoke_case_from_object(runtime, name, object)
+            contract_smoke_case_from_object(name, object)
         })
         .collect()
 }
 
 fn contract_smoke_case_from_object(
-    runtime: WorkflowRuntimeKind,
     name: String,
     object: &serde_json::Map<String, JsonValue>,
 ) -> Result<ContractSmokeCase> {
@@ -531,7 +516,7 @@ fn contract_smoke_case_from_object(
         .get("input")
         .cloned()
         .unwrap_or_else(|| JsonValue::Object(Default::default()));
-    default_contract_smoke_case(runtime, name, input, expect_error, expect_output)
+    default_contract_smoke_case(name, input, expect_error, expect_output)
 }
 
 fn expected_error_from_object(
@@ -563,41 +548,18 @@ fn non_empty_contract_smoke_command(command: &str) -> Result<String> {
 }
 
 fn default_contract_smoke_case(
-    runtime: WorkflowRuntimeKind,
     name: String,
     input: JsonValue,
     expect_error: Option<String>,
     expect_output: Option<JsonValue>,
 ) -> Result<ContractSmokeCase> {
-    let command = match runtime {
-        WorkflowRuntimeKind::Rune => ContractSmokeCommand::RuneInput(input.clone()),
-        WorkflowRuntimeKind::Typescript => {
-            ContractSmokeCommand::Shell(default_typescript_contract_smoke_command(&input)?)
-        }
-    };
     Ok(ContractSmokeCase {
         name,
-        command,
+        command: ContractSmokeCommand::RuneInput(input.clone()),
         input: Some(input),
         expect_error,
         expect_output,
     })
-}
-
-fn default_typescript_contract_smoke_command(input: &JsonValue) -> Result<String> {
-    let input_json = serde_json::to_string(input)
-        .with_context(|| "failed to serialize validation.contractSmoke.input")?;
-    Ok(format!(
-        "npm run --silent run -- --input {}",
-        shell_quote(&input_json)
-    ))
-}
-
-fn shell_quote(value: &str) -> String {
-    if cfg!(windows) {
-        return format!("\"{}\"", value.replace('"', "\\\""));
-    }
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn contract_smoke_case_command_name(case: &ContractSmokeCase) -> String {
