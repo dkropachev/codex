@@ -29,7 +29,6 @@ use rune::runtime::Ref;
 use rune::runtime::Value;
 use rune::runtime::VmResult;
 use serde_json::Value as JsonValue;
-use serde_json::json;
 
 use crate::command::WorkflowCommandInput;
 use crate::command_completion::WorkflowCommandCompletionSuggestion;
@@ -43,6 +42,7 @@ use crate::rune_api::WorkflowRuneToolsNamespace;
 use crate::rune_api::WorkflowRuneWorkflowsNamespace;
 use crate::rune_app_server;
 use crate::rune_app_server::WorkflowRuneAppServer;
+use crate::rune_event_sink;
 use crate::rune_input::WorkflowRuneInputHelpers;
 use crate::rune_tool::WorkflowRuneDynamicTool;
 use crate::workflow_runtime::WORKFLOW_NAME_ENV;
@@ -52,6 +52,7 @@ use crate::workflow_runtime::WORKFLOW_SELF_EXE_ENV;
 use crate::workflow_runtime::WORKFLOW_WORKING_DIRECTORY_ENV;
 use crate::workflow_runtime::WorkflowChildStatus;
 use crate::workflow_runtime::WorkflowRuntimeEvent;
+use crate::workflow_runtime::WorkflowRuntimeEventHandler;
 use crate::workflow_runtime::WorkflowRuntimeOutput;
 use crate::workflow_runtime::WorkflowStatusUpdate;
 use crate::workflow_runtime::WorkflowThreadStatus;
@@ -103,7 +104,14 @@ pub(crate) fn run_workflow_for_validation(
     let input = input.to_string();
     std::thread::spawn(move || {
         run_rune_on_current_thread(async {
-            run_workflow_inner(&working_directory, &workflow_dir, &workflow_path, &input).await
+            run_workflow_inner(
+                &working_directory,
+                &workflow_dir,
+                &workflow_path,
+                &input,
+                /*event_sender*/ None,
+            )
+            .await
         })
     })
     .join()
@@ -156,18 +164,32 @@ pub(crate) async fn run_workflow(
     workflow_dir: &Path,
     workflow_path: &Path,
     input: &str,
+    event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
 ) -> Result<WorkflowRuntimeOutput> {
     let working_directory = working_directory.to_path_buf();
     let workflow_dir = workflow_dir.to_path_buf();
     let workflow_path = workflow_path.to_path_buf();
     let input = input.to_string();
-    tokio::task::spawn_blocking(move || {
+    let (event_sender, mut event_receiver) = rune_event_sink::channel_if_needed(event_handler);
+    let task = tokio::task::spawn_blocking(move || {
         run_rune_on_current_thread(async {
-            run_workflow_inner(&working_directory, &workflow_dir, &workflow_path, &input).await
+            run_workflow_inner(
+                &working_directory,
+                &workflow_dir,
+                &workflow_path,
+                &input,
+                event_sender,
+            )
+            .await
         })
-    })
-    .await
-    .context("Rune workflow task failed")?
+    });
+
+    if let (Some(event_handler), Some(event_receiver)) = (event_handler, event_receiver.as_mut()) {
+        return rune_event_sink::forward_events_until_done(task, event_handler, event_receiver)
+            .await;
+    }
+
+    task.await.context("Rune workflow task failed")?
 }
 
 async fn run_workflow_inner(
@@ -175,7 +197,9 @@ async fn run_workflow_inner(
     workflow_dir: &Path,
     workflow_path: &Path,
     input: &str,
+    event_sender: Option<rune_event_sink::RuneRuntimeEventSender>,
 ) -> Result<WorkflowRuntimeOutput> {
+    let _event_sender_guard = rune_event_sink::RuneRuntimeEventSenderGuard::new(event_sender);
     let runtime = match CompiledRuneWorkflow::compile(workflow_path) {
         Ok(runtime) => runtime,
         Err(err) => return Ok(runtime_error_output(err)),
@@ -1089,18 +1113,15 @@ fn normalize_child_status(value: &JsonValue, index: usize) -> Result<WorkflowChi
 }
 
 fn emit_status(status: &WorkflowStatusUpdate) {
-    emit_runtime_event(json!({ "type": "status", "status": status }));
+    rune_event_sink::emit_runtime_event(WorkflowRuntimeEvent::Status {
+        status: status.clone(),
+    });
 }
 
 fn emit_report_to_user_markdown(markdown: &str) {
-    emit_runtime_event(json!({ "type": "reportToUserMarkdown", "markdown": markdown }));
-}
-
-fn emit_runtime_event(event: JsonValue) {
-    match serde_json::to_string(&event) {
-        Ok(event) => eprintln!("{WORKFLOW_RUNTIME_EVENT_PREFIX}{event}"),
-        Err(err) => eprintln!("failed to encode workflow runtime event: {err}"),
-    }
+    rune_event_sink::emit_runtime_event(WorkflowRuntimeEvent::ReportToUserMarkdown {
+        markdown: markdown.to_string(),
+    });
 }
 
 fn runtime_error_output(error: anyhow::Error) -> WorkflowRuntimeOutput {
@@ -1304,6 +1325,7 @@ pub async fn run(ctx, input) {
             &workflow_dir,
             &workflow_path,
             r#"{ "value": "example" }"#,
+            /*event_handler*/ None,
         )
         .await
         .expect("run workflow");
@@ -1543,6 +1565,7 @@ pub async fn run(ctx, input) {
             &workflow_dir,
             &workflow_path,
             r#"{ "prompt": "inspect everything" }"#,
+            /*event_handler*/ None,
         )
         .await
         .expect("run workflow");
@@ -1765,9 +1788,15 @@ pub async fn run(ctx, _input) {
 "##,
         );
 
-        let output = run_workflow(temp.path(), &workflow_dir, &workflow_path, "{}")
-            .await
-            .expect("run workflow");
+        let output = run_workflow(
+            temp.path(),
+            &workflow_dir,
+            &workflow_path,
+            "{}",
+            /*event_handler*/ None,
+        )
+        .await
+        .expect("run workflow");
 
         assert!(output.success, "stderr: {}", output.stderr);
         let result: serde_json::Value = serde_json::from_str(&output.stdout).expect("json stdout");

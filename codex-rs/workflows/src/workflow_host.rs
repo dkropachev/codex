@@ -11,6 +11,7 @@ use std::time::UNIX_EPOCH;
 use crate::registry::WorkflowSummary;
 use crate::workflow_runtime::WORKFLOW_RUNTIME_EVENT_PREFIX;
 use crate::workflow_runtime::WorkflowRuntimeEvent;
+use crate::workflow_runtime::WorkflowRuntimeEventHandler;
 use crate::workflow_runtime::WorkflowRuntimeOutput;
 use crate::workflow_runtime::workflow_tsx_path;
 use anyhow::Context as _;
@@ -86,6 +87,7 @@ pub(crate) async fn run_workflow_via_host(
     workflow_path: &Path,
     input: &str,
     workflows: &[WorkflowSummary],
+    event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
 ) -> Result<WorkflowRuntimeOutput> {
     let socket_path = workflow_host_socket_path(codex_home);
     ensure_workflow_host(codex_home, workflow_dir, &socket_path).await?;
@@ -155,7 +157,7 @@ pub(crate) async fn run_workflow_via_host(
 
     let mut reader = BufReader::new(stream).lines();
     let mut raw_stderr = String::new();
-    let forward_runtime_events = !std::io::stderr().is_terminal();
+    let forward_runtime_events = event_handler.is_none() && !std::io::stderr().is_terminal();
     let mut response = None;
 
     while let Some(line) = reader
@@ -165,8 +167,10 @@ pub(crate) async fn run_workflow_via_host(
     {
         if let Some(payload) = line.strip_prefix(WORKFLOW_RUNTIME_EVENT_PREFIX) {
             match serde_json::from_str::<WorkflowRuntimeEvent>(payload) {
-                Ok(_) => {
-                    if forward_runtime_events {
+                Ok(event) => {
+                    if let Some(event_handler) = event_handler {
+                        event_handler(&event);
+                    } else if forward_runtime_events {
                         eprintln!("{line}");
                     }
                 }
@@ -215,6 +219,7 @@ pub(crate) async fn run_workflow_via_host(
     _workflow_path: &Path,
     _input: &str,
     _workflows: &[WorkflowSummary],
+    _event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
 ) -> Result<WorkflowRuntimeOutput> {
     Err(anyhow::anyhow!(
         "workflow host is only available on Unix platforms"
@@ -1063,6 +1068,7 @@ process.exit(result.status ?? 1);
                 &workflow.path.join("src/workflow.ts"),
                 "{}",
                 &workflows,
+                /*event_handler*/ None,
             ),
         )
         .await

@@ -441,7 +441,7 @@ pub(crate) struct WorkflowRuntimeOutput {
     pub(crate) exit_status: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type")]
 pub enum WorkflowRuntimeEvent {
     #[serde(rename = "status")]
@@ -453,6 +453,13 @@ pub enum WorkflowRuntimeEvent {
     },
     #[serde(rename = "reportToUserMarkdown")]
     ReportToUserMarkdown { markdown: String },
+}
+
+pub(crate) type WorkflowRuntimeEventHandler<'a> = dyn Fn(&WorkflowRuntimeEvent) + Send + Sync + 'a;
+
+pub(crate) struct WorkflowRuntimeRunOptions<'a> {
+    pub(crate) workflows: &'a [crate::registry::WorkflowSummary],
+    pub(crate) event_handler: Option<&'a WorkflowRuntimeEventHandler<'a>>,
 }
 
 pub async fn complete_workflow(
@@ -478,6 +485,7 @@ pub async fn complete_workflow(
         workflow_path,
         &serde_json::to_string(input).context("failed to serialize workflow completion input")?,
         WorkflowRuntimeInvocationMode::Complete,
+        /*event_handler*/ None,
     )
     .await?;
 
@@ -531,7 +539,7 @@ pub(crate) async fn run_workflow(
     runtime: &WorkflowRuntimeInfo,
     workflow_path: &Path,
     input: &str,
-    workflows: &[crate::registry::WorkflowSummary],
+    options: WorkflowRuntimeRunOptions<'_>,
 ) -> Result<WorkflowRuntimeOutput> {
     if runtime.kind == WorkflowRuntimeKind::Rune {
         let output = crate::rune_runtime::run_workflow(
@@ -539,9 +547,10 @@ pub(crate) async fn run_workflow(
             workflow_dir,
             workflow_path,
             input,
+            options.event_handler,
         )
         .await?;
-        validate_workflow_runtime_output(codex_home, workflows, workflow_dir, &output)?;
+        validate_workflow_runtime_output(codex_home, options.workflows, workflow_dir, &output)?;
         return Ok(output);
     }
 
@@ -552,16 +561,24 @@ pub(crate) async fn run_workflow(
             workflow_dir,
             workflow_path,
             input,
-            workflows,
+            options.workflows,
+            options.event_handler,
         )
         .await;
         let output = output?;
-        validate_workflow_runtime_output(codex_home, workflows, workflow_dir, &output)?;
+        validate_workflow_runtime_output(codex_home, options.workflows, workflow_dir, &output)?;
         return Ok(output);
     }
 
-    let output = run_workflow_legacy(working_directory, workflow_dir, workflow_path, input).await?;
-    validate_workflow_runtime_output(codex_home, workflows, workflow_dir, &output)?;
+    let output = run_workflow_legacy(
+        working_directory,
+        workflow_dir,
+        workflow_path,
+        input,
+        options.event_handler,
+    )
+    .await?;
+    validate_workflow_runtime_output(codex_home, options.workflows, workflow_dir, &output)?;
     Ok(output)
 }
 
@@ -573,7 +590,7 @@ pub(crate) async fn run_workflow(
     runtime: &WorkflowRuntimeInfo,
     workflow_path: &Path,
     input: &str,
-    workflows: &[crate::registry::WorkflowSummary],
+    options: WorkflowRuntimeRunOptions<'_>,
 ) -> Result<WorkflowRuntimeOutput> {
     if runtime.kind == WorkflowRuntimeKind::Rune {
         let output = crate::rune_runtime::run_workflow(
@@ -581,14 +598,22 @@ pub(crate) async fn run_workflow(
             workflow_dir,
             workflow_path,
             input,
+            options.event_handler,
         )
         .await?;
-        validate_workflow_runtime_output(_codex_home, workflows, workflow_dir, &output)?;
+        validate_workflow_runtime_output(_codex_home, options.workflows, workflow_dir, &output)?;
         return Ok(output);
     }
 
-    let output = run_workflow_legacy(working_directory, workflow_dir, workflow_path, input).await?;
-    validate_workflow_runtime_output(_codex_home, workflows, workflow_dir, &output)?;
+    let output = run_workflow_legacy(
+        working_directory,
+        workflow_dir,
+        workflow_path,
+        input,
+        options.event_handler,
+    )
+    .await?;
+    validate_workflow_runtime_output(_codex_home, options.workflows, workflow_dir, &output)?;
     Ok(output)
 }
 
@@ -597,6 +622,7 @@ async fn run_workflow_legacy(
     workflow_dir: &Path,
     workflow_path: &Path,
     input: &str,
+    event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
 ) -> Result<WorkflowRuntimeOutput> {
     run_workflow_process(
         working_directory,
@@ -604,6 +630,7 @@ async fn run_workflow_legacy(
         workflow_path,
         input,
         WorkflowRuntimeInvocationMode::Run,
+        event_handler,
     )
     .await
 }
@@ -651,6 +678,7 @@ async fn run_workflow_process(
     workflow_path: &Path,
     input: &str,
     mode: WorkflowRuntimeInvocationMode,
+    event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
 ) -> Result<WorkflowRuntimeOutput> {
     let runner_path = write_runner_script()?;
     let tsx_path = workflow_tsx_path(workflow_dir);
@@ -724,19 +752,13 @@ async fn run_workflow_process(
             .map(|_| stdout_text)
     });
 
-    let stderr_task = tokio::spawn(async move { read_stderr(stderr).await });
-
-    let status = child
-        .wait()
-        .await
-        .context("failed to wait for workflow runtime process")?;
+    let (status, stderr) = tokio::join!(child.wait(), read_stderr(stderr, event_handler));
+    let status = status.context("failed to wait for workflow runtime process")?;
+    let stderr = stderr?;
     let stdout = stdout_task
         .await
         .context("workflow runtime stdout task panicked")?
         .context("failed to read workflow runtime stdout")?;
-    let stderr = stderr_task
-        .await
-        .context("workflow runtime stderr task panicked")??;
 
     let _ = fs::remove_file(&runner_path);
 
@@ -748,10 +770,13 @@ async fn run_workflow_process(
     })
 }
 
-async fn read_stderr(stderr: impl tokio::io::AsyncRead + Unpin) -> Result<String> {
+async fn read_stderr(
+    stderr: impl tokio::io::AsyncRead + Unpin,
+    event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
+) -> Result<String> {
     let mut reader = BufReader::new(stderr).lines();
     let mut raw_stderr = String::new();
-    let forward_runtime_events = !std::io::stderr().is_terminal();
+    let forward_runtime_events = event_handler.is_none() && !std::io::stderr().is_terminal();
 
     while let Some(line) = reader
         .next_line()
@@ -760,8 +785,10 @@ async fn read_stderr(stderr: impl tokio::io::AsyncRead + Unpin) -> Result<String
     {
         if let Some(payload) = line.strip_prefix(WORKFLOW_RUNTIME_EVENT_PREFIX) {
             match serde_json::from_str::<WorkflowRuntimeEvent>(payload) {
-                Ok(_) => {
-                    if forward_runtime_events {
+                Ok(event) => {
+                    if let Some(event_handler) = event_handler {
+                        event_handler(&event);
+                    } else if forward_runtime_events {
                         eprintln!("{line}");
                     }
                 }

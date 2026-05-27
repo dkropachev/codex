@@ -37,6 +37,7 @@ use crate::registry::validate_workflow_dir;
 use crate::registry::workflow_impact;
 use crate::registry::workflow_roots;
 use crate::repair::repair_workflow_command;
+use crate::runtime_progress::standalone_cli_runtime_event_handler;
 use crate::spec::RUNE_WORKFLOW_ENTRYPOINT;
 use crate::spec::TYPESCRIPT_WORKFLOW_ENTRYPOINT;
 use crate::spec::WORKFLOW_YAML;
@@ -460,6 +461,7 @@ async fn run(
     let input = read_input(input, input_fields)?;
     let workflow_entrypoint = normalize_runtime_entrypoint(&workflow.runtime.entrypoint)
         .with_context(|| format!("invalid workflow runtime entrypoint for {}", workflow.id))?;
+    let runtime_event_handler = standalone_cli_runtime_event_handler(ctx.progress);
     let output = workflow_runtime::run_workflow(
         ctx.codex_home,
         ctx.cwd,
@@ -467,7 +469,10 @@ async fn run(
         &workflow.runtime,
         &workflow.path.join(workflow_entrypoint),
         &input,
-        &workflows,
+        workflow_runtime::WorkflowRuntimeRunOptions {
+            workflows: &workflows,
+            event_handler: runtime_event_handler.as_deref(),
+        },
     )
     .await
     .with_context(|| format!("failed to run workflow {}", workflow.id))?;
