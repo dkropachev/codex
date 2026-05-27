@@ -5,13 +5,11 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::registry::WorkflowSummary;
-use crate::spec::WorkflowRuntimeKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkflowCommand {
     Mode,
     Develop {
-        runtime: WorkflowRuntimeKind,
         description: String,
     },
     Describe {
@@ -112,7 +110,9 @@ pub fn parse_workflow_command(
         return Ok(WorkflowCommand::Mode);
     };
     match command {
-        "develop" => parse_develop(args),
+        "develop" => Ok(WorkflowCommand::Develop {
+            description: joined_tail(args, /*start*/ 1, "develop", "a description")?,
+        }),
         "describe" => Ok(WorkflowCommand::Describe {
             id: required(args, /*index*/ 1, "describe", "a workflow id")?.to_string(),
             description: joined_tail(args, /*start*/ 2, "describe", "a description")?,
@@ -160,40 +160,6 @@ pub fn parse_workflow_command(
         "discard" => expect_no_extra(args, WorkflowCommand::Discard),
         "done" => expect_no_extra(args, WorkflowCommand::Done),
         other => Err(WorkflowCommandParseError::UnknownCommand(other.to_string())),
-    }
-}
-
-fn parse_develop(args: &[String]) -> Result<WorkflowCommand, WorkflowCommandParseError> {
-    let mut runtime = WorkflowRuntimeKind::Rune;
-    let mut index = 1;
-    while index < args.len() {
-        match parse_long_flag_argument(&args[index]) {
-            Some(("runtime", Some(value))) => {
-                runtime = parse_runtime_kind(value)?;
-                index += 1;
-            }
-            Some(("runtime", None)) => {
-                let value = required(args, index + 1, "develop --runtime", "rune or typescript")?;
-                runtime = parse_runtime_kind(value)?;
-                index += 2;
-            }
-            _ => break,
-        }
-    }
-
-    Ok(WorkflowCommand::Develop {
-        runtime,
-        description: joined_tail(args, index, "develop", "a description")?,
-    })
-}
-
-fn parse_runtime_kind(value: &str) -> Result<WorkflowRuntimeKind, WorkflowCommandParseError> {
-    match value {
-        "rune" => Ok(WorkflowRuntimeKind::Rune),
-        "typescript" | "ts" => Ok(WorkflowRuntimeKind::Typescript),
-        other => Err(WorkflowCommandParseError::UnexpectedArgument(format!(
-            "--runtime {other}"
-        ))),
     }
 }
 
@@ -397,7 +363,6 @@ mod tests {
     fn workflow_summary(command: Option<&str>) -> WorkflowSummary {
         WorkflowSummary {
             id: "reports/jira-summary".to_string(),
-            runtime: crate::spec::WorkflowRuntimeInfo::legacy_typescript(),
             command: command.map(ToString::to_string),
             title: Some("Jira Summary".to_string()),
             user_description: Some("Prepare a concise Jira summary".to_string()),
@@ -421,20 +386,6 @@ mod tests {
     #[test]
     fn parses_shared_workflow_commands() {
         assert_eq!(parse_workflow_command(&[]).unwrap(), WorkflowCommand::Mode);
-        assert_eq!(
-            parse_workflow_command_line("develop Jira Summary").unwrap(),
-            WorkflowCommand::Develop {
-                runtime: WorkflowRuntimeKind::Rune,
-                description: "Jira Summary".to_string(),
-            }
-        );
-        assert_eq!(
-            parse_workflow_command_line("develop --runtime typescript Jira Summary").unwrap(),
-            WorkflowCommand::Develop {
-                runtime: WorkflowRuntimeKind::Typescript,
-                description: "Jira Summary".to_string(),
-            }
-        );
         assert_eq!(
             parse_workflow_command_line("run reports/jira --input '{\"project\":\"COD\"}'")
                 .unwrap(),

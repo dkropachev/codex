@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(test)]
 use std::process::Command;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -19,7 +18,6 @@ use sha2::Sha256;
 use crate::registry::WorkflowSummary;
 
 const WORKFLOW_API_CONTRACTS_DIR: &str = "workflow-api-contracts";
-#[cfg(test)]
 const WORKFLOW_API_EXTRACTOR_SOURCE: &str = r#"
 import process from "node:process";
 import path from "node:path";
@@ -224,13 +222,9 @@ function schemaForType(type, stack = new Set()) {
     const hasNullish = nonNullableMembers.length !== members.length;
     const stringEnum = nonNullableMembers.every((member) => member.isStringLiteral());
     if (stringEnum) {
-      const enumValues = nonNullableMembers.map((member) => member.value);
-      if (hasNullish) {
-        enumValues.push(null);
-      }
       return {
         type: hasNullish ? ["string", "null"] : "string",
-        enum: enumValues,
+        enum: nonNullableMembers.map((member) => member.value),
       };
     }
 
@@ -484,10 +478,6 @@ pub(crate) fn read_published_workflow_api_contract(
     if record.workflow_id != workflow.id || record.workflow_path != workflow.path {
         return Ok(None);
     }
-    if workflow_source_digest(&workflow.path).ok().as_deref() != Some(record.source_digest.as_str())
-    {
-        return Ok(None);
-    }
     Ok(Some(record.contract))
 }
 
@@ -507,10 +497,6 @@ pub(crate) fn read_published_workflow_source_contract(
             )
         })?;
     if record.workflow_id != workflow.id || record.workflow_path != workflow.path {
-        return Ok(None);
-    }
-    if workflow_source_digest(&workflow.path).ok().as_deref() != Some(record.source_digest.as_str())
-    {
         return Ok(None);
     }
     Ok(Some(record.source_contract.unwrap_or({
@@ -575,13 +561,11 @@ pub(crate) fn publish_validated_workflow_api_contract(
     Ok(())
 }
 
-#[cfg(test)]
 pub(crate) fn extract_workflow_source_contract_from_typescript(
     workflow_dir: &Path,
-    entrypoint: &str,
 ) -> Result<WorkflowSourceContract> {
     ensure_repo_typescript_shim(workflow_dir)?;
-    let workflow_path = workflow_dir.join(entrypoint);
+    let workflow_path = workflow_dir.join("src/workflow.ts");
     let output = Command::new("node")
         .current_dir(workflow_dir)
         .args([
@@ -915,7 +899,6 @@ mod tests {
 
         let workflow = WorkflowSummary {
             id: "review/fix".to_string(),
-            runtime: crate::spec::WorkflowRuntimeInfo::legacy_typescript(),
             command: Some("fix".to_string()),
             title: Some("Fix".to_string()),
             user_description: Some("Fix workflow".to_string()),
@@ -954,66 +937,6 @@ mod tests {
     }
 
     #[test]
-    fn read_workflow_api_contract_ignores_stale_source_digest() {
-        let codex_home = TempDir::new().expect("codex home");
-        let workflow_root = TempDir::new().expect("workflow root");
-        let workflow_dir = workflow_root.path().join("review/stale");
-        std::fs::create_dir_all(workflow_dir.join("src")).expect("create workflow src");
-        std::fs::write(workflow_dir.join("workflow.yaml"), "id: review/stale\n")
-            .expect("workflow yaml");
-        std::fs::write(workflow_dir.join("package.json"), "{}\n").expect("package json");
-        std::fs::write(
-            workflow_dir.join("src/workflow.ts"),
-            "export const before = 1;\n",
-        )
-        .expect("workflow ts");
-
-        let workflow = WorkflowSummary {
-            id: "review/stale".to_string(),
-            runtime: crate::spec::WorkflowRuntimeInfo::legacy_typescript(),
-            command: Some("stale".to_string()),
-            title: Some("Stale".to_string()),
-            user_description: Some("Stale workflow".to_string()),
-            search_terms: Vec::new(),
-            command_option_hints: Vec::new(),
-            root_label: "global".to_string(),
-            root_kind: WorkflowRootKind::Global,
-            root_path: workflow_root.path().to_path_buf(),
-            path: workflow_dir.clone(),
-            workflow_yaml_path: workflow_dir.join("workflow.yaml"),
-            mention_target: "workflow:///tmp#review/stale".to_string(),
-            validation: WorkflowValidation {
-                status: WorkflowValidationStatus::Valid,
-                findings: Vec::new(),
-            },
-            repair_mode: "full".to_string(),
-        };
-        publish_validated_workflow_api_contract(
-            codex_home.path(),
-            &workflow,
-            WorkflowSourceContract {
-                callable_name: Some("staleReview".to_string()),
-                input_schema: json!({ "type": "object" }),
-                output_schema: json!({ "type": "object" }),
-                format_schemas: BTreeMap::new(),
-            },
-        )
-        .expect("publish contract");
-
-        std::fs::write(
-            workflow_dir.join("src/workflow.ts"),
-            "export const after = 1;\n",
-        )
-        .expect("workflow ts");
-
-        assert_eq!(
-            read_published_workflow_api_contract(codex_home.path(), &workflow)
-                .expect("read contract"),
-            None
-        );
-    }
-
-    #[test]
     fn extract_workflow_source_contract_from_typescript_extracts_named_default_export_and_formatter()
      {
         let workflow_dir = TempDir::new().expect("workflow dir");
@@ -1042,11 +965,8 @@ export default async function codeReview(_ctx: unknown, input: WorkflowInput): P
             return;
         }
 
-        let contract = extract_workflow_source_contract_from_typescript(
-            workflow_dir.path(),
-            crate::spec::TYPESCRIPT_WORKFLOW_ENTRYPOINT,
-        )
-        .expect("workflow source contract");
+        let contract = extract_workflow_source_contract_from_typescript(workflow_dir.path())
+            .expect("workflow source contract");
 
         assert_eq!(contract.callable_name.as_deref(), Some("codeReview"));
         assert_eq!(
@@ -1115,11 +1035,8 @@ export default async function (_ctx: unknown, input: WorkflowInput): Promise<Wor
             return;
         }
 
-        let err = extract_workflow_source_contract_from_typescript(
-            workflow_dir.path(),
-            crate::spec::TYPESCRIPT_WORKFLOW_ENTRYPOINT,
-        )
-        .expect_err("anonymous default export should be rejected");
+        let err = extract_workflow_source_contract_from_typescript(workflow_dir.path())
+            .expect_err("anonymous default export should be rejected");
         assert!(
             err.to_string()
                 .contains("workflow default export must be a named function")
@@ -1155,11 +1072,8 @@ export default async function codeReview(_ctx: unknown, input: WorkflowInput): P
             return;
         }
 
-        let err = extract_workflow_source_contract_from_typescript(
-            workflow_dir.path(),
-            crate::spec::TYPESCRIPT_WORKFLOW_ENTRYPOINT,
-        )
-        .expect_err("recursive types should be rejected");
+        let err = extract_workflow_source_contract_from_typescript(workflow_dir.path())
+            .expect_err("recursive types should be rejected");
         assert!(
             err.to_string()
                 .contains("recursive workflow API types are not supported")
@@ -1194,11 +1108,8 @@ export default async function codeReview(_ctx: unknown, input: WorkflowInput): P
             return;
         }
 
-        let err = extract_workflow_source_contract_from_typescript(
-            workflow_dir.path(),
-            crate::spec::TYPESCRIPT_WORKFLOW_ENTRYPOINT,
-        )
-        .expect_err("invalid formatter return shape should be rejected");
+        let err = extract_workflow_source_contract_from_typescript(workflow_dir.path())
+            .expect_err("invalid formatter return shape should be rejected");
         assert!(
             err.to_string()
                 .contains("WorkflowOutput.toTuiMarkdown(result) must return { markdown: string }")

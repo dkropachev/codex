@@ -309,45 +309,6 @@ async fn slash_workflow_autocomplete_commits_unique_dynamic_preview_and_runs_wor
 }
 
 #[tokio::test]
-async fn slash_workflow_autocomplete_runs_rune_completion_end_to_end() -> Result<()> {
-    if cfg!(windows) {
-        return Ok(());
-    }
-
-    let repo_root = codex_utils_cargo_bin::repo_root()?;
-    let codex = ensure_codex_binary(&repo_root)?;
-    let codex_home = tempdir()?;
-    let workspace = tempdir()?;
-    write_trusted_workspace_config(codex_home.path(), workspace.path())?;
-    write_rune_review_workflow(&codex_home.path().join("workflows/rune-review"))?;
-
-    run_workflow_autocomplete_session(
-        &repo_root,
-        &codex,
-        codex_home.path(),
-        workspace.path(),
-        WorkflowAutocompleteScenario {
-            typed_prefix: "/rune-review --reportId 2048",
-            completion_text: None,
-            popup_snippets: &["--format summary"],
-            ordered_popup_snippets: &[],
-            run_snippets: &[
-                "Workflow rune-review: starting",
-                "Rune autocomplete complete",
-                "Workflow Result",
-            ],
-            post_key_snippets: &[],
-            forbidden_snippets: &[],
-            popup_keys: &[
-                WorkflowAutocompletePopupKey::Tab,
-                WorkflowAutocompletePopupKey::Enter,
-            ],
-        },
-    )
-    .await
-}
-
-#[tokio::test]
 async fn slash_workflow_exact_command_with_args_enter_runs_workflow_without_committing_preview()
 -> Result<()> {
     if cfg!(windows) {
@@ -855,52 +816,6 @@ export default workflow;
 "##
     );
     write_workflow_fixture(workflow_dir, id, command, title, &workflow_source)
-}
-
-fn write_rune_review_workflow(workflow_dir: &Path) -> Result<()> {
-    std::fs::create_dir_all(workflow_dir.join("src"))?;
-    std::fs::create_dir_all(workflow_dir.join("state"))?;
-    std::fs::create_dir_all(workflow_dir.join(".git"))?;
-    std::fs::write(workflow_dir.join("README.md"), "# Rune Review\n")?;
-    std::fs::write(workflow_dir.join("state/.gitkeep"), "")?;
-    std::fs::write(
-        workflow_dir.join("workflow.yaml"),
-        r#"id: rune-review
-command: rune-review
-title: Rune Review
-userDescription: Rune autocomplete integration test.
-runtime:
-  kind: rune
-  entrypoint: src/workflow.rn
-api:
-  inputSchema:
-    type: object
-    additionalProperties: true
-"#,
-    )?;
-    std::fs::write(
-        workflow_dir.join("src/workflow.rn"),
-        r##"pub async fn run(ctx, input) {
-    ctx.status(#{ workflowName: "rune-review", workflowStatus: "reviewing", threads: [] });
-    #{ ok: true, input }
-}
-
-pub async fn complete(_ctx, input) {
-    if input.text == "--reportId 2048" {
-        [
-            #{ display: "--reportId 2048 --format summary", insertText: "--reportId 2048 --format summary", description: "Rune summary output" },
-        ]
-    } else {
-        []
-    }
-}
-
-pub fn to_tui_markdown(_result) {
-    #{ markdown: "# Workflow Result\n\nRune autocomplete complete.\n" }
-}
-"##,
-    )?;
-    Ok(())
 }
 
 pub(super) fn write_review_workflow(workflow_dir: &Path) -> Result<()> {

@@ -549,7 +549,6 @@ mod tests {
 
         WorkflowSummary {
             id: id.to_string(),
-            runtime: codex_workflows::WorkflowRuntimeInfo::legacy_typescript(),
             command: Some(command.to_string()),
             title: Some(title.to_string()),
             user_description: Some("Review an existing submission.".to_string()),
@@ -621,7 +620,6 @@ mod tests {
         let path = root.join("reports").join("jira-summary");
         let workflow = WorkflowSummary {
             id: "reports/jira-summary".to_string(),
-            runtime: codex_workflows::WorkflowRuntimeInfo::legacy_typescript(),
             command: Some("jira-summary".to_string()),
             title: Some("Jira Summary".to_string()),
             user_description: Some("Prepare a focused workflow report".to_string()),
@@ -660,7 +658,6 @@ mod tests {
         let path = root.join("reports").join("jira-summary");
         let workflow = WorkflowSummary {
             id: "reports/jira-summary".to_string(),
-            runtime: codex_workflows::WorkflowRuntimeInfo::legacy_typescript(),
             command: Some("summary".to_string()),
             title: Some("Jira Summary".to_string()),
             user_description: Some("Prepare a focused workflow report".to_string()),
@@ -728,7 +725,6 @@ api:
 
         let workflow = WorkflowSummary {
             id: "code-review".to_string(),
-            runtime: codex_workflows::WorkflowRuntimeInfo::legacy_typescript(),
             command: Some("code-review".to_string()),
             title: Some("Code Review".to_string()),
             user_description: Some("Review an existing submission.".to_string()),

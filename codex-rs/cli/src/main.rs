@@ -5115,7 +5115,6 @@ mod tests {
             path: path.clone(),
             workflow_yaml_path: path.join("workflow.yaml"),
             mention_target: codex_workflows::mention_target(&root, workflow_id).unwrap(),
-            runtime: codex_workflows::WorkflowRuntimeInfo::legacy_typescript(),
             validation: codex_workflows::WorkflowValidation {
                 status: codex_workflows::WorkflowValidationStatus::Valid,
                 findings: Vec::new(),

@@ -5166,16 +5166,6 @@
         "description": {
           "type": "string"
         },
-        "runtime": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/WorkflowRuntimeKind"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "stageSessionId": {
           "type": [
             "string",
@@ -5294,13 +5284,6 @@
         "id"
       ],
       "type": "object"
-    },
-    "WorkflowRuntimeKind": {
-      "enum": [
-        "rune",
-        "typescript"
-      ],
-      "type": "string"
     },
     "WorkflowStageSessionActionParams": {
       "properties": {

@@ -96,10 +96,6 @@ pub enum WorkflowValidationFinding {
         stdout: String,
         stderr: String,
     },
-    WorkflowRuntimeCompileFailed {
-        path: PathBuf,
-        error: String,
-    },
     WorkflowApiContractExtractionFailed {
         path: PathBuf,
         error: String,
@@ -220,12 +216,6 @@ impl WorkflowValidationFinding {
                 }
                 None => format!("validation command `{command}` failed"),
             },
-            Self::WorkflowRuntimeCompileFailed { path, error } => {
-                format!(
-                    "failed to compile workflow runtime source {}: {error}",
-                    path.display()
-                )
-            }
             Self::WorkflowApiContractExtractionFailed { path, error } => format!(
                 "failed to extract workflow API contract from {}: {error}",
                 path.display()
@@ -265,7 +255,6 @@ impl WorkflowValidationFinding {
             | Self::EmptyValidationCommands { .. }
             | Self::InvalidValidationCommands { .. }
             | Self::ValidationCommandFailed { .. }
-            | Self::WorkflowRuntimeCompileFailed { .. }
             | Self::AmbiguousWorkflowOutputSchema { .. }
             | Self::WorkflowApiContractExtractionFailed { .. }
             | Self::WorkflowApiContractSmokeFailed { .. } => "WF-007",
@@ -316,7 +305,6 @@ impl WorkflowValidationFinding {
             | Self::MissingCoverageMarker { path, .. }
             | Self::RuntimeStateGitignoreMissing { path, .. }
             | Self::AmbiguousWorkflowOutputSchema { path, .. }
-            | Self::WorkflowRuntimeCompileFailed { path, .. }
             | Self::WorkflowApiContractExtractionFailed { path, .. } => path.clone(),
             Self::WorkflowPathEscapesRoot { workflow_path, .. } => workflow_path.clone(),
             Self::CodeOutsideSrc { paths }

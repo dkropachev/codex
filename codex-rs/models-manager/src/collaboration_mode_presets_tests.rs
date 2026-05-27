@@ -107,15 +107,6 @@ fn workflow_mode_instructions_are_workflow_specialist_guidance() {
         "Workflow mode exists to design, inspect, tune, validate, repair, and explain Codex workflows."
     ));
     assert!(workflow_instructions.contains(
-        "Embedded Rune workflows use `ctx` with the same UX methods plus the Codex app-server SDK surface:"
-    ));
-    assert!(workflow_instructions.contains(
-        "`ctx.createAgent/startAgent/resumeAgent`, `AgentHandle`, `TurnHandle`, `TurnStream`, `ctx.defineTool`"
-    ));
-    assert!(workflow_instructions.contains(
-        "`ctx.api`, `ctx.artifacts`, `ctx.workflows`, `ctx.mcp`, `ctx.tools`, `ctx.fs`, `ctx.process`"
-    ));
-    assert!(workflow_instructions.contains(
         "Default scope is the current Codex workflow skills/config and the current repository."
     ));
     assert!(

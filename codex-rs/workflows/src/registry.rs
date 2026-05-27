@@ -24,7 +24,6 @@ use crate::id::mention_target;
 use crate::id::normalize_workflow_id;
 use crate::spec::WORKFLOW_YAML;
 use crate::spec::WorkflowHookKind;
-use crate::spec::WorkflowRuntimeInfo;
 use crate::spec::WorkflowToolSpec;
 use crate::spec::read_workflow_spec;
 use crate::spec::workflow_tool_name;
@@ -85,8 +84,6 @@ impl WorkflowValidation {
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowSummary {
     pub id: String,
-    #[serde(default = "WorkflowRuntimeInfo::legacy_typescript")]
-    pub runtime: WorkflowRuntimeInfo,
     pub command: Option<String>,
     pub title: Option<String>,
     pub user_description: Option<String>,
@@ -372,7 +369,6 @@ pub(crate) fn summarize_workflow(
     let id = normalize_workflow_id(&relative_workflow_id(relative)?).ok()?;
     let workflow_yaml_path = workflow_dir.join(WORKFLOW_YAML);
     let spec = read_workflow_spec(&workflow_yaml_path).unwrap_or_default();
-    let runtime = spec.resolved_runtime();
     let repair_mode = spec
         .repair
         .as_ref()
@@ -385,7 +381,6 @@ pub(crate) fn summarize_workflow(
     let mention_target = mention_target(&root.path, &id).ok()?;
     let published_summary = WorkflowSummary {
         id: id.clone(),
-        runtime: runtime.clone(),
         command: command.clone(),
         title: spec.title.clone(),
         user_description: spec.user_description.clone(),
@@ -408,7 +403,6 @@ pub(crate) fn summarize_workflow(
         .unwrap_or_else(|| command_option_hints_from_spec(&spec));
     Some(WorkflowSummary {
         id,
-        runtime,
         command,
         title: spec.title,
         user_description: spec.user_description,

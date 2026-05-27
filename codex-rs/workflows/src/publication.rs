@@ -1,6 +1,4 @@
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
-use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -28,7 +26,6 @@ use crate::registry::WorkflowSummary;
 use crate::registry::discover_workflow_tools_from_filesystem_for_hook;
 use crate::registry::summarize_workflow;
 use crate::spec::WorkflowHookKind;
-use crate::spec::WorkflowRuntimeKind;
 use crate::spec::WorkflowToolSpec;
 use crate::spec::read_workflow_spec;
 use crate::spec::workflow_tool_name;
@@ -267,7 +264,7 @@ fn workflow_tool_sources(
     hook: WorkflowHookKind,
 ) -> Vec<ArtifactSource> {
     let tool_name = workflow_tool_name(&workflow.id);
-    let mut sources = vec![
+    vec![
         ArtifactSource::new(
             PathBuf::from(".workflow-registration"),
             "workflow_identity",
@@ -279,64 +276,16 @@ fn workflow_tool_sources(
             file_hash_or_missing(&workflow.workflow_yaml_path),
         ),
         ArtifactSource::new(
-            PathBuf::from(&workflow.runtime.entrypoint),
+            PathBuf::from("src/workflow.ts"),
             "workflow_source",
-            file_hash_or_missing(&workflow.path.join(&workflow.runtime.entrypoint)),
+            file_hash_or_missing(&workflow.path.join("src/workflow.ts")),
         ),
-    ];
-
-    match workflow.runtime.kind {
-        WorkflowRuntimeKind::Rune => {
-            sources.extend(workflow_rune_source_artifacts(workflow));
-        }
-        WorkflowRuntimeKind::Typescript => {
-            sources.push(ArtifactSource::new(
-                PathBuf::from("package.json"),
-                "workflow_package",
-                file_hash_or_missing(&workflow.path.join("package.json")),
-            ));
-        }
-    }
-    sources
-}
-
-fn workflow_rune_source_artifacts(workflow: &WorkflowSummary) -> Vec<ArtifactSource> {
-    let mut paths = BTreeSet::new();
-    collect_rune_source_paths(&workflow.path, Path::new("src"), &mut paths);
-    paths
-        .into_iter()
-        .filter(|relative| relative != Path::new(&workflow.runtime.entrypoint))
-        .map(|relative| {
-            ArtifactSource::new(
-                relative.clone(),
-                "workflow_rune_source",
-                file_hash_or_missing(&workflow.path.join(&relative)),
-            )
-        })
-        .collect()
-}
-
-fn collect_rune_source_paths(workflow_dir: &Path, relative: &Path, paths: &mut BTreeSet<PathBuf>) {
-    let path = workflow_dir.join(relative);
-    let Ok(metadata) = fs::metadata(&path) else {
-        return;
-    };
-    if metadata.is_file() {
-        if path.extension().and_then(|extension| extension.to_str()) == Some("rn") {
-            paths.insert(relative.to_path_buf());
-        }
-        return;
-    }
-    if !metadata.is_dir() {
-        return;
-    }
-    let Ok(entries) = fs::read_dir(path) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let child_relative = relative.join(entry.file_name());
-        collect_rune_source_paths(workflow_dir, &child_relative, paths);
-    }
+        ArtifactSource::new(
+            PathBuf::from("package.json"),
+            "workflow_package",
+            file_hash_or_missing(&workflow.path.join("package.json")),
+        ),
+    ]
 }
 
 fn workflow_identity_digest(

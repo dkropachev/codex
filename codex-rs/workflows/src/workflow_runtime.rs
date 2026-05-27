@@ -10,7 +10,6 @@ use std::time::UNIX_EPOCH;
 use anyhow::Context;
 use anyhow::Result;
 use serde::Deserialize;
-use serde::Serialize;
 use serde_json::Value as JsonValue;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncReadExt;
@@ -18,20 +17,18 @@ use tokio::io::BufReader;
 use tokio::process::Command;
 
 use crate::api_contract::read_published_workflow_api_contract;
-use crate::spec::WorkflowRuntimeInfo;
-use crate::spec::WorkflowRuntimeKind;
 use crate::workflow_contract_validation::validate_json_against_schema;
 #[cfg(unix)]
 use crate::workflow_host;
 
 pub const WORKFLOW_RUNTIME_EVENT_PREFIX: &str = "__CODEX_WORKFLOW_EVENT__";
-pub(crate) const WORKFLOW_SELF_EXE_ENV: &str = "CODEX_WORKFLOW_SELF_EXE";
-pub(crate) const WORKFLOW_NAME_ENV: &str = "CODEX_WORKFLOW_NAME";
-pub(crate) const WORKFLOW_WORKING_DIRECTORY_ENV: &str = "CODEX_WORKFLOW_WORKING_DIRECTORY";
-pub(crate) const WORKFLOW_OUTPUT_FORMAT_ENV: &str = "CODEX_WORKFLOW_OUTPUT_FORMAT";
+const WORKFLOW_SELF_EXE_ENV: &str = "CODEX_WORKFLOW_SELF_EXE";
+const WORKFLOW_NAME_ENV: &str = "CODEX_WORKFLOW_NAME";
+const WORKFLOW_WORKING_DIRECTORY_ENV: &str = "CODEX_WORKFLOW_WORKING_DIRECTORY";
+const WORKFLOW_OUTPUT_FORMAT_ENV: &str = "CODEX_WORKFLOW_OUTPUT_FORMAT";
 
 #[derive(Clone, Copy)]
-pub(crate) enum WorkflowRuntimeInvocationMode {
+enum WorkflowRuntimeInvocationMode {
     Run,
     Complete,
 }
@@ -441,7 +438,7 @@ pub(crate) struct WorkflowRuntimeOutput {
     pub(crate) exit_status: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
 pub enum WorkflowRuntimeEvent {
     #[serde(rename = "status")]
@@ -465,20 +462,9 @@ pub(crate) struct WorkflowRuntimeRunOptions<'a> {
 pub async fn complete_workflow(
     workflow_dir: &Path,
     working_directory: &Path,
-    runtime: &WorkflowRuntimeInfo,
     workflow_path: &Path,
     input: &crate::command::WorkflowCommandInput,
 ) -> Result<Vec<crate::command_completion::WorkflowCommandCompletionSuggestion>> {
-    if runtime.kind == WorkflowRuntimeKind::Rune {
-        return crate::rune_runtime::complete_workflow(
-            workflow_dir,
-            working_directory,
-            workflow_path,
-            input,
-        )
-        .await;
-    }
-
     let output = run_workflow_process(
         working_directory,
         workflow_dir,
@@ -504,14 +490,14 @@ pub async fn complete_workflow(
     Ok(suggestions)
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowThreadStatus {
     pub name: String,
     pub status: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowChildStatus {
     pub workflow_name: String,
@@ -520,7 +506,7 @@ pub struct WorkflowChildStatus {
     pub threads: Vec<WorkflowThreadStatus>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowStatusUpdate {
     pub workflow_name: String,
@@ -536,24 +522,10 @@ pub(crate) async fn run_workflow(
     codex_home: &Path,
     working_directory: &Path,
     workflow_dir: &Path,
-    runtime: &WorkflowRuntimeInfo,
     workflow_path: &Path,
     input: &str,
     options: WorkflowRuntimeRunOptions<'_>,
 ) -> Result<WorkflowRuntimeOutput> {
-    if runtime.kind == WorkflowRuntimeKind::Rune {
-        let output = crate::rune_runtime::run_workflow(
-            working_directory,
-            workflow_dir,
-            workflow_path,
-            input,
-            options.event_handler,
-        )
-        .await?;
-        validate_workflow_runtime_output(codex_home, options.workflows, workflow_dir, &output)?;
-        return Ok(output);
-    }
-
     if workflow_host::should_use_host() {
         let output = workflow_host::run_workflow_via_host(
             codex_home,
@@ -587,24 +559,10 @@ pub(crate) async fn run_workflow(
     _codex_home: &Path,
     working_directory: &Path,
     workflow_dir: &Path,
-    runtime: &WorkflowRuntimeInfo,
     workflow_path: &Path,
     input: &str,
     options: WorkflowRuntimeRunOptions<'_>,
 ) -> Result<WorkflowRuntimeOutput> {
-    if runtime.kind == WorkflowRuntimeKind::Rune {
-        let output = crate::rune_runtime::run_workflow(
-            working_directory,
-            workflow_dir,
-            workflow_path,
-            input,
-            options.event_handler,
-        )
-        .await?;
-        validate_workflow_runtime_output(_codex_home, options.workflows, workflow_dir, &output)?;
-        return Ok(output);
-    }
-
     let output = run_workflow_legacy(
         working_directory,
         workflow_dir,
@@ -635,7 +593,7 @@ async fn run_workflow_legacy(
     .await
 }
 
-pub(crate) fn validate_workflow_runtime_output(
+fn validate_workflow_runtime_output(
     codex_home: &Path,
     workflows: &[crate::registry::WorkflowSummary],
     workflow_dir: &Path,
@@ -898,7 +856,6 @@ export default workflow;
         let suggestions = complete_workflow(
             &workflow_dir,
             &workflow_dir,
-            &crate::spec::WorkflowRuntimeInfo::legacy_typescript(),
             &workflow_path,
             &WorkflowCommandInput {
                 argv: vec!["--workflow-id".to_string()],
@@ -946,7 +903,6 @@ export default workflow;
         let suggestions = complete_workflow(
             &workflow_dir,
             &workflow_dir,
-            &crate::spec::WorkflowRuntimeInfo::legacy_typescript(),
             &workflow_path,
             &WorkflowCommandInput {
                 argv: Vec::new(),
@@ -985,7 +941,6 @@ export default workflow;
         let suggestions = complete_workflow(
             &workflow_dir,
             &workspace_cwd,
-            &crate::spec::WorkflowRuntimeInfo::legacy_typescript(),
             &workflow_path,
             &WorkflowCommandInput {
                 argv: Vec::new(),

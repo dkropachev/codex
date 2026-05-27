@@ -7296,7 +7296,6 @@ mod tests {
             .fold(root.clone(), |path, component| path.join(component));
         codex_workflows::WorkflowSummary {
             id: id.to_string(),
-            runtime: codex_workflows::WorkflowRuntimeInfo::legacy_typescript(),
             command: None,
             title: Some(title.to_string()),
             user_description: Some("Prepare a focused workflow report".to_string()),

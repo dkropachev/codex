@@ -314,42 +314,6 @@ fn write_layout_fixable_workflow_fixture(workflow_dir: &Path) {
     .unwrap();
 }
 
-fn write_rune_layout_fixable_workflow_fixture(workflow_dir: &Path) {
-    write_workflow_spec(
-        &workflow_dir.join("workflow.yaml"),
-        &crate::spec::WorkflowSpec {
-            id: "broken/rune".to_string(),
-            runtime: Some(crate::spec::WorkflowRuntimeInfo {
-                kind: crate::spec::WorkflowRuntimeKind::Rune,
-                entrypoint: crate::spec::RUNE_WORKFLOW_ENTRYPOINT.to_string(),
-            }),
-            api: json!({
-                "inputSchema": {
-                    "type": "object",
-                    "additionalProperties": true
-                },
-                "outputSchema": {
-                    "type": "object",
-                    "additionalProperties": true
-                },
-                "formatSchemas": {
-                    "tui.markdown.v1": {
-                        "type": "object",
-                        "properties": {
-                            "markdown": { "type": "string" }
-                        },
-                        "required": ["markdown"],
-                        "additionalProperties": false
-                    }
-                }
-            }),
-            validation: json!({}),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-}
-
 fn write_tracked_runtime_state_workflow_fixture(workflow_dir: &Path) {
     fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
     fs::create_dir_all(workflow_dir.join("state")).unwrap();
@@ -816,85 +780,6 @@ fn repair_workflow_command_reports_created_layout_directories() {
     assert!(workflow_dir.join("src/tests").is_dir());
     assert!(workflow_dir.join("state").is_dir());
     assert!(workflow_dir.join("state/.gitkeep").is_file());
-}
-
-#[test]
-fn repair_workflow_command_scaffolds_rune_layout_without_typescript_files() {
-    let home = TempDir::new().unwrap();
-    let cwd = TempDir::new().unwrap();
-    let workflow_dir = home.path().join("workflows/broken/rune");
-    fs::create_dir_all(&workflow_dir).unwrap();
-    write_rune_layout_fixable_workflow_fixture(&workflow_dir);
-
-    let config = codex_config::types::WorkflowsConfigToml {
-        commit_policy: Some("manual".to_string()),
-        ..Default::default()
-    };
-    let ctx = WorkflowCommandContext {
-        codex_home: home.path(),
-        cwd: cwd.path(),
-        config: &config,
-        codex_self_exe: None,
-        stage_session_id: None,
-        progress: None,
-    };
-
-    let output = repair_workflow_command(ctx, "broken/rune").unwrap();
-
-    assert_eq!(output.data["repair"]["stopReason"], "valid");
-    assert_eq!(output.data["validation"]["findings"], serde_json::json!([]));
-    assert!(workflow_dir.join("src/workflow.rn").is_file());
-    assert!(
-        workflow_dir
-            .join("src/tests/workflow.positive.test.rn")
-            .is_file()
-    );
-    assert!(
-        fs::read_to_string(workflow_dir.join("src/tests/workflow.positive.test.rn"))
-            .unwrap()
-            .contains("pub fn covers_positive_progress_final_result")
-    );
-    assert!(
-        workflow_dir
-            .join("src/tests/workflow.load.test.rn")
-            .is_file()
-    );
-    assert!(
-        workflow_dir
-            .join("src/tests/workflow.autocomplete.test.rn")
-            .is_file()
-    );
-    assert!(
-        workflow_dir
-            .join("src/tests/workflow.negative.test.rn")
-            .is_file()
-    );
-    assert!(!workflow_dir.join("src/workflow.ts").exists());
-    assert!(!workflow_dir.join("package.json").exists());
-    assert!(!workflow_dir.join("tsconfig.json").exists());
-
-    let spec = crate::spec::read_workflow_spec(&workflow_dir.join("workflow.yaml")).unwrap();
-    assert_eq!(
-        spec.runtime.unwrap().kind,
-        crate::spec::WorkflowRuntimeKind::Rune
-    );
-    assert_eq!(
-        spec.validation["commands"],
-        serde_json::json!([crate::validation_runner::RUNE_BUILTIN_TEST_COMMAND])
-    );
-    assert_eq!(
-        spec.validation["contractSmoke"],
-        serde_json::json!({
-            "input": {}
-        })
-    );
-
-    let readme = fs::read_to_string(workflow_dir.join("README.md")).unwrap();
-    assert!(readme.contains("embedded Rune"));
-    assert!(readme.contains("src/workflow.rn"));
-    let design = fs::read_to_string(workflow_dir.join("DESIGN.md")).unwrap();
-    assert!(design.contains("embedded Rune workflow"));
-    assert!(design.contains("workflow.positive.test.rn"));
 }
 
 #[test]

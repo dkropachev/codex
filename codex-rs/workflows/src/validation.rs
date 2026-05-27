@@ -11,13 +11,10 @@ use serde_json::Value as JsonValue;
 use crate::registry::WorkflowValidation;
 use crate::registry::WorkflowValidationStatus;
 use crate::spec::WORKFLOW_YAML;
-use crate::spec::WorkflowRuntimeInfo;
-use crate::spec::WorkflowRuntimeKind;
-use crate::spec::normalize_runtime_entrypoint;
 use crate::spec::read_workflow_spec;
 use crate::validation_finding::WorkflowValidationFinding;
 
-const COMMON_REQUIRED_FILES: &[&str] = &["README.md", "DESIGN.md"];
+const REQUIRED_FILES: &[&str] = &["README.md", "DESIGN.md", "package.json", "src/workflow.ts"];
 const REQUIRED_DIRS: &[&str] = &["src", "src/tests", "state"];
 const REQUIRED_README_HEADINGS: &[&str] = &[
     "Usage",
@@ -169,30 +166,12 @@ pub(crate) fn validate_workflow_dir(
         }
     };
 
-    let runtime = spec
-        .as_ref()
-        .map(crate::spec::WorkflowSpec::resolved_runtime)
-        .unwrap_or_else(WorkflowRuntimeInfo::legacy_typescript);
-
-    for relative in COMMON_REQUIRED_FILES {
+    for relative in REQUIRED_FILES {
         if !workflow_dir.join(relative).is_file() {
             findings.push(WorkflowValidationFinding::MissingFile {
                 path: PathBuf::from(relative),
             });
         }
-    }
-    match required_runtime_files(&runtime) {
-        Ok(required_files) => {
-            for relative in required_files {
-                if !workflow_dir.join(&relative).is_file() {
-                    findings.push(WorkflowValidationFinding::MissingFile { path: relative });
-                }
-            }
-        }
-        Err(_) => findings.push(WorkflowValidationFinding::WorkflowPathEscapesRoot {
-            workflow_path: workflow_dir.join(&runtime.entrypoint),
-            root_path: workflow_dir.to_path_buf(),
-        }),
     }
     for relative in REQUIRED_DIRS {
         if !workflow_dir.join(relative).is_dir() {
@@ -223,9 +202,7 @@ pub(crate) fn validate_workflow_dir(
         "DESIGN.md",
         REQUIRED_DESIGN_HEADINGS,
     ));
-    if runtime.kind == WorkflowRuntimeKind::Typescript {
-        findings.extend(validate_local_package_imports(workflow_dir));
-    }
+    findings.extend(validate_local_package_imports(workflow_dir));
     if let Some(spec) = spec.as_ref() {
         findings.extend(validate_validation_commands(spec));
         findings.extend(validate_coverage_metadata(workflow_dir, spec));
@@ -747,18 +724,8 @@ fn should_skip_layout_dir(path: &Path) -> bool {
 fn is_code_file(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|extension| extension.to_str()),
-        Some("ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" | "rn")
+        Some("ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts")
     )
-}
-
-fn required_runtime_files(runtime: &WorkflowRuntimeInfo) -> anyhow::Result<Vec<PathBuf>> {
-    let mut files = vec![normalize_runtime_entrypoint(&runtime.entrypoint)?];
-    if runtime.kind == WorkflowRuntimeKind::Typescript {
-        files.push(PathBuf::from("package.json"));
-    }
-    files.sort();
-    files.dedup();
-    Ok(files)
 }
 
 fn is_test_file(path: &Path) -> bool {
@@ -996,101 +963,6 @@ test("workflow rejects invalid input", async () => {
 
         assert_eq!(validation.status, WorkflowValidationStatus::Valid);
         assert!(validation.findings.is_empty());
-    }
-
-    #[test]
-    fn validate_workflow_dir_accepts_rune_workflow_without_package_manifest() {
-        let root = TempDir::new().unwrap();
-        let workflow_dir = root.path().join("example");
-        fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
-        fs::create_dir_all(workflow_dir.join("state")).unwrap();
-        fs::create_dir_all(workflow_dir.join(".git")).unwrap();
-        fs::write(
-            workflow_dir.join(".gitignore"),
-            "artifacts/\nstate/*\n!state/.gitkeep\n",
-        )
-        .unwrap();
-        fs::write(
-            workflow_dir.join("README.md"),
-            "# Example\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
-        )
-        .unwrap();
-        fs::write(
-            workflow_dir.join("DESIGN.md"),
-            "# Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
-        )
-        .unwrap();
-        fs::write(
-            workflow_dir.join("src/workflow.rn"),
-            "pub async fn run(_ctx, input) { input }\n",
-        )
-        .unwrap();
-        for (name, marker) in [
-            ("workflow.positive.test.rn", "positive progress finalResult"),
-            ("workflow.load.test.rn", "load"),
-            ("workflow.autocomplete.test.rn", "autocomplete"),
-            ("workflow.negative.test.rn", "negative failureUx"),
-        ] {
-            fs::write(
-                workflow_dir.join("src/tests").join(name),
-                format!("// workflow-covers: {marker}\n"),
-            )
-            .unwrap();
-        }
-        fs::write(workflow_dir.join("state/.gitkeep"), "").unwrap();
-        write_workflow_spec(
-            &workflow_dir.join(crate::spec::WORKFLOW_YAML),
-            &WorkflowSpec {
-                id: "example".to_string(),
-                runtime: Some(crate::spec::WorkflowRuntimeInfo::new(
-                    crate::spec::WorkflowRuntimeKind::Rune,
-                    /*entrypoint*/ None,
-                )),
-                validation: json!({
-                    "commands": ["true"],
-                    "coverage": {
-                        "positive": true,
-                        "negative": true,
-                        "progress": true,
-                        "finalResult": true,
-                        "failureUx": true,
-                        "load": true,
-                        "autocomplete": true,
-                        "recovery": false,
-                    }
-                }),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
-
-        assert_eq!(validation.status, WorkflowValidationStatus::Valid);
-        assert!(validation.findings.is_empty());
-    }
-
-    #[test]
-    fn validate_workflow_dir_rejects_runtime_entrypoint_outside_workflow() {
-        let root = TempDir::new().unwrap();
-        let workflow_dir = create_valid_workflow_dir(&root, "example");
-        let mut spec =
-            crate::spec::read_workflow_spec(&workflow_dir.join(crate::spec::WORKFLOW_YAML))
-                .unwrap();
-        spec.runtime = Some(crate::spec::WorkflowRuntimeInfo::new(
-            crate::spec::WorkflowRuntimeKind::Rune,
-            Some("../outside.rn".to_string()),
-        ));
-        write_workflow_spec(&workflow_dir.join(crate::spec::WORKFLOW_YAML), &spec).unwrap();
-
-        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
-
-        assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
-        assert!(
-            finding_messages(&validation.findings)
-                .iter()
-                .any(|message| message.contains("escapes root"))
-        );
     }
 
     #[test]

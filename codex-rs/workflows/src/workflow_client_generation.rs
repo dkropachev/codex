@@ -12,7 +12,6 @@ use serde_json::Value as JsonValue;
 
 use crate::api_contract::WorkflowSourceContract;
 use crate::registry::WorkflowSummary;
-use crate::spec::WorkflowRuntimeKind;
 
 const GENERATED_WORKFLOW_MODULE_PATH: &str = "src/generated/workflows.ts";
 
@@ -102,7 +101,6 @@ fn render_generated_workflow_module(
             .contract
             .format_schemas
             .contains_key("tui.markdown.v1")
-            && callable.workflow.runtime.kind == WorkflowRuntimeKind::Typescript
         {
             let callable_name = callable
                 .contract
@@ -699,7 +697,6 @@ mod tests {
     fn workflow_summary(workflow_dir: &std::path::Path, id: &str) -> WorkflowSummary {
         WorkflowSummary {
             id: id.to_string(),
-            runtime: crate::spec::WorkflowRuntimeInfo::legacy_typescript(),
             command: Some(id.split('/').next_back().unwrap_or(id).to_string()),
             title: Some(id.to_string()),
             user_description: Some(id.to_string()),

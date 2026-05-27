@@ -54,13 +54,12 @@ impl App {
         let input_for_event = input.clone();
         let task = tokio::spawn(async move {
             tokio::time::sleep(WORKFLOW_COMPLETION_DEBOUNCE).await;
-            let entrypoint = workflow.path.join(&workflow.runtime.entrypoint);
+            let entrypoint = workflow.path.join("src/workflow.ts");
             let result = match tokio::time::timeout(
                 WORKFLOW_COMPLETION_TIMEOUT,
                 codex_workflows::complete_workflow(
                     &workflow.path,
                     working_directory.as_path(),
-                    &workflow.runtime,
                     &entrypoint,
                     &input,
                 ),
@@ -143,7 +142,14 @@ impl App {
             .clone()
             .unwrap_or_else(|| "codex".into());
         let mut child_command = Command::new(executable);
-        child_command.args(&command);
+        let child_args = if command.first().is_some_and(|value| value == "workflow") {
+            command.clone()
+        } else {
+            std::iter::once("workflow".to_string())
+                .chain(command.iter().cloned())
+                .collect()
+        };
+        child_command.args(&child_args);
         child_command
             .current_dir(cwd)
             .env(WORKFLOW_RUN_ID_ENV, &run_id)

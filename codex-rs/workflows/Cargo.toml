@@ -16,22 +16,16 @@ anyhow = { workspace = true }
 codex-artifactory = { workspace = true }
 codex-config = { workspace = true }
 codex-protocol = { workspace = true }
-codex-utils-rustls-provider = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
-futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true }
 shlex = { workspace = true }
 regex = { workspace = true }
-rune = { workspace = true }
-rune-modules = { workspace = true, features = ["full"] }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
-tokio-tungstenite = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread"] }
 toml_edit = { workspace = true }
-url = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

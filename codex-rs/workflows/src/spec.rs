@@ -1,65 +1,15 @@
 use std::fs;
-use std::path::Component;
 use std::path::Path;
-use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::anyhow;
 use codex_config::types::WorkflowsConfigToml;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 
-use crate::validation_runner::RUNE_BUILTIN_TEST_COMMAND;
-
 pub const WORKFLOW_YAML: &str = "workflow.yaml";
-pub const TYPESCRIPT_WORKFLOW_ENTRYPOINT: &str = "src/workflow.ts";
-pub const RUNE_WORKFLOW_ENTRYPOINT: &str = "src/workflow.rn";
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum WorkflowRuntimeKind {
-    #[default]
-    Rune,
-    Typescript,
-}
-
-impl WorkflowRuntimeKind {
-    pub const fn default_entrypoint(self) -> &'static str {
-        match self {
-            WorkflowRuntimeKind::Rune => RUNE_WORKFLOW_ENTRYPOINT,
-            WorkflowRuntimeKind::Typescript => TYPESCRIPT_WORKFLOW_ENTRYPOINT,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkflowRuntimeInfo {
-    pub kind: WorkflowRuntimeKind,
-    pub entrypoint: String,
-}
-
-impl WorkflowRuntimeInfo {
-    pub fn new(kind: WorkflowRuntimeKind, entrypoint: Option<String>) -> Self {
-        let entrypoint = entrypoint
-            .filter(|entrypoint| !entrypoint.trim().is_empty())
-            .unwrap_or_else(|| kind.default_entrypoint().to_string());
-        Self { kind, entrypoint }
-    }
-
-    pub fn legacy_typescript() -> Self {
-        Self::new(WorkflowRuntimeKind::Typescript, /*entrypoint*/ None)
-    }
-}
-
-impl Default for WorkflowRuntimeInfo {
-    fn default() -> Self {
-        Self::new(WorkflowRuntimeKind::Rune, /*entrypoint*/ None)
-    }
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -96,8 +46,6 @@ pub struct WorkflowSpec {
     #[serde(default)]
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runtime: Option<WorkflowRuntimeInfo>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -125,14 +73,6 @@ pub struct WorkflowSpec {
     pub git: JsonValue,
 }
 
-impl WorkflowSpec {
-    pub fn resolved_runtime(&self) -> WorkflowRuntimeInfo {
-        self.runtime
-            .clone()
-            .unwrap_or_else(WorkflowRuntimeInfo::legacy_typescript)
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowRepairSpec {
@@ -153,33 +93,6 @@ pub fn read_workflow_spec(path: &Path) -> Result<WorkflowSpec> {
         .with_context(|| format!("failed to parse workflow spec {}", path.display()))
 }
 
-pub(crate) fn normalize_runtime_entrypoint(entrypoint: &str) -> Result<PathBuf> {
-    let entrypoint = entrypoint.trim();
-    if entrypoint.is_empty() {
-        return Err(anyhow!("runtime entrypoint must not be empty"));
-    }
-
-    let mut normalized = PathBuf::new();
-    for component in Path::new(entrypoint).components() {
-        match component {
-            Component::Normal(component) => normalized.push(component),
-            Component::CurDir
-            | Component::ParentDir
-            | Component::RootDir
-            | Component::Prefix(_) => {
-                return Err(anyhow!(
-                    "runtime entrypoint `{entrypoint}` must be a relative path inside the workflow directory"
-                ));
-            }
-        }
-    }
-
-    if normalized.as_os_str().is_empty() {
-        return Err(anyhow!("runtime entrypoint must not be empty"));
-    }
-    Ok(normalized)
-}
-
 pub fn write_workflow_spec(path: &Path, spec: &WorkflowSpec) -> Result<()> {
     let contents = serde_yaml::to_string(spec)
         .with_context(|| format!("failed to serialize workflow spec {}", path.display()))?;
@@ -191,7 +104,6 @@ pub fn scaffold_workflow_spec(
     id: String,
     title: String,
     user_description: String,
-    runtime: WorkflowRuntimeKind,
     config: &WorkflowsConfigToml,
 ) -> WorkflowSpec {
     let command = id
@@ -204,9 +116,8 @@ pub fn scaffold_workflow_spec(
         .repair_mode
         .clone()
         .unwrap_or_else(|| "full".to_string());
-    let mut spec = WorkflowSpec {
+    WorkflowSpec {
         id,
-        runtime: Some(WorkflowRuntimeInfo::new(runtime, /*entrypoint*/ None)),
         title: Some(title),
         user_description: Some(user_description),
         search_terms: Vec::new(),
@@ -216,10 +127,16 @@ pub fn scaffold_workflow_spec(
                 "Run this workflow with `/{command_label}` or `codex {command_label}`."
             )
         }),
-        dependencies: JsonValue::Null,
+        dependencies: json!({
+            "runtime": ["@openai/codex-sdk"],
+            "development": ["typescript", "tsx", "@types/node"]
+        }),
         validation: json!({
             "profile": config.validation_profile.clone().unwrap_or_else(|| "default".to_string()),
-            "commands": runtime_validation_commands(runtime),
+            "commands": ["npm run build", "npm test"],
+            "contractSmoke": {
+                "input": { "input": "example" }
+            },
             "coverage": {
                 "positive": true,
                 "negative": true,
@@ -240,82 +157,6 @@ pub fn scaffold_workflow_spec(
         git: json!({
             "commitPolicy": config.commit_policy.clone().unwrap_or_else(|| "auto".to_string())
         }),
-    };
-
-    match runtime {
-        WorkflowRuntimeKind::Rune => {
-            spec.api = json!({
-                "callableName": workflow_callable_name_from_id(&spec.id),
-                "inputSchema": {
-                    "type": "object",
-                    "additionalProperties": true
-                },
-                "outputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "ok": { "type": "boolean" },
-                        "input": { "type": "object", "additionalProperties": true }
-                    },
-                    "required": ["ok", "input"],
-                    "additionalProperties": false
-                },
-                "formatSchemas": {
-                    "tui.markdown.v1": {
-                        "type": "object",
-                        "properties": {
-                            "markdown": { "type": "string" }
-                        },
-                        "required": ["markdown"],
-                        "additionalProperties": false
-                    }
-                }
-            });
-            spec.validation["contractSmoke"] = json!({
-                "input": {}
-            });
-        }
-        WorkflowRuntimeKind::Typescript => {
-            spec.dependencies = json!({
-                "runtime": ["@openai/codex-sdk"],
-                "development": ["typescript", "tsx", "@types/node"]
-            });
-            spec.validation["contractSmoke"] = json!({
-                "input": { "input": "example" }
-            });
-        }
-    }
-
-    spec
-}
-
-fn runtime_validation_commands(runtime: WorkflowRuntimeKind) -> Vec<&'static str> {
-    match runtime {
-        WorkflowRuntimeKind::Rune => vec![RUNE_BUILTIN_TEST_COMMAND],
-        WorkflowRuntimeKind::Typescript => vec!["npm run build", "npm test"],
-    }
-}
-
-pub fn workflow_callable_name_from_id(id: &str) -> String {
-    let mut output = String::new();
-    let mut capitalize_next = false;
-    for ch in id.chars() {
-        if ch.is_ascii_alphanumeric() {
-            if output.is_empty() {
-                output.extend(ch.to_lowercase());
-            } else if capitalize_next {
-                output.extend(ch.to_uppercase());
-                capitalize_next = false;
-            } else {
-                output.push(ch);
-            }
-        } else if !output.is_empty() {
-            capitalize_next = true;
-        }
-    }
-    if output.is_empty() {
-        "workflow".to_string()
-    } else {
-        output
     }
 }
 

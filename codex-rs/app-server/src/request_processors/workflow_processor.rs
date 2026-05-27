@@ -35,8 +35,6 @@ use codex_app_server_protocol::WorkflowRootInfo;
 use codex_app_server_protocol::WorkflowRootKind;
 use codex_app_server_protocol::WorkflowRunParams;
 use codex_app_server_protocol::WorkflowRunResponse;
-use codex_app_server_protocol::WorkflowRuntimeInfo;
-use codex_app_server_protocol::WorkflowRuntimeKind;
 use codex_app_server_protocol::WorkflowStageSessionActionParams;
 use codex_app_server_protocol::WorkflowSummary;
 use codex_app_server_protocol::WorkflowValidateParams;
@@ -154,10 +152,6 @@ impl WorkflowRequestProcessor {
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.execute(
             WorkflowCommand::Develop {
-                runtime: params
-                    .runtime
-                    .map(runtime_kind_from_api)
-                    .unwrap_or(codex_workflows::WorkflowRuntimeKind::Rune),
                 description: params.description,
             },
             params.stage_session_id,
@@ -429,7 +423,6 @@ impl WorkflowRequestProcessor {
 fn summary_to_api(summary: codex_workflows::WorkflowSummary) -> WorkflowSummary {
     WorkflowSummary {
         id: summary.id,
-        runtime: runtime_to_api(summary.runtime),
         command: summary.command,
         title: summary.title,
         user_description: summary.user_description,
@@ -456,7 +449,6 @@ fn summary_to_api(summary: codex_workflows::WorkflowSummary) -> WorkflowSummary 
 fn workflow_to_core(summary: &WorkflowSummary) -> codex_workflows::WorkflowSummary {
     codex_workflows::WorkflowSummary {
         id: summary.id.clone(),
-        runtime: runtime_from_api(summary.runtime.clone()),
         command: summary.command.clone(),
         title: summary.title.clone(),
         user_description: summary.user_description.clone(),
@@ -485,34 +477,6 @@ fn workflow_to_core(summary: &WorkflowSummary) -> codex_workflows::WorkflowSumma
                 .collect(),
         ),
         repair_mode: summary.repair_mode.clone(),
-    }
-}
-
-fn runtime_to_api(runtime: codex_workflows::WorkflowRuntimeInfo) -> WorkflowRuntimeInfo {
-    WorkflowRuntimeInfo {
-        kind: runtime_kind_to_api(runtime.kind),
-        entrypoint: runtime.entrypoint,
-    }
-}
-
-fn runtime_from_api(runtime: WorkflowRuntimeInfo) -> codex_workflows::WorkflowRuntimeInfo {
-    codex_workflows::WorkflowRuntimeInfo {
-        kind: runtime_kind_from_api(runtime.kind),
-        entrypoint: runtime.entrypoint,
-    }
-}
-
-fn runtime_kind_to_api(kind: codex_workflows::WorkflowRuntimeKind) -> WorkflowRuntimeKind {
-    match kind {
-        codex_workflows::WorkflowRuntimeKind::Rune => WorkflowRuntimeKind::Rune,
-        codex_workflows::WorkflowRuntimeKind::Typescript => WorkflowRuntimeKind::Typescript,
-    }
-}
-
-fn runtime_kind_from_api(kind: WorkflowRuntimeKind) -> codex_workflows::WorkflowRuntimeKind {
-    match kind {
-        WorkflowRuntimeKind::Rune => codex_workflows::WorkflowRuntimeKind::Rune,
-        WorkflowRuntimeKind::Typescript => codex_workflows::WorkflowRuntimeKind::Typescript,
     }
 }
 
@@ -642,10 +606,6 @@ pub(crate) fn validation_finding_to_api(
             stdout,
             stderr,
         },
-        codex_workflows::WorkflowValidationFinding::WorkflowRuntimeCompileFailed {
-            path,
-            error,
-        } => WorkflowValidationFindingInfo::WorkflowRuntimeCompileFailed { path, error },
         codex_workflows::WorkflowValidationFinding::WorkflowApiContractExtractionFailed {
             path,
             error,
@@ -770,9 +730,6 @@ fn validation_finding_from_api(
             stdout,
             stderr,
         },
-        WorkflowValidationFindingInfo::WorkflowRuntimeCompileFailed { path, error } => {
-            codex_workflows::WorkflowValidationFinding::WorkflowRuntimeCompileFailed { path, error }
-        }
         WorkflowValidationFindingInfo::WorkflowApiContractExtractionFailed { path, error } => {
             codex_workflows::WorkflowValidationFinding::WorkflowApiContractExtractionFailed {
                 path,

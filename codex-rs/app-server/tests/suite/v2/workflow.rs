@@ -10,7 +10,6 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::WorkflowDevelopResponse;
 use codex_app_server_protocol::WorkflowDiscardResponse;
 use codex_app_server_protocol::WorkflowEditResponse;
 use codex_app_server_protocol::WorkflowListResponse;
@@ -19,9 +18,6 @@ use codex_app_server_protocol::WorkflowReadResponse;
 use codex_app_server_protocol::WorkflowRepairActionKind;
 use codex_app_server_protocol::WorkflowRepairResponse;
 use codex_app_server_protocol::WorkflowRepairStopReason;
-use codex_app_server_protocol::WorkflowRunResponse;
-use codex_app_server_protocol::WorkflowRuntimeKind;
-use codex_app_server_protocol::WorkflowValidateResponse;
 use codex_app_server_protocol::WorkflowValidationFindingInfo;
 use codex_app_server_protocol::WorkflowValidationStatus;
 use pretty_assertions::assert_eq;
@@ -100,61 +96,6 @@ fn write_valid_workflow(
     fs::write(
         workflow_dir.join("src/tests/workflow.negative.test.ts"),
         "// workflow-covers: negative failureUx\nexport {};\n",
-    )?;
-    fs::write(workflow_dir.join("state/.gitkeep"), "")?;
-    Ok(())
-}
-
-fn write_valid_rune_workflow(
-    workflow_dir: &Path,
-    id: &str,
-    title: &str,
-    description: &str,
-) -> Result<()> {
-    fs::create_dir_all(workflow_dir.join("src/tests"))?;
-    fs::create_dir_all(workflow_dir.join("state"))?;
-    fs::create_dir_all(workflow_dir.join(".git"))?;
-    fs::write(
-        workflow_dir.join(".gitignore"),
-        "artifacts/\nstate/*\n!state/.gitkeep\n",
-    )?;
-    fs::write(
-        workflow_dir.join("workflow.yaml"),
-        format!(
-            "id: {id}\nruntime:\n  kind: rune\n  entrypoint: src/workflow.rn\ntitle: {title}\nuserDescription: {description}\napi:\n  callableName: runeReport\n  inputSchema:\n    type: object\n    additionalProperties: true\n  outputSchema:\n    type: object\n    properties:\n      ok:\n        type: boolean\n      input:\n        type: object\n        additionalProperties: true\n    required:\n      - ok\n      - input\n    additionalProperties: false\nvalidation:\n  commands:\n    - \"true\"\n  contractSmoke:\n    input: {{}}\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
-        ),
-    )?;
-    fs::write(
-        workflow_dir.join("README.md"),
-        format!(
-            "# {title}\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
-        ),
-    )?;
-    fs::write(
-        workflow_dir.join("DESIGN.md"),
-        format!(
-            "# {title} Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
-        ),
-    )?;
-    fs::write(
-        workflow_dir.join("src/workflow.rn"),
-        "pub async fn run(_ctx, input) { #{ ok: true, input } }\n\npub async fn complete(_ctx, _input) { [] }\n",
-    )?;
-    fs::write(
-        workflow_dir.join("src/tests/workflow.positive.test.rn"),
-        "// workflow-covers: positive progress finalResult\npub fn covers_positive_progress_final_result() {\n    true\n}\n",
-    )?;
-    fs::write(
-        workflow_dir.join("src/tests/workflow.load.test.rn"),
-        "// workflow-covers: load\npub fn covers_load() {\n    true\n}\n",
-    )?;
-    fs::write(
-        workflow_dir.join("src/tests/workflow.autocomplete.test.rn"),
-        "// workflow-covers: autocomplete\npub fn covers_autocomplete() {\n    true\n}\n",
-    )?;
-    fs::write(
-        workflow_dir.join("src/tests/workflow.negative.test.rn"),
-        "// workflow-covers: negative failureUx\npub fn covers_negative_failure_ux() {\n    true\n}\n",
     )?;
     fs::write(workflow_dir.join("state/.gitkeep"), "")?;
     Ok(())
@@ -273,173 +214,6 @@ fn write_schema_repair_fixture(
             ..Default::default()
         },
     )?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn workflow_develop_defaults_to_rune_e2e() -> Result<()> {
-    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
-    let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::new(),
-        /*auto_compact_limit*/ 1024,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_raw_request(
-            "workflow/develop",
-            Some(json!({ "description": "Rune Report" })),
-        )
-        .await?;
-    let response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: WorkflowDevelopResponse = to_response(response)?;
-    assert_eq!(response.data["id"], "rune-report");
-
-    let request_id = mcp
-        .send_raw_request("workflow/read", Some(json!({ "id": "rune-report" })))
-        .await?;
-    let response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let read: WorkflowReadResponse = to_response(response)?;
-
-    assert_eq!(read.workflow.runtime.kind, WorkflowRuntimeKind::Rune);
-    assert_eq!(read.workflow.runtime.entrypoint, "src/workflow.rn");
-    assert!(
-        codex_home
-            .path()
-            .join("workflows/rune-report/src/workflow.rn")
-            .is_file()
-    );
-    assert!(
-        !codex_home
-            .path()
-            .join("workflows/rune-report/package.json")
-            .exists()
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn workflow_run_executes_rune_workflow_e2e() -> Result<()> {
-    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
-    let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::new(),
-        /*auto_compact_limit*/ 1024,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
-    let workflow_dir = codex_home.path().join("workflows/rune/report");
-    write_valid_rune_workflow(
-        &workflow_dir,
-        "rune/report",
-        "Rune Report",
-        "Run a Rune workflow",
-    )?;
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_raw_request(
-            "workflow/run",
-            Some(json!({
-                "id": "rune/report",
-                "input": { "value": "ok" }
-            })),
-        )
-        .await?;
-    let response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: WorkflowRunResponse = to_response(response)?;
-    let stdout = response.data["stdout"].as_str().expect("stdout string");
-    let output: serde_json::Value = serde_json::from_str(stdout)?;
-
-    assert_eq!(
-        output,
-        json!({
-            "ok": true,
-            "input": { "value": "ok" }
-        })
-    );
-    assert_eq!(response.data["stderr"], "");
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn workflow_validate_rejects_invalid_rune_source_e2e() -> Result<()> {
-    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
-    let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::new(),
-        /*auto_compact_limit*/ 1024,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
-    let workflow_dir = codex_home.path().join("workflows/rune/broken");
-    write_valid_rune_workflow(
-        &workflow_dir,
-        "rune/broken",
-        "Broken Rune",
-        "Validate a broken Rune workflow",
-    )?;
-    fs::write(
-        workflow_dir.join("src/workflow.rn"),
-        "pub async fn run(_ctx, input) { let = input }\n",
-    )?;
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_raw_request("workflow/validate", Some(json!({ "id": "rune/broken" })))
-        .await?;
-    let response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: WorkflowValidateResponse = to_response(response)?;
-    let findings = response.data["validation"]["findings"]
-        .as_array()
-        .expect("validation findings");
-
-    assert_eq!(response.data["validation"]["status"], "invalid");
-    assert!(
-        response
-            .message
-            .contains("failed to compile workflow runtime source")
-    );
-    assert!(findings.iter().any(|finding| {
-        finding["type"] == "workflowRuntimeCompileFailed" && finding["path"] == "src/workflow.rn"
-    }));
-
     Ok(())
 }
 

@@ -2,16 +2,8 @@ use anyhow::Result;
 use anyhow::anyhow;
 use serde_json::Value as JsonValue;
 
-const VALID_JSON_SCHEMA_TYPES: &[&str] = &[
-    "string", "number", "integer", "boolean", "null", "array", "object",
-];
-
 pub(crate) fn validate_json_against_schema(schema: &JsonValue, value: &JsonValue) -> Result<()> {
     validate_json_against_schema_at(schema, value, "$")
-}
-
-pub(crate) fn validate_json_schema_document(schema: &JsonValue, label: &str) -> Result<()> {
-    validate_json_schema_at(schema, label)
 }
 
 fn validate_json_against_schema_at(
@@ -19,21 +11,24 @@ fn validate_json_against_schema_at(
     value: &JsonValue,
     path: &str,
 ) -> Result<()> {
-    validate_combinators(schema, value, path)?;
+    if let Some(any_of) = schema.get("anyOf").and_then(JsonValue::as_array) {
+        if any_of
+            .iter()
+            .any(|candidate| validate_json_against_schema_at(candidate, value, path).is_ok())
+        {
+            return Ok(());
+        }
+        return Err(anyhow!(
+            "workflow contract violation at {path}: value does not match any allowed schema"
+        ));
+    }
 
     if let Some(enum_values) = schema.get("enum").and_then(JsonValue::as_array)
+        && !value.is_null()
         && !enum_values.iter().any(|candidate| candidate == value)
     {
         return Err(anyhow!(
             "workflow contract violation at {path}: value must be one of {enum_values:?}"
-        ));
-    }
-
-    if let Some(expected) = schema.get("const")
-        && value != expected
-    {
-        return Err(anyhow!(
-            "workflow contract violation at {path}: value must equal {expected:?}"
         ));
     }
 
@@ -62,38 +57,6 @@ fn validate_json_against_schema_at(
             "workflow contract violation at {path}: invalid schema type"
         )),
     }
-}
-
-fn validate_combinators(schema: &JsonValue, value: &JsonValue, path: &str) -> Result<()> {
-    if let Some(any_of) = schema.get("anyOf").and_then(JsonValue::as_array)
-        && !any_of
-            .iter()
-            .any(|candidate| validate_json_against_schema_at(candidate, value, path).is_ok())
-    {
-        return Err(anyhow!(
-            "workflow contract violation at {path}: value does not match any allowed schema"
-        ));
-    }
-
-    if let Some(one_of) = schema.get("oneOf").and_then(JsonValue::as_array) {
-        let matches = one_of
-            .iter()
-            .filter(|candidate| validate_json_against_schema_at(candidate, value, path).is_ok())
-            .count();
-        if matches != 1 {
-            return Err(anyhow!(
-                "workflow contract violation at {path}: value must match exactly one allowed schema"
-            ));
-        }
-    }
-
-    if let Some(all_of) = schema.get("allOf").and_then(JsonValue::as_array) {
-        for candidate in all_of {
-            validate_json_against_schema_at(candidate, value, path)?;
-        }
-    }
-
-    Ok(())
 }
 
 fn validate_shape(schema: &JsonValue, value: &JsonValue, path: &str) -> Result<()> {
@@ -227,22 +190,6 @@ fn validate_array(schema: &JsonValue, value: &JsonValue, path: &str) -> Result<(
         }
     }
 
-    let array_len = array.len() as u64;
-    if let Some(min_items) = schema.get("minItems").and_then(JsonValue::as_u64)
-        && array_len < min_items
-    {
-        return Err(anyhow!(
-            "workflow contract violation at {path}: expected at least {min_items} items"
-        ));
-    }
-    if let Some(max_items) = schema.get("maxItems").and_then(JsonValue::as_u64)
-        && array_len > max_items
-    {
-        return Err(anyhow!(
-            "workflow contract violation at {path}: expected at most {max_items} items"
-        ));
-    }
-
     Ok(())
 }
 
@@ -267,134 +214,5 @@ fn join_path(path: &str, segment: &str) -> String {
         format!("{path}.{segment}")
     } else {
         format!("{path}[{segment:?}]")
-    }
-}
-
-fn validate_json_schema_at(schema: &JsonValue, path: &str) -> Result<()> {
-    let Some(object) = schema.as_object() else {
-        return Err(anyhow!("{path} must be a JSON schema object"));
-    };
-
-    if let Some(type_spec) = object.get("type") {
-        validate_schema_type(type_spec, &format!("{path}.type"))?;
-    }
-    if let Some(enum_values) = object.get("enum")
-        && !enum_values.is_array()
-    {
-        return Err(anyhow!("{path}.enum must be an array"));
-    }
-    if let Some(properties) = object.get("properties") {
-        let Some(properties) = properties.as_object() else {
-            return Err(anyhow!("{path}.properties must be an object"));
-        };
-        for (name, property_schema) in properties {
-            validate_json_schema_at(property_schema, &format!("{path}.properties.{name}"))?;
-        }
-    }
-    if let Some(required) = object.get("required") {
-        let Some(required) = required.as_array() else {
-            return Err(anyhow!("{path}.required must be an array"));
-        };
-        for (index, required_name) in required.iter().enumerate() {
-            if !required_name.is_string() {
-                return Err(anyhow!("{path}.required[{index}] must be a string"));
-            }
-        }
-    }
-    if let Some(additional_properties) = object.get("additionalProperties") {
-        match additional_properties {
-            JsonValue::Bool(_) => {}
-            schema => validate_json_schema_at(schema, &format!("{path}.additionalProperties"))?,
-        }
-    }
-    if let Some(items) = object.get("items") {
-        validate_json_schema_at(items, &format!("{path}.items"))?;
-    }
-    if let Some(prefix_items) = object.get("prefixItems") {
-        let Some(prefix_items) = prefix_items.as_array() else {
-            return Err(anyhow!("{path}.prefixItems must be an array"));
-        };
-        for (index, item_schema) in prefix_items.iter().enumerate() {
-            validate_json_schema_at(item_schema, &format!("{path}.prefixItems[{index}]"))?;
-        }
-    }
-    for union_key in ["anyOf", "oneOf", "allOf"] {
-        let Some(entries) = object.get(union_key) else {
-            continue;
-        };
-        let Some(entries) = entries.as_array() else {
-            return Err(anyhow!("{path}.{union_key} must be an array"));
-        };
-        if entries.is_empty() {
-            return Err(anyhow!("{path}.{union_key} must not be empty"));
-        }
-        for (index, entry) in entries.iter().enumerate() {
-            validate_json_schema_at(entry, &format!("{path}.{union_key}[{index}]"))?;
-        }
-    }
-    Ok(())
-}
-
-fn validate_schema_type(type_spec: &JsonValue, path: &str) -> Result<()> {
-    match type_spec {
-        JsonValue::String(type_name) if VALID_JSON_SCHEMA_TYPES.contains(&type_name.as_str()) => {
-            Ok(())
-        }
-        JsonValue::String(type_name) => {
-            Err(anyhow!("{path} contains unsupported type `{type_name}`"))
-        }
-        JsonValue::Array(types) if !types.is_empty() => {
-            for (index, type_name) in types.iter().enumerate() {
-                let Some(type_name) = type_name.as_str() else {
-                    return Err(anyhow!("{path}[{index}] must be a string"));
-                };
-                if !VALID_JSON_SCHEMA_TYPES.contains(&type_name) {
-                    return Err(anyhow!(
-                        "{path}[{index}] contains unsupported type `{type_name}`"
-                    ));
-                }
-            }
-            Ok(())
-        }
-        JsonValue::Array(_) => Err(anyhow!("{path} must not be empty")),
-        _ => Err(anyhow!("{path} must be a string or array of strings")),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use pretty_assertions::assert_eq;
-    use serde_json::json;
-
-    use super::validate_json_against_schema;
-    use super::validate_json_schema_document;
-
-    #[test]
-    fn validate_json_against_schema_supports_one_of_and_const() {
-        let schema = json!({
-            "oneOf": [
-                { "type": "object", "properties": { "kind": { "const": "a" } }, "required": ["kind"] },
-                { "type": "object", "properties": { "kind": { "const": "b" } }, "required": ["kind"] }
-            ]
-        });
-
-        validate_json_against_schema(&schema, &json!({ "kind": "a" }))
-            .expect("oneOf schema should match");
-        let err = validate_json_against_schema(&schema, &json!({ "kind": "c" }))
-            .expect_err("unknown const should fail");
-
-        assert_eq!(
-            err.to_string(),
-            "workflow contract violation at $: value must match exactly one allowed schema"
-        );
-    }
-
-    #[test]
-    fn validate_json_schema_document_rejects_malformed_schema() {
-        let err =
-            validate_json_schema_document(&json!({ "type": ["object", 1] }), "api.outputSchema")
-                .expect_err("schema type arrays must contain only strings");
-
-        assert_eq!(err.to_string(), "api.outputSchema.type[1] must be a string");
     }
 }
