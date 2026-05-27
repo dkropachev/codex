@@ -15,6 +15,7 @@ mod spec;
 mod staging;
 mod validation;
 mod validation_finding;
+mod validation_package;
 mod validation_runner;
 mod workflow_api;
 mod workflow_client_generation;

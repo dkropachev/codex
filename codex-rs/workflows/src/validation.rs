@@ -1,11 +1,10 @@
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::LazyLock;
 
-use regex::Regex;
 use serde_json::Value as JsonValue;
 
 use crate::registry::WorkflowValidation;
@@ -13,8 +12,16 @@ use crate::registry::WorkflowValidationStatus;
 use crate::spec::WORKFLOW_YAML;
 use crate::spec::read_workflow_spec;
 use crate::validation_finding::WorkflowValidationFinding;
+use crate::validation_package::validate_local_package_imports;
+use crate::validation_package::validate_package_manifest;
 
-const REQUIRED_FILES: &[&str] = &["README.md", "DESIGN.md", "package.json", "src/workflow.ts"];
+const REQUIRED_FILES: &[&str] = &[
+    "README.md",
+    "DESIGN.md",
+    "package.json",
+    "tsconfig.json",
+    "src/workflow.ts",
+];
 const REQUIRED_DIRS: &[&str] = &["src", "src/tests", "state"];
 const REQUIRED_README_HEADINGS: &[&str] = &[
     "Usage",
@@ -61,82 +68,8 @@ const REQUIRED_TRUE_COVERAGE_KEYS: &[&str] = &[
     "autocomplete",
 ];
 const WORKFLOW_TEST_MARKER_PREFIX: &str = "workflow-covers:";
-const RUNTIME_STATE_GITIGNORE_PATTERNS: &[&str] = &["artifacts/", "state/*", "!state/.gitkeep"];
-const BARE_NODE_BUILTINS: &[&str] = &[
-    "assert",
-    "assert/strict",
-    "buffer",
-    "child_process",
-    "cluster",
-    "console",
-    "constants",
-    "crypto",
-    "dgram",
-    "diagnostics_channel",
-    "dns",
-    "dns/promises",
-    "domain",
-    "events",
-    "fs",
-    "fs/promises",
-    "http",
-    "http2",
-    "https",
-    "inspector",
-    "module",
-    "net",
-    "os",
-    "path",
-    "path/posix",
-    "path/win32",
-    "perf_hooks",
-    "process",
-    "punycode",
-    "querystring",
-    "readline",
-    "readline/promises",
-    "repl",
-    "stream",
-    "stream/consumers",
-    "stream/promises",
-    "stream/web",
-    "string_decoder",
-    "sys",
-    "timers",
-    "timers/promises",
-    "tls",
-    "trace_events",
-    "tty",
-    "url",
-    "util",
-    "util/types",
-    "v8",
-    "vm",
-    "wasi",
-    "worker_threads",
-    "zlib",
-];
-
-static IMPORT_FROM_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?ms)^\s*import\b[\s\S]*?\bfrom\s+['\"]([^'\"]+)['\"]"#)
-        .unwrap_or_else(|err| panic!("invalid import regex: {err}"))
-});
-static SIDE_EFFECT_IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?m)^\s*import\s+['\"]([^'\"]+)['\"]"#)
-        .unwrap_or_else(|err| panic!("invalid import regex: {err}"))
-});
-static EXPORT_FROM_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?ms)^\s*export\b[\s\S]*?\bfrom\s+['\"]([^'\"]+)['\"]"#)
-        .unwrap_or_else(|err| panic!("invalid export regex: {err}"))
-});
-static DYNAMIC_IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"import\(\s*['\"]([^'\"]+)['\"]\s*\)"#)
-        .unwrap_or_else(|err| panic!("invalid dynamic import regex: {err}"))
-});
-static REQUIRE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"require\(\s*['\"]([^'\"]+)['\"]\s*\)"#)
-        .unwrap_or_else(|err| panic!("invalid require regex: {err}"))
-});
+const RUNTIME_STATE_GITIGNORE_PATTERNS: &[&str] =
+    &["node_modules/", "artifacts/", "state/*", "!state/.gitkeep"];
 
 pub(crate) fn validate_workflow_dir(
     root: &Path,
@@ -202,10 +135,12 @@ pub(crate) fn validate_workflow_dir(
         "DESIGN.md",
         REQUIRED_DESIGN_HEADINGS,
     ));
+    findings.extend(validate_package_manifest(workflow_dir, spec.as_ref()));
     findings.extend(validate_local_package_imports(workflow_dir));
     if let Some(spec) = spec.as_ref() {
         findings.extend(validate_validation_commands(spec));
         findings.extend(validate_coverage_metadata(workflow_dir, spec));
+        findings.extend(validate_contract_smoke_metadata(spec));
         findings.extend(validate_output_schemas(spec));
     }
     findings.extend(validate_runtime_state_gitignore(workflow_dir));
@@ -255,10 +190,17 @@ fn validate_document_headings(
         return Vec::new();
     };
 
-    let headings = markdown_headings(&contents);
+    let sections = markdown_sections(&contents);
     let mut findings = Vec::new();
     for heading in required_headings {
-        if !headings.iter().any(|found| found == heading) {
+        if let Some(body) = sections.get(*heading) {
+            if body.trim().is_empty() {
+                findings.push(WorkflowValidationFinding::EmptyDocumentSection {
+                    path: PathBuf::from(file_name),
+                    heading: (*heading).to_string(),
+                });
+            }
+        } else {
             findings.push(WorkflowValidationFinding::MissingDocumentHeading {
                 path: PathBuf::from(file_name),
                 heading: (*heading).to_string(),
@@ -268,107 +210,28 @@ fn validate_document_headings(
     findings
 }
 
-fn markdown_headings(contents: &str) -> Vec<String> {
-    contents
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim_start();
-            let heading = line.strip_prefix("## ")?;
-            Some(heading.trim().to_string())
-        })
-        .collect()
-}
-
-fn validate_local_package_imports(workflow_dir: &Path) -> Vec<WorkflowValidationFinding> {
-    let package_json_path = workflow_dir.join("package.json");
-    let Ok(package_json) = fs::read_to_string(&package_json_path) else {
-        return Vec::new();
-    };
-    let package_json_value = match serde_json::from_str::<JsonValue>(&package_json) {
-        Ok(value) => value,
-        Err(err) => {
-            return vec![WorkflowValidationFinding::PackageManifestParseFailed {
-                path: package_json_path,
-                error: err.to_string(),
-            }];
-        }
-    };
-    let declared_packages = declared_packages(&package_json_value);
-
-    let mut findings = Vec::new();
-    for (relative, _path, contents) in workflow_code_files(workflow_dir) {
-        let specifiers = imported_specifiers(&contents);
-        for specifier in specifiers {
-            if is_builtin_specifier(&specifier) {
-                continue;
+fn markdown_sections(contents: &str) -> BTreeMap<String, String> {
+    let mut sections = BTreeMap::new();
+    let mut current_heading: Option<String> = None;
+    let mut current_body = String::new();
+    for line in contents.lines() {
+        let trimmed = line.trim_start();
+        if let Some(heading) = trimmed.strip_prefix("## ") {
+            if let Some(heading) = current_heading.replace(heading.trim().to_string()) {
+                sections.entry(heading).or_insert(current_body);
+                current_body = String::new();
             }
-            if let Some(package_name) = package_name_from_specifier(&specifier)
-                && !declared_packages.contains(&package_name)
-            {
-                findings.push(WorkflowValidationFinding::UndeclaredPackageImport {
-                    path: relative.clone(),
-                    specifier,
-                    package_name,
-                });
-            }
+            continue;
+        }
+        if current_heading.is_some() {
+            current_body.push_str(line);
+            current_body.push('\n');
         }
     }
-    findings.sort_by_key(WorkflowValidationFinding::message);
-    findings.dedup();
-    findings
-}
-
-fn declared_packages(package_json: &JsonValue) -> BTreeSet<String> {
-    let mut packages = BTreeSet::new();
-    for key in [
-        "dependencies",
-        "devDependencies",
-        "peerDependencies",
-        "optionalDependencies",
-    ] {
-        if let Some(entries) = package_json.get(key).and_then(JsonValue::as_object) {
-            packages.extend(entries.keys().cloned());
-        }
+    if let Some(heading) = current_heading {
+        sections.entry(heading).or_insert(current_body);
     }
-    packages
-}
-
-fn imported_specifiers(contents: &str) -> BTreeSet<String> {
-    let mut specifiers = BTreeSet::new();
-    for regex in [
-        &*IMPORT_FROM_RE,
-        &*SIDE_EFFECT_IMPORT_RE,
-        &*EXPORT_FROM_RE,
-        &*DYNAMIC_IMPORT_RE,
-        &*REQUIRE_RE,
-    ] {
-        for captures in regex.captures_iter(contents) {
-            if let Some(specifier) = captures.get(1) {
-                specifiers.insert(specifier.as_str().to_string());
-            }
-        }
-    }
-    specifiers
-}
-
-fn package_name_from_specifier(specifier: &str) -> Option<String> {
-    if specifier.starts_with('.') || specifier.starts_with('/') || specifier.starts_with("node:") {
-        return None;
-    }
-    if let Some(rest) = specifier.strip_prefix('@') {
-        let mut segments = rest.split('/');
-        let scope = segments.next()?;
-        let name = segments.next()?;
-        return Some(format!("@{scope}/{name}"));
-    }
-    Some(specifier.split('/').next().unwrap_or(specifier).to_string())
-}
-
-fn is_builtin_specifier(specifier: &str) -> bool {
-    if specifier.starts_with("node:") {
-        return true;
-    }
-    BARE_NODE_BUILTINS.contains(&specifier)
+    sections
 }
 
 fn validate_coverage_metadata(
@@ -432,13 +295,35 @@ fn validate_validation_commands(
 ) -> Vec<WorkflowValidationFinding> {
     match spec.validation.get("commands") {
         Some(JsonValue::Array(commands)) if !commands.is_empty() => {
-            if commands.iter().all(JsonValue::is_string) {
-                Vec::new()
-            } else {
-                vec![WorkflowValidationFinding::InvalidValidationCommands {
+            if !commands.iter().all(JsonValue::is_string) {
+                return vec![WorkflowValidationFinding::InvalidValidationCommands {
                     path: PathBuf::from(WORKFLOW_YAML),
-                }]
+                }];
             }
+            let command_strings = commands
+                .iter()
+                .filter_map(JsonValue::as_str)
+                .collect::<Vec<_>>();
+            let mut findings = Vec::new();
+            if !command_strings.iter().any(|command| {
+                let command = command.to_ascii_lowercase();
+                command.contains("build")
+                    || command.contains("typecheck")
+                    || command.contains("tsc")
+            }) {
+                findings.push(WorkflowValidationFinding::MissingBuildValidationCommand {
+                    path: PathBuf::from(WORKFLOW_YAML),
+                });
+            }
+            if !command_strings
+                .iter()
+                .any(|command| command.to_ascii_lowercase().contains("test"))
+            {
+                findings.push(WorkflowValidationFinding::MissingTestValidationCommand {
+                    path: PathBuf::from(WORKFLOW_YAML),
+                });
+            }
+            findings
         }
         Some(JsonValue::Array(_)) => vec![WorkflowValidationFinding::EmptyValidationCommands {
             path: PathBuf::from(WORKFLOW_YAML),
@@ -449,6 +334,34 @@ fn validate_validation_commands(
         None => vec![WorkflowValidationFinding::MissingValidationCommands {
             path: PathBuf::from(WORKFLOW_YAML),
         }],
+    }
+}
+
+fn validate_contract_smoke_metadata(
+    spec: &crate::spec::WorkflowSpec,
+) -> Vec<WorkflowValidationFinding> {
+    let Some(smoke) = spec.validation.get("contractSmoke") else {
+        return vec![WorkflowValidationFinding::MissingContractSmoke {
+            path: PathBuf::from(WORKFLOW_YAML),
+        }];
+    };
+    let valid = match smoke {
+        JsonValue::Bool(true) => true,
+        JsonValue::String(command) => !command.trim().is_empty(),
+        JsonValue::Object(object) if object.get("enabled") != Some(&JsonValue::Bool(false)) => {
+            object
+                .get("command")
+                .and_then(JsonValue::as_str)
+                .is_none_or(|command| !command.trim().is_empty())
+        }
+        _ => false,
+    };
+    if valid {
+        Vec::new()
+    } else {
+        vec![WorkflowValidationFinding::InvalidContractSmoke {
+            path: PathBuf::from(WORKFLOW_YAML),
+        }]
     }
 }
 
@@ -669,18 +582,6 @@ fn collect_layout_issues(
     }
 }
 
-fn workflow_code_files(workflow_dir: &Path) -> Vec<(PathBuf, PathBuf, String)> {
-    let mut files = Vec::new();
-    visit_workflow_files(workflow_dir, workflow_dir, &mut |relative, path| {
-        if is_code_file(relative)
-            && let Ok(contents) = fs::read_to_string(path)
-        {
-            files.push((relative.to_path_buf(), path.to_path_buf(), contents));
-        }
-    });
-    files
-}
-
 fn workflow_test_files(workflow_dir: &Path) -> Vec<(PathBuf, PathBuf, String)> {
     let mut files = Vec::new();
     visit_workflow_files(workflow_dir, workflow_dir, &mut |relative, path| {
@@ -797,12 +698,12 @@ mod tests {
         .unwrap();
         fs::write(
             workflow_dir.join("README.md"),
-            "# Example\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
+            "# Example\n\n## Usage\n\nRun `/example`.\n\n## Workflow Runtime\n\nRuns as a local TypeScript workflow.\n\n## Dependencies\n\nUses local package dependencies only.\n\n## Validation\n\nRun the configured build and test commands.\n\n## Maintenance\n\nKeep docs, metadata, and tests aligned.\n",
         )
         .unwrap();
         fs::write(
             workflow_dir.join("DESIGN.md"),
-            "# Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
+            "# Design\n\n## Overview\n\nExample workflow.\n\n## Architecture\n\nTypeScript source under src/.\n\n## Data Flow\n\nInput becomes output.\n\n## Failure Handling\n\nInvalid input is rejected.\n\n## Recovery Behavior\n\nNo recovery behavior.\n\n## Test Matrix\n\nPositive, negative, load, and autocomplete tests.\n\n## Maintenance Notes\n\nKeep validation metadata current.\n",
         )
         .unwrap();
         fs::write(
@@ -811,9 +712,33 @@ mod tests {
   "name": "codex-workflow-example",
   "private": true,
   "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "node --test src/tests/*.test.ts",
+    "run": "node src/workflow.ts"
+  },
   "dependencies": {
     "@openai/codex-sdk": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "typescript": "latest"
   }
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("tsconfig.json"),
+            r#"{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts"]
 }
 "#,
         )
@@ -934,8 +859,13 @@ test("workflow rejects invalid input", async () => {
             &workflow_dir.join(crate::spec::WORKFLOW_YAML),
             &WorkflowSpec {
                 id: id.to_string(),
+                dependencies: json!({
+                    "runtime": ["@openai/codex-sdk"],
+                    "development": ["@types/node", "typescript"],
+                }),
                 validation: json!({
                     "commands": ["npm run build", "npm test"],
+                    "contractSmoke": { "input": { "input": "example" } },
                     "coverage": {
                         "positive": true,
                         "negative": true,
@@ -1051,12 +981,17 @@ test("workflow rejects invalid input", async () => {
             &workflow_dir.join(crate::spec::WORKFLOW_YAML),
             &WorkflowSpec {
                 id: "example".to_string(),
+                dependencies: json!({
+                    "runtime": ["@openai/codex-sdk"],
+                    "development": ["@types/node", "typescript"],
+                }),
                 api: json!({
                     "inputSchema": { "type": "object", "additionalProperties": true },
                     "outputSchema": { "type": "object", "additionalProperties": true }
                 }),
                 validation: json!({
                     "commands": ["npm run build", "npm test"],
+                    "contractSmoke": { "input": { "input": "example" } },
                     "coverage": {
                         "positive": true,
                         "negative": true,
@@ -1159,6 +1094,90 @@ test("workflow rejects invalid input", async () => {
                     message
                         .contains("missing test coverage marker `// workflow-covers: autocomplete`")
                 })
+        );
+    }
+
+    #[test]
+    fn validate_workflow_dir_reports_dependency_metadata_drift_and_unused_runtime_deps() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = create_valid_workflow_dir(&root, "example");
+        fs::write(
+            workflow_dir.join("package.json"),
+            r#"{
+  "name": "codex-workflow-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "node --test src/tests/*.test.ts",
+    "run": "node src/workflow.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "latest",
+    "@openai/codex-sdk": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "typescript": "latest"
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
+        assert_eq!(
+            finding_messages(&validation.findings),
+            vec![
+                "package.json declares unused runtime dependency `@modelcontextprotocol/sdk`"
+                    .to_string(),
+                "package `@modelcontextprotocol/sdk` is listed in package.json dependencies but missing from workflow.yaml dependencies.runtime".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn validate_workflow_dir_requires_contract_smoke_and_build_test_commands() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = create_valid_workflow_dir(&root, "example");
+        write_workflow_spec(
+            &workflow_dir.join(crate::spec::WORKFLOW_YAML),
+            &WorkflowSpec {
+                id: "example".to_string(),
+                dependencies: json!({
+                    "runtime": ["@openai/codex-sdk"],
+                    "development": ["@types/node", "typescript"],
+                }),
+                validation: json!({
+                    "commands": ["echo ok"],
+                    "coverage": {
+                        "positive": true,
+                        "negative": true,
+                        "progress": true,
+                        "finalResult": true,
+                        "failureUx": true,
+                        "load": true,
+                        "autocomplete": true,
+                        "recovery": false,
+                    }
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
+        assert_eq!(
+            finding_messages(&validation.findings),
+            vec![
+                "validation commands must include a build/typecheck step".to_string(),
+                "validation commands must include a test step".to_string(),
+                "validation.contractSmoke must be configured".to_string(),
+            ]
         );
     }
 

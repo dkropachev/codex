@@ -106,12 +106,12 @@ fn write_command_failure_workflow_fixture(workflow_dir: &Path) {
     write_runtime_gitignore(workflow_dir);
     fs::write(
         workflow_dir.join("README.md"),
-        "# Workflow\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
+        "# Workflow\n\n## Usage\n\nRun `/fix`.\n\n## Workflow Runtime\n\nRuns as a local TypeScript workflow package.\n\n## Dependencies\n\nUses local package dependencies only.\n\n## Validation\n\nRuns build and test commands.\n\n## Maintenance\n\nKeep docs, metadata, and tests aligned.\n",
     )
     .unwrap();
     fs::write(
         workflow_dir.join("DESIGN.md"),
-        "# Workflow Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
+        "# Workflow Design\n\n## Overview\n\nFailing-command fixture.\n\n## Architecture\n\nSource lives under src/.\n\n## Data Flow\n\nThe workflow returns a JSON result.\n\n## Failure Handling\n\nValidation commands report failures.\n\n## Recovery Behavior\n\nNo recovery behavior.\n\n## Test Matrix\n\nPositive, negative, load, and autocomplete tests.\n\n## Maintenance Notes\n\nKeep validation metadata current.\n",
     )
     .unwrap();
     fs::write(
@@ -119,9 +119,23 @@ fn write_command_failure_workflow_fixture(workflow_dir: &Path) {
         r#"{
   "name": "codex-workflow-failing-command",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "build": "echo build",
+    "test": "echo test",
+    "run": "node src/workflow.ts"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "typescript": "latest"
+  }
 }
 "#,
+    )
+    .unwrap();
+    fs::write(
+        workflow_dir.join("tsconfig.json"),
+        "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"strict\": true,\n    \"noEmit\": true\n  },\n  \"include\": [\"src/**/*.ts\"]\n}\n",
     )
     .unwrap();
     fs::write(
@@ -154,8 +168,13 @@ fn write_command_failure_workflow_fixture(workflow_dir: &Path) {
         &workflow_dir.join("workflow.yaml"),
         &crate::spec::WorkflowSpec {
             id: "broken/fix".to_string(),
+            dependencies: json!({
+                "runtime": [],
+                "development": ["@types/node", "typescript"],
+            }),
             validation: json!({
-                "commands": ["node -e \"console.log('out'); console.error('err'); process.exit(1)\""],
+                "commands": ["node -e \"console.log('out'); console.error('err'); process.exit(1)\" # build test"],
+                "contractSmoke": { "input": {} },
                 "coverage": {
                     "positive": true,
                     "negative": true,
@@ -571,7 +590,7 @@ fn repair_workflow_command_reports_unsupported_validation_command_failures() {
     );
     assert_eq!(
         output.data["validationCommandResults"][0]["command"],
-        "node -e \"console.log('out'); console.error('err'); process.exit(1)\""
+        "node -e \"console.log('out'); console.error('err'); process.exit(1)\" # build test"
     );
     assert_eq!(
         output.data["validationCommandResults"][0]["succeeded"],

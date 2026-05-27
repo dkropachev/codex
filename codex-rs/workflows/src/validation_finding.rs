@@ -33,14 +33,41 @@ pub enum WorkflowValidationFinding {
         path: PathBuf,
         heading: String,
     },
+    EmptyDocumentSection {
+        path: PathBuf,
+        heading: String,
+    },
     PackageManifestParseFailed {
         path: PathBuf,
         error: String,
+    },
+    InvalidPackageManifestField {
+        path: PathBuf,
+        field: String,
+        expected: String,
+    },
+    MissingPackageScript {
+        path: PathBuf,
+        script: String,
     },
     UndeclaredPackageImport {
         path: PathBuf,
         specifier: String,
         package_name: String,
+    },
+    UnusedPackageDependency {
+        path: PathBuf,
+        package_name: String,
+    },
+    InvalidWorkflowDependencyMetadata {
+        path: PathBuf,
+        field: String,
+    },
+    WorkflowDependencyMetadataMismatch {
+        path: PathBuf,
+        package_name: String,
+        source: String,
+        target: String,
     },
     MissingValidationCommands {
         path: PathBuf,
@@ -49,6 +76,18 @@ pub enum WorkflowValidationFinding {
         path: PathBuf,
     },
     InvalidValidationCommands {
+        path: PathBuf,
+    },
+    MissingBuildValidationCommand {
+        path: PathBuf,
+    },
+    MissingTestValidationCommand {
+        path: PathBuf,
+    },
+    MissingContractSmoke {
+        path: PathBuf,
+    },
+    InvalidContractSmoke {
         path: PathBuf,
     },
     MissingCoverageMetadata {
@@ -148,19 +187,58 @@ impl WorkflowValidationFinding {
             Self::MissingDocumentHeading { path, heading } => {
                 format!("{} is missing required heading `{heading}`", path.display())
             }
+            Self::EmptyDocumentSection { path, heading } => {
+                format!(
+                    "{} section `{heading}` must describe the workflow",
+                    path.display()
+                )
+            }
             Self::PackageManifestParseFailed { path, error } => {
                 format!(
                     "failed to parse package manifest {}: {error}",
                     path.display()
                 )
             }
+            Self::InvalidPackageManifestField {
+                field, expected, ..
+            } => format!("package.json field `{field}` must be {expected}"),
+            Self::MissingPackageScript { script, .. } => {
+                format!("package.json is missing required `{script}` script")
+            }
             Self::UndeclaredPackageImport { package_name, .. } => {
                 format!("imports undeclared package `{package_name}`")
+            }
+            Self::UnusedPackageDependency { package_name, .. } => {
+                format!("package.json declares unused runtime dependency `{package_name}`")
+            }
+            Self::InvalidWorkflowDependencyMetadata { field, .. } => {
+                format!("workflow.yaml field `{field}` must be an array of package names")
+            }
+            Self::WorkflowDependencyMetadataMismatch {
+                package_name,
+                source,
+                target,
+                ..
+            } => {
+                format!("package `{package_name}` is listed in {source} but missing from {target}")
             }
             Self::MissingValidationCommands { .. } => "missing validation commands".to_string(),
             Self::EmptyValidationCommands { .. } => "validation commands are empty".to_string(),
             Self::InvalidValidationCommands { .. } => {
                 "validation commands must be a non-empty string array".to_string()
+            }
+            Self::MissingBuildValidationCommand { .. } => {
+                "validation commands must include a build/typecheck step".to_string()
+            }
+            Self::MissingTestValidationCommand { .. } => {
+                "validation commands must include a test step".to_string()
+            }
+            Self::MissingContractSmoke { .. } => {
+                "validation.contractSmoke must be configured".to_string()
+            }
+            Self::InvalidContractSmoke { .. } => {
+                "validation.contractSmoke must be true, a command string, or an enabled object"
+                    .to_string()
             }
             Self::MissingCoverageMetadata { .. } => {
                 "missing validation coverage metadata".to_string()
@@ -239,9 +317,24 @@ impl WorkflowValidationFinding {
                 "WF-002"
             }
             Self::MissingFile { .. } | Self::MissingDocumentHeading { .. } => "WF-011",
-            Self::PackageManifestParseFailed { .. } | Self::UndeclaredPackageImport { .. } => {
-                "WF-004"
+            Self::EmptyDocumentSection { path, .. }
+                if path.file_name().and_then(|name| name.to_str()) == Some("README.md") =>
+            {
+                "WF-001"
             }
+            Self::EmptyDocumentSection { path, .. }
+                if path.file_name().and_then(|name| name.to_str()) == Some("DESIGN.md") =>
+            {
+                "WF-002"
+            }
+            Self::EmptyDocumentSection { .. } => "WF-011",
+            Self::PackageManifestParseFailed { .. }
+            | Self::InvalidPackageManifestField { .. }
+            | Self::MissingPackageScript { .. }
+            | Self::UndeclaredPackageImport { .. }
+            | Self::UnusedPackageDependency { .. }
+            | Self::InvalidWorkflowDependencyMetadata { .. }
+            | Self::WorkflowDependencyMetadataMismatch { .. } => "WF-004",
             Self::MissingCoverageMetadata { .. } => "WF-008",
             Self::MissingCoverageKey { key, .. }
             | Self::InvalidCoverageKeyType { key, .. }
@@ -254,6 +347,10 @@ impl WorkflowValidationFinding {
             Self::MissingValidationCommands { .. }
             | Self::EmptyValidationCommands { .. }
             | Self::InvalidValidationCommands { .. }
+            | Self::MissingBuildValidationCommand { .. }
+            | Self::MissingTestValidationCommand { .. }
+            | Self::MissingContractSmoke { .. }
+            | Self::InvalidContractSmoke { .. }
             | Self::ValidationCommandFailed { .. }
             | Self::AmbiguousWorkflowOutputSchema { .. }
             | Self::WorkflowApiContractExtractionFailed { .. }
@@ -293,11 +390,21 @@ impl WorkflowValidationFinding {
             | Self::MissingDirectory { path }
             | Self::MissingGitRepository { path }
             | Self::MissingDocumentHeading { path, .. }
+            | Self::EmptyDocumentSection { path, .. }
             | Self::PackageManifestParseFailed { path, .. }
+            | Self::InvalidPackageManifestField { path, .. }
+            | Self::MissingPackageScript { path, .. }
             | Self::UndeclaredPackageImport { path, .. }
+            | Self::UnusedPackageDependency { path, .. }
+            | Self::InvalidWorkflowDependencyMetadata { path, .. }
+            | Self::WorkflowDependencyMetadataMismatch { path, .. }
             | Self::MissingValidationCommands { path }
             | Self::EmptyValidationCommands { path }
             | Self::InvalidValidationCommands { path }
+            | Self::MissingBuildValidationCommand { path }
+            | Self::MissingTestValidationCommand { path }
+            | Self::MissingContractSmoke { path }
+            | Self::InvalidContractSmoke { path }
             | Self::MissingCoverageMetadata { path }
             | Self::MissingCoverageKey { path, .. }
             | Self::InvalidCoverageKeyType { path, .. }

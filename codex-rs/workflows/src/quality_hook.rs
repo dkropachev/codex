@@ -256,7 +256,7 @@ fn render_findings(failures: &[WorkflowQualityFailure], include_guidance: bool) 
     if include_guidance {
         lines.push(String::new());
         lines.push(
-            "Fix these findings in the current workflow development cycle before treating the workflow as complete."
+            "Fix these findings in the current workflow development cycle before treating the workflow as complete. Keep README.md, package.json, tsconfig.json, workflow.yaml, tests, and dependency metadata aligned with the settled DESIGN.md."
                 .to_string(),
         );
         lines.push(
@@ -291,12 +291,12 @@ mod tests {
         .expect("write .gitignore");
         fs::write(
             workflow_dir.join("README.md"),
-            "# Test\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
+            "# Test\n\n## Usage\n\nRun `/fix`.\n\n## Workflow Runtime\n\nRuns as a local TypeScript workflow package.\n\n## Dependencies\n\nUses local package dependencies only.\n\n## Validation\n\nRuns build and test commands.\n\n## Maintenance\n\nKeep docs, metadata, and tests aligned.\n",
         )
         .expect("write README");
         fs::write(
             workflow_dir.join("DESIGN.md"),
-            "# Test Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
+            "# Test Design\n\n## Overview\n\nTest workflow fixture.\n\n## Architecture\n\nSource lives under src/.\n\n## Data Flow\n\nThe workflow returns a JSON result.\n\n## Failure Handling\n\nValidation commands report failures.\n\n## Recovery Behavior\n\nNo recovery behavior.\n\n## Test Matrix\n\nPositive, negative, load, and autocomplete tests.\n\n## Maintenance Notes\n\nKeep validation metadata current.\n",
         )
         .expect("write DESIGN");
         fs::write(
@@ -304,11 +304,25 @@ mod tests {
             r#"{
   "name": "codex-workflow-test",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "build": "echo build",
+    "test": "echo test",
+    "run": "node src/workflow.ts"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "typescript": "latest"
+  }
 }
 "#,
         )
         .expect("write package.json");
+        fs::write(
+            workflow_dir.join("tsconfig.json"),
+            "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"strict\": true,\n    \"noEmit\": true\n  },\n  \"include\": [\"src/**/*.ts\"]\n}\n",
+        )
+        .expect("write tsconfig");
         fs::write(
             workflow_dir.join("src/workflow.ts"),
             "export interface WorkflowInput { input?: string; }\nexport interface WorkflowOutput { ok: boolean; }\nexport {}\n",
@@ -347,7 +361,7 @@ mod tests {
         fs::create_dir_all(workflow_dir.join(".git")).expect("create git dir");
         fs::write(
             workflow_dir.join("workflow.yaml"),
-            "id: review/fix\napi:\n  inputSchema:\n    type: object\n  outputSchema:\n    type: object\n    additionalProperties: true\nvalidation:\n  commands:\n    - exit 0\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
+            "id: review/fix\napi:\n  inputSchema:\n    type: object\n  outputSchema:\n    type: object\n    additionalProperties: true\ndependencies:\n  runtime: []\n  development:\n    - '@types/node'\n    - typescript\nvalidation:\n  commands:\n    - echo build\n    - echo test\n  contractSmoke:\n    command: 'node -e \"console.log(JSON.stringify({ok:true}))\"'\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
         )
         .expect("write workflow spec");
 

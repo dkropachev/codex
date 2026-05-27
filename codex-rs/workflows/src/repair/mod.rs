@@ -41,7 +41,8 @@ mod message;
 
 pub mod types;
 
-const RUNTIME_STATE_GITIGNORE_PATTERNS: &[&str] = &["artifacts/", "state/*", "!state/.gitkeep"];
+const RUNTIME_STATE_GITIGNORE_PATTERNS: &[&str] =
+    &["node_modules/", "artifacts/", "state/*", "!state/.gitkeep"];
 
 #[derive(Debug, Default)]
 struct FixPlan {
@@ -54,9 +55,14 @@ struct FixPlan {
     create_layout: bool,
     add_coverage_markers: BTreeSet<String>,
     package_names: BTreeSet<String>,
+    remove_package_names: BTreeSet<String>,
     build_script: bool,
     test_script: bool,
     run_script: bool,
+    validation_build_command: bool,
+    validation_test_command: bool,
+    contract_smoke: bool,
+    sync_dependency_metadata: bool,
     refresh_dependencies: bool,
     spec_reset: bool,
 }
@@ -596,7 +602,7 @@ fn build_ai_repair_prompt(
 ) -> Result<String> {
     let findings_json = serde_json::to_string_pretty(unsupported_findings)?;
     Ok(format!(
-        "You are the workflow-coder for a Codex workflow repair pass.\n\nOnly modify files inside this workflow directory: `{workflow_dir}`. Do not edit files outside it. Keep writes inside this workflow root. Do not edit `DESIGN.md`. Use only dependencies declared in the workflow's local `package.json`. Keep code in `src/`, tests in `src/tests/`, and state in `state/`.\n\nThe deterministic repair pass already handled known cases and stopped on these unsupported findings:\n{findings_json}\n\nFix the workflow until validation passes. If the right fix requires a design change, do not edit `DESIGN.md`; write a `DESIGN.md request` for the parent instead. Keep iterating until the workflow is clean or a design change is required.\n",
+        "You are the workflow-coder for a Codex workflow repair pass.\n\nOnly modify files inside this workflow directory: `{workflow_dir}`. Do not edit files outside it. Keep writes inside this workflow root. Do not edit `DESIGN.md`. If the right fix requires a design change, write a `DESIGN.md request` for the parent architect instead.\n\nKeep the workflow in the standard environment: TypeScript source in `src/`, tests in `src/tests/`, persistent state in `state/`, generated artifacts in `artifacts/`, a `codex-workflow-*` private ESM package, a local `tsconfig.json`, and non-empty README/DESIGN sections. Use only local dependencies declared in `package.json`, remove unused runtime dependencies, and keep `workflow.yaml` `dependencies.runtime` / `dependencies.development` aligned with `package.json` `dependencies` / `devDependencies`. Keep validation metadata complete: build and test commands, `validation.contractSmoke`, and coverage markers for the declared coverage keys.\n\nThe deterministic repair pass already handled known cases and stopped on these unsupported findings:\n{findings_json}\n\nFix the workflow until validation passes. Keep iterating until the workflow is clean or a design change is required.\n",
         workflow_dir = workflow.path.display(),
         findings_json = findings_json,
     ))
@@ -694,22 +700,54 @@ fn build_fix_plan(
                     plan.repair_design = true;
                 }
             }
+            WorkflowValidationFinding::EmptyDocumentSection { path, .. } => {
+                if path == Path::new("README.md") {
+                    plan.repair_readme = true;
+                } else {
+                    plan.repair_design = true;
+                }
+            }
             WorkflowValidationFinding::PackageManifestParseFailed { .. } => {
                 plan.repair_package_manifest = true;
+            }
+            WorkflowValidationFinding::InvalidPackageManifestField { .. }
+            | WorkflowValidationFinding::MissingPackageScript { .. } => {
+                plan.repair_package_manifest = true;
+                plan.build_script = true;
+                plan.test_script = true;
+                plan.run_script = true;
             }
             WorkflowValidationFinding::UndeclaredPackageImport { package_name, .. } => {
                 plan.repair_package_manifest = true;
                 plan.refresh_dependencies = true;
+                plan.sync_dependency_metadata = true;
                 plan.package_names.insert(package_name.clone());
+            }
+            WorkflowValidationFinding::UnusedPackageDependency { package_name, .. } => {
+                plan.repair_package_manifest = true;
+                plan.sync_dependency_metadata = true;
+                plan.remove_package_names.insert(package_name.clone());
+            }
+            WorkflowValidationFinding::InvalidWorkflowDependencyMetadata { .. }
+            | WorkflowValidationFinding::WorkflowDependencyMetadataMismatch { .. } => {
+                plan.update_validation_yaml = true;
+                plan.sync_dependency_metadata = true;
             }
             WorkflowValidationFinding::MissingValidationCommands { .. }
             | WorkflowValidationFinding::EmptyValidationCommands { .. }
             | WorkflowValidationFinding::InvalidValidationCommands { .. }
+            | WorkflowValidationFinding::MissingBuildValidationCommand { .. }
+            | WorkflowValidationFinding::MissingTestValidationCommand { .. }
+            | WorkflowValidationFinding::MissingContractSmoke { .. }
+            | WorkflowValidationFinding::InvalidContractSmoke { .. }
             | WorkflowValidationFinding::MissingCoverageMetadata { .. }
             | WorkflowValidationFinding::MissingCoverageKey { .. }
             | WorkflowValidationFinding::InvalidCoverageKeyType { .. }
             | WorkflowValidationFinding::CoverageKeyMustBeTrue { .. } => {
                 plan.update_validation_yaml = true;
+                plan.validation_build_command = true;
+                plan.validation_test_command = true;
+                plan.contract_smoke = true;
             }
             WorkflowValidationFinding::AmbiguousWorkflowOutputSchema { .. } => {
                 plan.repair_output_schema_contracts = true;
@@ -782,6 +820,12 @@ fn action_kinds_for_finding(
         | WorkflowValidationFinding::MissingValidationCommands { .. }
         | WorkflowValidationFinding::EmptyValidationCommands { .. }
         | WorkflowValidationFinding::InvalidValidationCommands { .. }
+        | WorkflowValidationFinding::MissingBuildValidationCommand { .. }
+        | WorkflowValidationFinding::MissingTestValidationCommand { .. }
+        | WorkflowValidationFinding::MissingContractSmoke { .. }
+        | WorkflowValidationFinding::InvalidContractSmoke { .. }
+        | WorkflowValidationFinding::InvalidWorkflowDependencyMetadata { .. }
+        | WorkflowValidationFinding::WorkflowDependencyMetadataMismatch { .. }
         | WorkflowValidationFinding::MissingCoverageMetadata { .. }
         | WorkflowValidationFinding::MissingCoverageKey { .. }
         | WorkflowValidationFinding::InvalidCoverageKeyType { .. }
@@ -824,8 +868,18 @@ fn action_kinds_for_finding(
                 vec![WorkflowRepairActionKind::RepairDesign]
             }
         }
+        WorkflowValidationFinding::EmptyDocumentSection { path, .. } => {
+            if path == Path::new("README.md") {
+                vec![WorkflowRepairActionKind::RepairReadme]
+            } else {
+                vec![WorkflowRepairActionKind::RepairDesign]
+            }
+        }
         WorkflowValidationFinding::PackageManifestParseFailed { .. }
-        | WorkflowValidationFinding::UndeclaredPackageImport { .. } => {
+        | WorkflowValidationFinding::InvalidPackageManifestField { .. }
+        | WorkflowValidationFinding::MissingPackageScript { .. }
+        | WorkflowValidationFinding::UndeclaredPackageImport { .. }
+        | WorkflowValidationFinding::UnusedPackageDependency { .. } => {
             vec![WorkflowRepairActionKind::RepairPackageManifest]
         }
         WorkflowValidationFinding::MissingCoverageMarker { .. } => {
@@ -905,6 +959,8 @@ fn apply_validation_yaml_fix(
         };
 
         let commands_need_fix = plan.spec_reset
+            || plan.validation_build_command
+            || plan.validation_test_command
             || validation_object
                 .get("commands")
                 .and_then(JsonValue::as_array)
@@ -964,7 +1020,23 @@ fn apply_validation_yaml_fix(
                 JsonValue::String("default".to_string()),
             );
         }
+        if plan.contract_smoke
+            || !validation_object
+                .get("contractSmoke")
+                .is_some_and(valid_contract_smoke_metadata)
+        {
+            validation_object.insert(
+                "contractSmoke".to_string(),
+                json!({ "input": { "input": "example" } }),
+            );
+        }
         spec.validation = validation;
+        changed = true;
+    }
+
+    if (plan.spec_reset || plan.sync_dependency_metadata)
+        && sync_workflow_dependency_metadata(&workflow.path, &mut spec, plan)?
+    {
         changed = true;
     }
 
@@ -982,6 +1054,56 @@ fn apply_validation_yaml_fix(
         path: spec_path,
         detail: "Updated workflow.yaml metadata".to_string(),
     }])
+}
+
+fn valid_contract_smoke_metadata(value: &JsonValue) -> bool {
+    match value {
+        JsonValue::Bool(true) => true,
+        JsonValue::String(command) => !command.trim().is_empty(),
+        JsonValue::Object(object) if object.get("enabled") != Some(&JsonValue::Bool(false)) => {
+            object
+                .get("command")
+                .and_then(JsonValue::as_str)
+                .is_none_or(|command| !command.trim().is_empty())
+        }
+        _ => false,
+    }
+}
+
+fn sync_workflow_dependency_metadata(
+    workflow_path: &Path,
+    spec: &mut WorkflowSpec,
+    plan: &FixPlan,
+) -> Result<bool> {
+    let package_json_path = workflow_path.join("package.json");
+    let package_json = match fs::read_to_string(&package_json_path) {
+        Ok(contents) => serde_json::from_str::<JsonValue>(&contents)
+            .with_context(|| format!("failed to parse {}", package_json_path.display()))?,
+        Err(_) => JsonValue::Object(Default::default()),
+    };
+    let mut runtime = package_dependency_names(&package_json, "dependencies");
+    runtime.extend(plan.package_names.iter().cloned());
+    for package_name in &plan.remove_package_names {
+        runtime.remove(package_name);
+    }
+    let development = package_dependency_names(&package_json, "devDependencies");
+    let dependencies = json!({
+        "runtime": runtime.into_iter().collect::<Vec<_>>(),
+        "development": development.into_iter().collect::<Vec<_>>(),
+    });
+    if spec.dependencies == dependencies {
+        return Ok(false);
+    }
+    spec.dependencies = dependencies;
+    Ok(true)
+}
+
+fn package_dependency_names(package_json: &JsonValue, field: &str) -> BTreeSet<String> {
+    package_json
+        .get(field)
+        .and_then(JsonValue::as_object)
+        .map(|entries| entries.keys().cloned().collect())
+        .unwrap_or_default()
 }
 
 fn normalize_output_schema_contracts(spec: &mut WorkflowSpec) -> bool {
@@ -1294,6 +1416,14 @@ fn apply_package_manifest_fix(
         return Err(anyhow!("package.json must be a JSON object"));
     };
 
+    let expected_name = workflow_package_name(&workflow.id);
+    if object
+        .get("name")
+        .and_then(JsonValue::as_str)
+        .is_none_or(|name| !name.starts_with("codex-workflow-"))
+    {
+        object.insert("name".to_string(), JsonValue::String(expected_name));
+    }
     object.insert("private".to_string(), JsonValue::Bool(true));
     object.insert("type".to_string(), JsonValue::String("module".to_string()));
 
@@ -1330,10 +1460,9 @@ fn apply_package_manifest_fix(
     let Some(deps_object) = deps.as_object_mut() else {
         return Err(anyhow!("package.json dependencies must be a JSON object"));
     };
-    deps_object.insert(
-        "@openai/codex-sdk".to_string(),
-        JsonValue::String("latest".to_string()),
-    );
+    for package_name in &plan.remove_package_names {
+        deps_object.remove(package_name);
+    }
     for package_name in &plan.package_names {
         deps_object.insert(
             package_name.clone(),
@@ -1375,6 +1504,21 @@ fn apply_package_manifest_fix(
         path,
         detail: "Updated package.json".to_string(),
     })
+}
+
+fn workflow_package_name(id: &str) -> String {
+    let mut name = String::from("codex-workflow-");
+    for ch in id.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' {
+            name.push(ch.to_ascii_lowercase());
+        } else {
+            name.push('-');
+        }
+    }
+    while name.contains("--") {
+        name = name.replace("--", "-");
+    }
+    name.trim_end_matches('-').to_string()
 }
 
 fn apply_coverage_marker_fix(
@@ -1774,7 +1918,7 @@ fn readme_template(workflow: &WorkflowSummary) -> String {
         .as_deref()
         .unwrap_or_else(|| workflow.id.split('/').next_back().unwrap_or(&workflow.id));
     format!(
-        "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nPrefer `ctx.status({{ workflowName, workflowStatus, threads? }})` while the workflow is running so the TUI can render `Workflow <workflowName>: <workflowStatus>` with optional `-> <threadName>: <threadStatus>` rows when more than one thread is active. `ctx.progress(message, data?)` remains available as a legacy shorthand for single-string status updates. `ctx.cwd`, `ctx.currentWorkingDirectory`, `ctx.repoRoot`, and `ctx.workingDirectory` point at the workspace that launched the workflow, while `process.cwd()` stays on the workflow package directory. `ctx.runWorkflow(workflow, input?, {{ onStatusUpdate }})` can intercept child workflow status updates and either forward, transform, bundle, or suppress them. Export a named default async function for the execution entrypoint, an optional named `complete(...)` export for autocomplete, and an optional `WorkflowOutput.toTuiMarkdown(result)` value companion for markdown rendering. `/workflow validate {id}` extracts, smoke-tests when `validation.contractSmoke` is configured, and publishes the TS contract after the workflow passes validation. Keep the default export focused on canonical JSON results.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json` and resolved from this directory's `node_modules`.\n\n## Validation\n\nRun the configured validation commands from `workflow.yaml` and keep the coverage markers and contract smoke output aligned with the documented contract. Prefer commands that fail fast on missing dependencies or type errors.\n\n## Maintenance\n\nUpdate `README.md`, `DESIGN.md`, `workflow.yaml`, and the test markers together when the workflow contract changes. Keep runtime state and generated artifacts under ignored `state/` or `artifacts/` paths.\n",
+        "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nPrefer `ctx.status({{ workflowName, workflowStatus, threads? }})` while the workflow is running so the TUI can render `Workflow <workflowName>: <workflowStatus>` with optional `-> <threadName>: <threadStatus>` rows when more than one thread is active. `ctx.progress(message, data?)` remains available as a legacy shorthand for single-string status updates. `ctx.cwd`, `ctx.currentWorkingDirectory`, `ctx.repoRoot`, and `ctx.workingDirectory` point at the workspace that launched the workflow, while `process.cwd()` stays on the workflow package directory. `ctx.runWorkflow(workflow, input?, {{ onStatusUpdate }})` can intercept child workflow status updates and either forward, transform, bundle, or suppress them. Export a named default async function for the execution entrypoint, an optional named `complete(...)` export for autocomplete, and an optional `WorkflowOutput.toTuiMarkdown(result)` value companion for markdown rendering. `/workflow validate {id}` extracts, smoke-tests when `validation.contractSmoke` is configured, and publishes the TS contract after the workflow passes validation. Keep the default export focused on canonical JSON results.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json`, reflected in `workflow.yaml` dependencies metadata, and resolved from this directory's `node_modules`. Remove unused runtime dependencies instead of carrying transitive tooling by default.\n\n## Validation\n\nRun the configured validation commands from `workflow.yaml` and keep build/test commands, package scripts, `tsconfig.json`, coverage markers, dependency metadata, and contract smoke output aligned with the documented contract. Prefer commands that fail fast on missing dependencies or type errors.\n\n## Maintenance\n\nUpdate `README.md`, `DESIGN.md`, `workflow.yaml`, `package.json`, and the test markers together when the workflow contract changes. The architect owns `DESIGN.md`; coder-side implementation changes that need design changes should raise a `DESIGN.md request` before coding continues. Keep runtime state and generated artifacts under ignored `state/` or `artifacts/` paths.\n",
         id = workflow.id,
     )
 }
@@ -1785,7 +1929,7 @@ fn design_template(workflow: &WorkflowSummary) -> String {
         .clone()
         .unwrap_or_else(|| display_title(&workflow.id));
     format!(
-        "# {title} Design\n\n## Overview\n\nThis workflow is a local TypeScript package driven by Bun's TypeScript runtime and validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `src/workflow.ts` owns the runtime behavior and exports the named default async function, an optional `complete(...)` export, and an optional `WorkflowOutput.toTuiMarkdown(result)` companion.\n- `src/tests/` carries the coverage contract for positive, load, autocomplete, negative, and recovery paths.\n- `workflow.yaml` records validation commands, contract smoke input, and coverage expectations.\n- `state/` holds persistent runtime data; `artifacts/` holds generated run artifacts. Both are ignored except for `state/.gitkeep`.\n\n## Data Flow\n\n1. A registered workflow command loads the workflow from the local package through Bun.\n2. The named default export validates input, emits progress, and returns the canonical JSON result.\n3. If present, `WorkflowOutput.toTuiMarkdown(result)` provides the markdown view for the TUI and workflow-to-workflow callers.\n4. `codex workflow validate {id}` runs the local validation commands, checks docs/layout/coverage markers, smoke-tests the contract when configured, extracts the TS contract, and publishes it only after validation passes.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors. When the workflow cannot satisfy its contract, fail with a specific error that names the broken path.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.ts`: positive path, progress, JSON result, and markdown companion coverage.\n- `src/tests/workflow.load.test.ts`: loadability smoke.\n- `src/tests/workflow.autocomplete.test.ts`: registry and command-completion readiness smoke.\n- `src/tests/workflow.negative.test.ts`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.ts`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep dependency usage local. Keep `// workflow-covers:` markers aligned with `validation.coverage`, including load and autocomplete. Update this file when the workflow behavior or review expectations change. Keep runtime state and generated artifacts out of git.\n",
+        "# {title} Design\n\n## Overview\n\nThis workflow is a local TypeScript package driven by Bun's TypeScript runtime and validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `src/workflow.ts` owns the runtime behavior and exports the named default async function, an optional `complete(...)` export, and an optional `WorkflowOutput.toTuiMarkdown(result)` companion.\n- `src/tests/` carries the coverage contract for positive, load, autocomplete, negative, and recovery paths.\n- `package.json`, `tsconfig.json`, and `workflow.yaml` define one local execution environment: package scripts, package dependencies, workflow dependency metadata, validation commands, contract smoke, and coverage expectations must agree.\n- `state/` holds persistent runtime data; `artifacts/` holds generated run artifacts. Both are ignored except for `state/.gitkeep`.\n\n## Data Flow\n\n1. A registered workflow command loads the workflow from the local package through Bun.\n2. The named default export validates input, emits progress, and returns the canonical JSON result.\n3. If present, `WorkflowOutput.toTuiMarkdown(result)` provides the markdown view for the TUI and workflow-to-workflow callers.\n4. `codex workflow validate {id}` runs the local validation commands, checks docs/layout/package/dependency/coverage markers, smoke-tests the contract when configured, extracts the TS contract, and publishes it only after validation passes.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors. When the workflow cannot satisfy its contract, fail with a specific error that names the broken path.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.ts`: positive path, progress, JSON result, and markdown companion coverage.\n- `src/tests/workflow.load.test.ts`: loadability smoke.\n- `src/tests/workflow.autocomplete.test.ts`: registry and command-completion readiness smoke.\n- `src/tests/workflow.negative.test.ts`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.ts`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep dependency usage local and remove unused runtime dependencies. Keep `// workflow-covers:` markers aligned with `validation.coverage`, including load and autocomplete. Use the architect/coder workflow cycle: the architect owns this DESIGN.md, implementation follows the settled design, and coder-side design changes are raised as DESIGN.md requests. Keep runtime state and generated artifacts out of git.\n",
         id = workflow.id,
     )
 }
@@ -1879,9 +2023,14 @@ impl FixPlan {
             && !self.create_layout
             && self.add_coverage_markers.is_empty()
             && self.package_names.is_empty()
+            && self.remove_package_names.is_empty()
             && !self.build_script
             && !self.test_script
             && !self.run_script
+            && !self.validation_build_command
+            && !self.validation_test_command
+            && !self.contract_smoke
+            && !self.sync_dependency_metadata
             && !self.refresh_dependencies
             && !self.spec_reset
     }

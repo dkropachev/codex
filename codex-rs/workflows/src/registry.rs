@@ -588,12 +588,12 @@ mod tests {
         .unwrap();
         fs::write(
             workflow.join("README.md"),
-            "# Test\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
+            "# Test\n\n## Usage\n\nRun `/jira-summary`.\n\n## Workflow Runtime\n\nRuns as a local TypeScript workflow package.\n\n## Dependencies\n\nUses local package dependencies only.\n\n## Validation\n\nRuns build and test commands.\n\n## Maintenance\n\nKeep docs, metadata, and tests aligned.\n",
         )
         .unwrap();
         fs::write(
             workflow.join("DESIGN.md"),
-            "# Test Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
+            "# Test Design\n\n## Overview\n\nTest workflow fixture.\n\n## Architecture\n\nSource lives under src/.\n\n## Data Flow\n\nThe workflow returns a JSON result.\n\n## Failure Handling\n\nValidation commands report failures.\n\n## Recovery Behavior\n\nNo recovery behavior.\n\n## Test Matrix\n\nPositive, negative, load, and autocomplete tests.\n\n## Maintenance Notes\n\nKeep validation metadata current.\n",
         )
         .unwrap();
         fs::write(
@@ -602,11 +602,25 @@ mod tests {
   "name": "codex-workflow-test",
   "private": true,
   "type": "module",
+  "scripts": {
+    "build": "echo build",
+    "test": "echo test",
+    "run": "node src/workflow.ts"
+  },
   "dependencies": {
     "@openai/codex-sdk": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "typescript": "latest"
   }
 }
 "#,
+        )
+        .unwrap();
+        fs::write(
+            workflow.join("tsconfig.json"),
+            "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"strict\": true,\n    \"noEmit\": true\n  },\n  \"include\": [\"src/**/*.ts\"]\n}\n",
         )
         .unwrap();
         fs::write(
@@ -640,8 +654,13 @@ mod tests {
             &workflow.join(WORKFLOW_YAML),
             &crate::spec::WorkflowSpec {
                 id: "reports/jira-summary".to_string(),
+                dependencies: json!({
+                    "runtime": ["@openai/codex-sdk"],
+                    "development": ["@types/node", "typescript"],
+                }),
                 validation: json!({
                     "commands": ["npm run build", "npm test"],
+                    "contractSmoke": { "input": {} },
                     "coverage": {
                         "positive": true,
                         "negative": true,
