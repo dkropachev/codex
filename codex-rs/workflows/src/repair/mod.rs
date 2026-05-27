@@ -743,9 +743,11 @@ fn build_fix_plan(
                     continue;
                 }
                 plan.repair_package_manifest = true;
-                plan.repair_tsconfig = command.contains("npm run build");
-                plan.build_script = command.contains("npm run build");
-                plan.test_script = command.contains("npm test");
+                plan.repair_tsconfig =
+                    command.contains("npm run build") || command.contains("bun build");
+                plan.build_script =
+                    command.contains("npm run build") || command.contains("bun build");
+                plan.test_script = command.contains("npm test") || command.contains("bun test");
                 plan.run_script = true;
                 plan.refresh_dependencies = dependency_install_fixable(stdout, stderr);
             }
@@ -836,7 +838,7 @@ fn action_kinds_for_finding(
                 return None;
             }
             let mut kinds = vec![WorkflowRepairActionKind::RepairPackageManifest];
-            if command.contains("npm run build") {
+            if command.contains("npm run build") || command.contains("bun build") {
                 kinds.push(WorkflowRepairActionKind::RepairTsconfig);
             }
             kinds
@@ -913,8 +915,10 @@ fn apply_validation_yaml_fix(
             validation_object.insert(
                 "commands".to_string(),
                 JsonValue::Array(vec![
-                    JsonValue::String("npm run build".to_string()),
-                    JsonValue::String("npm test".to_string()),
+                    JsonValue::String(
+                        "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk".to_string(),
+                    ),
+                    JsonValue::String("bun test src/tests".to_string()),
                 ]),
             );
         }
@@ -1302,19 +1306,21 @@ fn apply_package_manifest_fix(
     if plan.build_script || plan.repair_tsconfig {
         scripts_object.insert(
             "build".to_string(),
-            JsonValue::String("tsc --noEmit".to_string()),
+            JsonValue::String(
+                "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk".to_string(),
+            ),
         );
     }
     if plan.test_script || !scripts_object.contains_key("test") {
         scripts_object.insert(
             "test".to_string(),
-            JsonValue::String("npm exec --yes --package bun -- bun test src/tests".to_string()),
+            JsonValue::String("bun test src/tests".to_string()),
         );
     }
     if plan.run_script || !scripts_object.contains_key("run") {
         scripts_object.insert(
             "run".to_string(),
-            JsonValue::String("npm exec --yes --package bun -- bun src/workflow.ts".to_string()),
+            JsonValue::String("bun src/workflow.ts".to_string()),
         );
     }
 
@@ -1347,7 +1353,7 @@ fn apply_package_manifest_fix(
         "@types/node".to_string(),
         JsonValue::String("latest".to_string()),
     );
-    dev_deps_object.insert("bun".to_string(), JsonValue::String("latest".to_string()));
+    dev_deps_object.remove("bun");
     dev_deps_object.insert(
         "typescript".to_string(),
         JsonValue::String("latest".to_string()),
@@ -1836,7 +1842,10 @@ fn command_fixable(command: &str, _exit_code: Option<i32>) -> bool {
     if command.contains("exit 1") {
         return false;
     }
-    command.contains("npm run build") || command.contains("npm test")
+    command.contains("npm run build")
+        || command.contains("npm test")
+        || command.contains("bun build")
+        || command.contains("bun test")
 }
 
 fn dependency_install_fixable(stdout: &str, stderr: &str) -> bool {

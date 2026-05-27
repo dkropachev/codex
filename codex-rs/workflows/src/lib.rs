@@ -4,6 +4,7 @@ mod command_completion;
 mod context;
 mod execute;
 mod id;
+mod managed_bun;
 mod publication;
 mod quality_hook;
 mod registry;

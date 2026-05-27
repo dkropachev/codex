@@ -129,11 +129,14 @@ pub fn scaffold_workflow_spec(
         }),
         dependencies: json!({
             "runtime": ["@openai/codex-sdk"],
-            "development": ["bun", "typescript", "@types/node"]
+            "development": ["typescript", "@types/node"]
         }),
         validation: json!({
             "profile": config.validation_profile.clone().unwrap_or_else(|| "default".to_string()),
-            "commands": ["npm run build", "npm test"],
+            "commands": [
+                "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
+                "bun test src/tests"
+            ],
             "contractSmoke": {
                 "input": { "input": "example" }
             },

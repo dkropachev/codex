@@ -795,16 +795,15 @@ fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -
   "private": true,
   "type": "module",
   "scripts": {{
-    "build": "node --experimental-strip-types --check src/workflow.ts",
-    "test": "npm exec --yes --package bun -- bun test src/tests",
-    "run": "npm exec --yes --package bun -- bun src/workflow.ts"
+    "build": "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
+    "test": "bun test src/tests",
+    "run": "bun src/workflow.ts"
   }},
   "dependencies": {{
     "@openai/codex-sdk": "latest"
   }},
   "devDependencies": {{
     "@types/node": "latest",
-    "bun": "latest",
     "typescript": "latest"
   }}
 }}

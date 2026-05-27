@@ -17,12 +17,16 @@ codex-artifactory = { workspace = true }
 codex-config = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-home-dir = { workspace = true }
+flate2 = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true }
 shlex = { workspace = true }
-regex = { workspace = true }
+tar = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread"] }
 toml_edit = { workspace = true }

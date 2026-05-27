@@ -1,6 +1,4 @@
 use std::env;
-#[cfg(windows)]
-use std::ffi::OsString;
 use std::fs;
 use std::io::IsTerminal;
 use std::path::Path;
@@ -468,6 +466,7 @@ pub async fn complete_workflow(
     input: &crate::command::WorkflowCommandInput,
 ) -> Result<Vec<crate::command_completion::WorkflowCommandCompletionSuggestion>> {
     let output = run_workflow_process(
+        /*codex_home*/ None,
         working_directory,
         workflow_dir,
         workflow_path,
@@ -545,6 +544,7 @@ pub(crate) async fn run_workflow(
     }
 
     let output = run_workflow_legacy(
+        codex_home,
         working_directory,
         workflow_dir,
         workflow_path,
@@ -558,7 +558,7 @@ pub(crate) async fn run_workflow(
 
 #[cfg(not(unix))]
 pub(crate) async fn run_workflow(
-    _codex_home: &Path,
+    codex_home: &Path,
     working_directory: &Path,
     workflow_dir: &Path,
     workflow_path: &Path,
@@ -566,6 +566,7 @@ pub(crate) async fn run_workflow(
     options: WorkflowRuntimeRunOptions<'_>,
 ) -> Result<WorkflowRuntimeOutput> {
     let output = run_workflow_legacy(
+        codex_home,
         working_directory,
         workflow_dir,
         workflow_path,
@@ -573,11 +574,12 @@ pub(crate) async fn run_workflow(
         options.event_handler,
     )
     .await?;
-    validate_workflow_runtime_output(_codex_home, options.workflows, workflow_dir, &output)?;
+    validate_workflow_runtime_output(codex_home, options.workflows, workflow_dir, &output)?;
     Ok(output)
 }
 
 async fn run_workflow_legacy(
+    codex_home: &Path,
     working_directory: &Path,
     workflow_dir: &Path,
     workflow_path: &Path,
@@ -585,6 +587,7 @@ async fn run_workflow_legacy(
     event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
 ) -> Result<WorkflowRuntimeOutput> {
     run_workflow_process(
+        Some(codex_home),
         working_directory,
         workflow_dir,
         workflow_path,
@@ -633,6 +636,7 @@ fn validate_workflow_runtime_output(
 }
 
 async fn run_workflow_process(
+    codex_home: Option<&Path>,
     working_directory: &Path,
     workflow_dir: &Path,
     workflow_path: &Path,
@@ -641,8 +645,8 @@ async fn run_workflow_process(
     event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
 ) -> Result<WorkflowRuntimeOutput> {
     let runner_path = write_runner_script()?;
-    let engine = workflow_ts_engine_command(workflow_dir)?;
-    let mut child = engine.command();
+    let engine_path = workflow_ts_engine_path(codex_home, workflow_dir)?;
+    let mut child = Command::new(&engine_path);
     child
         .arg(&runner_path)
         .arg("--mode")
@@ -781,57 +785,46 @@ fn write_runner_script() -> Result<PathBuf> {
     Ok(path)
 }
 
-pub(crate) struct WorkflowTsEngineCommand {
-    program: PathBuf,
-    args: &'static [&'static str],
-}
-
-impl WorkflowTsEngineCommand {
-    fn new(program: impl Into<PathBuf>) -> Self {
-        Self {
-            program: program.into(),
-            args: &[],
-        }
-    }
-
-    fn with_args(program: impl Into<PathBuf>, args: &'static [&'static str]) -> Self {
-        Self {
-            program: program.into(),
-            args,
-        }
-    }
-
-    pub(crate) fn command(&self) -> Command {
-        let mut command = Command::new(&self.program);
-        command.args(self.args);
-        command
-    }
-}
-
-pub(crate) fn workflow_ts_engine_command(workflow_dir: &Path) -> Result<WorkflowTsEngineCommand> {
+pub(crate) fn workflow_ts_engine_path(
+    codex_home: Option<&Path>,
+    workflow_dir: &Path,
+) -> Result<PathBuf> {
     let bun_path = workflow_bun_path(workflow_dir);
     if bun_path.is_file() {
-        return Ok(WorkflowTsEngineCommand::new(bun_path));
+        return Ok(bun_path);
     }
 
-    if command_on_path("bun") {
-        return Ok(WorkflowTsEngineCommand::new("bun"));
+    if let Some(managed_bun_path) = crate::managed_bun::cached_managed_bun_path(codex_home)? {
+        return Ok(managed_bun_path);
     }
+
+    if crate::managed_bun::command_on_path("bun") {
+        return Ok(PathBuf::from("bun"));
+    }
+
+    let managed_bun_error = match crate::managed_bun::ensure_managed_bun(codex_home) {
+        Ok(Some(managed_bun_path)) => return Ok(managed_bun_path),
+        Ok(None) => None,
+        Err(err) => Some(err),
+    };
 
     let tsx_path = workflow_tsx_path(workflow_dir);
     if tsx_path.is_file() {
-        return Ok(WorkflowTsEngineCommand::new(tsx_path));
+        return Ok(tsx_path);
     }
 
-    if command_on_path("npm") {
-        return Ok(WorkflowTsEngineCommand::with_args(
-            "npm",
-            &["exec", "--yes", "--package", "bun", "--", "bun"],
-        ));
+    if let Some(err) = managed_bun_error {
+        return Err(err).with_context(|| {
+            format!(
+                "workflow runtime requires managed Bun in CODEX_HOME, local `{}`, `bun` on PATH, or legacy local `{}`",
+                bun_path.display(),
+                tsx_path.display()
+            )
+        });
     }
 
     Err(anyhow::anyhow!(
-        "workflow runtime requires Bun (local `{}`, `bun` on PATH, or `npm exec --package bun`); legacy local `{}` was also not found, so run the workflow install step in this workflow directory before executing the workflow directly",
+        "workflow runtime requires managed Bun in CODEX_HOME, local `{}`, `bun` on PATH, or legacy local `{}`",
         bun_path.display(),
         tsx_path.display()
     ))
@@ -851,33 +844,6 @@ fn workflow_tsx_path(workflow_dir: &Path) -> PathBuf {
     } else {
         workflow_dir.join("node_modules/.bin/tsx")
     }
-}
-
-fn command_on_path(command: &str) -> bool {
-    let Some(paths) = env::var_os("PATH") else {
-        return false;
-    };
-
-    env::split_paths(&paths).any(|dir| {
-        if dir.join(command).is_file() {
-            return true;
-        }
-
-        #[cfg(windows)]
-        {
-            let extensions =
-                env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
-            for extension in env::split_paths(&extensions) {
-                let extension = extension.as_os_str().to_string_lossy();
-                let extension = extension.trim_start_matches('.');
-                if dir.join(format!("{command}.{extension}")).is_file() {
-                    return true;
-                }
-            }
-        }
-
-        false
-    })
 }
 
 #[cfg(test)]

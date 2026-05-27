@@ -98,7 +98,9 @@ pub(crate) fn run_validation_command(
     command: &str,
     cwd: &Path,
 ) -> Result<WorkflowValidationCommandResult> {
-    let output = validation_shell_command(command)
+    let mut shell_command = validation_shell_command(command);
+    crate::managed_bun::prepend_managed_bun_to_path(&mut shell_command, /*cache_root*/ None)?;
+    let output = shell_command
         .current_dir(cwd)
         .output()
         .with_context(|| format!("failed to run validation command `{command}`"))?;

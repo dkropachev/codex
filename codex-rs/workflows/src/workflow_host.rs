@@ -13,7 +13,7 @@ use crate::workflow_runtime::WORKFLOW_RUNTIME_EVENT_PREFIX;
 use crate::workflow_runtime::WorkflowRuntimeEvent;
 use crate::workflow_runtime::WorkflowRuntimeEventHandler;
 use crate::workflow_runtime::WorkflowRuntimeOutput;
-use crate::workflow_runtime::workflow_ts_engine_command;
+use crate::workflow_runtime::workflow_ts_engine_path;
 use anyhow::Context as _;
 use anyhow::Result;
 use serde::Deserialize;
@@ -22,6 +22,7 @@ use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::net::UnixStream;
+use tokio::process::Command;
 use tokio::time::sleep;
 
 const WORKFLOW_RUNTIME_MODE_ENV: &str = "CODEX_WORKFLOW_RUNTIME_MODE";
@@ -240,8 +241,8 @@ async fn ensure_workflow_host(
     }
 
     let host_script = write_host_script()?;
-    let engine = workflow_ts_engine_command(workflow_dir)?;
-    let mut command = engine.command();
+    let engine_path = workflow_ts_engine_path(Some(codex_home), workflow_dir)?;
+    let mut command = Command::new(&engine_path);
     command
         .arg(&host_script)
         .arg("--serve")
@@ -321,8 +322,9 @@ fn push_stderr_line(stderr: &mut String, line: impl AsRef<str>) {
 
 const WORKFLOW_HOST_SOURCE: &str = r##"
 import { createServer } from "node:net";
-import { readFileSync, unlinkSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { randomUUID } from "node:crypto";
@@ -529,10 +531,46 @@ function legacyProgressToStatus(workflowName, message, data) {
   };
 }
 
-function cacheBustedWorkflowUrl(workflowPath, executionId) {
+function queryCacheBustedWorkflowUrl(workflowPath, executionId) {
   const moduleUrl = pathToFileURL(path.resolve(workflowPath)).href;
   const separator = moduleUrl.includes("?") ? "&" : "?";
   return `${moduleUrl}${separator}executionId=${encodeURIComponent(executionId)}`;
+}
+
+function cacheBustedWorkflowImport(workflowPath, executionId) {
+  const resolvedWorkflowPath = path.resolve(workflowPath);
+  const workflowDir = path.dirname(resolvedWorkflowPath);
+  const tempDir = mkdtempSync(path.join(tmpdir(), "codex-workflow-import-"));
+  const copiedWorkflowDir = path.join(tempDir, path.basename(workflowDir));
+  try {
+    cpSync(workflowDir, copiedWorkflowDir, {
+      recursive: true,
+      filter(source) {
+        const relative = path.relative(workflowDir, source);
+        if (!relative) {
+          return true;
+        }
+        const [first] = relative.split(path.sep);
+        return ![".git", "artifacts", "node_modules", "state"].includes(first);
+      },
+    });
+    const originalNodeModules = path.join(workflowDir, "node_modules");
+    if (existsSync(originalNodeModules)) {
+      symlinkSync(originalNodeModules, path.join(copiedWorkflowDir, "node_modules"), "dir");
+    }
+    return {
+      url: pathToFileURL(path.join(copiedWorkflowDir, path.basename(resolvedWorkflowPath))).href,
+      cleanup() {
+        rmSync(tempDir, { recursive: true, force: true });
+      },
+    };
+  } catch (_error) {
+    rmSync(tempDir, { recursive: true, force: true });
+    return {
+      url: queryCacheBustedWorkflowUrl(workflowPath, executionId),
+      cleanup() {},
+    };
+  }
 }
 
 function captureStderr() {
@@ -713,9 +751,12 @@ function createStatusDispatcher(emit, statusHook) {
 async function executeWorkflowRequest(request, registry, emit, statusHook) {
   const restoreStdout = suppressStdout();
   const stderrCapture = captureStderr();
+  let cleanupWorkflowImport = () => {};
   try {
     return await withWorkflowContext(request, async () => {
-      const workflowModule = await loadWorkflow(request.workflowPath, request.executionId ?? randomUUID());
+      const loadedWorkflow = await loadWorkflow(request.workflowPath, request.executionId ?? randomUUID());
+      cleanupWorkflowImport = loadedWorkflow.cleanup;
+      const workflowModule = loadedWorkflow.module;
       const workflow = workflowModule.default;
       const status = createStatusDispatcher(emit, statusHook);
       const context = createRuntimeContext(request, registry, emit, status);
@@ -747,13 +788,23 @@ async function executeWorkflowRequest(request, registry, emit, statusHook) {
       exitStatus: "1",
     };
   } finally {
+    cleanupWorkflowImport();
     stderrCapture.restore();
     restoreStdout();
   }
 }
 
 async function loadWorkflow(workflowPath, executionId) {
-  return import(cacheBustedWorkflowUrl(workflowPath, executionId));
+  const target = cacheBustedWorkflowImport(workflowPath, executionId);
+  try {
+    return {
+      module: await import(target.url),
+      cleanup: target.cleanup,
+    };
+  } catch (error) {
+    target.cleanup();
+    throw error;
+  }
 }
 
 function createRuntimeContext(request, registry, emit, statusSink) {
