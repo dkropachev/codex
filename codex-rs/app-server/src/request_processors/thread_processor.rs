@@ -46,8 +46,7 @@ fn collect_resume_override_mismatches(
         let requested_service_tier = requested_service_tier.as_ref().map(ApiServiceTier::as_str);
         let active_service_tier = config_snapshot.service_tier.as_deref();
         mismatch_details.push(format!(
-            "service_tier requested={:?} active={:?}",
-            requested_service_tier, active_service_tier
+            "service_tier requested={requested_service_tier:?} active={active_service_tier:?}"
         ));
     }
     if let Some(requested_cwd) = request.cwd.as_deref() {

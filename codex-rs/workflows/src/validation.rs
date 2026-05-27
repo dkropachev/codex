@@ -12,6 +12,7 @@ use crate::registry::WorkflowValidationStatus;
 use crate::spec::WORKFLOW_YAML;
 use crate::spec::read_workflow_spec;
 use crate::validation_finding::WorkflowValidationFinding;
+use crate::validation_package::is_bun_runtime_command;
 use crate::validation_package::validate_local_package_imports;
 use crate::validation_package::validate_package_manifest;
 
@@ -305,7 +306,18 @@ fn validate_validation_commands(
                 .filter_map(JsonValue::as_str)
                 .collect::<Vec<_>>();
             let mut findings = Vec::new();
-            if !command_strings.iter().any(|command| {
+            let mut bun_commands = Vec::new();
+            for command in &command_strings {
+                if is_bun_runtime_command(command) {
+                    bun_commands.push(*command);
+                } else {
+                    findings.push(WorkflowValidationFinding::NonBunValidationCommand {
+                        path: PathBuf::from(WORKFLOW_YAML),
+                        command: (*command).to_string(),
+                    });
+                }
+            }
+            if !bun_commands.iter().any(|command| {
                 let command = command.to_ascii_lowercase();
                 command.contains("build")
                     || command.contains("typecheck")
@@ -315,7 +327,7 @@ fn validate_validation_commands(
                     path: PathBuf::from(WORKFLOW_YAML),
                 });
             }
-            if !command_strings
+            if !bun_commands
                 .iter()
                 .any(|command| command.to_ascii_lowercase().contains("test"))
             {
@@ -347,12 +359,12 @@ fn validate_contract_smoke_metadata(
     };
     let valid = match smoke {
         JsonValue::Bool(true) => true,
-        JsonValue::String(command) => !command.trim().is_empty(),
+        JsonValue::String(command) => !command.trim().is_empty() && is_bun_runtime_command(command),
         JsonValue::Object(object) if object.get("enabled") != Some(&JsonValue::Bool(false)) => {
             object
                 .get("command")
                 .and_then(JsonValue::as_str)
-                .is_none_or(|command| !command.trim().is_empty())
+                .is_none_or(|command| !command.trim().is_empty() && is_bun_runtime_command(command))
         }
         _ => false,
     };
@@ -713,9 +725,9 @@ mod tests {
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc --noEmit",
-    "test": "node --test src/tests/*.test.ts",
-    "run": "node src/workflow.ts"
+    "build": "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
+    "test": "bun test src/tests",
+    "run": "bun src/workflow.ts"
   },
   "dependencies": {
     "@openai/codex-sdk": "latest"
@@ -864,7 +876,7 @@ test("workflow rejects invalid input", async () => {
                     "development": ["@types/node", "typescript"],
                 }),
                 validation: json!({
-                    "commands": ["npm run build", "npm test"],
+                    "commands": ["bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk", "bun test src/tests"],
                     "contractSmoke": { "input": { "input": "example" } },
                     "coverage": {
                         "positive": true,
@@ -942,7 +954,7 @@ test("workflow rejects invalid input", async () => {
                     "outputSchema": { "type": "object" }
                 }),
                 validation: json!({
-                    "commands": ["npm run build", "npm test"],
+                    "commands": ["bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk", "bun test src/tests"],
                     "coverage": {
                         "positive": true,
                         "negative": true,
@@ -990,7 +1002,7 @@ test("workflow rejects invalid input", async () => {
                     "outputSchema": { "type": "object", "additionalProperties": true }
                 }),
                 validation: json!({
-                    "commands": ["npm run build", "npm test"],
+                    "commands": ["bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk", "bun test src/tests"],
                     "contractSmoke": { "input": { "input": "example" } },
                     "coverage": {
                         "positive": true,
@@ -1108,9 +1120,9 @@ test("workflow rejects invalid input", async () => {
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc --noEmit",
-    "test": "node --test src/tests/*.test.ts",
-    "run": "node src/workflow.ts"
+    "build": "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
+    "test": "bun test src/tests",
+    "run": "bun src/workflow.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "latest",
@@ -1134,6 +1146,92 @@ test("workflow rejects invalid input", async () => {
                 "package.json declares unused runtime dependency `@modelcontextprotocol/sdk`"
                     .to_string(),
                 "package `@modelcontextprotocol/sdk` is listed in package.json dependencies but missing from workflow.yaml dependencies.runtime".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn validate_workflow_dir_rejects_node_and_tsx_runtime_drift() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = create_valid_workflow_dir(&root, "example");
+        fs::write(workflow_dir.join("package-lock.json"), "{}\n").unwrap();
+        fs::write(
+            workflow_dir.join("package.json"),
+            r#"{
+  "name": "codex-workflow-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsx src/workflow.ts",
+    "test": "node --test src/tests/*.test.ts",
+    "run": "node src/workflow.ts"
+  },
+  "dependencies": {
+    "@openai/codex-sdk": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("src/storage.ts"),
+            "import { DatabaseSync } from \"node:sqlite\";\nexport { DatabaseSync };\n",
+        )
+        .unwrap();
+        write_workflow_spec(
+            &workflow_dir.join(crate::spec::WORKFLOW_YAML),
+            &WorkflowSpec {
+                id: "example".to_string(),
+                dependencies: json!({
+                    "runtime": ["@openai/codex-sdk"],
+                    "development": ["@types/node", "tsx", "typescript"],
+                }),
+                validation: json!({
+                    "commands": ["node --import tsx src/tests/contract-smoke.ts"],
+                    "contractSmoke": {
+                        "command": "node --import tsx src/tests/contract-smoke.ts"
+                    },
+                    "coverage": {
+                        "positive": true,
+                        "negative": true,
+                        "progress": true,
+                        "finalResult": true,
+                        "failureUx": true,
+                        "load": true,
+                        "autocomplete": true,
+                        "recovery": false,
+                    }
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
+        assert_eq!(
+            finding_messages(&validation.findings),
+            vec![
+                "package-lock.json is not allowed for Bun workflows".to_string(),
+                "imports Node-only runtime module `node:sqlite`".to_string(),
+                "package.json `build` script must use Bun, found `tsx src/workflow.ts`".to_string(),
+                "package.json `test` script must use Bun, found `node --test src/tests/*.test.ts`".to_string(),
+                "package.json `run` script must use Bun, found `node src/workflow.ts`".to_string(),
+                "package.json field `engines.node` must be absent because workflows run on managed Bun".to_string(),
+                "package.json dependency `tsx` is not allowed in Bun workflows".to_string(),
+                "validation command `node --import tsx src/tests/contract-smoke.ts` must use Bun".to_string(),
+                "validation commands must include a build/typecheck step".to_string(),
+                "validation commands must include a test step".to_string(),
+                "validation.contractSmoke must be true, a command string, or an enabled object".to_string(),
             ]
         );
     }
@@ -1174,6 +1272,7 @@ test("workflow rejects invalid input", async () => {
         assert_eq!(
             finding_messages(&validation.findings),
             vec![
+                "validation command `echo ok` must use Bun".to_string(),
                 "validation commands must include a build/typecheck step".to_string(),
                 "validation commands must include a test step".to_string(),
                 "validation.contractSmoke must be configured".to_string(),
@@ -1213,7 +1312,7 @@ export default { async run() { return leftPad("x", 2); } };
             &WorkflowSpec {
                 id: "example".to_string(),
                 validation: json!({
-                    "commands": ["npm run build", "npm test"],
+                    "commands": ["bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk", "bun test src/tests"],
                     "coverage": {
                         "positive": true,
                         "negative": true,

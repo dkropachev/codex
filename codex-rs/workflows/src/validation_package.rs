@@ -91,14 +91,21 @@ pub(crate) fn validate_package_manifest(
     workflow_dir: &Path,
     spec: Option<&crate::spec::WorkflowSpec>,
 ) -> Vec<WorkflowValidationFinding> {
+    let mut findings = Vec::new();
+    findings.extend(validate_disallowed_runtime_files(workflow_dir));
+    findings.extend(validate_bun_runtime_imports(workflow_dir));
+
     let package_json_path = workflow_dir.join("package.json");
     let package_json = match read_package_manifest(&package_json_path) {
         Ok(Some(value)) => value,
-        Ok(None) => return Vec::new(),
-        Err(finding) => return vec![finding],
+        Ok(None) => return findings,
+        Err(finding) => {
+            findings.push(finding);
+            return findings;
+        }
     };
-    let mut findings = Vec::new();
     validate_package_manifest_shape(&package_json, &mut findings);
+    validate_bun_dependency_policy(&package_json, &mut findings);
     validate_unused_runtime_dependencies(workflow_dir, &package_json, &mut findings);
     if let Some(spec) = spec {
         validate_dependency_metadata(spec, &package_json, &mut findings);
@@ -194,16 +201,38 @@ fn validate_package_manifest_shape(
 
     let scripts = object.get("scripts").and_then(JsonValue::as_object);
     for script in REQUIRED_PACKAGE_SCRIPTS {
-        if scripts
+        let command = scripts
             .and_then(|scripts| scripts.get(*script))
-            .and_then(JsonValue::as_str)
-            .is_none_or(|value| value.trim().is_empty())
-        {
-            findings.push(WorkflowValidationFinding::MissingPackageScript {
-                path: path.clone(),
-                script: (*script).to_string(),
-            });
+            .and_then(JsonValue::as_str);
+        match command {
+            Some(command) if !command.trim().is_empty() => {
+                if !is_bun_package_script(script, command) {
+                    findings.push(WorkflowValidationFinding::NonBunPackageScript {
+                        path: path.clone(),
+                        script: (*script).to_string(),
+                        command: command.to_string(),
+                    });
+                }
+            }
+            _ => {
+                findings.push(WorkflowValidationFinding::MissingPackageScript {
+                    path: path.clone(),
+                    script: (*script).to_string(),
+                });
+            }
         }
+    }
+
+    if object
+        .get("engines")
+        .and_then(JsonValue::as_object)
+        .is_some_and(|engines| engines.contains_key("node"))
+    {
+        findings.push(WorkflowValidationFinding::InvalidPackageManifestField {
+            path: path.clone(),
+            field: "engines.node".to_string(),
+            expected: "absent because workflows run on managed Bun".to_string(),
+        });
     }
 
     for field in [
@@ -219,6 +248,76 @@ fn validate_package_manifest_shape(
                 expected: "an object".to_string(),
             });
         }
+    }
+}
+
+fn validate_disallowed_runtime_files(workflow_dir: &Path) -> Vec<WorkflowValidationFinding> {
+    [
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+    ]
+    .into_iter()
+    .filter_map(|file_name| {
+        let path = workflow_dir.join(file_name);
+        path.exists().then(
+            || WorkflowValidationFinding::DisallowedWorkflowRuntimeFile {
+                path: PathBuf::from(file_name),
+            },
+        )
+    })
+    .collect()
+}
+
+fn validate_bun_runtime_imports(workflow_dir: &Path) -> Vec<WorkflowValidationFinding> {
+    let mut findings = Vec::new();
+    for (relative, _path, contents) in workflow_code_files(workflow_dir) {
+        for specifier in imported_specifiers(&contents) {
+            if is_node_only_runtime_specifier(&specifier) {
+                findings.push(WorkflowValidationFinding::DisallowedNodeRuntimeImport {
+                    path: relative.clone(),
+                    specifier,
+                });
+            }
+        }
+    }
+    findings.sort_by_key(WorkflowValidationFinding::message);
+    findings.dedup();
+    findings
+}
+
+fn validate_bun_dependency_policy(
+    package_json: &JsonValue,
+    findings: &mut Vec<WorkflowValidationFinding>,
+) {
+    for field in ["dependencies", "devDependencies", "optionalDependencies"] {
+        for package_name in package_dependency_names(package_json, field) {
+            if is_disallowed_bun_dependency(&package_name) {
+                findings.push(WorkflowValidationFinding::DisallowedPackageDependency {
+                    path: PathBuf::from("package.json"),
+                    package_name,
+                });
+            }
+        }
+    }
+}
+
+fn is_bun_package_script(script: &str, command: &str) -> bool {
+    if contains_disallowed_runtime_command(command) {
+        return false;
+    }
+    let command = command.to_ascii_lowercase();
+    if !command.contains("bun") {
+        return false;
+    }
+    match script {
+        "build" => {
+            command.contains("build") || command.contains("tsc") || command.contains("typecheck")
+        }
+        "test" => command.contains("test"),
+        "run" => command.contains("src/workflow.ts"),
+        _ => true,
     }
 }
 
@@ -353,7 +452,6 @@ fn package_used_by_scripts(package_name: &str, script_text: &str) -> bool {
     script_text.contains(package_name)
         || match package_name {
             "typescript" => script_text.contains("tsc"),
-            "tsx" => script_text.contains("tsx"),
             _ => false,
         }
 }
@@ -409,6 +507,36 @@ fn is_builtin_specifier(specifier: &str) -> bool {
         return true;
     }
     BARE_NODE_BUILTINS.contains(&specifier)
+}
+
+fn is_node_only_runtime_specifier(specifier: &str) -> bool {
+    matches!(specifier, "node:sqlite")
+}
+
+fn is_disallowed_bun_dependency(package_name: &str) -> bool {
+    matches!(package_name, "tsx" | "bun")
+}
+
+pub(crate) fn is_bun_runtime_command(command: &str) -> bool {
+    command.to_ascii_lowercase().contains("bun") && !contains_disallowed_runtime_command(command)
+}
+
+fn contains_disallowed_runtime_command(command: &str) -> bool {
+    let command = command.to_ascii_lowercase();
+    [
+        "node ",
+        "node\t",
+        "node --",
+        "node.exe ",
+        "tsx",
+        "npm ",
+        "npm\t",
+        "npx ",
+        "pnpm ",
+        "yarn ",
+    ]
+    .into_iter()
+    .any(|needle| command.contains(needle))
 }
 
 fn workflow_code_files(workflow_dir: &Path) -> Vec<(PathBuf, PathBuf, String)> {

@@ -9594,6 +9594,8 @@ impl ChatWidget {
         let enabled = self.config.features.enabled(Feature::Workflows);
         self.bottom_pane.set_workflows_enabled(enabled);
         if enabled {
+            #[cfg(not(test))]
+            codex_workflows::prefetch_managed_bun_runtime(self.config.codex_home.as_path());
             let workflows = codex_workflows::discover_workflows(
                 self.config.codex_home.as_path(),
                 self.config.cwd.as_path(),

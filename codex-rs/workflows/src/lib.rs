@@ -53,6 +53,7 @@ pub use id::mention_target;
 pub use id::normalize_workflow_id;
 pub use id::parse_mention_target;
 pub use id::workflow_path;
+pub use managed_bun::prefetch_managed_bun_runtime;
 pub use publication::publish_tool;
 pub use publication::read_active_workflow_tool_registrations_for_hook;
 pub use publication::read_active_workflow_tools_for_hook;

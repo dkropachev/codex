@@ -976,9 +976,19 @@ api:
         fs::create_dir_all(path.join("src/tests")).expect("workflow dir");
         fs::create_dir_all(path.join("state")).expect("workflow dir");
         fs::create_dir_all(path.join(".git")).expect("workflow dir");
-        fs::write(path.join("README.md"), "# Code Review\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n").expect("workflow readme");
-        fs::write(path.join("DESIGN.md"), "# Code Review Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n").expect("workflow design");
-        fs::write(path.join("package.json"), "{\n  \"name\": \"codex-workflow-code-review\",\n  \"private\": true,\n  \"type\": \"module\"\n}\n").expect("workflow package");
+        fs::write(
+            path.join(".gitignore"),
+            "node_modules/\nartifacts/\nstate/*\n!state/.gitkeep\n",
+        )
+        .expect("workflow gitignore");
+        fs::write(path.join("README.md"), "# Code Review\n\n## Usage\n\nRun `/code-review --review-id <id>` to inspect a submitted change.\n\n## Workflow Runtime\n\nThe workflow runs on managed Bun with local dependencies.\n\n## Dependencies\n\nRuntime dependencies are declared in workflow.yaml and package.json.\n\n## Validation\n\nValidation runs Bun build and test commands plus a contract smoke input.\n\n## Maintenance\n\nKeep option metadata aligned with the exported workflow input type.\n").expect("workflow readme");
+        fs::write(path.join("DESIGN.md"), "# Code Review Design\n\n## Overview\n\nThe workflow summarizes review metadata and optional comment details.\n\n## Architecture\n\nThe command parser maps slash arguments into a typed workflow input object.\n\n## Data Flow\n\nUser arguments flow through command completion into workflow execution.\n\n## Failure Handling\n\nInvalid input is rejected before the workflow performs review work.\n\n## Recovery Behavior\n\nUsers can retry with corrected arguments without changing workflow state.\n\n## Test Matrix\n\nCoverage includes positive, negative, load, autocomplete, and recovery paths.\n\n## Maintenance Notes\n\nKeep workflow.yaml dependencies and package.json dependencies synchronized.\n").expect("workflow design");
+        fs::write(path.join("package.json"), "{\n  \"name\": \"codex-workflow-code-review\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\n    \"build\": \"bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk\",\n    \"test\": \"bun test src/tests\",\n    \"run\": \"bun src/workflow.ts\"\n  },\n  \"dependencies\": {\n    \"@openai/codex-sdk\": \"latest\"\n  },\n  \"devDependencies\": {\n    \"@types/node\": \"latest\",\n    \"typescript\": \"latest\"\n  }\n}\n").expect("workflow package");
+        fs::write(
+            path.join("tsconfig.json"),
+            "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"strict\": true,\n    \"noEmit\": true\n  },\n  \"include\": [\"src/**/*.ts\"]\n}\n",
+        )
+        .expect("workflow tsconfig");
         fs::write(path.join("src/workflow.ts"), "export {};\n").expect("workflow source");
         fs::write(
             path.join("src/tests/workflow.positive.test.ts"),
@@ -1024,10 +1034,19 @@ api:
             "      includeComments:\n",
             "        type: boolean\n",
             "        description: Include comment bodies\n",
+            "dependencies:\n",
+            "  runtime:\n",
+            "    - '@openai/codex-sdk'\n",
+            "  development:\n",
+            "    - '@types/node'\n",
+            "    - typescript\n",
             "validation:\n",
             "  commands:\n",
-            "    - npm run build\n",
-            "    - npm test\n",
+            "    - bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk\n",
+            "    - bun test src/tests\n",
+            "  contractSmoke:\n",
+            "    input:\n",
+            "      reviewId: smoke\n",
             "  coverage:\n",
             "    positive: true\n",
             "    negative: true\n",

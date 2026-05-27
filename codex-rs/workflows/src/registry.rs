@@ -603,9 +603,9 @@ mod tests {
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "echo build",
-    "test": "echo test",
-    "run": "node src/workflow.ts"
+    "build": "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
+    "test": "bun test src/tests",
+    "run": "bun src/workflow.ts"
   },
   "dependencies": {
     "@openai/codex-sdk": "latest"
@@ -659,7 +659,7 @@ mod tests {
                     "development": ["@types/node", "typescript"],
                 }),
                 validation: json!({
-                    "commands": ["npm run build", "npm test"],
+                    "commands": ["bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk", "bun test src/tests"],
                     "contractSmoke": { "input": {} },
                     "coverage": {
                         "positive": true,
@@ -752,8 +752,13 @@ mod tests {
             &dir.join(WORKFLOW_YAML),
             &crate::spec::WorkflowSpec {
                 id: id.to_string(),
+                dependencies: json!({
+                    "runtime": [],
+                    "development": ["@types/node", "typescript"],
+                }),
                 validation: json!({
-                    "commands": ["npm run build", "npm test"],
+                    "commands": ["bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk", "bun test src/tests"],
+                    "contractSmoke": { "input": {} },
                     "coverage": {
                         "positive": true,
                         "negative": true,

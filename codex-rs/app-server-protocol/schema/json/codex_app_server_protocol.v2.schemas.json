@@ -20077,6 +20077,58 @@
         },
         {
           "properties": {
+            "command": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "script": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "nonBunPackageScript"
+              ],
+              "title": "NonBunPackageScriptWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "command",
+            "path",
+            "script",
+            "type"
+          ],
+          "title": "NonBunPackageScriptWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "package_name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "disallowedPackageDependency"
+              ],
+              "title": "DisallowedPackageDependencyWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "package_name",
+            "path",
+            "type"
+          ],
+          "title": "DisallowedPackageDependencyWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
             "package_name": {
               "type": "string"
             },
@@ -20101,6 +20153,50 @@
             "type"
           ],
           "title": "UndeclaredPackageImportWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "specifier": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "disallowedNodeRuntimeImport"
+              ],
+              "title": "DisallowedNodeRuntimeImportWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "specifier",
+            "type"
+          ],
+          "title": "DisallowedNodeRuntimeImportWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "disallowedWorkflowRuntimeFile"
+              ],
+              "title": "DisallowedWorkflowRuntimeFileWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "DisallowedWorkflowRuntimeFileWorkflowValidationFindingInfo",
           "type": "object"
         },
         {
@@ -20281,6 +20377,30 @@
             "type"
           ],
           "title": "MissingTestValidationCommandWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "nonBunValidationCommand"
+              ],
+              "title": "NonBunValidationCommandWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "command",
+            "path",
+            "type"
+          ],
+          "title": "NonBunValidationCommandWorkflowValidationFindingInfo",
           "type": "object"
         },
         {

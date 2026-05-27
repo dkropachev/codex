@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::env;
 #[cfg(windows)]
 use std::ffi::OsString;
@@ -7,6 +8,8 @@ use std::io::Cursor;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -27,6 +30,8 @@ const BUN_ARCHIVE_ENTRY: &str = "package/bin/bun";
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 const INSTALL_LOCK_TIMEOUT: Duration = Duration::from_secs(180);
 const INSTALL_LOCK_RETRY: Duration = Duration::from_millis(100);
+
+static PREFETCHED_CACHE_ROOTS: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
 
 #[derive(Clone, Copy)]
 struct ManagedBunPackage {
@@ -105,6 +110,19 @@ pub(crate) fn ensure_managed_bun(cache_root: Option<&Path>) -> Result<Option<Pat
     })?;
 
     Ok(Some(bun_path))
+}
+
+pub fn prefetch_managed_bun_runtime(cache_root: &Path) {
+    let cache_root = cache_root.to_path_buf();
+    let cache_roots = PREFETCHED_CACHE_ROOTS.get_or_init(|| Mutex::new(BTreeSet::new()));
+    if let Ok(mut cache_roots) = cache_roots.lock()
+        && !cache_roots.insert(cache_root.clone())
+    {
+        return;
+    }
+    thread::spawn(move || {
+        let _ = ensure_managed_bun(Some(&cache_root));
+    });
 }
 
 pub(crate) fn prepend_managed_bun_to_path(

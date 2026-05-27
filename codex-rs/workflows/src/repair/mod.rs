@@ -602,7 +602,7 @@ fn build_ai_repair_prompt(
 ) -> Result<String> {
     let findings_json = serde_json::to_string_pretty(unsupported_findings)?;
     Ok(format!(
-        "You are the workflow-coder for a Codex workflow repair pass.\n\nOnly modify files inside this workflow directory: `{workflow_dir}`. Do not edit files outside it. Keep writes inside this workflow root. Do not edit `DESIGN.md`. If the right fix requires a design change, write a `DESIGN.md request` for the parent architect instead.\n\nKeep the workflow in the standard environment: TypeScript source in `src/`, tests in `src/tests/`, persistent state in `state/`, generated artifacts in `artifacts/`, a `codex-workflow-*` private ESM package, a local `tsconfig.json`, and non-empty README/DESIGN sections. Use only local dependencies declared in `package.json`, remove unused runtime dependencies, and keep `workflow.yaml` `dependencies.runtime` / `dependencies.development` aligned with `package.json` `dependencies` / `devDependencies`. Keep validation metadata complete: build and test commands, `validation.contractSmoke`, and coverage markers for the declared coverage keys.\n\nThe deterministic repair pass already handled known cases and stopped on these unsupported findings:\n{findings_json}\n\nFix the workflow until validation passes. Keep iterating until the workflow is clean or a design change is required.\n",
+        "You are the workflow-coder for a Codex workflow repair pass.\n\nOnly modify files inside this workflow directory: `{workflow_dir}`. Do not edit files outside it. Keep writes inside this workflow root. Do not edit `DESIGN.md`. If the right fix requires a design change, write a `DESIGN.md request` for the parent architect instead.\n\nKeep the workflow in the standard Bun environment: TypeScript source in `src/`, tests in `src/tests/`, persistent state in `state/`, generated artifacts in `artifacts/`, a `codex-workflow-*` private ESM package, a local `tsconfig.json`, and non-empty README/DESIGN sections. Use Bun scripts (`bun build`, `bun test`, `bun src/workflow.ts`) and do not add Node/tsx/npm runtime paths, Node-only imports such as `node:sqlite`, Node engine pins, or npm/yarn/pnpm lockfiles. Use only local dependencies declared in `package.json`, remove unused runtime dependencies, and keep `workflow.yaml` `dependencies.runtime` / `dependencies.development` aligned with `package.json` `dependencies` / `devDependencies`. Keep validation metadata complete: Bun build and test commands, `validation.contractSmoke`, and coverage markers for the declared coverage keys.\n\nThe deterministic repair pass already handled known cases and stopped on these unsupported findings:\n{findings_json}\n\nFix the workflow until validation passes. Keep iterating until the workflow is clean or a design change is required.\n",
         workflow_dir = workflow.path.display(),
         findings_json = findings_json,
     ))
@@ -711,17 +711,27 @@ fn build_fix_plan(
                 plan.repair_package_manifest = true;
             }
             WorkflowValidationFinding::InvalidPackageManifestField { .. }
-            | WorkflowValidationFinding::MissingPackageScript { .. } => {
+            | WorkflowValidationFinding::MissingPackageScript { .. }
+            | WorkflowValidationFinding::NonBunPackageScript { .. } => {
                 plan.repair_package_manifest = true;
                 plan.build_script = true;
                 plan.test_script = true;
                 plan.run_script = true;
+            }
+            WorkflowValidationFinding::DisallowedPackageDependency { package_name, .. } => {
+                plan.repair_package_manifest = true;
+                plan.sync_dependency_metadata = true;
+                plan.remove_package_names.insert(package_name.clone());
             }
             WorkflowValidationFinding::UndeclaredPackageImport { package_name, .. } => {
                 plan.repair_package_manifest = true;
                 plan.refresh_dependencies = true;
                 plan.sync_dependency_metadata = true;
                 plan.package_names.insert(package_name.clone());
+            }
+            WorkflowValidationFinding::DisallowedNodeRuntimeImport { .. } => {}
+            WorkflowValidationFinding::DisallowedWorkflowRuntimeFile { .. } => {
+                plan.create_layout = true;
             }
             WorkflowValidationFinding::UnusedPackageDependency { package_name, .. } => {
                 plan.repair_package_manifest = true;
@@ -738,6 +748,7 @@ fn build_fix_plan(
             | WorkflowValidationFinding::InvalidValidationCommands { .. }
             | WorkflowValidationFinding::MissingBuildValidationCommand { .. }
             | WorkflowValidationFinding::MissingTestValidationCommand { .. }
+            | WorkflowValidationFinding::NonBunValidationCommand { .. }
             | WorkflowValidationFinding::MissingContractSmoke { .. }
             | WorkflowValidationFinding::InvalidContractSmoke { .. }
             | WorkflowValidationFinding::MissingCoverageMetadata { .. }
@@ -822,6 +833,7 @@ fn action_kinds_for_finding(
         | WorkflowValidationFinding::InvalidValidationCommands { .. }
         | WorkflowValidationFinding::MissingBuildValidationCommand { .. }
         | WorkflowValidationFinding::MissingTestValidationCommand { .. }
+        | WorkflowValidationFinding::NonBunValidationCommand { .. }
         | WorkflowValidationFinding::MissingContractSmoke { .. }
         | WorkflowValidationFinding::InvalidContractSmoke { .. }
         | WorkflowValidationFinding::InvalidWorkflowDependencyMetadata { .. }
@@ -854,6 +866,7 @@ fn action_kinds_for_finding(
         }
         WorkflowValidationFinding::MissingDirectory { .. }
         | WorkflowValidationFinding::MissingGitRepository { .. }
+        | WorkflowValidationFinding::DisallowedWorkflowRuntimeFile { .. }
         | WorkflowValidationFinding::CodeOutsideSrc { .. }
         | WorkflowValidationFinding::TestsOutsideSrcTests { .. }
         | WorkflowValidationFinding::DatabasesOutsideState { .. }
@@ -878,6 +891,8 @@ fn action_kinds_for_finding(
         WorkflowValidationFinding::PackageManifestParseFailed { .. }
         | WorkflowValidationFinding::InvalidPackageManifestField { .. }
         | WorkflowValidationFinding::MissingPackageScript { .. }
+        | WorkflowValidationFinding::NonBunPackageScript { .. }
+        | WorkflowValidationFinding::DisallowedPackageDependency { .. }
         | WorkflowValidationFinding::UndeclaredPackageImport { .. }
         | WorkflowValidationFinding::UnusedPackageDependency { .. } => {
             vec![WorkflowRepairActionKind::RepairPackageManifest]
@@ -898,6 +913,7 @@ fn action_kinds_for_finding(
             kinds
         }
         WorkflowValidationFinding::WorkflowPathEscapesRoot { .. }
+        | WorkflowValidationFinding::DisallowedNodeRuntimeImport { .. }
         | WorkflowValidationFinding::WorkflowApiContractExtractionFailed { .. }
         | WorkflowValidationFinding::WorkflowApiContractSmokeFailed { .. } => {
             return None;
@@ -1211,6 +1227,19 @@ fn apply_layout_fix(
         });
     }
 
+    for path in disallowed_runtime_file_paths(report) {
+        let absolute = workflow.path.join(&path);
+        if absolute.is_file() {
+            fs::remove_file(&absolute)
+                .with_context(|| format!("failed to remove {}", absolute.display()))?;
+            actions.push(WorkflowRepairAction {
+                kind: WorkflowRepairActionKind::RepairLayout,
+                path: absolute,
+                detail: format!("Removed Bun-incompatible runtime file {}", path.display()),
+            });
+        }
+    }
+
     let tracked_runtime_state_paths = tracked_runtime_state_paths(report);
     if untrack_runtime_state_files(&workflow.path, &tracked_runtime_state_paths)? {
         actions.push(WorkflowRepairAction {
@@ -1344,6 +1373,20 @@ fn tracked_runtime_state_paths(report: &WorkflowValidationReport) -> Vec<PathBuf
         })
         .flatten()
         .cloned()
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn disallowed_runtime_file_paths(report: &WorkflowValidationReport) -> Vec<PathBuf> {
+    let mut paths = report
+        .findings
+        .iter()
+        .filter_map(|finding| match finding {
+            WorkflowValidationFinding::DisallowedWorkflowRuntimeFile { path } => Some(path.clone()),
+            _ => None,
+        })
         .collect::<Vec<_>>();
     paths.sort();
     paths.dedup();
@@ -1616,13 +1659,26 @@ fn apply_dependency_install_fix(
         return Ok(None);
     }
 
-    let output = Command::new("npm")
-        .args(["install", "--ignore-scripts", "--no-audit", "--no-fund"])
+    let mut command = if let Some(managed_bun) = crate::managed_bun::cached_managed_bun_path(None)?
+    {
+        Command::new(managed_bun)
+    } else if crate::managed_bun::command_on_path("bun") {
+        Command::new("bun")
+    } else {
+        let Some(managed_bun) = crate::managed_bun::ensure_managed_bun(None)? else {
+            return Err(anyhow!(
+                "workflow dependency refresh requires managed Bun in CODEX_HOME or `bun` on PATH"
+            ));
+        };
+        Command::new(managed_bun)
+    };
+    let output = command
+        .args(["install", "--ignore-scripts"])
         .current_dir(&workflow.path)
         .output()
         .with_context(|| {
             format!(
-                "failed to run npm install for workflow `{}` in {}",
+                "failed to run bun install for workflow `{}` in {}",
                 workflow.id,
                 workflow.path.display()
             )
@@ -1630,7 +1686,7 @@ fn apply_dependency_install_fix(
 
     if !output.status.success() {
         return Err(anyhow!(
-            "npm install failed for workflow `{}` with exit code {:?}\nstdout:\n{}\nstderr:\n{}",
+            "bun install failed for workflow `{}` with exit code {:?}\nstdout:\n{}\nstderr:\n{}",
             workflow.id,
             output.status.code(),
             String::from_utf8_lossy(&output.stdout),
@@ -1640,10 +1696,8 @@ fn apply_dependency_install_fix(
 
     Ok(Some(WorkflowRepairAction {
         kind: WorkflowRepairActionKind::RepairPackageManifest,
-        path: workflow.path.join("package-lock.json"),
-        detail:
-            "Installed workflow dependencies with npm install --ignore-scripts --no-audit --no-fund"
-                .to_string(),
+        path: workflow.path.join("bun.lock"),
+        detail: "Installed workflow dependencies with bun install --ignore-scripts".to_string(),
     }))
 }
 

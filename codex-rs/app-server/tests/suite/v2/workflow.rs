@@ -35,6 +35,28 @@ fn append_workflows_config(codex_home: &TempDir, extra: &str) -> Result<()> {
     Ok(())
 }
 
+fn write_test_bun_stub(workflow_dir: &Path) -> Result<()> {
+    let bin_dir = workflow_dir.join("node_modules/.bin");
+    fs::create_dir_all(&bin_dir)?;
+    let bun_path = if cfg!(windows) {
+        bin_dir.join("bun.cmd")
+    } else {
+        bin_dir.join("bun")
+    };
+    let contents = if cfg!(windows) {
+        "@echo off\r\necho %* | findstr /C:\"process.exit(1)\" >nul && (\r\n  echo out\r\n  echo err 1>&2\r\n  exit /b 1\r\n)\r\necho {\"ok\":true}\r\nexit /b 0\r\n"
+    } else {
+        "#!/bin/sh\ncase \"$*\" in *\"process.exit(1)\"*) printf 'out\\n'; printf 'err\\n' >&2; exit 1;; *) printf '{\"ok\":true}\\n'; exit 0;; esac\n"
+    };
+    fs::write(&bun_path, contents)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&bun_path, fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
+}
+
 fn write_valid_workflow(
     workflow_dir: &Path,
     id: &str,
@@ -44,6 +66,7 @@ fn write_valid_workflow(
     fs::create_dir_all(workflow_dir.join("src/tests"))?;
     fs::create_dir_all(workflow_dir.join("state"))?;
     fs::create_dir_all(workflow_dir.join(".git"))?;
+    write_test_bun_stub(workflow_dir)?;
     fs::write(
         workflow_dir.join(".gitignore"),
         "node_modules/\nartifacts/\nstate/*\n!state/.gitkeep\n",
@@ -51,35 +74,35 @@ fn write_valid_workflow(
     fs::write(
         workflow_dir.join("workflow.yaml"),
         format!(
-            "id: {id}\ntitle: {title}\nuserDescription: {description}\nvalidation:\n  commands:\n    - exit 0\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
+            "id: {id}\ntitle: {title}\nuserDescription: {description}\ndependencies:\n  development:\n    - \"@types/node\"\n    - typescript\nvalidation:\n  commands:\n    - bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk\n    - bun test src/tests\n  contractSmoke:\n    input:\n      input: example\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
         ),
     )?;
     fs::write(
         workflow_dir.join("README.md"),
         format!(
-            "# {title}\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
+            "# {title}\n\n## Usage\n\nRun this workflow from Codex.\n\n## Workflow Runtime\n\nRuns on the managed Bun runtime.\n\n## Dependencies\n\nUses local package dependencies only.\n\n## Validation\n\nBuild, test, and contract smoke run through Bun.\n\n## Maintenance\n\nKeep workflow metadata, docs, and tests aligned.\n",
         ),
     )?;
     fs::write(
         workflow_dir.join("DESIGN.md"),
         format!(
-            "# {title} Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
+            "# {title} Design\n\n## Overview\n\nValid workflow fixture.\n\n## Architecture\n\nSource lives under src/ with tests under src/tests/.\n\n## Data Flow\n\nInput is mapped to a simple output.\n\n## Failure Handling\n\nUnexpected failures surface through the workflow result.\n\n## Recovery Behavior\n\nNo recovery behavior is required for this fixture.\n\n## Test Matrix\n\nPositive, negative, load, and autocomplete coverage markers are present.\n\n## Maintenance Notes\n\nKeep Bun validation commands current.\n",
         ),
     )?;
     fs::write(
         workflow_dir.join("package.json"),
         format!(
-            "{{\n  \"name\": \"codex-workflow-{}\",\n  \"private\": true,\n  \"type\": \"module\"\n}}\n",
+            "{{\n  \"name\": \"codex-workflow-{}\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {{\n    \"build\": \"bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk\",\n    \"test\": \"bun test src/tests\",\n    \"run\": \"bun src/workflow.ts\"\n  }},\n  \"devDependencies\": {{\n    \"@types/node\": \"latest\",\n    \"typescript\": \"latest\"\n  }}\n}}\n",
             id.replace('/', "-")
         ),
     )?;
     fs::write(
-        workflow_dir.join(".gitignore"),
-        "artifacts/\nstate/*\n!state/.gitkeep\n",
+        workflow_dir.join("tsconfig.json"),
+        "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"strict\": true,\n    \"noEmit\": true\n  },\n  \"include\": [\"src/**/*.ts\"]\n}\n",
     )?;
     fs::write(
         workflow_dir.join("src/workflow.ts"),
-        "export interface WorkflowInput { input?: string; }\nexport interface WorkflowOutput { ok: boolean; }\nexport default async function runWorkflow(_ctx: unknown, _input: WorkflowInput): Promise<WorkflowOutput> {\n  return { ok: true };\n}\n",
+        "export interface WorkflowInput { input?: string; }\nexport interface WorkflowOutput { ok: boolean; input?: string; }\nexport const WorkflowOutput = { toTuiMarkdown(_result: WorkflowOutput) { return { markdown: \"done\" }; } };\nexport default async function runWorkflow(_ctx: unknown, input: WorkflowInput): Promise<WorkflowOutput> {\n  return { ok: true, input: input.input };\n}\nexport async function complete() { return []; }\n",
     )?;
     fs::write(
         workflow_dir.join("src/tests/workflow.positive.test.ts"),
@@ -103,6 +126,7 @@ fn write_valid_workflow(
 
 fn write_broken_repair_fixture(workflow_dir: &Path) -> Result<()> {
     fs::create_dir_all(workflow_dir.join(".git"))?;
+    write_test_bun_stub(workflow_dir)?;
     fs::write(
         workflow_dir.join("workflow.yaml"),
         "id: broken/other\nvalidation:\n  commands:\n    - exit 0\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
@@ -118,7 +142,7 @@ fn write_broken_repair_fixture(workflow_dir: &Path) -> Result<()> {
     )?;
     fs::write(
         workflow_dir.join("workflow.ts"),
-        "import leftPad from \"left-pad\";\nimport { WorkflowContext } from \"@openai/codex-sdk/workflow\";\n\nexport interface WorkflowInput { input?: string; }\nexport interface WorkflowOutput { ok: boolean; input: WorkflowInput; }\nexport const WorkflowOutput = { toTuiMarkdown() { return { markdown: \"done\" }; } };\nexport default async function run(_ctx: WorkflowContext, input: WorkflowInput): Promise<WorkflowOutput> { return { ok: true, input: { input: leftPad(input.input ?? \"\", 2) } }; }\n",
+        "export interface WorkflowInput { input?: string; }\nexport interface WorkflowOutput { ok: boolean; input: WorkflowInput; }\nexport const WorkflowOutput = { toTuiMarkdown() { return { markdown: \"done\" }; } };\nexport default async function run(_ctx: unknown, input: WorkflowInput): Promise<WorkflowOutput> { return { ok: true, input }; }\n",
     )?;
     fs::write(
         workflow_dir.join("workflow.positive.test.ts"),
@@ -143,9 +167,10 @@ fn write_unsupported_command_fixture(workflow_dir: &Path) -> Result<()> {
     fs::create_dir_all(workflow_dir.join("src/tests"))?;
     fs::create_dir_all(workflow_dir.join("state"))?;
     fs::create_dir_all(workflow_dir.join(".git"))?;
+    write_test_bun_stub(workflow_dir)?;
     fs::write(
         workflow_dir.join("workflow.yaml"),
-        "id: broken/fix\nvalidation:\n  commands:\n    - node -e \"console.log('out'); console.error('err'); process.exit(1)\"\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
+        "id: broken/fix\nvalidation:\n  commands:\n    - bun --eval \"console.log('out'); console.error('err'); process.exit(1)\" # build test\n  contractSmoke:\n    input:\n      input: example\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
     )?;
     fs::write(
         workflow_dir.join("README.md"),
@@ -157,7 +182,11 @@ fn write_unsupported_command_fixture(workflow_dir: &Path) -> Result<()> {
     )?;
     fs::write(
         workflow_dir.join("package.json"),
-        "{\n  \"name\": \"codex-workflow-failing-command\",\n  \"private\": true,\n  \"type\": \"module\"\n}\n",
+        "{\n  \"name\": \"codex-workflow-failing-command\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\n    \"build\": \"bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk\",\n    \"test\": \"bun test src/tests\",\n    \"run\": \"bun src/workflow.ts\"\n  },\n  \"devDependencies\": {\n    \"@types/node\": \"latest\",\n    \"typescript\": \"latest\"\n  }\n}\n",
+    )?;
+    fs::write(
+        workflow_dir.join("tsconfig.json"),
+        "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"strict\": true,\n    \"noEmit\": true\n  },\n  \"include\": [\"src/**/*.ts\"]\n}\n",
     )?;
     fs::write(
         workflow_dir.join("src/workflow.ts"),
@@ -198,8 +227,15 @@ fn write_schema_repair_fixture(
             user_description: Some("Repair schema metadata".to_string()),
             api,
             tool,
+            dependencies: json!({
+                "development": ["@types/node", "typescript"],
+            }),
             validation: json!({
-                "commands": ["exit 0"],
+                "commands": [
+                    "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
+                    "bun test src/tests"
+                ],
+                "contractSmoke": { "input": { "input": "example" } },
                 "coverage": {
                     "positive": true,
                     "negative": true,
@@ -278,7 +314,10 @@ async fn workflow_repair_returns_structured_result() -> Result<()> {
         "mock_provider",
         "compact",
     )?;
-    append_workflows_config(&codex_home, "\n[workflows]\ncommit_policy = \"manual\"\n")?;
+    append_workflows_config(
+        &codex_home,
+        "\n[workflows]\ncommit_policy = \"manual\"\ndependency_update_policy = \"manual\"\n",
+    )?;
     let workflow_dir = codex_home.path().join("workflows/broken/fix");
     fs::create_dir_all(&workflow_dir)?;
     write_broken_repair_fixture(&workflow_dir)?;
@@ -322,7 +361,7 @@ async fn workflow_repair_returns_blocked_mode_result() -> Result<()> {
     )?;
     append_workflows_config(
         &codex_home,
-        "\n[workflows]\ncommit_policy = \"manual\"\nrepair_mode = \"metadata\"\n",
+        "\n[workflows]\ncommit_policy = \"manual\"\ndependency_update_policy = \"manual\"\nrepair_mode = \"metadata\"\n",
     )?;
     let workflow_dir = codex_home.path().join("workflows/broken/fix");
     fs::create_dir_all(&workflow_dir)?;
@@ -365,7 +404,10 @@ async fn workflow_repair_returns_unsupported_command_result() -> Result<()> {
         "mock_provider",
         "compact",
     )?;
-    append_workflows_config(&codex_home, "\n[workflows]\ncommit_policy = \"manual\"\n")?;
+    append_workflows_config(
+        &codex_home,
+        "\n[workflows]\ncommit_policy = \"manual\"\ndependency_update_policy = \"manual\"\n",
+    )?;
     let workflow_dir = codex_home.path().join("workflows/broken/fix");
     fs::create_dir_all(&workflow_dir)?;
     write_unsupported_command_fixture(&workflow_dir)?;
@@ -418,7 +460,10 @@ async fn workflow_repair_repairs_missing_design_and_schema_e2e() -> Result<()> {
         "mock_provider",
         "compact",
     )?;
-    append_workflows_config(&codex_home, "\n[workflows]\ncommit_policy = \"manual\"\n")?;
+    append_workflows_config(
+        &codex_home,
+        "\n[workflows]\ncommit_policy = \"manual\"\ndependency_update_policy = \"manual\"\n",
+    )?;
     let workflow_dir = codex_home.path().join("workflows/broken/schema");
     write_schema_repair_fixture(
         &workflow_dir,
@@ -502,7 +547,7 @@ async fn workflow_repair_blocked_schema_finding_round_trips_e2e() -> Result<()> 
     )?;
     append_workflows_config(
         &codex_home,
-        "\n[workflows]\ncommit_policy = \"manual\"\nrepair_mode = \"none\"\n",
+        "\n[workflows]\ncommit_policy = \"manual\"\ndependency_update_policy = \"manual\"\nrepair_mode = \"none\"\n",
     )?;
     let workflow_dir = codex_home.path().join("workflows/broken/schema");
     write_schema_repair_fixture(
@@ -558,7 +603,7 @@ async fn workflow_repair_blocked_runtime_state_finding_round_trips_e2e() -> Resu
     )?;
     append_workflows_config(
         &codex_home,
-        "\n[workflows]\ncommit_policy = \"manual\"\nrepair_mode = \"metadata\"\n",
+        "\n[workflows]\ncommit_policy = \"manual\"\ndependency_update_policy = \"manual\"\nrepair_mode = \"metadata\"\n",
     )?;
     let workflow_dir = codex_home.path().join("workflows/broken/runtime-state");
     write_valid_workflow(
@@ -612,6 +657,10 @@ async fn workflow_stage_session_id_keeps_edits_private_until_done() -> Result<()
         /*requires_openai_auth*/ None,
         "mock_provider",
         "compact",
+    )?;
+    append_workflows_config(
+        &codex_home,
+        "\n[workflows]\ncommit_policy = \"manual\"\ndependency_update_policy = \"manual\"\n",
     )?;
     let workflow_dir = codex_home.path().join("workflows/review/fix");
     write_valid_workflow(
@@ -728,6 +777,10 @@ async fn workflow_stage_session_id_discard_removes_staged_changes() -> Result<()
         /*requires_openai_auth*/ None,
         "mock_provider",
         "compact",
+    )?;
+    append_workflows_config(
+        &codex_home,
+        "\n[workflows]\ncommit_policy = \"manual\"\ndependency_update_policy = \"manual\"\n",
     )?;
     let workflow_dir = codex_home.path().join("workflows/review/fix");
     write_valid_workflow(

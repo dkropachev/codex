@@ -50,10 +50,26 @@ pub enum WorkflowValidationFinding {
         path: PathBuf,
         script: String,
     },
+    NonBunPackageScript {
+        path: PathBuf,
+        script: String,
+        command: String,
+    },
+    DisallowedPackageDependency {
+        path: PathBuf,
+        package_name: String,
+    },
     UndeclaredPackageImport {
         path: PathBuf,
         specifier: String,
         package_name: String,
+    },
+    DisallowedNodeRuntimeImport {
+        path: PathBuf,
+        specifier: String,
+    },
+    DisallowedWorkflowRuntimeFile {
+        path: PathBuf,
     },
     UnusedPackageDependency {
         path: PathBuf,
@@ -83,6 +99,10 @@ pub enum WorkflowValidationFinding {
     },
     MissingTestValidationCommand {
         path: PathBuf,
+    },
+    NonBunValidationCommand {
+        path: PathBuf,
+        command: String,
     },
     MissingContractSmoke {
         path: PathBuf,
@@ -205,8 +225,22 @@ impl WorkflowValidationFinding {
             Self::MissingPackageScript { script, .. } => {
                 format!("package.json is missing required `{script}` script")
             }
+            Self::NonBunPackageScript {
+                script, command, ..
+            } => {
+                format!("package.json `{script}` script must use Bun, found `{command}`")
+            }
+            Self::DisallowedPackageDependency { package_name, .. } => {
+                format!("package.json dependency `{package_name}` is not allowed in Bun workflows")
+            }
             Self::UndeclaredPackageImport { package_name, .. } => {
                 format!("imports undeclared package `{package_name}`")
+            }
+            Self::DisallowedNodeRuntimeImport { specifier, .. } => {
+                format!("imports Node-only runtime module `{specifier}`")
+            }
+            Self::DisallowedWorkflowRuntimeFile { path } => {
+                format!("{} is not allowed for Bun workflows", path.display())
             }
             Self::UnusedPackageDependency { package_name, .. } => {
                 format!("package.json declares unused runtime dependency `{package_name}`")
@@ -232,6 +266,9 @@ impl WorkflowValidationFinding {
             }
             Self::MissingTestValidationCommand { .. } => {
                 "validation commands must include a test step".to_string()
+            }
+            Self::NonBunValidationCommand { command, .. } => {
+                format!("validation command `{command}` must use Bun")
             }
             Self::MissingContractSmoke { .. } => {
                 "validation.contractSmoke must be configured".to_string()
@@ -331,7 +368,11 @@ impl WorkflowValidationFinding {
             Self::PackageManifestParseFailed { .. }
             | Self::InvalidPackageManifestField { .. }
             | Self::MissingPackageScript { .. }
+            | Self::NonBunPackageScript { .. }
+            | Self::DisallowedPackageDependency { .. }
             | Self::UndeclaredPackageImport { .. }
+            | Self::DisallowedNodeRuntimeImport { .. }
+            | Self::DisallowedWorkflowRuntimeFile { .. }
             | Self::UnusedPackageDependency { .. }
             | Self::InvalidWorkflowDependencyMetadata { .. }
             | Self::WorkflowDependencyMetadataMismatch { .. } => "WF-004",
@@ -349,6 +390,7 @@ impl WorkflowValidationFinding {
             | Self::InvalidValidationCommands { .. }
             | Self::MissingBuildValidationCommand { .. }
             | Self::MissingTestValidationCommand { .. }
+            | Self::NonBunValidationCommand { .. }
             | Self::MissingContractSmoke { .. }
             | Self::InvalidContractSmoke { .. }
             | Self::ValidationCommandFailed { .. }
@@ -394,7 +436,11 @@ impl WorkflowValidationFinding {
             | Self::PackageManifestParseFailed { path, .. }
             | Self::InvalidPackageManifestField { path, .. }
             | Self::MissingPackageScript { path, .. }
+            | Self::NonBunPackageScript { path, .. }
+            | Self::DisallowedPackageDependency { path, .. }
             | Self::UndeclaredPackageImport { path, .. }
+            | Self::DisallowedNodeRuntimeImport { path, .. }
+            | Self::DisallowedWorkflowRuntimeFile { path }
             | Self::UnusedPackageDependency { path, .. }
             | Self::InvalidWorkflowDependencyMetadata { path, .. }
             | Self::WorkflowDependencyMetadataMismatch { path, .. }
@@ -403,6 +449,7 @@ impl WorkflowValidationFinding {
             | Self::InvalidValidationCommands { path }
             | Self::MissingBuildValidationCommand { path }
             | Self::MissingTestValidationCommand { path }
+            | Self::NonBunValidationCommand { path, .. }
             | Self::MissingContractSmoke { path }
             | Self::InvalidContractSmoke { path }
             | Self::MissingCoverageMetadata { path }

@@ -27,7 +27,29 @@ fn write_runtime_gitignore(workflow_dir: &Path) {
     .unwrap();
 }
 
+fn write_test_bun_stub(workflow_dir: &Path) {
+    let bin_dir = workflow_dir.join("node_modules/.bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let bun_path = if cfg!(windows) {
+        bin_dir.join("bun.cmd")
+    } else {
+        bin_dir.join("bun")
+    };
+    let contents = if cfg!(windows) {
+        "@echo off\r\necho %* | findstr /C:\"process.exit(1)\" >nul && (\r\n  echo out\r\n  echo err 1>&2\r\n  exit /b 1\r\n)\r\necho {\"ok\":true}\r\nexit /b 0\r\n"
+    } else {
+        "#!/bin/sh\ncase \"$*\" in *\"process.exit(1)\"*) printf 'out\\n'; printf 'err\\n' >&2; exit 1;; *) printf '{\"ok\":true}\\n'; exit 0;; esac\n"
+    };
+    fs::write(&bun_path, contents).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&bun_path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
 fn write_broken_workflow_fixture(workflow_dir: &Path) {
+    write_test_bun_stub(workflow_dir);
     fs::write(
         workflow_dir.join("README.md"),
         "# Broken\n\n## Usage\n\n## Workflow Runtime\n",
@@ -103,6 +125,7 @@ fn write_command_failure_workflow_fixture(workflow_dir: &Path) {
     fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
     fs::create_dir_all(workflow_dir.join("state")).unwrap();
     fs::create_dir_all(workflow_dir.join(".git")).unwrap();
+    write_test_bun_stub(workflow_dir);
     write_runtime_gitignore(workflow_dir);
     fs::write(
         workflow_dir.join("README.md"),
@@ -121,9 +144,9 @@ fn write_command_failure_workflow_fixture(workflow_dir: &Path) {
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "echo build",
-    "test": "echo test",
-    "run": "node src/workflow.ts"
+    "build": "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
+    "test": "bun test src/tests",
+    "run": "bun src/workflow.ts"
   },
   "devDependencies": {
     "@types/node": "latest",
@@ -173,7 +196,7 @@ fn write_command_failure_workflow_fixture(workflow_dir: &Path) {
                 "development": ["@types/node", "typescript"],
             }),
             validation: json!({
-                "commands": ["node -e \"console.log('out'); console.error('err'); process.exit(1)\" # build test"],
+                "commands": ["bun -e \"console.log('out'); console.error('err'); process.exit(1)\" # build test"],
                 "contractSmoke": { "input": {} },
                 "coverage": {
                     "positive": true,
@@ -200,6 +223,7 @@ fn write_build_fixable_workflow_fixture(workflow_dir: &Path) {
     fs::create_dir_all(workflow_dir.join("state")).unwrap();
     fs::create_dir_all(workflow_dir.join(".git")).unwrap();
     fs::create_dir_all(workflow_dir.join("node_modules/.bin")).unwrap();
+    write_test_bun_stub(workflow_dir);
     write_runtime_gitignore(workflow_dir);
     fs::write(
         workflow_dir.join("README.md"),
@@ -263,7 +287,7 @@ fn write_build_fixable_workflow_fixture(workflow_dir: &Path) {
         &crate::spec::WorkflowSpec {
             id: "broken/fix".to_string(),
             validation: json!({
-                "commands": ["npm run build"],
+                "commands": ["bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk"],
                 "coverage": {
                     "positive": true,
                     "negative": true,
@@ -284,6 +308,7 @@ fn write_build_fixable_workflow_fixture(workflow_dir: &Path) {
 fn write_layout_fixable_workflow_fixture(workflow_dir: &Path) {
     fs::create_dir_all(workflow_dir.join("src")).unwrap();
     fs::create_dir_all(workflow_dir.join(".git")).unwrap();
+    write_test_bun_stub(workflow_dir);
     fs::write(workflow_dir.join(".git/HEAD"), "ref: refs/heads/master\n").unwrap();
     fs::write(
         workflow_dir.join("README.md"),
@@ -336,6 +361,7 @@ fn write_layout_fixable_workflow_fixture(workflow_dir: &Path) {
 fn write_tracked_runtime_state_workflow_fixture(workflow_dir: &Path) {
     fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
     fs::create_dir_all(workflow_dir.join("state")).unwrap();
+    write_test_bun_stub(workflow_dir);
     fs::write(
         workflow_dir.join("README.md"),
         "# Workflow\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
@@ -596,7 +622,7 @@ fn repair_workflow_command_reports_unsupported_validation_command_failures() {
     );
     assert_eq!(
         output.data["validationCommandResults"][0]["command"],
-        "node -e \"console.log('out'); console.error('err'); process.exit(1)\" # build test"
+        "bun -e \"console.log('out'); console.error('err'); process.exit(1)\" # build test"
     );
     assert_eq!(
         output.data["validationCommandResults"][0]["succeeded"],
@@ -726,7 +752,7 @@ fn repair_workflow_command_refreshes_dependencies_for_broken_local_tsc() {
     let command_runner =
         |command: &str, cwd: &Path| -> anyhow::Result<WorkflowValidationCommandResult> {
             let installed_tsc = cwd.join("node_modules/typescript/lib/tsc.js").is_file();
-            let succeeded = command != "npm run build" || installed_tsc;
+            let succeeded = !command.contains("bun build") || installed_tsc;
             Ok(WorkflowValidationCommandResult {
                 command: command.to_string(),
                 succeeded,
@@ -751,7 +777,7 @@ fn repair_workflow_command_refreshes_dependencies_for_broken_local_tsc() {
         .unwrap();
         Ok::<Option<WorkflowRepairAction>, anyhow::Error>(Some(WorkflowRepairAction {
             kind: WorkflowRepairActionKind::RepairPackageManifest,
-            path: workflow.path.join("package-lock.json"),
+            path: workflow.path.join("bun.lock"),
             detail: "Installed workflow dependencies".to_string(),
         }))
     };

@@ -475,17 +475,17 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.join("workflow.yaml"),
-            "id: reports/jira-summary\ntitle: Jira Summary\nuserDescription: Summarize Jira work\nvalidation:\n  commands:\n    - npm run build\n    - npm test\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\ntool:\n  description: Run the Jira summary workflow\n  inputSchema:\n    type: object\n  outputSchema: null\n  registerOn:\n    - afterAgent\n",
+            "id: reports/jira-summary\ntitle: Jira Summary\nuserDescription: Summarize Jira work\ndependencies:\n  runtime: []\n  development:\n    - '@types/node'\n    - typescript\nvalidation:\n  commands:\n    - bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk\n    - bun test src/tests\n  contractSmoke:\n    input: {}\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\ntool:\n  description: Run the Jira summary workflow\n  inputSchema:\n    type: object\n  outputSchema: null\n  registerOn:\n    - afterAgent\n",
         )
         .unwrap();
         std::fs::write(
             dir.join("README.md"),
-            "# Jira Summary\n\n## Usage\n\n## Workflow Runtime\n\n## Dependencies\n\n## Validation\n\n## Maintenance\n",
+            "# Jira Summary\n\n## Usage\n\nRun `/jira-summary`.\n\n## Workflow Runtime\n\nRuns as a local Bun workflow.\n\n## Dependencies\n\nUses local package dependencies only.\n\n## Validation\n\nRuns Bun build and test commands.\n\n## Maintenance\n\nKeep docs, metadata, and tests aligned.\n",
         )
         .unwrap();
         std::fs::write(
             dir.join("DESIGN.md"),
-            "# Jira Summary Design\n\n## Overview\n\n## Architecture\n\n## Data Flow\n\n## Failure Handling\n\n## Recovery Behavior\n\n## Test Matrix\n\n## Maintenance Notes\n",
+            "# Jira Summary Design\n\n## Overview\n\nTest workflow fixture.\n\n## Architecture\n\nSource lives under src/.\n\n## Data Flow\n\nThe workflow returns a JSON result.\n\n## Failure Handling\n\nValidation commands report failures.\n\n## Recovery Behavior\n\nNo recovery behavior.\n\n## Test Matrix\n\nPositive, negative, load, and autocomplete tests.\n\n## Maintenance Notes\n\nKeep validation metadata current.\n",
         )
         .unwrap();
         std::fs::write(dir.join("src/workflow.ts"), "export {};\n").unwrap();
@@ -512,7 +512,12 @@ mod tests {
         std::fs::write(dir.join("state/.gitkeep"), "").unwrap();
         std::fs::write(
             dir.join("package.json"),
-            "{\n  \"name\": \"codex-workflow-reports-jira-summary\",\n  \"private\": true,\n  \"type\": \"module\"\n}\n",
+            "{\n  \"name\": \"codex-workflow-reports-jira-summary\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\n    \"build\": \"bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk\",\n    \"test\": \"bun test src/tests\",\n    \"run\": \"bun src/workflow.ts\"\n  },\n  \"devDependencies\": {\n    \"@types/node\": \"latest\",\n    \"typescript\": \"latest\"\n  }\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("tsconfig.json"),
+            "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"strict\": true,\n    \"noEmit\": true\n  },\n  \"include\": [\"src/**/*.ts\"]\n}\n",
         )
         .unwrap();
     }

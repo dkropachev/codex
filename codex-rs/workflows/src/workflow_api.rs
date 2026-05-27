@@ -206,10 +206,12 @@ fn non_empty_contract_smoke_command(command: &str) -> Result<Option<String>> {
 fn default_contract_smoke_command(input: &JsonValue) -> Result<String> {
     let input_json = serde_json::to_string(input)
         .with_context(|| "failed to serialize validation.contractSmoke.input")?;
-    Ok(format!(
-        "npm run --silent run -- --input {}",
-        shell_quote(&input_json)
-    ))
+    let input_literal = serde_json::to_string(&input_json)
+        .with_context(|| "failed to serialize validation.contractSmoke.input literal")?;
+    let source = format!(
+        r#"const mod=await import("./src/workflow.ts");if(typeof mod.default!=="function"){{throw new Error("workflow default export must be a function");}}const input=JSON.parse({input_literal});const ctx={{progress(){{}},reportToUserMarkdown(){{}},status(){{}},runWorkflow(){{throw new Error("runWorkflow() is unavailable in contract smoke");}},cwd:process.cwd(),currentWorkingDirectory:process.cwd(),repoRoot:process.cwd(),workingDirectory:process.cwd()}};const output=await mod.default(ctx,input);console.log(JSON.stringify(output));"#
+    );
+    Ok(format!("bun --eval {}", shell_quote(&source)))
 }
 
 fn shell_quote(value: &str) -> String {
@@ -631,9 +633,9 @@ export default async function sharedReview(_ctx: unknown, input: WorkflowInput):
             "review/smoke",
             json!({}),
             json!({
-                "commands": ["echo ok"],
+                "commands": ["bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk", "bun test src/tests"],
                 "contractSmoke": {
-                    "command": "npm run run -- --input '{\"value\":\"ok\"}'"
+                    "command": "bun src/workflow.ts --input '{\"value\":\"ok\"}'"
                 }
             }),
         );
@@ -670,7 +672,7 @@ export default async function smokeReview(_ctx: unknown, input: WorkflowInput): 
             &config,
             &workflow,
             |command, _cwd| {
-                if command.starts_with("npm run run") {
+                if command.starts_with("bun src/workflow.ts") {
                     Ok(WorkflowValidationCommandResult {
                         command: command.to_string(),
                         succeeded: true,
@@ -686,11 +688,11 @@ export default async function smokeReview(_ctx: unknown, input: WorkflowInput): 
         .expect("workflow API validation should complete");
 
         assert_eq!(report.status, WorkflowValidationStatus::Invalid);
-        assert_eq!(report.command_results.len(), 2);
+        assert_eq!(report.command_results.len(), 3);
         assert_eq!(
             crate::validation_finding::finding_messages(&report.findings),
             vec![
-                "workflow contract smoke command `npm run run -- --input '{\"value\":\"ok\"}'` failed: output did not match the workflow contract: workflow contract violation at $.reviewId: unexpected property".to_string()
+                "workflow contract smoke command `bun src/workflow.ts --input '{\"value\":\"ok\"}'` failed: output did not match the workflow contract: workflow contract violation at $.reviewId: unexpected property".to_string()
             ]
         );
         assert_eq!(
@@ -712,7 +714,7 @@ export default async function smokeReview(_ctx: unknown, input: WorkflowInput): 
             "review/smoke-ok",
             json!({}),
             json!({
-                "commands": ["echo ok"],
+                "commands": ["bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk", "bun test src/tests"],
                 "contractSmoke": { "input": { "value": "ok" } }
             }),
         );
@@ -749,7 +751,7 @@ export default async function smokeOkReview(_ctx: unknown, input: WorkflowInput)
             &config,
             &workflow,
             |command, _cwd| {
-                if command.starts_with("npm run --silent run") {
+                if command.starts_with("bun --eval") {
                     Ok(WorkflowValidationCommandResult {
                         command: command.to_string(),
                         succeeded: true,
@@ -765,9 +767,9 @@ export default async function smokeOkReview(_ctx: unknown, input: WorkflowInput)
         .expect("workflow API validation should pass");
 
         assert_eq!(report.status, WorkflowValidationStatus::Valid);
-        assert_eq!(report.command_results.len(), 2);
+        assert_eq!(report.command_results.len(), 3);
         assert_eq!(
-            report.command_results[1].command,
+            report.command_results[2].command,
             super::default_contract_smoke_command(&json!({ "value": "ok" })).unwrap()
         );
         assert!(

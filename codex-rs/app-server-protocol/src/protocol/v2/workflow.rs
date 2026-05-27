@@ -70,10 +70,26 @@ pub enum WorkflowValidationFindingInfo {
         path: PathBuf,
         script: String,
     },
+    NonBunPackageScript {
+        path: PathBuf,
+        script: String,
+        command: String,
+    },
+    DisallowedPackageDependency {
+        path: PathBuf,
+        package_name: String,
+    },
     UndeclaredPackageImport {
         path: PathBuf,
         specifier: String,
         package_name: String,
+    },
+    DisallowedNodeRuntimeImport {
+        path: PathBuf,
+        specifier: String,
+    },
+    DisallowedWorkflowRuntimeFile {
+        path: PathBuf,
     },
     UnusedPackageDependency {
         path: PathBuf,
@@ -103,6 +119,10 @@ pub enum WorkflowValidationFindingInfo {
     },
     MissingTestValidationCommand {
         path: PathBuf,
+    },
+    NonBunValidationCommand {
+        path: PathBuf,
+        command: String,
     },
     MissingContractSmoke {
         path: PathBuf,

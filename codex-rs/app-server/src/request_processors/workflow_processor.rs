@@ -602,6 +602,19 @@ pub(crate) fn validation_finding_to_api(
         codex_workflows::WorkflowValidationFinding::MissingPackageScript { path, script } => {
             WorkflowValidationFindingInfo::MissingPackageScript { path, script }
         }
+        codex_workflows::WorkflowValidationFinding::NonBunPackageScript {
+            path,
+            script,
+            command,
+        } => WorkflowValidationFindingInfo::NonBunPackageScript {
+            path,
+            script,
+            command,
+        },
+        codex_workflows::WorkflowValidationFinding::DisallowedPackageDependency {
+            path,
+            package_name,
+        } => WorkflowValidationFindingInfo::DisallowedPackageDependency { path, package_name },
         codex_workflows::WorkflowValidationFinding::UndeclaredPackageImport {
             path,
             specifier,
@@ -611,6 +624,13 @@ pub(crate) fn validation_finding_to_api(
             specifier,
             package_name,
         },
+        codex_workflows::WorkflowValidationFinding::DisallowedNodeRuntimeImport {
+            path,
+            specifier,
+        } => WorkflowValidationFindingInfo::DisallowedNodeRuntimeImport { path, specifier },
+        codex_workflows::WorkflowValidationFinding::DisallowedWorkflowRuntimeFile { path } => {
+            WorkflowValidationFindingInfo::DisallowedWorkflowRuntimeFile { path }
+        }
         codex_workflows::WorkflowValidationFinding::UnusedPackageDependency {
             path,
             package_name,
@@ -644,6 +664,9 @@ pub(crate) fn validation_finding_to_api(
         }
         codex_workflows::WorkflowValidationFinding::MissingTestValidationCommand { path } => {
             WorkflowValidationFindingInfo::MissingTestValidationCommand { path }
+        }
+        codex_workflows::WorkflowValidationFinding::NonBunValidationCommand { path, command } => {
+            WorkflowValidationFindingInfo::NonBunValidationCommand { path, command }
         }
         codex_workflows::WorkflowValidationFinding::MissingContractSmoke { path } => {
             WorkflowValidationFindingInfo::MissingContractSmoke { path }
@@ -768,6 +791,21 @@ fn validation_finding_from_api(
         WorkflowValidationFindingInfo::MissingPackageScript { path, script } => {
             codex_workflows::WorkflowValidationFinding::MissingPackageScript { path, script }
         }
+        WorkflowValidationFindingInfo::NonBunPackageScript {
+            path,
+            script,
+            command,
+        } => codex_workflows::WorkflowValidationFinding::NonBunPackageScript {
+            path,
+            script,
+            command,
+        },
+        WorkflowValidationFindingInfo::DisallowedPackageDependency { path, package_name } => {
+            codex_workflows::WorkflowValidationFinding::DisallowedPackageDependency {
+                path,
+                package_name,
+            }
+        }
         WorkflowValidationFindingInfo::UndeclaredPackageImport {
             path,
             specifier,
@@ -777,6 +815,15 @@ fn validation_finding_from_api(
             specifier,
             package_name,
         },
+        WorkflowValidationFindingInfo::DisallowedNodeRuntimeImport { path, specifier } => {
+            codex_workflows::WorkflowValidationFinding::DisallowedNodeRuntimeImport {
+                path,
+                specifier,
+            }
+        }
+        WorkflowValidationFindingInfo::DisallowedWorkflowRuntimeFile { path } => {
+            codex_workflows::WorkflowValidationFinding::DisallowedWorkflowRuntimeFile { path }
+        }
         WorkflowValidationFindingInfo::UnusedPackageDependency { path, package_name } => {
             codex_workflows::WorkflowValidationFinding::UnusedPackageDependency {
                 path,
@@ -814,6 +861,9 @@ fn validation_finding_from_api(
         }
         WorkflowValidationFindingInfo::MissingTestValidationCommand { path } => {
             codex_workflows::WorkflowValidationFinding::MissingTestValidationCommand { path }
+        }
+        WorkflowValidationFindingInfo::NonBunValidationCommand { path, command } => {
+            codex_workflows::WorkflowValidationFinding::NonBunValidationCommand { path, command }
         }
         WorkflowValidationFindingInfo::MissingContractSmoke { path } => {
             codex_workflows::WorkflowValidationFinding::MissingContractSmoke { path }
@@ -987,7 +1037,29 @@ mod tests {
     use tempfile::TempDir;
     use tokio::sync::mpsc;
 
+    fn write_test_bun_stub(workflow_dir: &std::path::Path) {
+        let bin_dir = workflow_dir.join("node_modules/.bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let bun_path = if cfg!(windows) {
+            bin_dir.join("bun.cmd")
+        } else {
+            bin_dir.join("bun")
+        };
+        let contents = if cfg!(windows) {
+            "@echo off\r\necho %* | findstr /C:\"process.exit(1)\" >nul && (\r\n  echo out\r\n  echo err 1>&2\r\n  exit /b 1\r\n)\r\necho {\"ok\":true}\r\nexit /b 0\r\n"
+        } else {
+            "#!/bin/sh\ncase \"$*\" in *\"process.exit(1)\"*) printf 'out\\n'; printf 'err\\n' >&2; exit 1;; *) printf '{\"ok\":true}\\n'; exit 0;; esac\n"
+        };
+        fs::write(&bun_path, contents).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&bun_path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
     fn write_broken_workflow_fixture(workflow_dir: &std::path::Path) {
+        write_test_bun_stub(workflow_dir);
         fs::write(
             workflow_dir.join("README.md"),
             "# Broken\n\n## Usage\n\n## Workflow Runtime\n",
@@ -1006,13 +1078,12 @@ mod tests {
         .unwrap();
         fs::write(
             workflow_dir.join("workflow.ts"),
-            r#"import leftPad from "left-pad";
-import { WorkflowContext } from "@openai/codex-sdk/workflow";
+            r#"import type { WorkflowContext } from "@openai/codex-sdk/workflow";
 
 export interface WorkflowInput { input?: string; }
 export interface WorkflowOutput { ok: boolean; input: WorkflowInput; }
 export const WorkflowOutput = { toTuiMarkdown() { return { markdown: "done" }; } };
-export default async function run(_ctx: WorkflowContext, input: WorkflowInput): Promise<WorkflowOutput> { return { ok: true, input: { input: leftPad(input.input ?? "", 2) } }; }
+export default async function run(_ctx: WorkflowContext, input: WorkflowInput): Promise<WorkflowOutput> { return { ok: true, input }; }
 "#,
         )
         .unwrap();
@@ -1149,8 +1220,13 @@ export default async function run(_ctx: WorkflowContext, input: WorkflowInput): 
         );
         assert_eq!(response.repair.changed, true);
         assert!(!response.repair.applied_fixes.is_empty());
-        assert_eq!(response.validation_command_results.len(), 1);
-        assert!(response.validation_command_results[0].succeeded);
+        assert_eq!(response.validation_command_results.len(), 2);
+        assert!(
+            response
+                .validation_command_results
+                .iter()
+                .all(|result| result.succeeded)
+        );
 
         let mut progress_messages = Vec::new();
         while let Ok(envelope) = outgoing_rx.try_recv() {

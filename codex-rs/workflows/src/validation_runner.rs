@@ -8,6 +8,7 @@ use serde_json::Value as JsonValue;
 
 use crate::validation_finding::WorkflowValidationFinding;
 use crate::validation_finding::finding_messages;
+use crate::validation_package::is_bun_runtime_command;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,7 +100,14 @@ pub(crate) fn run_validation_command(
     cwd: &Path,
 ) -> Result<WorkflowValidationCommandResult> {
     let mut shell_command = validation_shell_command(command);
-    crate::managed_bun::prepend_managed_bun_to_path(&mut shell_command, /*cache_root*/ None)?;
+    let local_bun = crate::workflow_runtime::workflow_bun_path(cwd);
+    if !local_bun.is_file() {
+        crate::managed_bun::prepend_managed_bun_to_path(
+            &mut shell_command,
+            /*cache_root*/ None,
+        )?;
+    }
+    prepend_workflow_bin_to_path(&mut shell_command, cwd)?;
     let output = shell_command
         .current_dir(cwd)
         .output()
@@ -114,23 +122,33 @@ pub(crate) fn run_validation_command(
 }
 
 fn validation_commands(spec: &crate::spec::WorkflowSpec) -> Vec<String> {
-    let commands = spec
+    match spec
         .validation
         .get("commands")
         .and_then(JsonValue::as_array)
-        .map(|commands| {
-            commands
-                .iter()
-                .filter_map(JsonValue::as_str)
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if commands.is_empty() {
-        vec!["npm test".to_string()]
-    } else {
-        commands
+    {
+        Some(commands) => commands
+            .iter()
+            .filter_map(JsonValue::as_str)
+            .filter(|command| is_bun_runtime_command(command))
+            .map(ToString::to_string)
+            .collect(),
+        None => vec!["bun test src/tests".to_string()],
     }
+}
+
+fn prepend_workflow_bin_to_path(command: &mut Command, cwd: &Path) -> Result<()> {
+    let bin_dir = cwd.join("node_modules/.bin");
+    if !bin_dir.is_dir() {
+        return Ok(());
+    }
+    let mut paths = vec![bin_dir];
+    if let Some(path) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&path));
+    }
+    let paths = std::env::join_paths(paths).context("failed to build workflow validation PATH")?;
+    command.env("PATH", paths);
+    Ok(())
 }
 
 fn validation_shell_command(command: &str) -> Command {

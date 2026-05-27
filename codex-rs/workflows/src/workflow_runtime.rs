@@ -466,22 +466,36 @@ pub(crate) struct WorkflowRuntimeRunOptions<'a> {
     pub(crate) runtime: crate::execute::WorkflowRuntimeContext,
 }
 
+struct WorkflowProcessInvocation<'a> {
+    codex_home: Option<&'a Path>,
+    working_directory: &'a Path,
+    workflow_dir: &'a Path,
+    workflow_path: &'a Path,
+    input: &'a str,
+    mode: WorkflowRuntimeInvocationMode,
+    runtime: &'a crate::execute::WorkflowRuntimeContext,
+    event_handler: Option<&'a WorkflowRuntimeEventHandler<'a>>,
+}
+
 pub async fn complete_workflow(
     workflow_dir: &Path,
     working_directory: &Path,
     workflow_path: &Path,
     input: &crate::command::WorkflowCommandInput,
 ) -> Result<Vec<crate::command_completion::WorkflowCommandCompletionSuggestion>> {
-    let output = run_workflow_process(
-        /*codex_home*/ None,
+    let runtime = crate::execute::WorkflowRuntimeContext::default();
+    let input =
+        serde_json::to_string(input).context("failed to serialize workflow completion input")?;
+    let output = run_workflow_process(WorkflowProcessInvocation {
+        codex_home: None,
         working_directory,
         workflow_dir,
         workflow_path,
-        &serde_json::to_string(input).context("failed to serialize workflow completion input")?,
-        WorkflowRuntimeInvocationMode::Complete,
-        &crate::execute::WorkflowRuntimeContext::default(),
-        /*event_handler*/ None,
-    )
+        input: &input,
+        mode: WorkflowRuntimeInvocationMode::Complete,
+        runtime: &runtime,
+        event_handler: None,
+    })
     .await?;
 
     if !output.success {
@@ -597,16 +611,16 @@ async fn run_workflow_legacy(
     runtime: &crate::execute::WorkflowRuntimeContext,
     event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
 ) -> Result<WorkflowRuntimeOutput> {
-    run_workflow_process(
-        Some(codex_home),
+    run_workflow_process(WorkflowProcessInvocation {
+        codex_home: Some(codex_home),
         working_directory,
         workflow_dir,
         workflow_path,
         input,
-        WorkflowRuntimeInvocationMode::Run,
+        mode: WorkflowRuntimeInvocationMode::Run,
         runtime,
         event_handler,
-    )
+    })
     .await
 }
 
@@ -648,39 +662,33 @@ fn validate_workflow_runtime_output(
 }
 
 async fn run_workflow_process(
-    codex_home: Option<&Path>,
-    working_directory: &Path,
-    workflow_dir: &Path,
-    workflow_path: &Path,
-    input: &str,
-    mode: WorkflowRuntimeInvocationMode,
-    runtime: &crate::execute::WorkflowRuntimeContext,
-    event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
+    invocation: WorkflowProcessInvocation<'_>,
 ) -> Result<WorkflowRuntimeOutput> {
     let runner_path = write_runner_script()?;
-    let engine_path = workflow_ts_engine_path(codex_home, workflow_dir)?;
+    let engine_path = workflow_ts_engine_path(invocation.codex_home, invocation.workflow_dir)?;
     let mut child = Command::new(&engine_path);
     child
         .arg(&runner_path)
         .arg("--mode")
-        .arg(mode.as_str())
+        .arg(invocation.mode.as_str())
         .arg("--workflow-path")
-        .arg(workflow_path)
+        .arg(invocation.workflow_path)
         .arg("--input")
-        .arg(input)
+        .arg(invocation.input)
         .env(
             WORKFLOW_WORKING_DIRECTORY_ENV,
-            working_directory.display().to_string(),
+            invocation.working_directory.display().to_string(),
         )
         .env(
             WORKFLOW_OUTPUT_FORMAT_ENV,
-            runtime
+            invocation
+                .runtime
                 .output_format
                 .clone()
                 .or_else(|| env::var(WORKFLOW_OUTPUT_FORMAT_ENV).ok())
                 .unwrap_or_default(),
         )
-        .current_dir(workflow_dir)
+        .current_dir(invocation.workflow_dir)
         .env(
             WORKFLOW_SELF_EXE_ENV,
             env::var_os(WORKFLOW_SELF_EXE_ENV)
@@ -692,7 +700,8 @@ async fn run_workflow_process(
         )
         .env(
             WORKFLOW_NAME_ENV,
-            workflow_dir
+            invocation
+                .workflow_dir
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("workflow"),
@@ -701,26 +710,26 @@ async fn run_workflow_process(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(run_id) = &runtime.run_id {
+    if let Some(run_id) = &invocation.runtime.run_id {
         child.env(WORKFLOW_RUN_ID_ENV, run_id);
     }
-    if let Some(origin_thread_id) = &runtime.origin_thread_id {
+    if let Some(origin_thread_id) = &invocation.runtime.origin_thread_id {
         child.env(WORKFLOW_ORIGIN_THREAD_ID_ENV, origin_thread_id);
     }
-    if let Some(app_server_url) = &runtime.app_server_url {
+    if let Some(app_server_url) = &invocation.runtime.app_server_url {
         child.env(WORKFLOW_APP_SERVER_URL_ENV, app_server_url);
     }
-    if let Some(approvals) = &runtime.approvals {
+    if let Some(approvals) = &invocation.runtime.approvals {
         child.env(WORKFLOW_APPROVALS_ENV, approvals);
     }
-    if let Some(behavior) = &runtime.interactive_request_behavior {
+    if let Some(behavior) = &invocation.runtime.interactive_request_behavior {
         child.env(WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR_ENV, behavior);
     }
 
     let mut child = child.spawn().with_context(|| {
         format!(
             "failed to start workflow runtime for {}",
-            workflow_path.display()
+            invocation.workflow_path.display()
         )
     })?;
 
@@ -741,7 +750,8 @@ async fn run_workflow_process(
             .map(|_| stdout_text)
     });
 
-    let (status, stderr) = tokio::join!(child.wait(), read_stderr(stderr, event_handler));
+    let (status, stderr) =
+        tokio::join!(child.wait(), read_stderr(stderr, invocation.event_handler));
     let status = status.context("failed to wait for workflow runtime process")?;
     let stderr = stderr?;
     let stdout = stdout_task
@@ -834,32 +844,27 @@ pub(crate) fn workflow_ts_engine_path(
         return Ok(PathBuf::from("bun"));
     }
 
-    let managed_bun_error = match crate::managed_bun::ensure_managed_bun(codex_home) {
+    match crate::managed_bun::ensure_managed_bun(codex_home) {
         Ok(Some(managed_bun_path)) => return Ok(managed_bun_path),
         Ok(None) => None,
         Err(err) => Some(err),
-    };
-
-    let tsx_path = workflow_tsx_path(workflow_dir);
-    if tsx_path.is_file() {
-        return Ok(tsx_path);
     }
-
-    if let Some(err) = managed_bun_error {
-        return Err(err).with_context(|| {
-            format!(
-                "workflow runtime requires managed Bun in CODEX_HOME, local `{}`, `bun` on PATH, or legacy local `{}`",
-                bun_path.display(),
-                tsx_path.display()
-            )
-        });
-    }
-
-    Err(anyhow::anyhow!(
-        "workflow runtime requires managed Bun in CODEX_HOME, local `{}`, `bun` on PATH, or legacy local `{}`",
-        bun_path.display(),
-        tsx_path.display()
-    ))
+    .map_or_else(
+        || {
+            Err(anyhow::anyhow!(
+                "workflow runtime requires managed Bun in CODEX_HOME, local `{}`, or `bun` on PATH",
+                bun_path.display()
+            ))
+        },
+        |err| {
+            Err(err).with_context(|| {
+                format!(
+                    "workflow runtime requires managed Bun in CODEX_HOME, local `{}`, or `bun` on PATH",
+                    bun_path.display()
+                )
+            })
+        },
+    )
 }
 
 pub(crate) fn workflow_bun_path(workflow_dir: &Path) -> PathBuf {
@@ -867,14 +872,6 @@ pub(crate) fn workflow_bun_path(workflow_dir: &Path) -> PathBuf {
         workflow_dir.join("node_modules/.bin/bun.cmd")
     } else {
         workflow_dir.join("node_modules/.bin/bun")
-    }
-}
-
-fn workflow_tsx_path(workflow_dir: &Path) -> PathBuf {
-    if cfg!(windows) {
-        workflow_dir.join("node_modules/.bin/tsx.cmd")
-    } else {
-        workflow_dir.join("node_modules/.bin/tsx")
     }
 }
 

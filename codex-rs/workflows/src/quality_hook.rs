@@ -306,9 +306,9 @@ mod tests {
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "echo build",
-    "test": "echo test",
-    "run": "node src/workflow.ts"
+    "build": "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
+    "test": "bun test src/tests",
+    "run": "bun src/workflow.ts"
   },
   "devDependencies": {
     "@types/node": "latest",
@@ -325,7 +325,7 @@ mod tests {
         .expect("write tsconfig");
         fs::write(
             workflow_dir.join("src/workflow.ts"),
-            "export interface WorkflowInput { input?: string; }\nexport interface WorkflowOutput { ok: boolean; }\nexport {}\n",
+            "export interface WorkflowInput { input?: string; }\nexport interface WorkflowOutput { ok: boolean; }\nexport default async function workflow(_ctx: unknown, _input: WorkflowInput): Promise<WorkflowOutput> { return { ok: true }; }\nexport async function complete() { return []; }\n",
         )
         .expect("write workflow");
         fs::write(
@@ -361,7 +361,7 @@ mod tests {
         fs::create_dir_all(workflow_dir.join(".git")).expect("create git dir");
         fs::write(
             workflow_dir.join("workflow.yaml"),
-            "id: review/fix\napi:\n  inputSchema:\n    type: object\n  outputSchema:\n    type: object\n    additionalProperties: true\ndependencies:\n  runtime: []\n  development:\n    - '@types/node'\n    - typescript\nvalidation:\n  commands:\n    - echo build\n    - echo test\n  contractSmoke:\n    command: 'node -e \"console.log(JSON.stringify({ok:true}))\"'\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
+            "id: review/fix\napi:\n  inputSchema:\n    type: object\n  outputSchema:\n    type: object\n    additionalProperties: true\ndependencies:\n  runtime: []\n  development:\n    - '@types/node'\n    - typescript\nvalidation:\n  commands:\n    - bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk\n    - bun test src/tests\n  contractSmoke:\n    input: {}\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
         )
         .expect("write workflow spec");
 
@@ -421,9 +421,11 @@ mod tests {
         let home = TempDir::new().expect("create temp dir");
         let cwd = TempDir::new().expect("create temp dir");
         let workflow_dir = write_workflow_fixture(home.path(), "review/fix");
+        let workflow_source =
+            fs::read_to_string(workflow_dir.join("src/workflow.ts")).expect("read workflow source");
         fs::write(
             workflow_dir.join("src/workflow.ts"),
-            "// extra comment to keep the workflow valid\nexport {}\n",
+            format!("// extra comment to keep the workflow valid\n{workflow_source}"),
         )
         .expect("dirty valid workflow");
 

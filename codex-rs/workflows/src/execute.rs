@@ -1377,9 +1377,31 @@ mod tests {
             .expect("node executable should be available for workflow tests")
     }
 
+    fn write_test_bun_stub(workflow_dir: &Path) {
+        let bin_dir = workflow_dir.join("node_modules/.bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let bun_path = if cfg!(windows) {
+            bin_dir.join("bun.cmd")
+        } else {
+            bin_dir.join("bun")
+        };
+        let contents = if cfg!(windows) {
+            "@echo off\r\necho %* | findstr /C:\"process.exit(1)\" >nul && exit /b 1\r\necho {\"ok\":true}\r\nexit /b 0\r\n"
+        } else {
+            "#!/bin/sh\ncase \"$*\" in *\"process.exit(1)\"*) exit 1;; *) printf '{\"ok\":true}\\n'; exit 0;; esac\n"
+        };
+        fs::write(&bun_path, contents).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&bun_path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
     fn write_validation_fixture(workflow_dir: &Path, validation_commands: JsonValue) {
         fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
         fs::create_dir_all(workflow_dir.join("state")).unwrap();
+        write_test_bun_stub(workflow_dir);
         fs::write(
             workflow_dir.join(".gitignore"),
             "node_modules/\nartifacts/\nstate/*\n!state/.gitkeep\n",
@@ -1402,9 +1424,9 @@ mod tests {
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "echo build",
-    "test": "echo test",
-    "run": "node src/workflow.ts"
+    "build": "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
+    "test": "bun test src/tests",
+    "run": "bun src/workflow.ts"
   },
   "devDependencies": {
     "@types/node": "latest",
@@ -1419,7 +1441,11 @@ mod tests {
             "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"strict\": true,\n    \"noEmit\": true\n  },\n  \"include\": [\"src/**/*.ts\"]\n}\n",
         )
         .unwrap();
-        fs::write(workflow_dir.join("src/workflow.ts"), "export {};\n").unwrap();
+        fs::write(
+            workflow_dir.join("src/workflow.ts"),
+            "export interface WorkflowInput { input?: string; }\nexport interface WorkflowOutput { ok: boolean; }\nexport default async function workflow(_ctx: unknown, _input: WorkflowInput): Promise<WorkflowOutput> { return { ok: true }; }\nexport async function complete() { return []; }\n",
+        )
+        .unwrap();
         fs::write(
             workflow_dir.join("src/tests/workflow.positive.test.ts"),
             "// workflow-covers: positive progress finalResult\nexport {};\n",
@@ -1460,7 +1486,7 @@ mod tests {
                 validation: json!({
                     "commands": validation_commands,
                     "contractSmoke": {
-                        "command": "node -e \"console.log(JSON.stringify({ ok: true }))\""
+                        "input": { "input": "example" }
                     },
                     "coverage": {
                         "positive": true,
@@ -1649,7 +1675,13 @@ mod tests {
     fn validate_workflow_runs_validation_commands() {
         let temp_dir = TempDir::new().unwrap();
         let workflow_dir = temp_dir.path().join("review/fix");
-        write_validation_fixture(&workflow_dir, json!(["echo build", "echo test"]));
+        write_validation_fixture(
+            &workflow_dir,
+            json!([
+                "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
+                "bun test src/tests"
+            ]),
+        );
         let workflow = crate::registry::WorkflowSummary {
             id: "review/fix".to_string(),
             command: Some("fix".to_string()),
@@ -1678,9 +1710,12 @@ mod tests {
             Vec::<String>::new()
         );
         assert_eq!(report.command_results.len(), 2);
-        assert_eq!(report.command_results[0].command, "echo build");
+        assert_eq!(
+            report.command_results[0].command,
+            "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk"
+        );
         assert!(report.command_results[0].succeeded);
-        assert_eq!(report.command_results[1].command, "echo test");
+        assert_eq!(report.command_results[1].command, "bun test src/tests");
         assert!(report.command_results[1].succeeded);
     }
 
@@ -1688,7 +1723,13 @@ mod tests {
     fn validate_workflow_reports_failing_validation_command() {
         let temp_dir = TempDir::new().unwrap();
         let workflow_dir = temp_dir.path().join("review/fix");
-        write_validation_fixture(&workflow_dir, json!(["false # build test", "echo skipped"]));
+        write_validation_fixture(
+            &workflow_dir,
+            json!([
+                "bun -e \"process.exit(1)\" # build test",
+                "bun test src/tests"
+            ]),
+        );
         let workflow = crate::registry::WorkflowSummary {
             id: "review/fix".to_string(),
             command: Some("fix".to_string()),
@@ -1715,7 +1756,10 @@ mod tests {
         assert_eq!(report.command_results.len(), 1);
         assert_eq!(
             crate::validation_finding::finding_messages(&report.findings),
-            vec!["validation command `false # build test` failed with exit code 1".to_string()]
+            vec![
+                "validation command `bun -e \"process.exit(1)\" # build test` failed with exit code 1"
+                    .to_string()
+            ]
         );
     }
 
@@ -1724,10 +1768,16 @@ mod tests {
         let home = TempDir::new().unwrap();
         let cwd = TempDir::new().unwrap();
         let workflow_dir = home.path().join("workflows/review/fix");
-        write_validation_fixture(&workflow_dir, json!(["echo build", "echo test"]));
+        write_validation_fixture(
+            &workflow_dir,
+            json!([
+                "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
+                "bun test src/tests"
+            ]),
+        );
         fs::write(
             workflow_dir.join(WORKFLOW_YAML),
-            "id: review/other\ndependencies:\n  runtime: []\n  development:\n    - '@types/node'\n    - typescript\nvalidation:\n  commands:\n    - echo build\n    - echo test\n  contractSmoke:\n    input: {}\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
+            "id: review/other\ndependencies:\n  runtime: []\n  development:\n    - '@types/node'\n    - typescript\nvalidation:\n  commands:\n    - bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk\n    - bun test src/tests\n  contractSmoke:\n    input: {}\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
         )
         .unwrap();
 
@@ -1776,7 +1826,13 @@ mod tests {
         let home = TempDir::new().unwrap();
         let cwd = TempDir::new().unwrap();
         let workflow_dir = home.path().join("workflows/review/fix");
-        write_validation_fixture(&workflow_dir, json!(["echo build", "echo test"]));
+        write_validation_fixture(
+            &workflow_dir,
+            json!([
+                "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
+                "bun test src/tests"
+            ]),
+        );
 
         let config = WorkflowsConfigToml::default();
         let ctx = WorkflowCommandContext {
@@ -1816,7 +1872,13 @@ mod tests {
         let home = TempDir::new().unwrap();
         let cwd = TempDir::new().unwrap();
         let workflow_dir = home.path().join("workflows/review/fix");
-        write_validation_fixture(&workflow_dir, json!(["echo build", "echo test"]));
+        write_validation_fixture(
+            &workflow_dir,
+            json!([
+                "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
+                "bun test src/tests"
+            ]),
+        );
 
         let config = WorkflowsConfigToml::default();
         let session_id = "019d0000-0000-0000-0000-000000000001".to_string();
@@ -1863,7 +1925,13 @@ mod tests {
         let home = TempDir::new().unwrap();
         let cwd = TempDir::new().unwrap();
         let workflow_dir = home.path().join("workflows/review/fix");
-        write_validation_fixture(&workflow_dir, json!(["echo build", "echo test"]));
+        write_validation_fixture(
+            &workflow_dir,
+            json!([
+                "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
+                "bun test src/tests"
+            ]),
+        );
 
         let config = WorkflowsConfigToml::default();
         let session_id = "019d0000-0000-0000-0000-000000000010".to_string();
@@ -1904,7 +1972,13 @@ mod tests {
         let home = TempDir::new().unwrap();
         let cwd = TempDir::new().unwrap();
         let workflow_dir = home.path().join("workflows/review/fix");
-        write_validation_fixture(&workflow_dir, json!(["echo build", "echo test"]));
+        write_validation_fixture(
+            &workflow_dir,
+            json!([
+                "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
+                "bun test src/tests"
+            ]),
+        );
 
         let config = WorkflowsConfigToml::default();
         let session_id = "019d0000-0000-0000-0000-000000000011".to_string();
@@ -1948,7 +2022,13 @@ mod tests {
         let home = TempDir::new().unwrap();
         let cwd = TempDir::new().unwrap();
         let workflow_dir = home.path().join("workflows/review/fix");
-        write_validation_fixture(&workflow_dir, json!(["echo build", "echo test"]));
+        write_validation_fixture(
+            &workflow_dir,
+            json!([
+                "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
+                "bun test src/tests"
+            ]),
+        );
 
         let config = WorkflowsConfigToml::default();
         let session_id = "019d0000-0000-0000-0000-000000000002".to_string();

@@ -567,14 +567,17 @@ pub(crate) fn extract_workflow_source_contract_from_typescript(
 ) -> Result<WorkflowSourceContract> {
     ensure_repo_typescript_shim(workflow_dir)?;
     let workflow_path = workflow_dir.join("src/workflow.ts");
-    let command = if let Some(managed_bun) =
-        crate::managed_bun::cached_managed_bun_path(/*cache_root*/ None)?
-    {
+    let command = if let Some(managed_bun) = crate::managed_bun::cached_managed_bun_path(None)? {
         WorkflowApiExtractorCommand::ManagedBun(managed_bun)
     } else if crate::managed_bun::command_on_path("bun") {
         WorkflowApiExtractorCommand::PathBun
     } else {
-        WorkflowApiExtractorCommand::Node
+        let Some(managed_bun) = crate::managed_bun::ensure_managed_bun(None)? else {
+            return Err(anyhow!(
+                "workflow API extraction requires managed Bun in CODEX_HOME or `bun` on PATH"
+            ));
+        };
+        WorkflowApiExtractorCommand::ManagedBun(managed_bun)
     };
     let output = run_workflow_api_extractor(command, workflow_dir, &workflow_path)?;
     if !output.status.success() {
@@ -602,7 +605,6 @@ pub(crate) fn extract_workflow_source_contract_from_typescript(
 enum WorkflowApiExtractorCommand {
     ManagedBun(PathBuf),
     PathBun,
-    Node,
 }
 
 fn run_workflow_api_extractor(
@@ -610,41 +612,12 @@ fn run_workflow_api_extractor(
     workflow_dir: &Path,
     workflow_path: &Path,
 ) -> Result<Output> {
-    match run_workflow_api_extractor_once(&command, workflow_dir, workflow_path) {
-        Ok(output) => Ok(output),
-        Err(err)
-            if matches!(command, WorkflowApiExtractorCommand::Node)
-                && err.kind() == std::io::ErrorKind::NotFound =>
-        {
-            let Some(managed_bun) =
-                crate::managed_bun::ensure_managed_bun(/*cache_root*/ None)?
-            else {
-                return Err(err).with_context(|| {
-                    format!(
-                        "failed to extract workflow API from {}",
-                        workflow_path.display()
-                    )
-                });
-            };
-            run_workflow_api_extractor_once(
-                &WorkflowApiExtractorCommand::ManagedBun(managed_bun),
-                workflow_dir,
-                workflow_path,
-            )
-            .with_context(|| {
-                format!(
-                    "failed to extract workflow API from {}",
-                    workflow_path.display()
-                )
-            })
-        }
-        Err(err) => Err(err).with_context(|| {
-            format!(
-                "failed to extract workflow API from {}",
-                workflow_path.display()
-            )
-        }),
-    }
+    run_workflow_api_extractor_once(&command, workflow_dir, workflow_path).with_context(|| {
+        format!(
+            "failed to extract workflow API from {}",
+            workflow_path.display()
+        )
+    })
 }
 
 fn run_workflow_api_extractor_once(
@@ -655,11 +628,6 @@ fn run_workflow_api_extractor_once(
     let mut command = match command {
         WorkflowApiExtractorCommand::ManagedBun(path) => Command::new(path),
         WorkflowApiExtractorCommand::PathBun => Command::new("bun"),
-        WorkflowApiExtractorCommand::Node => {
-            let mut command = Command::new("node");
-            command.arg("--input-type=module");
-            command
-        }
     };
     command
         .current_dir(workflow_dir)
