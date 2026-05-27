@@ -29,6 +29,7 @@ use codex_model_router::policy;
 use codex_model_router::policy::PolicyAvailableModel;
 use codex_model_router::policy::PolicyRoute;
 use codex_model_router::select_candidate_with_score_bias;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::openai_models::ModelInfo;
@@ -1061,6 +1062,29 @@ pub(crate) async fn available_router_models(
         tracing::debug!(error = %err, "failed to read available model metadata for model router");
         Vec::new()
     });
+    available_router_models_from_catalog(config, models_manager, remote_models, discovery_cache)
+        .await
+}
+
+async fn available_router_models_with_cache_refresh(
+    config: &Config,
+    models_manager: &SharedModelsManager,
+    discovery_cache: &ModelRouterDiscoveryCache,
+) -> Vec<AvailableRouterModel> {
+    let remote_models = models_manager
+        .raw_model_catalog(RefreshStrategy::OnlineIfUncached)
+        .await
+        .models;
+    available_router_models_from_catalog(config, models_manager, remote_models, discovery_cache)
+        .await
+}
+
+async fn available_router_models_from_catalog(
+    config: &Config,
+    models_manager: &SharedModelsManager,
+    remote_models: Vec<ModelInfo>,
+    discovery_cache: &ModelRouterDiscoveryCache,
+) -> Vec<AvailableRouterModel> {
     let available_presets = models_manager.build_available_models(remote_models.clone());
     available_presets
         .into_iter()
@@ -1148,7 +1172,8 @@ pub async fn model_router_candidate_pool_for_config(
     models_manager: &SharedModelsManager,
 ) -> Result<Vec<ModelRouterCandidateToml>, String> {
     let discovery_cache = ModelRouterDiscoveryCache::new();
-    let available_models = available_router_models(config, models_manager, &discovery_cache).await;
+    let available_models =
+        available_router_models_with_cache_refresh(config, models_manager, &discovery_cache).await;
     model_router_candidate_pool(config, &available_models)
 }
 

@@ -20,6 +20,7 @@ use codex_features::Feature;
 use codex_model_provider_info::DEEPSEEK_PROVIDER_ID;
 use codex_model_router::policy::candidate_identity_key;
 use codex_models_manager::bundled_models_response;
+use codex_models_manager::client_version_to_whole;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::ThreadId;
@@ -27,6 +28,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -52,6 +54,7 @@ use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use serde_json::Value;
+use serde_json::json;
 use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -710,6 +713,96 @@ discovery = "manual"
     Ok(())
 }
 
+#[test]
+fn model_router_cli_policy_and_tune_load_active_provider_models_cache() -> Result<()> {
+    let home = TempDir::new()?;
+    fs::write(
+        home.path().join("config.toml"),
+        r#"
+model = "gpt-5.4"
+model_provider = "openai"
+approval_policy = "never"
+
+[model_router]
+enabled = true
+"#,
+    )?;
+
+    let mut spark = model_info_from_slug("gpt-5.3-codex-spark");
+    spark.visibility = ModelVisibility::List;
+    spark.supported_in_api = true;
+    spark.priority = 1;
+    let cache = json!({
+        "fetched_at": Utc::now(),
+        "etag": "test-spark-cache",
+        "client_version": client_version_to_whole(),
+        "models": [spark],
+    });
+    fs::write(
+        home.path().join("models_cache.json"),
+        serde_json::to_vec_pretty(&cache)?,
+    )?;
+
+    let policy = run_model_router_cli_json(
+        home.path(),
+        &["policy", "--task-key", "chat.default", "--json"],
+    )?;
+    assert!(
+        policy["candidates"]
+            .as_array()
+            .expect("policy candidates should be an array")
+            .iter()
+            .any(|candidate| {
+                candidate["id"].as_str() == Some("spark")
+                    && candidate["model"].as_str() == Some("gpt-5.3-codex-spark")
+                    && candidate["modelProvider"].as_str() == Some("openai")
+            }),
+        "policy should include cached active-provider Spark model: {policy:#}"
+    );
+
+    let tune_output = run_model_router_cli(
+        home.path(),
+        &[
+            "tune",
+            "--window",
+            "all",
+            "--token-budget",
+            "1",
+            "--cost-budget-usd",
+            "0",
+            "--dry-run",
+            "--json",
+        ],
+    )?;
+    assert!(
+        tune_output.status.success(),
+        "model-router tune failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&tune_output.stdout),
+        String::from_utf8_lossy(&tune_output.stderr)
+    );
+    let tune_stderr = String::from_utf8_lossy(&tune_output.stderr);
+    assert!(
+        tune_stderr.contains("model-router tune: discovered")
+            && tune_stderr.contains("gpt-5.3-codex-spark"),
+        "tune progress should name discovered cached Spark candidate:\n{tune_stderr}"
+    );
+    let tune: Value = serde_json::from_slice(&tune_output.stdout)?;
+    assert!(
+        tune["candidates"]
+            .as_array()
+            .expect("tune candidates should be an array")
+            .iter()
+            .any(|candidate| {
+                candidate["identity"]["id"].as_str() == Some("spark")
+                    && candidate["model"].as_str() == Some("gpt-5.3-codex-spark")
+                    && candidate["modelProvider"].as_str() == Some("openai")
+            }),
+        "tune should include cached active-provider Spark model: {tune:#}"
+    );
+
+    Ok(())
+}
+
 fn request_model_counts(requests: &[responses::ResponsesRequest]) -> BTreeMap<String, usize> {
     let mut counts = BTreeMap::new();
     for request in requests {
@@ -726,13 +819,19 @@ fn request_model_counts(requests: &[responses::ResponsesRequest]) -> BTreeMap<St
     counts
 }
 
-fn run_model_router_cli_json(codex_home: &Path, args: &[&str]) -> Result<Value> {
-    let output = Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
+fn run_model_router_cli(codex_home: &Path, args: &[&str]) -> Result<std::process::Output> {
+    Ok(Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
         .env("CODEX_HOME", codex_home)
         .env("CODEX_SQLITE_HOME", codex_home)
+        .env_remove("DEEPSEEK_API_KEY")
+        .env_remove("OPENAI_API_KEY")
         .arg("model-router")
         .args(args)
-        .output()?;
+        .output()?)
+}
+
+fn run_model_router_cli_json(codex_home: &Path, args: &[&str]) -> Result<Value> {
+    let output = run_model_router_cli(codex_home, args)?;
     assert!(
         output.status.success(),
         "model-router command failed with args {args:?}:\nstdout:\n{}\nstderr:\n{}",

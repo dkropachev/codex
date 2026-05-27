@@ -42,6 +42,7 @@ use serde::Serialize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use supports_color::Stream;
 
 mod account_usage;
@@ -67,6 +68,7 @@ use crate::workflow_cmd::run_workflow_command;
 use crate::workflow_quality_hook_cmd::run_workflow_quality_hook;
 
 use codex_config::LoaderOverrides;
+use codex_config::config_toml::ModelRouterCandidateToml;
 use codex_core::build_models_manager;
 use codex_core::clear_memory_roots_contents;
 use codex_core::config::Config;
@@ -2867,18 +2869,23 @@ async fn run_model_router_tune_command(
     cmd: ModelRouterTuneCommand,
     root_config_overrides: CliConfigOverrides,
 ) -> anyhow::Result<()> {
+    let ModelRouterTuneCommand {
+        window,
+        cost_budget_usd,
+        token_budget,
+        dry_run,
+        report_out,
+        json,
+    } = cmd;
     let (config, state_db) = model_router_config_and_state(root_config_overrides).await?;
     let lifecycle_defaults = codex_model_router::policy::effective_lifecycle_for_route(
         config.model_router.as_ref(),
         "model_router.tune",
         /*route*/ None,
     )?;
-    let window = cmd.window.unwrap_or(lifecycle_defaults.window);
-    let cost_budget_usd = cmd
-        .cost_budget_usd
-        .unwrap_or(lifecycle_defaults.cost_budget_usd);
-    let token_budget = cmd
-        .token_budget
+    let window = window.unwrap_or(lifecycle_defaults.window);
+    let cost_budget_usd = cost_budget_usd.unwrap_or(lifecycle_defaults.cost_budget_usd);
+    let token_budget = token_budget
         .unwrap_or_else(|| i64::try_from(lifecycle_defaults.token_budget).unwrap_or(i64::MAX));
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true);
@@ -2887,25 +2894,32 @@ async fn run_model_router_tune_command(
         auth_manager.clone(),
         CollaborationModesConfig::default(),
     );
+    let candidate_preview = model_router_candidate_pool_for_config(&config, &models_manager)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let options = codex_core::model_router_tune::ModelRouterTuneOptions {
+        window,
+        cost_budget_usd,
+        token_budget,
+        dry_run,
+    };
+    print_model_router_tune_progress_start(&options, &candidate_preview);
+    let started_at = Instant::now();
     let tune_runtime =
         codex_core::model_router_tune::ModelRouterTuneRuntime::new(auth_manager, models_manager);
     let report = codex_core::model_router_tune::tune_model_router(
         state_db.as_ref(),
         &config,
-        codex_core::model_router_tune::ModelRouterTuneOptions {
-            window,
-            cost_budget_usd,
-            token_budget,
-            dry_run: cmd.dry_run,
-        },
+        options,
         Some(tune_runtime),
     )
     .await?;
-    if let Some(report_out) = cmd.report_out {
+    if let Some(report_out) = report_out {
         let json = serde_json::to_string_pretty(&report)?;
         tokio::fs::write(report_out, format!("{json}\n")).await?;
     }
-    if cmd.json {
+    print_model_router_tune_progress_complete(&report, started_at.elapsed());
+    if json {
         serde_json::to_writer_pretty(std::io::stdout(), &report)?;
         println!();
     } else {
@@ -3020,6 +3034,63 @@ fn print_model_router_tune_report(report: &codex_core::model_router_tune::ModelR
                 change.apply_eligible
             );
         }
+    }
+}
+
+fn print_model_router_tune_progress_start(
+    options: &codex_core::model_router_tune::ModelRouterTuneOptions,
+    candidates: &[ModelRouterCandidateToml],
+) {
+    eprintln!(
+        "model-router tune: window={}, token_budget={}, cost_budget=${:.6}, dry_run={}",
+        options.window, options.token_budget, options.cost_budget_usd, options.dry_run
+    );
+    eprintln!(
+        "model-router tune: discovered {} candidate(s): {}",
+        candidates.len(),
+        summarize_model_router_candidates(candidates)
+    );
+}
+
+fn print_model_router_tune_progress_complete(
+    report: &codex_core::model_router_tune::ModelRouterTuneReport,
+    elapsed: std::time::Duration,
+) {
+    eprintln!(
+        "model-router tune: completed in {:.1}s; evaluated {}, skipped {}, used {} tokens and ${:.6}",
+        elapsed.as_secs_f64(),
+        report.evaluated_count,
+        report.skipped_count,
+        report.budget_used.tokens_used,
+        report.budget_used.cost_used_usd_micros as f64 / 1_000_000.0
+    );
+}
+
+fn summarize_model_router_candidates(candidates: &[ModelRouterCandidateToml]) -> String {
+    if candidates.is_empty() {
+        return "none".to_string();
+    }
+
+    let mut labels = candidates
+        .iter()
+        .take(8)
+        .map(model_router_candidate_label)
+        .collect::<Vec<_>>();
+    if candidates.len() > labels.len() {
+        labels.push(format!("+{} more", candidates.len() - labels.len()));
+    }
+    labels.join(", ")
+}
+
+fn model_router_candidate_label(candidate: &ModelRouterCandidateToml) -> String {
+    let provider = candidate
+        .model_provider
+        .as_deref()
+        .unwrap_or("current-provider");
+    let model = candidate.model.as_deref().unwrap_or("current-model");
+    match candidate.id.as_deref() {
+        Some(id) => format!("{id} ({provider}/{model})"),
+        None => format!("{provider}/{model}"),
     }
 }
 

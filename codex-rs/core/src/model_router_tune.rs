@@ -20,11 +20,10 @@ use sha2::Sha256;
 use uuid::Uuid;
 
 use crate::config::Config;
-use crate::model_router::ModelRouterDiscoveryCache;
-use crate::model_router::available_router_models;
 use crate::model_router::model_router_candidate_identity;
 use crate::model_router::model_router_candidate_identity_key;
 use crate::model_router::model_router_candidate_pool;
+use crate::model_router::model_router_candidate_pool_for_config;
 use crate::model_router::token_price_from_candidate;
 
 mod apply;
@@ -248,17 +247,13 @@ async fn tune_candidates(
     config: &Config,
     runtime: Option<&ModelRouterTuneRuntime>,
 ) -> anyhow::Result<Vec<ModelRouterCandidateToml>> {
-    let available_models = if let Some(runtime) = runtime {
-        available_router_models(
-            config,
-            &runtime.models_manager,
-            &ModelRouterDiscoveryCache::new(),
-        )
-        .await
+    if let Some(runtime) = runtime {
+        model_router_candidate_pool_for_config(config, &runtime.models_manager)
+            .await
+            .map_err(anyhow::Error::msg)
     } else {
-        Vec::new()
-    };
-    model_router_candidate_pool(config, &available_models).map_err(anyhow::Error::msg)
+        model_router_candidate_pool(config, &[]).map_err(anyhow::Error::msg)
+    }
 }
 
 pub async fn refresh_model_router_report_deltas(
