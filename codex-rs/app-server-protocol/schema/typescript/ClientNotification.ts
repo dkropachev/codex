@@ -4,4 +4,4 @@
 import type { WorkflowMarkdownResultNotification } from "./v2/WorkflowMarkdownResultNotification";
 import type { WorkflowProgressNotification } from "./v2/WorkflowProgressNotification";
 
-export type ClientNotification = { "method": "initialized" } | { "method": "workflow/progress", "params": WorkflowProgressNotification } | { "method": "workflow/reportToUserMarkdown", "params": WorkflowMarkdownResultNotification };
+export type ClientNotification = { "method": "initialized" } | { "method": "workflowRun/progress", "params": WorkflowProgressNotification } | { "method": "workflowRun/reportToUserMarkdown", "params": WorkflowMarkdownResultNotification };

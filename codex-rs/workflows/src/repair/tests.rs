@@ -458,6 +458,8 @@ fn repair_workflow_command_repairs_validation_findings_iteratively() {
         codex_self_exe: None,
         stage_session_id: None,
         progress: Some(&progress),
+        runtime_event_handler: None,
+        runtime: Default::default(),
     };
 
     let output: WorkflowCommandOutput = repair_workflow_command(ctx, "broken/fix").unwrap();
@@ -535,6 +537,8 @@ fn repair_workflow_command_reports_blocked_findings_when_mode_is_too_narrow() {
         codex_self_exe: None,
         stage_session_id: None,
         progress: None,
+        runtime_event_handler: None,
+        runtime: Default::default(),
     };
 
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();
@@ -577,6 +581,8 @@ fn repair_workflow_command_reports_unsupported_validation_command_failures() {
         codex_self_exe: None,
         stage_session_id: None,
         progress: None,
+        runtime_event_handler: None,
+        runtime: Default::default(),
     };
 
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();
@@ -632,6 +638,8 @@ fn repair_workflow_command_uses_ai_fallback_until_validation_passes() {
         codex_self_exe: Some(codex_self_exe),
         stage_session_id: None,
         progress: None,
+        runtime_event_handler: None,
+        runtime: Default::default(),
     };
 
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();
@@ -676,6 +684,8 @@ fn repair_workflow_command_applies_known_build_command_fixers() {
         codex_self_exe: None,
         stage_session_id: None,
         progress: None,
+        runtime_event_handler: None,
+        runtime: Default::default(),
     };
 
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();
@@ -710,6 +720,8 @@ fn repair_workflow_command_refreshes_dependencies_for_broken_local_tsc() {
         codex_self_exe: None,
         stage_session_id: None,
         progress: None,
+        runtime_event_handler: None,
+        runtime: Default::default(),
     };
     let command_runner =
         |command: &str, cwd: &Path| -> anyhow::Result<WorkflowValidationCommandResult> {
@@ -783,6 +795,8 @@ fn repair_workflow_command_reports_created_layout_directories() {
         codex_self_exe: None,
         stage_session_id: None,
         progress: None,
+        runtime_event_handler: None,
+        runtime: Default::default(),
     };
 
     let output = repair_workflow_command(ctx, "broken/layout").unwrap();
@@ -820,6 +834,8 @@ fn repair_workflow_command_untracks_runtime_state_and_updates_gitignore() {
         codex_self_exe: None,
         stage_session_id: None,
         progress: None,
+        runtime_event_handler: None,
+        runtime: Default::default(),
     };
 
     let output = repair_workflow_command(ctx, "broken/runtime-state").unwrap();
@@ -857,6 +873,8 @@ fn repair_workflow_command_commits_successful_repairs_when_commit_policy_allows_
         codex_self_exe: None,
         stage_session_id: None,
         progress: None,
+        runtime_event_handler: None,
+        runtime: Default::default(),
     };
 
     let output = repair_workflow_command(ctx, "broken/fix").unwrap();

@@ -1,5 +1,10 @@
 import * as child_process from "node:child_process";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createServer, type Socket } from "node:net";
 import { PassThrough } from "node:stream";
 
 import { beforeEach, describe, expect, it } from "@jest/globals";
@@ -36,6 +41,7 @@ class FakeAppServerProcess extends EventEmitter {
   approvalResponse: JsonMessage | null = null;
   apiCatalogReadParams: JsonMessage | null = null;
   workflowRunParams: JsonMessage | null = null;
+  workflowRunWaitParams: JsonMessage | null = null;
   workflowCommandExecuteParams: JsonMessage | null = null;
   workflowNotifications: JsonMessage[] = [];
   artifactRequests: Array<{ method: string; params: JsonMessage }> = [];
@@ -306,9 +312,83 @@ class FakeAppServerProcess extends EventEmitter {
       });
       return;
     }
-    if (message.method === "workflow/run") {
+    if (message.method === "workflowRun/start") {
       this.workflowRunParams = message.params as JsonMessage;
-      this.write({ id: message.id, result: { message: "ran", data: { ok: true } } });
+      this.write({
+        id: message.id,
+        result: {
+          run: {
+            id: "run-1",
+            workflowId: String((message.params as JsonMessage).id),
+            status: "running",
+            threadId: null,
+            createdAt: 123,
+            startedAt: 123,
+            completedAt: null,
+            output: null,
+            error: null,
+          },
+        },
+      });
+      return;
+    }
+    if (message.method === "workflowRun/wait") {
+      this.workflowRunWaitParams = message.params as JsonMessage;
+      this.write({
+        id: message.id,
+        result: {
+          completed: true,
+          run: {
+            id: String((message.params as JsonMessage).runId),
+            workflowId: "reports/jira",
+            status: "succeeded",
+            threadId: null,
+            createdAt: 123,
+            startedAt: 123,
+            completedAt: 124,
+            output: { ok: true },
+            error: null,
+          },
+        },
+      });
+      return;
+    }
+    if (message.method === "workflowRun/read") {
+      this.write({
+        id: message.id,
+        result: {
+          run: {
+            id: String((message.params as JsonMessage).runId),
+            workflowId: "reports/jira",
+            status: "running",
+            threadId: null,
+            createdAt: 123,
+            startedAt: 123,
+            completedAt: null,
+            output: null,
+            error: null,
+          },
+        },
+      });
+      return;
+    }
+    if (message.method === "workflowRun/cancel") {
+      this.write({
+        id: message.id,
+        result: {
+          run: {
+            id: String((message.params as JsonMessage).runId),
+            workflowId: "reports/jira",
+            status: "canceled",
+            threadId: null,
+            createdAt: 123,
+            startedAt: 123,
+            completedAt: 124,
+            output: null,
+            error: "workflow run canceled",
+          },
+        },
+      });
       return;
     }
     if (message.method === "workflow/command/execute") {
@@ -316,7 +396,7 @@ class FakeAppServerProcess extends EventEmitter {
       this.write({ id: message.id, result: { message: "listed", data: { ok: true } } });
       return;
     }
-    if (typeof message.method === "string" && message.method.startsWith("workflow/")) {
+    if (typeof message.method === "string" && message.method.startsWith("workflowRun/")) {
       this.workflowNotifications.push(message);
       return;
     }
@@ -395,6 +475,175 @@ class FakeWebSocket extends EventEmitter {
   private write(message: JsonMessage): void {
     this.emit("message", { data: JSON.stringify(message) });
   }
+}
+
+class FakeUnixAppServer {
+  private readonly dir = mkdtempSync(join(tmpdir(), "codex-sdk-unix-"));
+  readonly socketPath = join(this.dir, "app-server.sock");
+  readonly messages: JsonMessage[] = [];
+  private readonly server = createServer((socket) => this.handleSocket(socket));
+
+  async start(): Promise<void> {
+    await new Promise<void>((resolve) => this.server.listen(this.socketPath, resolve));
+  }
+
+  async close(): Promise<void> {
+    await new Promise<void>((resolve) => this.server.close(() => resolve()));
+    rmSync(this.dir, { recursive: true, force: true });
+  }
+
+  private handleSocket(socket: Socket): void {
+    let buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+    let handshakeComplete = false;
+    socket.on("data", (chunk: Buffer) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      if (!handshakeComplete) {
+        const headerEnd = buffer.indexOf("\r\n\r\n");
+        if (headerEnd === -1) {
+          return;
+        }
+        const header = buffer.subarray(0, headerEnd).toString("utf8");
+        const key = header
+          .split("\r\n")
+          .find((line) => line.toLowerCase().startsWith("sec-websocket-key:"))
+          ?.split(":")
+          .slice(1)
+          .join(":")
+          .trim();
+        if (!key) {
+          socket.destroy(new Error("missing websocket key"));
+          return;
+        }
+        const accept = createHash("sha1")
+          .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+          .digest("base64");
+        socket.write(
+          [
+            "HTTP/1.1 101 Switching Protocols",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            `Sec-WebSocket-Accept: ${accept}`,
+            "",
+            "",
+          ].join("\r\n"),
+        );
+        handshakeComplete = true;
+        buffer = buffer.subarray(headerEnd + 4);
+      }
+      buffer = this.drainFrames(socket, buffer);
+    });
+  }
+
+  private drainFrames(
+    socket: Socket,
+    buffer: Buffer<ArrayBufferLike>,
+  ): Buffer<ArrayBufferLike> {
+    for (;;) {
+      const frame = decodeClientFrame(buffer);
+      if (!frame) {
+        return buffer;
+      }
+      buffer = frame.remaining;
+      if (frame.opcode !== 0x1) {
+        continue;
+      }
+      const message = JSON.parse(frame.payload.toString("utf8")) as JsonMessage;
+      this.messages.push(message);
+      this.handleMessage(socket, message);
+    }
+  }
+
+  private handleMessage(socket: Socket, message: JsonMessage): void {
+    if (message.method === "initialize") {
+      this.write(socket, {
+        id: message.id,
+        result: { userAgent: "fake", codexHome: "/tmp/codex" },
+      });
+      return;
+    }
+    if (message.method === "initialized") {
+      return;
+    }
+    if (message.method === "thread/start") {
+      this.write(socket, {
+        id: message.id,
+        result: { thread: { id: "thread-unix", turns: [] } },
+      });
+      return;
+    }
+    if (message.method === "thread/unsubscribe") {
+      this.write(socket, { id: message.id, result: {} });
+    }
+  }
+
+  private write(socket: Socket, message: JsonMessage): void {
+    socket.write(encodeServerFrame(JSON.stringify(message)));
+  }
+}
+
+function decodeClientFrame(
+  buffer: Buffer<ArrayBufferLike>,
+): {
+  opcode: number;
+  payload: Buffer<ArrayBufferLike>;
+  remaining: Buffer<ArrayBufferLike>;
+} | null {
+  if (buffer.length < 2) {
+    return null;
+  }
+  const first = buffer[0]!;
+  const second = buffer[1]!;
+  let offset = 2;
+  let length = second & 0x7f;
+  if (length === 126) {
+    if (buffer.length < offset + 2) {
+      return null;
+    }
+    length = buffer.readUInt16BE(offset);
+    offset += 2;
+  } else if (length === 127) {
+    if (buffer.length < offset + 8) {
+      return null;
+    }
+    length = Number(buffer.readBigUInt64BE(offset));
+    offset += 8;
+  }
+  const masked = (second & 0x80) !== 0;
+  if (!masked || buffer.length < offset + 4 + length) {
+    return null;
+  }
+  const mask = buffer.subarray(offset, offset + 4);
+  offset += 4;
+  const maskedPayload = buffer.subarray(offset, offset + length);
+  const payload = Buffer.from(maskedPayload.map((byte, index) => byte ^ mask[index % 4]!));
+  return {
+    opcode: first & 0x0f,
+    payload,
+    remaining: buffer.subarray(offset + length),
+  };
+}
+
+function encodeServerFrame(message: string): Buffer {
+  const payload = Buffer.from(message, "utf8");
+  let headerLength = 2;
+  if (payload.length >= 126 && payload.length <= 0xffff) {
+    headerLength += 2;
+  } else if (payload.length > 0xffff) {
+    headerLength += 8;
+  }
+  const frame = Buffer.alloc(headerLength + payload.length);
+  frame[0] = 0x81;
+  if (payload.length < 126) {
+    frame[1] = payload.length;
+  } else if (payload.length <= 0xffff) {
+    frame[1] = 126;
+    frame.writeUInt16BE(payload.length, 2);
+  } else {
+    frame[1] = 127;
+    frame.writeBigUInt64BE(BigInt(payload.length), 2);
+  }
+  payload.copy(frame, headerLength);
+  return frame;
 }
 
 function waitForImmediate(): Promise<void> {
@@ -558,6 +807,30 @@ describe("CodexWorkflow", () => {
     expect(FakeWebSocket.instances[0]?.url).toBe("ws://127.0.0.1:8765/");
 
     await workflow.close();
+  });
+
+  const unixIt = process.platform === "win32" ? it.skip : it;
+
+  unixIt("connects workflows to a shared app-server over a unix socket", async () => {
+    const fake = new FakeUnixAppServer();
+    await fake.start();
+
+    const workflow = await CodexWorkflow.start({
+      appServerUrl: `unix://${fake.socketPath}`,
+    });
+    const agent = await workflow.startAgent({ workingDirectory: "/repo" });
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(agent.threadId).toBe("thread-unix");
+    expect(fake.messages.map((message) => message.method)).toEqual([
+      "initialize",
+      "initialized",
+      "thread/start",
+    ]);
+
+    await agent.close();
+    await workflow.close();
+    await fake.close();
   });
 
   it("requires an existing app-server when requested", async () => {
@@ -755,7 +1028,8 @@ describe("CodexWorkflow", () => {
     const commandResult = await workflow.workflows.command.execute(["list"]);
 
     expect(fake.workflowRunParams).toEqual({ id: "reports/jira", input: { project: "COD" } });
-    expect(result.message).toBe("ran");
+    expect(fake.workflowRunWaitParams).toEqual({ runId: "run-1" });
+    expect(result.data).toEqual({ ok: true });
     expect(fake.workflowCommandExecuteParams).toEqual({ args: ["list"] });
     expect(commandResult.message).toBe("listed");
 
@@ -828,7 +1102,7 @@ describe("CodexWorkflow", () => {
     expect(fake.workflowNotifications).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          method: "workflow/progress",
+          method: "workflowRun/progress",
           params: expect.objectContaining({
             message: "starting",
             data: { prompt: "Use the weather tool" },
@@ -836,7 +1110,7 @@ describe("CodexWorkflow", () => {
           }),
         }),
         expect.objectContaining({
-          method: "workflow/reportToUserMarkdown",
+          method: "workflowRun/reportToUserMarkdown",
           params: expect.objectContaining({
             markdown: "# Result\n\nUse the weather tool",
             runId: expect.any(String),
@@ -878,7 +1152,7 @@ describe("CodexWorkflow", () => {
     expect(fake.workflowNotifications).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          method: "workflow/progress",
+          method: "workflowRun/progress",
           params: expect.objectContaining({
             message: "child",
             data: { value: "done" },

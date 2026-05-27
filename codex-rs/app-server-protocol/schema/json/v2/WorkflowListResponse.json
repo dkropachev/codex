@@ -284,6 +284,30 @@
         },
         {
           "properties": {
+            "heading": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "emptyDocumentSection"
+              ],
+              "title": "EmptyDocumentSectionWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "heading",
+            "path",
+            "type"
+          ],
+          "title": "EmptyDocumentSectionWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
             "error": {
               "type": "string"
             },
@@ -304,6 +328,58 @@
             "type"
           ],
           "title": "PackageManifestParseFailedWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "expected": {
+              "type": "string"
+            },
+            "field": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "invalidPackageManifestField"
+              ],
+              "title": "InvalidPackageManifestFieldWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "expected",
+            "field",
+            "path",
+            "type"
+          ],
+          "title": "InvalidPackageManifestFieldWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "script": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "missingPackageScript"
+              ],
+              "title": "MissingPackageScriptWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "script",
+            "type"
+          ],
+          "title": "MissingPackageScriptWorkflowValidationFindingInfo",
           "type": "object"
         },
         {
@@ -332,6 +408,86 @@
             "type"
           ],
           "title": "UndeclaredPackageImportWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "package_name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "unusedPackageDependency"
+              ],
+              "title": "UnusedPackageDependencyWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "package_name",
+            "path",
+            "type"
+          ],
+          "title": "UnusedPackageDependencyWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "invalidWorkflowDependencyMetadata"
+              ],
+              "title": "InvalidWorkflowDependencyMetadataWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "field",
+            "path",
+            "type"
+          ],
+          "title": "InvalidWorkflowDependencyMetadataWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "package_name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            },
+            "target": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "workflowDependencyMetadataMismatch"
+              ],
+              "title": "WorkflowDependencyMetadataMismatchWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "package_name",
+            "path",
+            "source",
+            "target",
+            "type"
+          ],
+          "title": "WorkflowDependencyMetadataMismatchWorkflowValidationFindingInfo",
           "type": "object"
         },
         {
@@ -392,6 +548,86 @@
             "type"
           ],
           "title": "InvalidValidationCommandsWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "missingBuildValidationCommand"
+              ],
+              "title": "MissingBuildValidationCommandWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "MissingBuildValidationCommandWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "missingTestValidationCommand"
+              ],
+              "title": "MissingTestValidationCommandWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "MissingTestValidationCommandWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "missingContractSmoke"
+              ],
+              "title": "MissingContractSmokeWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "MissingContractSmokeWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "invalidContractSmoke"
+              ],
+              "title": "InvalidContractSmokeWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "InvalidContractSmokeWorkflowValidationFindingInfo",
           "type": "object"
         },
         {

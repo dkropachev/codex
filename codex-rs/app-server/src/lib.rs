@@ -633,6 +633,13 @@ pub async fn run_main_with_transport_options(
         }
         AppServerTransport::Off => {}
     }
+    let workflow_app_server_url = match &transport {
+        AppServerTransport::UnixSocket { socket_path } => {
+            Some(format!("unix://{}", socket_path.display()))
+        }
+        AppServerTransport::WebSocket { bind_address } => Some(format!("ws://{bind_address}")),
+        AppServerTransport::Stdio | AppServerTransport::Off => None,
+    };
 
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
@@ -739,6 +746,7 @@ pub async fn run_main_with_transport_options(
             rpc_transport: analytics_rpc_transport(&transport),
             remote_control_handle: Some(remote_control_handle),
             plugin_startup_tasks: runtime_options.plugin_startup_tasks,
+            workflow_app_server_url,
         }));
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();

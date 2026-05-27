@@ -396,11 +396,14 @@ async fn run_workflow_active_interrupt_session(
     let workflow_writer = writer_tx.clone();
 
     let workflow_status_prefix = format!("Workflow {command}:");
+    let workflow_cancel_snippet = format!("Workflow canceled: {command}");
     let workflow_command = format!("/{command}");
     let mut saw_required = vec![false; required_snippets.len()];
+    let mut saw_workflow_canceled = false;
     let mut answered_cursor_query = false;
     let mut sent_workflow_command = false;
     let mut sent_interrupts = false;
+    let mut sent_exit_keys = false;
     let mut scheduled_workflow_command = false;
 
     let exit_code_result = timeout(Duration::from_secs(/*secs*/ 45), async {
@@ -434,6 +437,8 @@ async fn run_workflow_active_interrupt_session(
                         sent_workflow_command |= output_text.contains(&workflow_command)
                             || screen.contains(&workflow_command)
                             || screen.contains(&workflow_status_prefix);
+                        saw_workflow_canceled |= output_text.contains(&workflow_cancel_snippet)
+                            || screen.contains(&workflow_cancel_snippet);
 
                         for (seen, snippet) in saw_required.iter_mut().zip(required_snippets.iter()) {
                             *seen |= output_text.contains(snippet) || screen.contains(snippet);
@@ -447,9 +452,17 @@ async fn run_workflow_active_interrupt_session(
                             sent_interrupts = true;
                             let interrupt_writer = interrupt_writer.clone();
                             tokio::spawn(async move {
-                                for _ in 0..20 {
-                                    let _ = interrupt_writer.send(vec![3]).await;
-                                    sleep(Duration::from_millis(/*millis*/ 200)).await;
+                                let _ = interrupt_writer.send(vec![3]).await;
+                            });
+                        }
+
+                        if saw_workflow_canceled && !sent_exit_keys {
+                            sent_exit_keys = true;
+                            let interrupt_writer = interrupt_writer.clone();
+                            tokio::spawn(async move {
+                                for _ in 0..2 {
+                                    let _ = interrupt_writer.send(vec![4]).await;
+                                    sleep(Duration::from_millis(/*millis*/ 100)).await;
                                 }
                             });
                         }

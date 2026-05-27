@@ -841,6 +841,8 @@ pub(crate) struct ChatWidget {
     /// as "running" while this is populated, even if no agent turn is currently
     /// executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
+    /// Tracks whether an app-server workflow run is currently active.
+    workflow_process_active: bool,
     /// Expected MCP servers for the current startup round, seeded from enabled local config.
     mcp_startup_expected_servers: Option<HashSet<String>>,
     /// After startup settles, ignore stale updates until enough notifications confirm a new round.
@@ -1707,10 +1709,13 @@ impl ChatWidget {
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
-    /// both the agent turn lifecycle and MCP startup lifecycle.
+    /// the agent turn lifecycle, MCP startup lifecycle, and workflow-run lifecycle.
     fn update_task_running_state(&mut self) {
-        self.bottom_pane
-            .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+        self.bottom_pane.set_task_running(
+            self.agent_turn_running
+                || self.mcp_startup_status.is_some()
+                || self.workflow_process_active,
+        );
         self.refresh_plan_mode_nudge();
         self.refresh_status_surfaces();
     }
@@ -4989,6 +4994,7 @@ impl ChatWidget {
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
+            workflow_process_active: false,
             last_agent_markdown: None,
             agent_turn_markdowns: Vec::new(),
             visible_user_turn_count: 0,
@@ -6376,14 +6382,14 @@ impl ChatWidget {
                     self.on_agent_reasoning_delta(notification.delta);
                 }
             }
-            ServerNotification::WorkflowProgress(notification) => {
+            ServerNotification::WorkflowRunProgress(notification) => {
                 self.handle_workflow_progress_notification(
                     /*workflow_name*/ None,
                     notification,
                     replay_kind,
                 )
             }
-            ServerNotification::WorkflowMarkdownResult(notification) => {
+            ServerNotification::WorkflowRunMarkdownResult(notification) => {
                 self.handle_workflow_markdown_result_notification(notification, replay_kind)
             }
             ServerNotification::ReasoningSummaryPartAdded(_) => self.on_reasoning_section_break(),
@@ -6541,6 +6547,8 @@ impl ChatWidget {
             | ServerNotification::ThreadRealtimeTranscriptDone(_)
             | ServerNotification::WindowsWorldWritableWarning(_)
             | ServerNotification::WindowsSandboxSetupCompleted(_)
+            | ServerNotification::WorkflowRunCompleted(_)
+            | ServerNotification::WorkflowRunFailed(_)
             | ServerNotification::AccountLoginCompleted(_) => {}
             ServerNotification::ContextCompacted(_) => {}
         }

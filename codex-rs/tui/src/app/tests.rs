@@ -941,7 +941,7 @@ async fn app_server_thread_scoped_workflow_notifications_are_visible_and_queue_h
     app.handle_app_server_event(
         &mut app_server,
         codex_app_server_client::AppServerEvent::ServerNotification(
-            ServerNotification::WorkflowProgress(
+            ServerNotification::WorkflowRunProgress(
                 codex_app_server_protocol::WorkflowProgressNotification {
                     run_id: "run-1".to_string(),
                     thread_id: Some(thread_id.to_string()),
@@ -1017,7 +1017,7 @@ async fn app_server_thread_scoped_workflow_notifications_are_visible_and_queue_h
     app.handle_app_server_event(
         &mut app_server,
         codex_app_server_client::AppServerEvent::ServerNotification(
-            ServerNotification::WorkflowMarkdownResult(
+            ServerNotification::WorkflowRunMarkdownResult(
                 codex_app_server_protocol::WorkflowMarkdownResultNotification {
                     run_id: "run-1".to_string(),
                     thread_id: Some(thread_id.to_string()),

@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "WorkflowRun": {
+      "properties": {
+        "completedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "output": true,
+        "startedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/WorkflowRunStatus"
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workflowId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "createdAt",
+        "id",
+        "status",
+        "workflowId"
+      ],
+      "type": "object"
+    },
+    "WorkflowRunStatus": {
+      "enum": [
+        "running",
+        "succeeded",
+        "failed",
+        "canceled"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "run": {
+      "$ref": "#/definitions/WorkflowRun"
+    }
+  },
+  "required": [
+    "run"
+  ],
+  "title": "WorkflowRunCompletedNotification",
+  "type": "object"
+}

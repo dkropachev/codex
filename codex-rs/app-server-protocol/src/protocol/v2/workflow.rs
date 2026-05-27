@@ -53,14 +53,41 @@ pub enum WorkflowValidationFindingInfo {
         path: PathBuf,
         heading: String,
     },
+    EmptyDocumentSection {
+        path: PathBuf,
+        heading: String,
+    },
     PackageManifestParseFailed {
         path: PathBuf,
         error: String,
+    },
+    InvalidPackageManifestField {
+        path: PathBuf,
+        field: String,
+        expected: String,
+    },
+    MissingPackageScript {
+        path: PathBuf,
+        script: String,
     },
     UndeclaredPackageImport {
         path: PathBuf,
         specifier: String,
         package_name: String,
+    },
+    UnusedPackageDependency {
+        path: PathBuf,
+        package_name: String,
+    },
+    InvalidWorkflowDependencyMetadata {
+        path: PathBuf,
+        field: String,
+    },
+    WorkflowDependencyMetadataMismatch {
+        path: PathBuf,
+        package_name: String,
+        source: String,
+        target: String,
     },
     MissingValidationCommands {
         path: PathBuf,
@@ -69,6 +96,18 @@ pub enum WorkflowValidationFindingInfo {
         path: PathBuf,
     },
     InvalidValidationCommands {
+        path: PathBuf,
+    },
+    MissingBuildValidationCommand {
+        path: PathBuf,
+    },
+    MissingTestValidationCommand {
+        path: PathBuf,
+    },
+    MissingContractSmoke {
+        path: PathBuf,
+    },
+    InvalidContractSmoke {
         path: PathBuf,
     },
     MissingCoverageMetadata {
@@ -279,15 +318,104 @@ pub struct WorkflowEditParams {
     pub stage_session_id: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum WorkflowRunApprovalHandling {
+    Delegate,
+    Decline,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum WorkflowRunStatus {
+    Running,
+    Succeeded,
+    Failed,
+    Canceled,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct WorkflowRunParams {
+pub struct WorkflowRun {
+    pub id: String,
+    pub workflow_id: String,
+    pub status: WorkflowRunStatus,
+    pub thread_id: Option<String>,
+    pub created_at: i64,
+    pub started_at: Option<i64>,
+    pub completed_at: Option<i64>,
+    pub output: Option<JsonValue>,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowRunStartParams {
     pub id: String,
     #[ts(optional = nullable)]
     pub input: Option<JsonValue>,
     #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
+    #[ts(optional = nullable)]
     pub stage_session_id: Option<String>,
+    #[ts(optional = nullable)]
+    pub approval_handling: Option<WorkflowRunApprovalHandling>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowRunStartResponse {
+    pub run: WorkflowRun,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowRunReadParams {
+    pub run_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowRunReadResponse {
+    pub run: WorkflowRun,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowRunWaitParams {
+    pub run_id: String,
+    #[ts(optional = nullable)]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowRunWaitResponse {
+    pub run: WorkflowRun,
+    pub completed: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowRunCancelParams {
+    pub run_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowRunCancelResponse {
+    pub run: WorkflowRun,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -370,6 +498,20 @@ pub struct WorkflowMarkdownResultNotification {
     pub markdown: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowRunCompletedNotification {
+    pub run: WorkflowRun,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowRunFailedNotification {
+    pub run: WorkflowRun,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
@@ -446,7 +588,6 @@ workflow_command_response_type!(WorkflowDevelopResponse);
 workflow_command_response_type!(WorkflowEditResponse);
 workflow_command_response_type!(WorkflowPublishResponse);
 workflow_command_response_type!(WorkflowDiscardResponse);
-workflow_command_response_type!(WorkflowRunResponse);
 workflow_command_response_type!(WorkflowValidateResponse);
 workflow_command_response_type!(WorkflowCommandExecuteResponse);
 

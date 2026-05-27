@@ -26,6 +26,12 @@ const WORKFLOW_SELF_EXE_ENV: &str = "CODEX_WORKFLOW_SELF_EXE";
 const WORKFLOW_NAME_ENV: &str = "CODEX_WORKFLOW_NAME";
 const WORKFLOW_WORKING_DIRECTORY_ENV: &str = "CODEX_WORKFLOW_WORKING_DIRECTORY";
 const WORKFLOW_OUTPUT_FORMAT_ENV: &str = "CODEX_WORKFLOW_OUTPUT_FORMAT";
+const WORKFLOW_RUN_ID_ENV: &str = "CODEX_WORKFLOW_RUN_ID";
+const WORKFLOW_ORIGIN_THREAD_ID_ENV: &str = "CODEX_WORKFLOW_ORIGIN_THREAD_ID";
+const WORKFLOW_APP_SERVER_URL_ENV: &str = "CODEX_WORKFLOW_APP_SERVER_URL";
+const WORKFLOW_APPROVALS_ENV: &str = "CODEX_WORKFLOW_APPROVALS";
+const WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR_ENV: &str =
+    "CODEX_WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR";
 
 #[derive(Clone, Copy)]
 enum WorkflowRuntimeInvocationMode {
@@ -452,11 +458,12 @@ pub enum WorkflowRuntimeEvent {
     ReportToUserMarkdown { markdown: String },
 }
 
-pub(crate) type WorkflowRuntimeEventHandler<'a> = dyn Fn(&WorkflowRuntimeEvent) + Send + Sync + 'a;
+pub type WorkflowRuntimeEventHandler<'a> = dyn Fn(&WorkflowRuntimeEvent) + Send + Sync + 'a;
 
 pub(crate) struct WorkflowRuntimeRunOptions<'a> {
     pub(crate) workflows: &'a [crate::registry::WorkflowSummary],
     pub(crate) event_handler: Option<&'a WorkflowRuntimeEventHandler<'a>>,
+    pub(crate) runtime: crate::execute::WorkflowRuntimeContext,
 }
 
 pub async fn complete_workflow(
@@ -472,6 +479,7 @@ pub async fn complete_workflow(
         workflow_path,
         &serde_json::to_string(input).context("failed to serialize workflow completion input")?,
         WorkflowRuntimeInvocationMode::Complete,
+        &crate::execute::WorkflowRuntimeContext::default(),
         /*event_handler*/ None,
     )
     .await?;
@@ -527,7 +535,7 @@ pub(crate) async fn run_workflow(
     input: &str,
     options: WorkflowRuntimeRunOptions<'_>,
 ) -> Result<WorkflowRuntimeOutput> {
-    if workflow_host::should_use_host() {
+    if !options.runtime.force_process_runtime && workflow_host::should_use_host() {
         let output = workflow_host::run_workflow_via_host(
             codex_home,
             working_directory,
@@ -549,6 +557,7 @@ pub(crate) async fn run_workflow(
         workflow_dir,
         workflow_path,
         input,
+        &options.runtime,
         options.event_handler,
     )
     .await?;
@@ -571,6 +580,7 @@ pub(crate) async fn run_workflow(
         workflow_dir,
         workflow_path,
         input,
+        &options.runtime,
         options.event_handler,
     )
     .await?;
@@ -584,6 +594,7 @@ async fn run_workflow_legacy(
     workflow_dir: &Path,
     workflow_path: &Path,
     input: &str,
+    runtime: &crate::execute::WorkflowRuntimeContext,
     event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
 ) -> Result<WorkflowRuntimeOutput> {
     run_workflow_process(
@@ -593,6 +604,7 @@ async fn run_workflow_legacy(
         workflow_path,
         input,
         WorkflowRuntimeInvocationMode::Run,
+        runtime,
         event_handler,
     )
     .await
@@ -642,6 +654,7 @@ async fn run_workflow_process(
     workflow_path: &Path,
     input: &str,
     mode: WorkflowRuntimeInvocationMode,
+    runtime: &crate::execute::WorkflowRuntimeContext,
     event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
 ) -> Result<WorkflowRuntimeOutput> {
     let runner_path = write_runner_script()?;
@@ -661,7 +674,11 @@ async fn run_workflow_process(
         )
         .env(
             WORKFLOW_OUTPUT_FORMAT_ENV,
-            env::var(WORKFLOW_OUTPUT_FORMAT_ENV).unwrap_or_default(),
+            runtime
+                .output_format
+                .clone()
+                .or_else(|| env::var(WORKFLOW_OUTPUT_FORMAT_ENV).ok())
+                .unwrap_or_default(),
         )
         .current_dir(workflow_dir)
         .env(
@@ -684,6 +701,21 @@ async fn run_workflow_process(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(run_id) = &runtime.run_id {
+        child.env(WORKFLOW_RUN_ID_ENV, run_id);
+    }
+    if let Some(origin_thread_id) = &runtime.origin_thread_id {
+        child.env(WORKFLOW_ORIGIN_THREAD_ID_ENV, origin_thread_id);
+    }
+    if let Some(app_server_url) = &runtime.app_server_url {
+        child.env(WORKFLOW_APP_SERVER_URL_ENV, app_server_url);
+    }
+    if let Some(approvals) = &runtime.approvals {
+        child.env(WORKFLOW_APPROVALS_ENV, approvals);
+    }
+    if let Some(behavior) = &runtime.interactive_request_behavior {
+        child.env(WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR_ENV, behavior);
+    }
 
     let mut child = child.spawn().with_context(|| {
         format!(

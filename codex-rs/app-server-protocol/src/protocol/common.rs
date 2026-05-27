@@ -738,9 +738,21 @@ client_request_definitions! {
         params: v2::WorkflowEditParams,
         response: v2::WorkflowEditResponse,
     },
-    WorkflowRun => "workflow/run" {
-        params: v2::WorkflowRunParams,
-        response: v2::WorkflowRunResponse,
+    WorkflowRunStart => "workflowRun/start" {
+        params: v2::WorkflowRunStartParams,
+        response: v2::WorkflowRunStartResponse,
+    },
+    WorkflowRunRead => "workflowRun/read" {
+        params: v2::WorkflowRunReadParams,
+        response: v2::WorkflowRunReadResponse,
+    },
+    WorkflowRunWait => "workflowRun/wait" {
+        params: v2::WorkflowRunWaitParams,
+        response: v2::WorkflowRunWaitResponse,
+    },
+    WorkflowRunCancel => "workflowRun/cancel" {
+        params: v2::WorkflowRunCancelParams,
+        response: v2::WorkflowRunCancelResponse,
     },
     WorkflowValidate => "workflow/validate" {
         params: v2::WorkflowValidateParams,
@@ -1609,20 +1621,22 @@ server_notification_definitions! {
     #[ts(rename = "account/login/completed")]
     #[strum(serialize = "account/login/completed")]
     AccountLoginCompleted(v2::AccountLoginCompletedNotification),
-    WorkflowProgress => "workflow/progress" (v2::WorkflowProgressNotification),
-    WorkflowMarkdownResult => "workflow/reportToUserMarkdown" (v2::WorkflowMarkdownResultNotification),
+    WorkflowRunProgress => "workflowRun/progress" (v2::WorkflowProgressNotification),
+    WorkflowRunMarkdownResult => "workflowRun/reportToUserMarkdown" (v2::WorkflowMarkdownResultNotification),
+    WorkflowRunCompleted => "workflowRun/completed" (v2::WorkflowRunCompletedNotification),
+    WorkflowRunFailed => "workflowRun/failed" (v2::WorkflowRunFailedNotification),
 
 }
 
 client_notification_definitions! {
     Initialized,
-    #[serde(rename = "workflow/progress")]
-    #[ts(rename = "workflow/progress")]
-    #[strum(serialize = "workflow/progress")]
+    #[serde(rename = "workflowRun/progress")]
+    #[ts(rename = "workflowRun/progress")]
+    #[strum(serialize = "workflowRun/progress")]
     WorkflowProgress(v2::WorkflowProgressNotification),
-    #[serde(rename = "workflow/reportToUserMarkdown")]
-    #[ts(rename = "workflow/reportToUserMarkdown")]
-    #[strum(serialize = "workflow/reportToUserMarkdown")]
+    #[serde(rename = "workflowRun/reportToUserMarkdown")]
+    #[ts(rename = "workflowRun/reportToUserMarkdown")]
+    #[strum(serialize = "workflowRun/reportToUserMarkdown")]
     WorkflowMarkdownResult(v2::WorkflowMarkdownResultNotification),
 }
 
@@ -1808,7 +1822,7 @@ mod tests {
         });
         assert_eq!(
             json!({
-                "method": "workflow/progress",
+                "method": "workflowRun/progress",
                 "params": {
                     "runId": "run-1",
                     "threadId": "thread-1",
@@ -1839,7 +1853,7 @@ mod tests {
             });
         assert_eq!(
             json!({
-                "method": "workflow/reportToUserMarkdown",
+                "method": "workflowRun/reportToUserMarkdown",
                 "params": {
                     "runId": "run-1",
                     "threadId": null,
@@ -2667,7 +2681,7 @@ mod tests {
 
     #[test]
     fn serialize_workflow_server_notifications() -> Result<()> {
-        let progress = ServerNotification::WorkflowProgress(v2::WorkflowProgressNotification {
+        let progress = ServerNotification::WorkflowRunProgress(v2::WorkflowProgressNotification {
             run_id: "run-1".to_string(),
             thread_id: Some("thread-1".to_string()),
             message: "starting".to_string(),
@@ -2676,7 +2690,7 @@ mod tests {
         });
         assert_eq!(
             json!({
-                "method": "workflow/progress",
+                "method": "workflowRun/progress",
                 "params": {
                     "runId": "run-1",
                     "threadId": "thread-1",
@@ -2689,10 +2703,10 @@ mod tests {
         );
         let decoded: ServerNotification = serde_json::from_value(serde_json::to_value(&progress)?)?;
         match decoded {
-            ServerNotification::WorkflowProgress(decoded) => assert_eq!(
+            ServerNotification::WorkflowRunProgress(decoded) => assert_eq!(
                 decoded,
                 match progress {
-                    ServerNotification::WorkflowProgress(notification) => notification,
+                    ServerNotification::WorkflowRunProgress(notification) => notification,
                     _ => unreachable!(),
                 }
             ),
@@ -2700,14 +2714,14 @@ mod tests {
         }
 
         let markdown =
-            ServerNotification::WorkflowMarkdownResult(v2::WorkflowMarkdownResultNotification {
+            ServerNotification::WorkflowRunMarkdownResult(v2::WorkflowMarkdownResultNotification {
                 run_id: "run-1".to_string(),
                 thread_id: None,
                 markdown: "# Result\n\nDone".to_string(),
             });
         assert_eq!(
             json!({
-                "method": "workflow/reportToUserMarkdown",
+                "method": "workflowRun/reportToUserMarkdown",
                 "params": {
                     "runId": "run-1",
                     "threadId": null,
@@ -2718,10 +2732,10 @@ mod tests {
         );
         let decoded: ServerNotification = serde_json::from_value(serde_json::to_value(&markdown)?)?;
         match decoded {
-            ServerNotification::WorkflowMarkdownResult(decoded) => assert_eq!(
+            ServerNotification::WorkflowRunMarkdownResult(decoded) => assert_eq!(
                 decoded,
                 match markdown {
-                    ServerNotification::WorkflowMarkdownResult(notification) => notification,
+                    ServerNotification::WorkflowRunMarkdownResult(notification) => notification,
                     _ => unreachable!(),
                 }
             ),

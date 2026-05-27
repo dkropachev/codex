@@ -463,6 +463,7 @@ mod token_usage_replay;
 mod turn_processor;
 mod windows_sandbox_processor;
 mod workflow_processor;
+mod workflow_run_manager;
 
 pub(crate) use account_processor::AccountRequestProcessor;
 pub(crate) use apps_processor::AppsRequestProcessor;

@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::fs;
 use std::sync::Arc;
 
@@ -25,7 +24,6 @@ use codex_app_server_protocol::WorkflowImpactParams;
 use codex_app_server_protocol::WorkflowImpactResponse;
 use codex_app_server_protocol::WorkflowListParams;
 use codex_app_server_protocol::WorkflowListResponse;
-use codex_app_server_protocol::WorkflowProgressNotification;
 use codex_app_server_protocol::WorkflowPublishResponse;
 use codex_app_server_protocol::WorkflowReadParams;
 use codex_app_server_protocol::WorkflowReadResponse;
@@ -33,8 +31,10 @@ use codex_app_server_protocol::WorkflowRepairParams;
 use codex_app_server_protocol::WorkflowRepairResponse;
 use codex_app_server_protocol::WorkflowRootInfo;
 use codex_app_server_protocol::WorkflowRootKind;
-use codex_app_server_protocol::WorkflowRunParams;
-use codex_app_server_protocol::WorkflowRunResponse;
+use codex_app_server_protocol::WorkflowRunCancelParams;
+use codex_app_server_protocol::WorkflowRunReadParams;
+use codex_app_server_protocol::WorkflowRunStartParams;
+use codex_app_server_protocol::WorkflowRunWaitParams;
 use codex_app_server_protocol::WorkflowStageSessionActionParams;
 use codex_app_server_protocol::WorkflowSummary;
 use codex_app_server_protocol::WorkflowValidateParams;
@@ -51,7 +51,6 @@ use codex_workflows::WorkflowCommandContext;
 use codex_workflows::WorkflowCommandProgress;
 use codex_workflows::WorkflowCommandProgressHandler;
 use codex_workflows::WorkflowConfigCommand;
-use codex_workflows::WorkflowInputSource;
 use codex_workflows::discover_workflows_for_context;
 use codex_workflows::execute_workflow_command;
 use codex_workflows::parse_mention_target;
@@ -68,11 +67,16 @@ use crate::error_code::invalid_params;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::ServerNotification;
 
+use super::workflow_run_manager::WorkflowRunManager;
+use super::workflow_run_manager::WorkflowRunStartArgs;
+
 #[derive(Clone)]
 pub(crate) struct WorkflowRequestProcessor {
     config: Arc<Config>,
     config_manager: ConfigManager,
     outgoing: Arc<OutgoingMessageSender>,
+    workflow_runs: WorkflowRunManager,
+    workflow_app_server_url: Option<String>,
 }
 
 impl WorkflowRequestProcessor {
@@ -80,11 +84,15 @@ impl WorkflowRequestProcessor {
         config: Arc<Config>,
         config_manager: ConfigManager,
         outgoing: Arc<OutgoingMessageSender>,
+        workflow_app_server_url: Option<String>,
     ) -> Self {
+        let workflow_runs = WorkflowRunManager::new(Arc::clone(&outgoing));
         Self {
             config,
             config_manager,
             outgoing,
+            workflow_runs,
+            workflow_app_server_url,
         }
     }
 
@@ -173,22 +181,57 @@ impl WorkflowRequestProcessor {
         .map(|response: WorkflowEditResponse| Some(response.into()))
     }
 
-    pub(crate) async fn run(
+    pub(crate) async fn start_run(
         &self,
-        params: WorkflowRunParams,
+        params: WorkflowRunStartParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let input = params
-            .input
-            .map(|value| WorkflowInputSource::Inline(value.to_string()));
-        self.execute(
-            WorkflowCommand::Run {
-                id: params.id,
-                input,
-                input_fields: BTreeMap::new(),
-            },
-            params.stage_session_id,
-        )
-        .map(|response: WorkflowRunResponse| Some(response.into()))
+        let workflow = self.resolve_workflow(
+            params.id,
+            /*target*/ None,
+            params.stage_session_id.as_deref(),
+        )?;
+        self.workflow_runs
+            .start(WorkflowRunStartArgs {
+                config: Arc::clone(&self.config),
+                workflow_id: workflow.id,
+                input: params.input,
+                thread_id: params.thread_id,
+                stage_session_id: params.stage_session_id,
+                approval_handling: params.approval_handling,
+                app_server_url: self.workflow_app_server_url.clone(),
+            })
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn read_run(
+        &self,
+        params: WorkflowRunReadParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.workflow_runs
+            .read(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn wait_run(
+        &self,
+        params: WorkflowRunWaitParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.workflow_runs
+            .wait(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn cancel_run(
+        &self,
+        params: WorkflowRunCancelParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.workflow_runs
+            .cancel(params)
+            .await
+            .map(|response| Some(response.into()))
     }
 
     pub(crate) async fn validate(
@@ -209,8 +252,8 @@ impl WorkflowRequestProcessor {
         let run_id = Uuid::new_v4().to_string();
         let outgoing = Arc::clone(&self.outgoing);
         let progress = |event: WorkflowCommandProgress| {
-            outgoing.try_send_server_notification(ServerNotification::WorkflowProgress(
-                WorkflowProgressNotification {
+            outgoing.try_send_server_notification(ServerNotification::WorkflowRunProgress(
+                codex_app_server_protocol::WorkflowProgressNotification {
                     run_id: run_id.clone(),
                     thread_id: None,
                     message: event.message,
@@ -409,6 +452,8 @@ impl WorkflowRequestProcessor {
             codex_self_exe: self.config.codex_self_exe.clone(),
             stage_session_id,
             progress,
+            runtime_event_handler: None,
+            runtime: Default::default(),
         }
     }
 
@@ -539,8 +584,23 @@ pub(crate) fn validation_finding_to_api(
         codex_workflows::WorkflowValidationFinding::MissingDocumentHeading { path, heading } => {
             WorkflowValidationFindingInfo::MissingDocumentHeading { path, heading }
         }
+        codex_workflows::WorkflowValidationFinding::EmptyDocumentSection { path, heading } => {
+            WorkflowValidationFindingInfo::EmptyDocumentSection { path, heading }
+        }
         codex_workflows::WorkflowValidationFinding::PackageManifestParseFailed { path, error } => {
             WorkflowValidationFindingInfo::PackageManifestParseFailed { path, error }
+        }
+        codex_workflows::WorkflowValidationFinding::InvalidPackageManifestField {
+            path,
+            field,
+            expected,
+        } => WorkflowValidationFindingInfo::InvalidPackageManifestField {
+            path,
+            field,
+            expected,
+        },
+        codex_workflows::WorkflowValidationFinding::MissingPackageScript { path, script } => {
+            WorkflowValidationFindingInfo::MissingPackageScript { path, script }
         }
         codex_workflows::WorkflowValidationFinding::UndeclaredPackageImport {
             path,
@@ -551,6 +611,25 @@ pub(crate) fn validation_finding_to_api(
             specifier,
             package_name,
         },
+        codex_workflows::WorkflowValidationFinding::UnusedPackageDependency {
+            path,
+            package_name,
+        } => WorkflowValidationFindingInfo::UnusedPackageDependency { path, package_name },
+        codex_workflows::WorkflowValidationFinding::InvalidWorkflowDependencyMetadata {
+            path,
+            field,
+        } => WorkflowValidationFindingInfo::InvalidWorkflowDependencyMetadata { path, field },
+        codex_workflows::WorkflowValidationFinding::WorkflowDependencyMetadataMismatch {
+            path,
+            package_name,
+            source,
+            target,
+        } => WorkflowValidationFindingInfo::WorkflowDependencyMetadataMismatch {
+            path,
+            package_name,
+            source,
+            target,
+        },
         codex_workflows::WorkflowValidationFinding::MissingValidationCommands { path } => {
             WorkflowValidationFindingInfo::MissingValidationCommands { path }
         }
@@ -559,6 +638,18 @@ pub(crate) fn validation_finding_to_api(
         }
         codex_workflows::WorkflowValidationFinding::InvalidValidationCommands { path } => {
             WorkflowValidationFindingInfo::InvalidValidationCommands { path }
+        }
+        codex_workflows::WorkflowValidationFinding::MissingBuildValidationCommand { path } => {
+            WorkflowValidationFindingInfo::MissingBuildValidationCommand { path }
+        }
+        codex_workflows::WorkflowValidationFinding::MissingTestValidationCommand { path } => {
+            WorkflowValidationFindingInfo::MissingTestValidationCommand { path }
+        }
+        codex_workflows::WorkflowValidationFinding::MissingContractSmoke { path } => {
+            WorkflowValidationFindingInfo::MissingContractSmoke { path }
+        }
+        codex_workflows::WorkflowValidationFinding::InvalidContractSmoke { path } => {
+            WorkflowValidationFindingInfo::InvalidContractSmoke { path }
         }
         codex_workflows::WorkflowValidationFinding::MissingCoverageMetadata { path } => {
             WorkflowValidationFindingInfo::MissingCoverageMetadata { path }
@@ -659,8 +750,23 @@ fn validation_finding_from_api(
         WorkflowValidationFindingInfo::MissingDocumentHeading { path, heading } => {
             codex_workflows::WorkflowValidationFinding::MissingDocumentHeading { path, heading }
         }
+        WorkflowValidationFindingInfo::EmptyDocumentSection { path, heading } => {
+            codex_workflows::WorkflowValidationFinding::EmptyDocumentSection { path, heading }
+        }
         WorkflowValidationFindingInfo::PackageManifestParseFailed { path, error } => {
             codex_workflows::WorkflowValidationFinding::PackageManifestParseFailed { path, error }
+        }
+        WorkflowValidationFindingInfo::InvalidPackageManifestField {
+            path,
+            field,
+            expected,
+        } => codex_workflows::WorkflowValidationFinding::InvalidPackageManifestField {
+            path,
+            field,
+            expected,
+        },
+        WorkflowValidationFindingInfo::MissingPackageScript { path, script } => {
+            codex_workflows::WorkflowValidationFinding::MissingPackageScript { path, script }
         }
         WorkflowValidationFindingInfo::UndeclaredPackageImport {
             path,
@@ -671,6 +777,29 @@ fn validation_finding_from_api(
             specifier,
             package_name,
         },
+        WorkflowValidationFindingInfo::UnusedPackageDependency { path, package_name } => {
+            codex_workflows::WorkflowValidationFinding::UnusedPackageDependency {
+                path,
+                package_name,
+            }
+        }
+        WorkflowValidationFindingInfo::InvalidWorkflowDependencyMetadata { path, field } => {
+            codex_workflows::WorkflowValidationFinding::InvalidWorkflowDependencyMetadata {
+                path,
+                field,
+            }
+        }
+        WorkflowValidationFindingInfo::WorkflowDependencyMetadataMismatch {
+            path,
+            package_name,
+            source,
+            target,
+        } => codex_workflows::WorkflowValidationFinding::WorkflowDependencyMetadataMismatch {
+            path,
+            package_name,
+            source,
+            target,
+        },
         WorkflowValidationFindingInfo::MissingValidationCommands { path } => {
             codex_workflows::WorkflowValidationFinding::MissingValidationCommands { path }
         }
@@ -679,6 +808,18 @@ fn validation_finding_from_api(
         }
         WorkflowValidationFindingInfo::InvalidValidationCommands { path } => {
             codex_workflows::WorkflowValidationFinding::InvalidValidationCommands { path }
+        }
+        WorkflowValidationFindingInfo::MissingBuildValidationCommand { path } => {
+            codex_workflows::WorkflowValidationFinding::MissingBuildValidationCommand { path }
+        }
+        WorkflowValidationFindingInfo::MissingTestValidationCommand { path } => {
+            codex_workflows::WorkflowValidationFinding::MissingTestValidationCommand { path }
+        }
+        WorkflowValidationFindingInfo::MissingContractSmoke { path } => {
+            codex_workflows::WorkflowValidationFinding::MissingContractSmoke { path }
+        }
+        WorkflowValidationFindingInfo::InvalidContractSmoke { path } => {
+            codex_workflows::WorkflowValidationFinding::InvalidContractSmoke { path }
         }
         WorkflowValidationFindingInfo::MissingCoverageMetadata { path } => {
             codex_workflows::WorkflowValidationFinding::MissingCoverageMetadata { path }
@@ -982,8 +1123,12 @@ export default async function run(_ctx: WorkflowContext, input: WorkflowInput): 
             outgoing_tx,
             codex_analytics::AnalyticsEventsClient::disabled(),
         ));
-        let processor =
-            WorkflowRequestProcessor::new(Arc::new(config), config_manager, Arc::clone(&outgoing));
+        let processor = WorkflowRequestProcessor::new(
+            Arc::new(config),
+            config_manager,
+            Arc::clone(&outgoing),
+            /*workflow_app_server_url*/ None,
+        );
 
         let Some(ClientResponsePayload::WorkflowRepair(response)) = processor
             .repair(WorkflowRepairParams {
@@ -1013,7 +1158,7 @@ export default async function run(_ctx: WorkflowContext, input: WorkflowInput): 
                 continue;
             };
             let crate::outgoing_message::OutgoingMessage::AppServerNotification(
-                codex_app_server_protocol::ServerNotification::WorkflowProgress(notification),
+                codex_app_server_protocol::ServerNotification::WorkflowRunProgress(notification),
             ) = message
             else {
                 continue;

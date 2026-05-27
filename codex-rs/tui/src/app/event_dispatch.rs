@@ -74,14 +74,18 @@ impl App {
                 }
             }
             AppEvent::RunWorkflow { command } => {
-                self.run_workflow_command(command);
+                self.run_workflow_command_on_app_server(app_server, command)
+                    .await;
             }
+            #[cfg(test)]
             AppEvent::WorkflowProgress { notification } => {
                 self.handle_workflow_progress_notification(notification);
             }
+            #[cfg(test)]
             AppEvent::WorkflowMarkdownResult { notification } => {
                 self.handle_workflow_markdown_result_notification(notification);
             }
+            #[cfg(test)]
             AppEvent::WorkflowProcessFinished {
                 run_id,
                 command,
@@ -371,6 +375,11 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
+                if matches!(op, AppCommand::Interrupt)
+                    && self.cancel_active_workflow_runs(app_server).await
+                {
+                    return Ok(AppRunControl::Continue);
+                }
                 self.submit_active_thread_op(app_server, op).await?;
             }
             AppEvent::ApproveRecentAutoReviewDenial { thread_id, id } => {

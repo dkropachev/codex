@@ -106,11 +106,22 @@ impl App {
                 self.fetch_plugins_list(app_server_client, cwd);
                 return;
             }
+            ServerNotification::WorkflowRunCompleted(notification) => {
+                self.handle_workflow_run_completed(notification.run.clone());
+                return;
+            }
+            ServerNotification::WorkflowRunFailed(notification) => {
+                self.handle_workflow_run_failed(notification.run.clone());
+                return;
+            }
             _ => {}
         }
 
         let notification_thread_target = server_notification_thread_target(&notification);
-        if let ServerNotification::WorkflowMarkdownResult(notification) = &notification {
+        if let ServerNotification::WorkflowRunMarkdownResult(notification) = &notification {
+            if let Some(state) = self.workflow_runs.get_mut(&notification.run_id) {
+                state.markdown_result_emitted = true;
+            }
             match &notification_thread_target {
                 ServerNotificationThreadTarget::Thread(thread_id) => self
                     .queue_workflow_markdown_handoff(

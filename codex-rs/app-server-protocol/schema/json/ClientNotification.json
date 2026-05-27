@@ -142,9 +142,9 @@
       "properties": {
         "method": {
           "enum": [
-            "workflow/progress"
+            "workflowRun/progress"
           ],
-          "title": "Workflow/progressNotificationMethod",
+          "title": "WorkflowRun/progressNotificationMethod",
           "type": "string"
         },
         "params": {
@@ -155,16 +155,16 @@
         "method",
         "params"
       ],
-      "title": "Workflow/progressNotification",
+      "title": "WorkflowRun/progressNotification",
       "type": "object"
     },
     {
       "properties": {
         "method": {
           "enum": [
-            "workflow/reportToUserMarkdown"
+            "workflowRun/reportToUserMarkdown"
           ],
-          "title": "Workflow/reportToUserMarkdownNotificationMethod",
+          "title": "WorkflowRun/reportToUserMarkdownNotificationMethod",
           "type": "string"
         },
         "params": {
@@ -175,7 +175,7 @@
         "method",
         "params"
       ],
-      "title": "Workflow/reportToUserMarkdownNotification",
+      "title": "WorkflowRun/reportToUserMarkdownNotification",
       "type": "object"
     }
   ],

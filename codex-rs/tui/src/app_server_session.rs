@@ -106,6 +106,14 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
+use codex_app_server_protocol::WorkflowCommandExecuteParams;
+use codex_app_server_protocol::WorkflowCommandExecuteResponse;
+use codex_app_server_protocol::WorkflowListParams;
+use codex_app_server_protocol::WorkflowListResponse;
+use codex_app_server_protocol::WorkflowRunCancelParams;
+use codex_app_server_protocol::WorkflowRunCancelResponse;
+use codex_app_server_protocol::WorkflowRunStartParams;
+use codex_app_server_protocol::WorkflowRunStartResponse;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
@@ -939,6 +947,60 @@ impl AppServerSession {
             .request_typed(ClientRequest::SkillsList { request_id, params })
             .await
             .wrap_err("skills/list failed in TUI")
+    }
+
+    pub(crate) async fn workflow_list(&mut self) -> Result<WorkflowListResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::WorkflowList {
+                request_id,
+                params: WorkflowListParams {
+                    stage_session_id: None,
+                },
+            })
+            .await
+            .wrap_err("workflow/list failed in TUI")
+    }
+
+    pub(crate) async fn workflow_command_execute(
+        &mut self,
+        args: Vec<String>,
+    ) -> Result<WorkflowCommandExecuteResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::WorkflowCommandExecute {
+                request_id,
+                params: WorkflowCommandExecuteParams {
+                    args,
+                    stage_session_id: None,
+                },
+            })
+            .await
+            .wrap_err("workflow/command/execute failed in TUI")
+    }
+
+    pub(crate) async fn workflow_run_start(
+        &mut self,
+        params: WorkflowRunStartParams,
+    ) -> Result<WorkflowRunStartResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::WorkflowRunStart { request_id, params })
+            .await
+            .wrap_err("workflowRun/start failed in TUI")
+    }
+
+    pub(crate) async fn workflow_run_cancel(&mut self, run_id: String) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: WorkflowRunCancelResponse = self
+            .client
+            .request_typed(ClientRequest::WorkflowRunCancel {
+                request_id,
+                params: WorkflowRunCancelParams { run_id },
+            })
+            .await
+            .wrap_err("workflowRun/cancel failed in TUI")?;
+        Ok(())
     }
 
     pub(crate) async fn reload_user_config(&mut self) -> Result<()> {

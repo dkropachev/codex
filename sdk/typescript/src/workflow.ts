@@ -423,6 +423,47 @@ export type WorkflowCommandResponse = {
   data: unknown;
 };
 
+export type WorkflowRunStatus = "running" | "succeeded" | "failed" | "canceled";
+
+export type WorkflowRunApprovalHandling = "delegate" | "decline";
+
+export type WorkflowRun = {
+  id: string;
+  workflowId: string;
+  status: WorkflowRunStatus;
+  threadId: string | null;
+  createdAt: number;
+  startedAt: number | null;
+  completedAt: number | null;
+  output: unknown | null;
+  error: string | null;
+};
+
+export type WorkflowRunStartParams<Input = unknown> = {
+  id: string;
+  input?: Input | null;
+  threadId?: string | null;
+  stageSessionId?: string | null;
+  approvalHandling?: WorkflowRunApprovalHandling | null;
+};
+
+export type WorkflowRunStartResponse = {
+  run: WorkflowRun;
+};
+
+export type WorkflowRunReadResponse = {
+  run: WorkflowRun;
+};
+
+export type WorkflowRunWaitResponse = {
+  run: WorkflowRun;
+  completed: boolean;
+};
+
+export type WorkflowRunCancelResponse = {
+  run: WorkflowRun;
+};
+
 export type WorkflowConfigReadResponse = {
   config: WorkflowConfigValues;
 };
@@ -649,7 +690,7 @@ export class CodexWorkflow {
 
   /** @internal */
   notifyWorkflowProgress(message: string, data?: unknown): void {
-    this.client.notify("workflow/progress", {
+    this.client.notify("workflowRun/progress", {
       runId: this.notificationContext.runId,
       threadId: this.notificationContext.originThreadId ?? undefined,
       message,
@@ -659,7 +700,7 @@ export class CodexWorkflow {
 
   /** @internal */
   notifyWorkflowMarkdown(markdown: string): void {
-    this.client.notify("workflow/reportToUserMarkdown", {
+    this.client.notify("workflowRun/reportToUserMarkdown", {
       runId: this.notificationContext.runId,
       threadId: this.notificationContext.originThreadId ?? undefined,
       markdown,
@@ -997,7 +1038,37 @@ export class WorkflowApis {
   }
 
   run(id: string, input?: unknown): Promise<WorkflowCommandResponse> {
-    return this.client.request("workflow/run", { id, input });
+    return this.start({ id, input }).then(async ({ run }) => {
+      const waited = await this.wait(run.id);
+      if (waited.run.status === "failed") {
+        throw new Error(waited.run.error ?? `workflow ${id} failed`);
+      }
+      if (waited.run.status === "canceled") {
+        throw new Error(waited.run.error ?? `workflow ${id} was canceled`);
+      }
+      return {
+        message: JSON.stringify(waited.run.output ?? null, null, 2),
+        data: waited.run.output,
+      };
+    });
+  }
+
+  start<Input = unknown>(
+    params: WorkflowRunStartParams<Input>,
+  ): Promise<WorkflowRunStartResponse> {
+    return this.client.request("workflowRun/start", params);
+  }
+
+  read(runId: string): Promise<WorkflowRunReadResponse> {
+    return this.client.request("workflowRun/read", { runId });
+  }
+
+  wait(runId: string, timeoutMs?: number | null): Promise<WorkflowRunWaitResponse> {
+    return this.client.request("workflowRun/wait", { runId, timeoutMs });
+  }
+
+  cancel(runId: string): Promise<WorkflowRunCancelResponse> {
+    return this.client.request("workflowRun/cancel", { runId });
   }
 }
 

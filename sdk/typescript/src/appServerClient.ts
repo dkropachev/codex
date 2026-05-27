@@ -1,6 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
 import { Buffer } from "node:buffer";
+import { createHash, randomBytes } from "node:crypto";
+import { EventEmitter } from "node:events";
+import { createConnection, type Socket } from "node:net";
 
 import type { CodexConfigObject } from "./codexOptions";
 import { findCodexPath, serializeConfigOverrides } from "./exec";
@@ -143,6 +146,19 @@ export class AppServerClient {
   static async connect(options: AppServerClientOptions): Promise<AppServerClient> {
     if (!options.appServerUrl) {
       throw new Error("appServerUrl is required when connecting to an existing Codex app-server");
+    }
+
+    if (options.appServerUrl.startsWith("unix://")) {
+      let client: AppServerClient;
+      const transport = await unixWebSocketTransport(
+        options.appServerUrl,
+        (line) => client.handleLine(line),
+        (error) => client.handleTransportError(error),
+        (detail) => client.handleTransportClosed(detail),
+      );
+      client = new AppServerClient(transport);
+      await client.initialize(options);
+      return client;
     }
 
     const webSocket = await openWebSocket(options);
@@ -314,6 +330,214 @@ export class AppServerClient {
     }
     this.pending.clear();
   }
+}
+
+async function unixWebSocketTransport(
+  appServerUrl: string,
+  onLine: (line: string) => void,
+  onError: (error: Error) => void,
+  onClose: (detail: string) => void,
+): Promise<AppServerTransport> {
+  const { socket, buffered } = await openUnixWebSocket(appServerUrl);
+  const parser = new UnixWebSocketFrameParser(onLine, onClose);
+  socket.on("data", (chunk: Buffer) => parser.push(chunk));
+  socket.once("error", onError);
+  socket.once("close", () => onClose("unix websocket closed"));
+  if (buffered.length > 0) {
+    parser.push(buffered);
+  }
+
+  return {
+    write(message: string) {
+      socket.write(encodeClientWebSocketFrame(message));
+    },
+    close() {
+      return new Promise<void>((resolve) => {
+        if (socket.closed || socket.destroyed) {
+          resolve();
+          return;
+        }
+        socket.once("close", () => resolve());
+        socket.write(encodeClientWebSocketFrame("", 0x8), () => socket.end());
+      });
+    },
+    isClosed() {
+      return socket.closed || socket.destroyed;
+    },
+  };
+}
+
+async function openUnixWebSocket(
+  appServerUrl: string,
+): Promise<{ socket: Socket; buffered: Buffer }> {
+  const socketPath = unixSocketPathFromUrl(appServerUrl);
+  const socket = createConnection(socketPath);
+  await new Promise<void>((resolve, reject) => {
+    socket.once("connect", resolve);
+    socket.once("error", reject);
+  });
+
+  const key = randomBytes(16).toString("base64");
+  socket.write(
+    [
+      "GET / HTTP/1.1",
+      "Host: localhost",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Key: ${key}`,
+      "Sec-WebSocket-Version: 13",
+      "",
+      "",
+    ].join("\r\n"),
+  );
+
+  let buffer = Buffer.alloc(0);
+  await new Promise<void>((resolve, reject) => {
+    const onData = (chunk: Buffer) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      const headerEnd = buffer.indexOf("\r\n\r\n");
+      if (headerEnd === -1) {
+        return;
+      }
+      socket.off("data", onData);
+      socket.off("error", onError);
+      const header = buffer.subarray(0, headerEnd).toString("utf8");
+      verifyUnixWebSocketHandshake(header, key);
+      buffer = buffer.subarray(headerEnd + 4);
+      resolve();
+    };
+    const onError = (error: Error) => {
+      socket.off("data", onData);
+      reject(error);
+    };
+    socket.on("data", onData);
+    socket.once("error", onError);
+  });
+
+  return { socket, buffered: buffer };
+}
+
+function unixSocketPathFromUrl(appServerUrl: string): string {
+  const path = appServerUrl.slice("unix://".length);
+  if (!path) {
+    throw new Error("unix:// app-server URL must include a socket path");
+  }
+  return decodeURIComponent(path);
+}
+
+function verifyUnixWebSocketHandshake(header: string, key: string): void {
+  const lines = header.split("\r\n");
+  if (!lines[0]?.includes(" 101 ")) {
+    throw new Error(`Codex app-server unix websocket handshake failed: ${lines[0] ?? header}`);
+  }
+  const headers = new Map<string, string>();
+  for (const line of lines.slice(1)) {
+    const separator = line.indexOf(":");
+    if (separator > 0) {
+      headers.set(line.slice(0, separator).trim().toLowerCase(), line.slice(separator + 1).trim());
+    }
+  }
+  const expectedAccept = createHash("sha1")
+    .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+    .digest("base64");
+  if (headers.get("sec-websocket-accept") !== expectedAccept) {
+    throw new Error("Codex app-server unix websocket handshake returned an invalid accept key");
+  }
+}
+
+class UnixWebSocketFrameParser extends EventEmitter {
+  private buffer = Buffer.alloc(0);
+
+  constructor(
+    private onLine: (line: string) => void,
+    private onClose: (detail: string) => void,
+  ) {
+    super();
+  }
+
+  push(chunk: Buffer): void {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
+    for (;;) {
+      const frame = this.nextFrame();
+      if (!frame) {
+        return;
+      }
+      if (frame.opcode === 0x1) {
+        this.onLine(frame.payload.toString("utf8"));
+      } else if (frame.opcode === 0x8) {
+        this.onClose("unix websocket closed by server");
+      }
+    }
+  }
+
+  private nextFrame(): { opcode: number; payload: Buffer } | null {
+    if (this.buffer.length < 2) {
+      return null;
+    }
+    const first = this.buffer[0]!;
+    const second = this.buffer[1]!;
+    let offset = 2;
+    let length = second & 0x7f;
+    if (length === 126) {
+      if (this.buffer.length < offset + 2) {
+        return null;
+      }
+      length = this.buffer.readUInt16BE(offset);
+      offset += 2;
+    } else if (length === 127) {
+      if (this.buffer.length < offset + 8) {
+        return null;
+      }
+      const bigLength = this.buffer.readBigUInt64BE(offset);
+      if (bigLength > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error("Codex app-server websocket frame is too large");
+      }
+      length = Number(bigLength);
+      offset += 8;
+    }
+    const masked = (second & 0x80) !== 0;
+    const maskOffset = offset;
+    if (masked) {
+      offset += 4;
+    }
+    if (this.buffer.length < offset + length) {
+      return null;
+    }
+    let payload = this.buffer.subarray(offset, offset + length);
+    if (masked) {
+      const mask = this.buffer.subarray(maskOffset, maskOffset + 4);
+      payload = Buffer.from(payload.map((byte, index) => byte ^ mask[index % 4]!));
+    }
+    this.buffer = this.buffer.subarray(offset + length);
+    return { opcode: first & 0x0f, payload };
+  }
+}
+
+function encodeClientWebSocketFrame(message: string, opcode = 0x1): Buffer {
+  const payload = Buffer.from(message, "utf8");
+  const mask = randomBytes(4);
+  let headerLength = 2;
+  if (payload.length >= 126 && payload.length <= 0xffff) {
+    headerLength += 2;
+  } else if (payload.length > 0xffff) {
+    headerLength += 8;
+  }
+  const frame = Buffer.alloc(headerLength + 4 + payload.length);
+  frame[0] = 0x80 | opcode;
+  if (payload.length < 126) {
+    frame[1] = 0x80 | payload.length;
+  } else if (payload.length <= 0xffff) {
+    frame[1] = 0x80 | 126;
+    frame.writeUInt16BE(payload.length, 2);
+  } else {
+    frame[1] = 0x80 | 127;
+    frame.writeBigUInt64BE(BigInt(payload.length), 2);
+  }
+  mask.copy(frame, headerLength);
+  for (let index = 0; index < payload.length; index += 1) {
+    frame[headerLength + 4 + index] = payload[index]! ^ mask[index % 4]!;
+  }
+  return frame;
 }
 
 function childProcessTransport(

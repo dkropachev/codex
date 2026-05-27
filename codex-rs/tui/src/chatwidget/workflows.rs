@@ -5,11 +5,8 @@ use codex_app_server_protocol::WorkflowProgressNotification;
 impl ChatWidget {
     /// Show or refresh the workflow status row with the provided details.
     pub(crate) fn show_workflow_process_status(&mut self, header: String, details: Option<String>) {
-        self.bottom_pane.ensure_status_indicator();
-        if !self.bottom_pane.is_task_running() {
-            self.bottom_pane
-                .set_interrupt_hint_visible(/*visible*/ false);
-        }
+        self.workflow_process_active = true;
+        self.update_task_running_state();
         self.set_status(
             header,
             details,
@@ -20,7 +17,11 @@ impl ChatWidget {
 
     /// Hide the workflow status row if the workflow no longer has anything active to show.
     pub(crate) fn hide_workflow_process_status(&mut self) {
-        self.bottom_pane.hide_status_indicator();
+        self.workflow_process_active = false;
+        self.update_task_running_state();
+        if !self.bottom_pane.is_task_running() {
+            self.bottom_pane.hide_status_indicator();
+        }
     }
 
     pub(crate) fn handle_workflow_progress_notification(

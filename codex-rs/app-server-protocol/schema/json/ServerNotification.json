@@ -4902,6 +4902,88 @@
       ],
       "type": "object"
     },
+    "WorkflowRun": {
+      "properties": {
+        "completedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "output": true,
+        "startedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/WorkflowRunStatus"
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workflowId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "createdAt",
+        "id",
+        "status",
+        "workflowId"
+      ],
+      "type": "object"
+    },
+    "WorkflowRunCompletedNotification": {
+      "properties": {
+        "run": {
+          "$ref": "#/definitions/WorkflowRun"
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "type": "object"
+    },
+    "WorkflowRunFailedNotification": {
+      "properties": {
+        "run": {
+          "$ref": "#/definitions/WorkflowRun"
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "type": "object"
+    },
+    "WorkflowRunStatus": {
+      "enum": [
+        "running",
+        "succeeded",
+        "failed",
+        "canceled"
+      ],
+      "type": "string"
+    },
     "WorkflowStatusUpdate": {
       "properties": {
         "childStatuses": {
@@ -6218,9 +6300,9 @@
       "properties": {
         "method": {
           "enum": [
-            "workflow/progress"
+            "workflowRun/progress"
           ],
-          "title": "Workflow/progressNotificationMethod",
+          "title": "WorkflowRun/progressNotificationMethod",
           "type": "string"
         },
         "params": {
@@ -6231,16 +6313,16 @@
         "method",
         "params"
       ],
-      "title": "Workflow/progressNotification",
+      "title": "WorkflowRun/progressNotification",
       "type": "object"
     },
     {
       "properties": {
         "method": {
           "enum": [
-            "workflow/reportToUserMarkdown"
+            "workflowRun/reportToUserMarkdown"
           ],
-          "title": "Workflow/reportToUserMarkdownNotificationMethod",
+          "title": "WorkflowRun/reportToUserMarkdownNotificationMethod",
           "type": "string"
         },
         "params": {
@@ -6251,7 +6333,47 @@
         "method",
         "params"
       ],
-      "title": "Workflow/reportToUserMarkdownNotification",
+      "title": "WorkflowRun/reportToUserMarkdownNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "workflowRun/completed"
+          ],
+          "title": "WorkflowRun/completedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowRunCompletedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "WorkflowRun/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "workflowRun/failed"
+          ],
+          "title": "WorkflowRun/failedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowRunFailedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "WorkflowRun/failedNotification",
       "type": "object"
     }
   ],

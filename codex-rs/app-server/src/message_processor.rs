@@ -268,6 +268,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) rpc_transport: AppServerRpcTransport,
     pub(crate) remote_control_handle: Option<RemoteControlHandle>,
     pub(crate) plugin_startup_tasks: crate::PluginStartupTasks,
+    pub(crate) workflow_app_server_url: Option<String>,
 }
 
 impl MessageProcessor {
@@ -290,6 +291,7 @@ impl MessageProcessor {
             rpc_transport,
             remote_control_handle,
             plugin_startup_tasks,
+            workflow_app_server_url,
         } = args;
         auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
@@ -424,6 +426,7 @@ impl MessageProcessor {
             Arc::clone(&config),
             config_manager.clone(),
             Arc::clone(&outgoing),
+            workflow_app_server_url,
         );
         let artifact_processor = ArtifactRequestProcessor::new(Arc::clone(&config));
         if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {
@@ -627,12 +630,12 @@ impl MessageProcessor {
             }
             ClientNotification::WorkflowProgress(notification) => {
                 self.outgoing
-                    .send_server_notification(ServerNotification::WorkflowProgress(notification))
+                    .send_server_notification(ServerNotification::WorkflowRunProgress(notification))
                     .await;
             }
             ClientNotification::WorkflowMarkdownResult(notification) => {
                 self.outgoing
-                    .send_server_notification(ServerNotification::WorkflowMarkdownResult(
+                    .send_server_notification(ServerNotification::WorkflowRunMarkdownResult(
                         notification,
                     ))
                     .await;
@@ -1128,7 +1131,18 @@ impl MessageProcessor {
             ClientRequest::WorkflowEdit { params, .. } => {
                 self.workflow_processor.edit(params).await
             }
-            ClientRequest::WorkflowRun { params, .. } => self.workflow_processor.run(params).await,
+            ClientRequest::WorkflowRunStart { params, .. } => {
+                self.workflow_processor.start_run(params).await
+            }
+            ClientRequest::WorkflowRunRead { params, .. } => {
+                self.workflow_processor.read_run(params).await
+            }
+            ClientRequest::WorkflowRunWait { params, .. } => {
+                self.workflow_processor.wait_run(params).await
+            }
+            ClientRequest::WorkflowRunCancel { params, .. } => {
+                self.workflow_processor.cancel_run(params).await
+            }
             ClientRequest::WorkflowValidate { params, .. } => {
                 self.workflow_processor.validate(params).await
             }

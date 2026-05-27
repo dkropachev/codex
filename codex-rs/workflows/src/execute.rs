@@ -64,9 +64,22 @@ pub struct WorkflowCommandContext<'a> {
     pub codex_self_exe: Option<PathBuf>,
     pub stage_session_id: Option<String>,
     pub progress: Option<&'a WorkflowCommandProgressHandler<'a>>,
+    pub runtime_event_handler: Option<&'a workflow_runtime::WorkflowRuntimeEventHandler<'a>>,
+    pub runtime: WorkflowRuntimeContext,
 }
 
 pub type WorkflowCommandProgressHandler<'a> = dyn Fn(WorkflowCommandProgress) + Send + Sync + 'a;
+
+#[derive(Debug, Clone, Default)]
+pub struct WorkflowRuntimeContext {
+    pub run_id: Option<String>,
+    pub origin_thread_id: Option<String>,
+    pub app_server_url: Option<String>,
+    pub approvals: Option<String>,
+    pub interactive_request_behavior: Option<String>,
+    pub output_format: Option<String>,
+    pub force_process_runtime: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -447,7 +460,14 @@ async fn run(
     let normalized_id = normalize_workflow_id(id)?;
     let workflow = resolve_workflow_for_context(&ctx, &normalized_id)?;
     let input = read_input(input, input_fields)?;
-    let runtime_event_handler = standalone_cli_runtime_event_handler(ctx.progress);
+    let standalone_runtime_event_handler = if ctx.runtime_event_handler.is_none() {
+        standalone_cli_runtime_event_handler(ctx.progress)
+    } else {
+        None
+    };
+    let runtime_event_handler = ctx
+        .runtime_event_handler
+        .or(standalone_runtime_event_handler.as_deref());
     let output = workflow_runtime::run_workflow(
         ctx.codex_home,
         ctx.cwd,
@@ -456,7 +476,8 @@ async fn run(
         &input,
         workflow_runtime::WorkflowRuntimeRunOptions {
             workflows: &workflows,
-            event_handler: runtime_event_handler.as_deref(),
+            event_handler: runtime_event_handler,
+            runtime: ctx.runtime.clone(),
         },
     )
     .await
@@ -1510,6 +1531,8 @@ mod tests {
                 codex_self_exe: None,
                 stage_session_id: None,
                 progress: None,
+                runtime_event_handler: None,
+                runtime: Default::default(),
             },
             WorkflowCommand::Develop {
                 description: "Jira Summary".to_string(),
@@ -1724,6 +1747,8 @@ mod tests {
             codex_self_exe: None,
             stage_session_id: None,
             progress: None,
+            runtime_event_handler: None,
+            runtime: Default::default(),
         };
 
         let err = commit_workflow_changes(&ctx, &workflow_dir, "Update workflow documentation")
@@ -1761,6 +1786,8 @@ mod tests {
             codex_self_exe: None,
             stage_session_id: None,
             progress: None,
+            runtime_event_handler: None,
+            runtime: Default::default(),
         };
         let workflow = find_workflow(home.path(), cwd.path(), &config, "review/fix").unwrap();
         let staged = stage_existing_workflow(&ctx, &workflow).unwrap();
@@ -1800,6 +1827,8 @@ mod tests {
             codex_self_exe: None,
             stage_session_id: Some(session_id.clone()),
             progress: None,
+            runtime_event_handler: None,
+            runtime: Default::default(),
         };
 
         let workflow = find_workflow(home.path(), cwd.path(), &config, "review/fix").unwrap();
@@ -1845,6 +1874,8 @@ mod tests {
             codex_self_exe: None,
             stage_session_id: Some(session_id.clone()),
             progress: None,
+            runtime_event_handler: None,
+            runtime: Default::default(),
         };
 
         let workflow = find_workflow(home.path(), cwd.path(), &config, "review/fix").unwrap();
@@ -1884,6 +1915,8 @@ mod tests {
             codex_self_exe: None,
             stage_session_id: Some(session_id.clone()),
             progress: None,
+            runtime_event_handler: None,
+            runtime: Default::default(),
         };
 
         let workflow = find_workflow(home.path(), cwd.path(), &config, "review/fix").unwrap();
@@ -1926,6 +1959,8 @@ mod tests {
             codex_self_exe: None,
             stage_session_id: Some(session_id.clone()),
             progress: None,
+            runtime_event_handler: None,
+            runtime: Default::default(),
         };
 
         let workflow = find_workflow(home.path(), cwd.path(), &config, "review/fix").unwrap();
@@ -2136,6 +2171,8 @@ process.exit(result.status ?? 1);
                 codex_self_exe: None,
                 stage_session_id: None,
                 progress: None,
+                runtime_event_handler: None,
+                runtime: Default::default(),
             },
             WorkflowCommand::Run {
                 id: "reports/runtime-progress".to_string(),
@@ -2249,6 +2286,8 @@ process.exit(result.status ?? 1);
                 codex_self_exe: None,
                 stage_session_id: None,
                 progress: None,
+                runtime_event_handler: None,
+                runtime: Default::default(),
             },
             WorkflowCommand::Run {
                 id: "reports/resident-host".to_string(),
@@ -2271,6 +2310,8 @@ process.exit(result.status ?? 1);
                 codex_self_exe: None,
                 stage_session_id: None,
                 progress: None,
+                runtime_event_handler: None,
+                runtime: Default::default(),
             },
             WorkflowCommand::Run {
                 id: "reports/resident-host".to_string(),
@@ -2410,6 +2451,8 @@ process.exit(result.status ?? 1);
                 codex_self_exe: None,
                 stage_session_id: None,
                 progress: None,
+                runtime_event_handler: None,
+                runtime: Default::default(),
             },
             WorkflowCommand::Run {
                 id: "reports/parent-review".to_string(),

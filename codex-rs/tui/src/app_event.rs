@@ -26,7 +26,9 @@ use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
+#[cfg(test)]
 use codex_app_server_protocol::WorkflowMarkdownResultNotification;
+#[cfg(test)]
 use codex_app_server_protocol::WorkflowProgressNotification;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
@@ -143,21 +145,24 @@ pub(crate) enum AppEvent {
         user_message: Option<UserMessage>,
     },
 
-    /// Start a JavaScript workflow process connected to the managed TUI app-server.
+    /// Start a workflow run through the managed TUI app-server.
     RunWorkflow {
         command: Vec<String>,
     },
 
+    #[cfg(test)]
     /// Workflow progress emitted by a running workflow child process.
     WorkflowProgress {
         notification: WorkflowProgressNotification,
     },
 
+    #[cfg(test)]
     /// Workflow markdown emitted by a running workflow child process.
     WorkflowMarkdownResult {
         notification: WorkflowMarkdownResultNotification,
     },
 
+    #[cfg(test)]
     /// Result of a workflow process launched from the TUI.
     WorkflowProcessFinished {
         run_id: String,

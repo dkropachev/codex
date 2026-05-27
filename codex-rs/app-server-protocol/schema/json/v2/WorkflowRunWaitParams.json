@@ -1,20 +1,21 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "properties": {
-    "id": {
+    "runId": {
       "type": "string"
     },
-    "input": true,
-    "stageSessionId": {
+    "timeoutMs": {
+      "format": "uint64",
+      "minimum": 0.0,
       "type": [
-        "string",
+        "integer",
         "null"
       ]
     }
   },
   "required": [
-    "id"
+    "runId"
   ],
-  "title": "WorkflowRunParams",
+  "title": "WorkflowRunWaitParams",
   "type": "object"
 }

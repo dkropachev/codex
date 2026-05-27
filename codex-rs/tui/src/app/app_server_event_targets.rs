@@ -109,8 +109,8 @@ pub(super) fn server_notification_thread_target(
         ServerNotification::ReasoningTextDelta(notification) => {
             Some(notification.thread_id.as_str())
         }
-        ServerNotification::WorkflowProgress(notification) => notification.thread_id.as_deref(),
-        ServerNotification::WorkflowMarkdownResult(notification) => {
+        ServerNotification::WorkflowRunProgress(notification) => notification.thread_id.as_deref(),
+        ServerNotification::WorkflowRunMarkdownResult(notification) => {
             notification.thread_id.as_deref()
         }
         ServerNotification::ContextCompacted(notification) => Some(notification.thread_id.as_str()),
@@ -162,6 +162,8 @@ pub(super) fn server_notification_thread_target(
         | ServerNotification::FsChanged(_)
         | ServerNotification::WindowsWorldWritableWarning(_)
         | ServerNotification::WindowsSandboxSetupCompleted(_)
+        | ServerNotification::WorkflowRunCompleted(_)
+        | ServerNotification::WorkflowRunFailed(_)
         | ServerNotification::AccountLoginCompleted(_) => None,
     };
 
@@ -225,7 +227,7 @@ mod tests {
     #[test]
     fn workflow_progress_notifications_route_to_threads_when_thread_id_is_present() {
         let thread_id = ThreadId::new();
-        let notification = ServerNotification::WorkflowProgress(
+        let notification = ServerNotification::WorkflowRunProgress(
             codex_app_server_protocol::WorkflowProgressNotification {
                 run_id: "run-1".to_string(),
                 thread_id: Some(thread_id.to_string()),
@@ -242,7 +244,7 @@ mod tests {
 
     #[test]
     fn workflow_markdown_result_notifications_route_to_global_when_threadless() {
-        let notification = ServerNotification::WorkflowMarkdownResult(
+        let notification = ServerNotification::WorkflowRunMarkdownResult(
             codex_app_server_protocol::WorkflowMarkdownResultNotification {
                 run_id: "run-1".to_string(),
                 thread_id: None,

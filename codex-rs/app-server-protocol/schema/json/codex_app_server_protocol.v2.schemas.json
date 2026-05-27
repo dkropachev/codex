@@ -2658,13 +2658,13 @@
             },
             "method": {
               "enum": [
-                "workflow/run"
+                "workflowRun/start"
               ],
-              "title": "Workflow/runRequestMethod",
+              "title": "WorkflowRun/startRequestMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/WorkflowRunParams"
+              "$ref": "#/definitions/WorkflowRunStartParams"
             }
           },
           "required": [
@@ -2672,7 +2672,79 @@
             "method",
             "params"
           ],
-          "title": "Workflow/runRequest",
+          "title": "WorkflowRun/startRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflowRun/read"
+              ],
+              "title": "WorkflowRun/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowRunReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "WorkflowRun/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflowRun/wait"
+              ],
+              "title": "WorkflowRun/waitRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowRunWaitParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "WorkflowRun/waitRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflowRun/cancel"
+              ],
+              "title": "WorkflowRun/cancelRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowRunCancelParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "WorkflowRun/cancelRequest",
           "type": "object"
         },
         {
@@ -14352,9 +14424,9 @@
           "properties": {
             "method": {
               "enum": [
-                "workflow/progress"
+                "workflowRun/progress"
               ],
-              "title": "Workflow/progressNotificationMethod",
+              "title": "WorkflowRun/progressNotificationMethod",
               "type": "string"
             },
             "params": {
@@ -14365,16 +14437,16 @@
             "method",
             "params"
           ],
-          "title": "Workflow/progressNotification",
+          "title": "WorkflowRun/progressNotification",
           "type": "object"
         },
         {
           "properties": {
             "method": {
               "enum": [
-                "workflow/reportToUserMarkdown"
+                "workflowRun/reportToUserMarkdown"
               ],
-              "title": "Workflow/reportToUserMarkdownNotificationMethod",
+              "title": "WorkflowRun/reportToUserMarkdownNotificationMethod",
               "type": "string"
             },
             "params": {
@@ -14385,7 +14457,47 @@
             "method",
             "params"
           ],
-          "title": "Workflow/reportToUserMarkdownNotification",
+          "title": "WorkflowRun/reportToUserMarkdownNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "workflowRun/completed"
+              ],
+              "title": "WorkflowRun/completedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowRunCompletedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "WorkflowRun/completedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "workflowRun/failed"
+              ],
+              "title": "WorkflowRun/failedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowRunFailedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "WorkflowRun/failedNotification",
           "type": "object"
         }
       ],
@@ -19273,9 +19385,155 @@
       ],
       "type": "string"
     },
-    "WorkflowRunParams": {
+    "WorkflowRun": {
+      "properties": {
+        "completedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "output": true,
+        "startedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/WorkflowRunStatus"
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workflowId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "createdAt",
+        "id",
+        "status",
+        "workflowId"
+      ],
+      "type": "object"
+    },
+    "WorkflowRunApprovalHandling": {
+      "enum": [
+        "delegate",
+        "decline"
+      ],
+      "type": "string"
+    },
+    "WorkflowRunCancelParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "runId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "runId"
+      ],
+      "title": "WorkflowRunCancelParams",
+      "type": "object"
+    },
+    "WorkflowRunCancelResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "run": {
+          "$ref": "#/definitions/WorkflowRun"
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "title": "WorkflowRunCancelResponse",
+      "type": "object"
+    },
+    "WorkflowRunCompletedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "run": {
+          "$ref": "#/definitions/WorkflowRun"
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "title": "WorkflowRunCompletedNotification",
+      "type": "object"
+    },
+    "WorkflowRunFailedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "run": {
+          "$ref": "#/definitions/WorkflowRun"
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "title": "WorkflowRunFailedNotification",
+      "type": "object"
+    },
+    "WorkflowRunReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "runId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "runId"
+      ],
+      "title": "WorkflowRunReadParams",
+      "type": "object"
+    },
+    "WorkflowRunReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "run": {
+          "$ref": "#/definitions/WorkflowRun"
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "title": "WorkflowRunReadResponse",
+      "type": "object"
+    },
+    "WorkflowRunStartParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "approvalHandling": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkflowRunApprovalHandling"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "id": {
           "type": "string"
         },
@@ -19285,27 +19543,78 @@
             "string",
             "null"
           ]
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
         "id"
       ],
-      "title": "WorkflowRunParams",
+      "title": "WorkflowRunStartParams",
       "type": "object"
     },
-    "WorkflowRunResponse": {
+    "WorkflowRunStartResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
-        "data": true,
-        "message": {
-          "type": "string"
+        "run": {
+          "$ref": "#/definitions/WorkflowRun"
         }
       },
       "required": [
-        "data",
-        "message"
+        "run"
       ],
-      "title": "WorkflowRunResponse",
+      "title": "WorkflowRunStartResponse",
+      "type": "object"
+    },
+    "WorkflowRunStatus": {
+      "enum": [
+        "running",
+        "succeeded",
+        "failed",
+        "canceled"
+      ],
+      "type": "string"
+    },
+    "WorkflowRunWaitParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "runId"
+      ],
+      "title": "WorkflowRunWaitParams",
+      "type": "object"
+    },
+    "WorkflowRunWaitResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "completed": {
+          "type": "boolean"
+        },
+        "run": {
+          "$ref": "#/definitions/WorkflowRun"
+        }
+      },
+      "required": [
+        "completed",
+        "run"
+      ],
+      "title": "WorkflowRunWaitResponse",
       "type": "object"
     },
     "WorkflowStageSessionActionParams": {
@@ -19668,6 +19977,30 @@
         },
         {
           "properties": {
+            "heading": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "emptyDocumentSection"
+              ],
+              "title": "EmptyDocumentSectionWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "heading",
+            "path",
+            "type"
+          ],
+          "title": "EmptyDocumentSectionWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
             "error": {
               "type": "string"
             },
@@ -19688,6 +20021,58 @@
             "type"
           ],
           "title": "PackageManifestParseFailedWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "expected": {
+              "type": "string"
+            },
+            "field": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "invalidPackageManifestField"
+              ],
+              "title": "InvalidPackageManifestFieldWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "expected",
+            "field",
+            "path",
+            "type"
+          ],
+          "title": "InvalidPackageManifestFieldWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "script": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "missingPackageScript"
+              ],
+              "title": "MissingPackageScriptWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "script",
+            "type"
+          ],
+          "title": "MissingPackageScriptWorkflowValidationFindingInfo",
           "type": "object"
         },
         {
@@ -19716,6 +20101,86 @@
             "type"
           ],
           "title": "UndeclaredPackageImportWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "package_name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "unusedPackageDependency"
+              ],
+              "title": "UnusedPackageDependencyWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "package_name",
+            "path",
+            "type"
+          ],
+          "title": "UnusedPackageDependencyWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "invalidWorkflowDependencyMetadata"
+              ],
+              "title": "InvalidWorkflowDependencyMetadataWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "field",
+            "path",
+            "type"
+          ],
+          "title": "InvalidWorkflowDependencyMetadataWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "package_name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            },
+            "target": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "workflowDependencyMetadataMismatch"
+              ],
+              "title": "WorkflowDependencyMetadataMismatchWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "package_name",
+            "path",
+            "source",
+            "target",
+            "type"
+          ],
+          "title": "WorkflowDependencyMetadataMismatchWorkflowValidationFindingInfo",
           "type": "object"
         },
         {
@@ -19776,6 +20241,86 @@
             "type"
           ],
           "title": "InvalidValidationCommandsWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "missingBuildValidationCommand"
+              ],
+              "title": "MissingBuildValidationCommandWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "MissingBuildValidationCommandWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "missingTestValidationCommand"
+              ],
+              "title": "MissingTestValidationCommandWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "MissingTestValidationCommandWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "missingContractSmoke"
+              ],
+              "title": "MissingContractSmokeWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "MissingContractSmokeWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "invalidContractSmoke"
+              ],
+              "title": "InvalidContractSmokeWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "InvalidContractSmokeWorkflowValidationFindingInfo",
           "type": "object"
         },
         {

@@ -5267,8 +5267,47 @@
       ],
       "type": "object"
     },
-    "WorkflowRunParams": {
+    "WorkflowRunApprovalHandling": {
+      "enum": [
+        "delegate",
+        "decline"
+      ],
+      "type": "string"
+    },
+    "WorkflowRunCancelParams": {
       "properties": {
+        "runId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "runId"
+      ],
+      "type": "object"
+    },
+    "WorkflowRunReadParams": {
+      "properties": {
+        "runId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "runId"
+      ],
+      "type": "object"
+    },
+    "WorkflowRunStartParams": {
+      "properties": {
+        "approvalHandling": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkflowRunApprovalHandling"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "id": {
           "type": "string"
         },
@@ -5278,10 +5317,35 @@
             "string",
             "null"
           ]
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
         "id"
+      ],
+      "type": "object"
+    },
+    "WorkflowRunWaitParams": {
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "runId"
       ],
       "type": "object"
     },
@@ -6237,13 +6301,13 @@
         },
         "method": {
           "enum": [
-            "workflow/run"
+            "workflowRun/start"
           ],
-          "title": "Workflow/runRequestMethod",
+          "title": "WorkflowRun/startRequestMethod",
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/WorkflowRunParams"
+          "$ref": "#/definitions/WorkflowRunStartParams"
         }
       },
       "required": [
@@ -6251,7 +6315,79 @@
         "method",
         "params"
       ],
-      "title": "Workflow/runRequest",
+      "title": "WorkflowRun/startRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "workflowRun/read"
+          ],
+          "title": "WorkflowRun/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowRunReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "WorkflowRun/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "workflowRun/wait"
+          ],
+          "title": "WorkflowRun/waitRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowRunWaitParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "WorkflowRun/waitRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "workflowRun/cancel"
+          ],
+          "title": "WorkflowRun/cancelRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowRunCancelParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "WorkflowRun/cancelRequest",
       "type": "object"
     },
     {

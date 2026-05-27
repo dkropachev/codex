@@ -65,18 +65,24 @@ use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::ConnectionOrigin;
+use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
+use crate::transport::TransportEvent;
+use crate::transport::app_server_control_socket_path;
 use crate::transport::route_outgoing_envelope;
+use crate::transport::start_control_socket_acceptor;
 use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_transport::AppServerTransport;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
@@ -91,6 +97,7 @@ pub use codex_state::log_db::LogDbLayer;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
 use tracing::warn;
 
@@ -141,6 +148,8 @@ pub struct InProcessStartArgs {
     pub initialize: InitializeParams,
     /// Capacity used for all runtime queues (clamped to at least 1).
     pub channel_capacity: usize,
+    /// Whether to expose this embedded runtime on the app-server Unix control socket.
+    pub expose_workflow_app_server: bool,
 }
 
 /// Event emitted from the app-server to the in-process client.
@@ -186,6 +195,20 @@ enum InProcessClientMessage {
 enum ProcessorCommand {
     Request(Box<ClientRequest>),
     Notification(Box<ClientNotification>),
+}
+
+enum InProcessOutboundControlEvent {
+    Opened {
+        connection_id: ConnectionId,
+        writer: mpsc::Sender<QueuedOutgoingMessage>,
+        disconnect_sender: Option<CancellationToken>,
+        initialized: Arc<AtomicBool>,
+        experimental_api_enabled: Arc<AtomicBool>,
+        opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
+    },
+    Closed {
+        connection_id: ConnectionId,
+    },
 }
 
 #[derive(Clone)]
@@ -396,13 +419,89 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 /*disconnect_sender*/ None,
             ),
         );
+        let (outbound_control_tx, mut outbound_control_rx) =
+            mpsc::channel::<InProcessOutboundControlEvent>(channel_capacity);
         let mut outbound_handle = tokio::spawn(async move {
-            while let Some(envelope) = outgoing_rx.recv().await {
-                route_outgoing_envelope(&mut outbound_connections, envelope).await;
+            loop {
+                tokio::select! {
+                    control_event = outbound_control_rx.recv() => {
+                        let Some(control_event) = control_event else {
+                            break;
+                        };
+                        match control_event {
+                            InProcessOutboundControlEvent::Opened {
+                                connection_id,
+                                writer,
+                                disconnect_sender,
+                                initialized,
+                                experimental_api_enabled,
+                                opted_out_notification_methods,
+                            } => {
+                                outbound_connections.insert(
+                                    connection_id,
+                                    OutboundConnectionState::new(
+                                        writer,
+                                        initialized,
+                                        experimental_api_enabled,
+                                        opted_out_notification_methods,
+                                        disconnect_sender,
+                                    ),
+                                );
+                            }
+                            InProcessOutboundControlEvent::Closed { connection_id } => {
+                                outbound_connections.remove(&connection_id);
+                            }
+                        }
+                    }
+                    envelope = outgoing_rx.recv() => {
+                        let Some(envelope) = envelope else {
+                            break;
+                        };
+                        route_outgoing_envelope(&mut outbound_connections, envelope).await;
+                    }
+                }
             }
         });
 
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
+        let workflow_socket_shutdown_token = CancellationToken::new();
+        let (workflow_transport_event_tx, mut workflow_transport_event_rx) =
+            mpsc::channel::<TransportEvent>(channel_capacity);
+        let (workflow_transport, workflow_app_server_url, mut workflow_accept_handle) =
+            if args.expose_workflow_app_server {
+                match app_server_control_socket_path(args.config.codex_home.as_path()) {
+                    Ok(socket_path) => {
+                        match start_control_socket_acceptor(
+                            socket_path.clone(),
+                            workflow_transport_event_tx,
+                            workflow_socket_shutdown_token.clone(),
+                        )
+                        .await
+                        {
+                            Ok(handle) => (
+                                Some(AppServerTransport::UnixSocket {
+                                    socket_path: socket_path.clone(),
+                                }),
+                                Some(format!("unix://{}", socket_path.display())),
+                                Some(handle),
+                            ),
+                            Err(err) => {
+                                warn!(
+                                    socket_path = %socket_path.display(),
+                                    "failed to expose embedded app-server workflow socket: {err}"
+                                );
+                                (None, None, None)
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        warn!("failed to resolve embedded app-server workflow socket path: {err}");
+                        (None, None, None)
+                    }
+                }
+            } else {
+                (None, None, None)
+            };
         let config_manager = ConfigManager::new(
             args.config.codex_home.to_path_buf(),
             args.cli_overrides,
@@ -429,10 +528,13 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 rpc_transport: AppServerRpcTransport::InProcess,
                 remote_control_handle: None,
                 plugin_startup_tasks: crate::PluginStartupTasks::Start,
+                workflow_app_server_url,
             }));
             let mut thread_created_rx = processor.thread_created_receiver();
             let session = Arc::new(ConnectionSessionState::new(ConnectionOrigin::InProcess));
+            let mut workflow_connection_states = HashMap::<ConnectionId, ConnectionState>::new();
             let mut listen_for_threads = true;
+            let mut workflow_transport_open = workflow_transport.is_some();
 
             loop {
                 tokio::select! {
@@ -477,14 +579,179 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                             }
                         }
                     }
+                    workflow_event = workflow_transport_event_rx.recv(), if workflow_transport_open => {
+                        let Some(workflow_event) = workflow_event else {
+                            workflow_transport_open = false;
+                            continue;
+                        };
+                        match workflow_event {
+                            TransportEvent::ConnectionOpened {
+                                connection_id,
+                                origin,
+                                writer,
+                                disconnect_sender,
+                            } => {
+                                let outbound_initialized = Arc::new(AtomicBool::new(false));
+                                let outbound_experimental_api_enabled =
+                                    Arc::new(AtomicBool::new(false));
+                                let outbound_opted_out_notification_methods =
+                                    Arc::new(RwLock::new(HashSet::new()));
+                                if outbound_control_tx
+                                    .send(InProcessOutboundControlEvent::Opened {
+                                        connection_id,
+                                        writer,
+                                        disconnect_sender,
+                                        initialized: Arc::clone(&outbound_initialized),
+                                        experimental_api_enabled: Arc::clone(
+                                            &outbound_experimental_api_enabled,
+                                        ),
+                                        opted_out_notification_methods: Arc::clone(
+                                            &outbound_opted_out_notification_methods,
+                                        ),
+                                    })
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                                workflow_connection_states.insert(
+                                    connection_id,
+                                    ConnectionState::new(
+                                        origin,
+                                        outbound_initialized,
+                                        outbound_experimental_api_enabled,
+                                        outbound_opted_out_notification_methods,
+                                    ),
+                                );
+                            }
+                            TransportEvent::ConnectionClosed { connection_id } => {
+                                let Some(connection_state) =
+                                    workflow_connection_states.remove(&connection_id)
+                                else {
+                                    continue;
+                                };
+                                if outbound_control_tx
+                                    .send(InProcessOutboundControlEvent::Closed { connection_id })
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                                processor
+                                    .connection_closed(connection_id, &connection_state.session)
+                                    .await;
+                            }
+                            TransportEvent::IncomingMessage { connection_id, message } => {
+                                let Some(workflow_transport) = workflow_transport.as_ref() else {
+                                    continue;
+                                };
+                                match message {
+                                    JSONRPCMessage::Request(request) => {
+                                        let Some(connection_state) =
+                                            workflow_connection_states.get_mut(&connection_id)
+                                        else {
+                                            warn!(
+                                                "dropping request from unknown workflow socket connection: {connection_id:?}"
+                                            );
+                                            continue;
+                                        };
+                                        let was_initialized =
+                                            connection_state.session.initialized();
+                                        processor
+                                            .process_request(
+                                                connection_id,
+                                                request,
+                                                workflow_transport,
+                                                Arc::clone(&connection_state.session),
+                                            )
+                                            .await;
+                                        let opted_out_notification_methods_snapshot =
+                                            connection_state
+                                                .session
+                                                .opted_out_notification_methods();
+                                        let experimental_api_enabled =
+                                            connection_state.session.experimental_api_enabled();
+                                        let is_initialized =
+                                            connection_state.session.initialized();
+                                        if let Ok(mut opted_out_notification_methods) =
+                                            connection_state
+                                                .outbound_opted_out_notification_methods
+                                                .write()
+                                        {
+                                            *opted_out_notification_methods =
+                                                opted_out_notification_methods_snapshot;
+                                        } else {
+                                            warn!(
+                                                "failed to update workflow socket opted-out notifications"
+                                            );
+                                        }
+                                        connection_state
+                                            .outbound_experimental_api_enabled
+                                            .store(experimental_api_enabled, Ordering::Release);
+                                        if !was_initialized && is_initialized {
+                                            processor
+                                                .send_initialize_notifications_to_connection(
+                                                    connection_id,
+                                                )
+                                                .await;
+                                            processor.connection_initialized(connection_id).await;
+                                            connection_state
+                                                .outbound_initialized
+                                                .store(true, Ordering::Release);
+                                        }
+                                    }
+                                    JSONRPCMessage::Response(response) => {
+                                        if !workflow_connection_states.contains_key(&connection_id)
+                                        {
+                                            warn!(
+                                                "dropping response from unknown workflow socket connection: {connection_id:?}"
+                                            );
+                                            continue;
+                                        }
+                                        processor.process_response(response).await;
+                                    }
+                                    JSONRPCMessage::Notification(notification) => {
+                                        if !workflow_connection_states.contains_key(&connection_id)
+                                        {
+                                            warn!(
+                                                "dropping notification from unknown workflow socket connection: {connection_id:?}"
+                                            );
+                                            continue;
+                                        }
+                                        processor.process_notification(notification).await;
+                                    }
+                                    JSONRPCMessage::Error(err) => {
+                                        if !workflow_connection_states.contains_key(&connection_id)
+                                        {
+                                            warn!(
+                                                "dropping error from unknown workflow socket connection: {connection_id:?}"
+                                            );
+                                            continue;
+                                        }
+                                        processor.process_error(err).await;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
                             Ok(thread_id) => {
-                                let connection_ids = if session.initialized() {
+                                let mut connection_ids = if session.initialized() {
                                     vec![IN_PROCESS_CONNECTION_ID]
                                 } else {
                                     Vec::<ConnectionId>::new()
                                 };
+                                connection_ids.extend(
+                                    workflow_connection_states
+                                        .iter()
+                                        .filter_map(|(connection_id, connection_state)| {
+                                            connection_state
+                                                .session
+                                                .initialized()
+                                                .then_some(*connection_id)
+                                        }),
+                                );
                                 processor
                                     .try_attach_thread_listener(thread_id, connection_ids)
                                     .await;
@@ -505,6 +772,11 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             processor
                 .connection_closed(IN_PROCESS_CONNECTION_ID, &session)
                 .await;
+            for (connection_id, connection_state) in workflow_connection_states {
+                processor
+                    .connection_closed(connection_id, &connection_state.session)
+                    .await;
+            }
             processor.clear_all_thread_listeners().await;
             processor.drain_background_tasks().await;
             processor.shutdown_threads().await;
@@ -698,6 +970,13 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             processor_handle.abort();
             let _ = processor_handle.await;
         }
+        workflow_socket_shutdown_token.cancel();
+        if let Some(handle) = workflow_accept_handle.as_mut()
+            && let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut *handle).await
+        {
+            handle.abort();
+            let _ = handle.await;
+        }
         if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut outbound_handle).await {
             outbound_handle.abort();
             let _ = outbound_handle.await;
@@ -810,6 +1089,7 @@ mod tests {
                 capabilities: None,
             },
             channel_capacity,
+            expose_workflow_app_server: false,
         };
         let mut client = start(args).await.expect("in-process runtime should start");
         client._test_codex_home = Some(codex_home);

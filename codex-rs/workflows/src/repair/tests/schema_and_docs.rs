@@ -57,6 +57,8 @@ fn run_repair(home: &TempDir, cwd: &TempDir, id: &str) -> WorkflowCommandOutput 
         codex_self_exe: None,
         stage_session_id: None,
         progress: None,
+        runtime_event_handler: None,
+        runtime: Default::default(),
     };
 
     super::super::repair_workflow_command(ctx, id).unwrap()

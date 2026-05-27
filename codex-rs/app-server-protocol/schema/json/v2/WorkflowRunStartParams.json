@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "WorkflowRunApprovalHandling": {
+      "enum": [
+        "delegate",
+        "decline"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "approvalHandling": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/WorkflowRunApprovalHandling"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "id": {
+      "type": "string"
+    },
+    "input": true,
+    "stageSessionId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "threadId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "title": "WorkflowRunStartParams",
+  "type": "object"
+}

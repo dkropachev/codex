@@ -453,7 +453,6 @@ async fn published_workflow_tools_are_added_to_router_specs() -> anyhow::Result<
     let published_tool = WorkflowPublishedTool {
         workflow: WorkflowSummary {
             id: "reports/jira-summary".to_string(),
-            runtime: codex_workflows::WorkflowRuntimeInfo::legacy_typescript(),
             command: Some("jira-summary".to_string()),
             title: Some("Jira Summary".to_string()),
             user_description: Some("Summarize Jira work".to_string()),

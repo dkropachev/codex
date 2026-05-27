@@ -190,8 +190,10 @@ pub(crate) fn server_notification_requires_delivery(notification: &ServerNotific
             | ServerNotification::PlanDelta(_)
             | ServerNotification::ReasoningSummaryTextDelta(_)
             | ServerNotification::ReasoningTextDelta(_)
-            | ServerNotification::WorkflowProgress(_)
-            | ServerNotification::WorkflowMarkdownResult(_)
+            | ServerNotification::WorkflowRunProgress(_)
+            | ServerNotification::WorkflowRunMarkdownResult(_)
+            | ServerNotification::WorkflowRunCompleted(_)
+            | ServerNotification::WorkflowRunFailed(_)
     )
 }
 
@@ -373,6 +375,8 @@ pub struct InProcessClientStartArgs {
     pub opt_out_notification_methods: Vec<String>,
     /// Queue capacity for command/event channels (clamped to at least 1).
     pub channel_capacity: usize,
+    /// Whether the embedded runtime should expose the app-server Unix control socket.
+    pub expose_workflow_app_server: bool,
 }
 
 fn configured_thread_config_loader(config: &Config) -> Arc<dyn ThreadConfigLoader> {
@@ -423,6 +427,7 @@ impl InProcessClientStartArgs {
             enable_codex_api_key_env: self.enable_codex_api_key_env,
             initialize,
             channel_capacity: self.channel_capacity,
+            expose_workflow_app_server: self.expose_workflow_app_server,
         }
     }
 }
@@ -1050,6 +1055,7 @@ mod tests {
             experimental_api: true,
             opt_out_notification_methods: Vec::new(),
             channel_capacity,
+            expose_workflow_app_server: false,
         })
         .await
         .expect("in-process app-server client should start");
@@ -2159,6 +2165,7 @@ mod tests {
             experimental_api: true,
             opt_out_notification_methods: Vec::new(),
             channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+            expose_workflow_app_server: false,
         }
         .into_runtime_start_args();
 
@@ -2199,6 +2206,7 @@ mod tests {
             experimental_api: true,
             opt_out_notification_methods: Vec::new(),
             channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+            expose_workflow_app_server: false,
         }
         .into_runtime_start_args();
 

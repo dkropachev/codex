@@ -217,7 +217,7 @@ async fn workflow_progress_notification_updates_workflow_status_row() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.handle_server_notification(
-        ServerNotification::WorkflowProgress(
+        ServerNotification::WorkflowRunProgress(
             codex_app_server_protocol::WorkflowProgressNotification {
                 run_id: "run-1".to_string(),
                 thread_id: None,
@@ -229,7 +229,7 @@ async fn workflow_progress_notification_updates_workflow_status_row() {
         /*replay_kind*/ None,
     );
 
-    assert!(!chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.is_task_running());
     let status = chat
         .bottom_pane
         .status_widget()
@@ -246,7 +246,7 @@ async fn workflow_structured_status_notification_renders_threads() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.handle_server_notification(
-        ServerNotification::WorkflowProgress(
+        ServerNotification::WorkflowRunProgress(
             codex_app_server_protocol::WorkflowProgressNotification {
                 run_id: "run-1".to_string(),
                 thread_id: None,
@@ -288,7 +288,7 @@ async fn workflow_markdown_result_adds_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.handle_server_notification(
-        ServerNotification::WorkflowMarkdownResult(
+        ServerNotification::WorkflowRunMarkdownResult(
             codex_app_server_protocol::WorkflowMarkdownResultNotification {
                 run_id: "run-2".to_string(),
                 thread_id: Some(ThreadId::new().to_string()),

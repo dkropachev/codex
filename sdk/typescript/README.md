@@ -80,7 +80,7 @@ console.log(summary);
 ```
 
 `connection: "auto"` connects to `appServerUrl`, `CODEX_APP_SERVER_URL`, or `CODEX_WORKFLOW_APP_SERVER_URL` when one is
-available. Otherwise it starts `codex app-server --listen stdio://` and shuts it down when the workflow finishes. Use
+available, including `unix://` app-server control sockets. Otherwise it starts `codex app-server --listen stdio://` and shuts it down when the workflow finishes. Use
 `connection: "require-existing"` to fail instead of spawning, or `connection: "spawn"` to always start a private server.
 
 `approvals` controls who answers app-server requests that need a decision. This is separate from an agent's
@@ -140,11 +140,15 @@ Workflows can ask Codex for the same machine-readable API catalog exposed by `co
 const catalog = await ctx.api.read({ mcpDetail: "toolsAndAuthOnly" });
 ```
 
-The context also exposes the workflow registry and command API used by `codex workflow` and `/workflow`.
+The context also exposes the workflow registry, command API, and app-server-owned workflow-run API used by `/workflow`.
 
 ```typescript
 const { workflows } = await ctx.workflows.registry.list();
-const result = await ctx.workflows.run("reports/jira-summary", { project: "COD" });
+const { run } = await ctx.workflows.start({
+  id: "reports/jira-summary",
+  input: { project: "COD" },
+});
+const result = await ctx.workflows.wait(run.id);
 await ctx.workflows.command.execute(["validate", workflows[0].id]);
 ```
 
@@ -171,7 +175,9 @@ Then launch the workflow from the TUI with its registered command alias:
 /<workflow-command>
 ```
 
-The TUI starts a loopback app-server automatically and runs the same shared workflow command engine as `codex workflow`.
+The TUI uses the app-server workflow-run API on the active app-server transport. Set `CODEX_WORKFLOW_APP_SERVER_URL`
+to `stdio://`, `ws://...`, or `unix://$CODEX_HOME/app-server-control/app-server-control.sock` when a standalone
+workflow process should attach to an existing app-server.
 In that mode reusable workflows can use the same `runWorkflow()` entrypoint:
 
 ```typescript

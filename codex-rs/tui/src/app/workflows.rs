@@ -1,20 +1,44 @@
 use super::*;
+use std::collections::BTreeMap;
+use std::path::Path;
+#[cfg(test)]
 use std::process::Stdio;
+#[cfg(test)]
 use tokio::io::AsyncBufReadExt;
+#[cfg(test)]
+use tokio::io::AsyncReadExt;
+#[cfg(test)]
 use tokio::io::BufReader;
+#[cfg(test)]
 use tokio::process::Command;
 
+#[cfg(test)]
 use codex_app_server_protocol::WorkflowMarkdownResultNotification;
+#[cfg(test)]
 use codex_app_server_protocol::WorkflowProgressNotification;
+use codex_app_server_protocol::WorkflowRun;
+use codex_app_server_protocol::WorkflowRunApprovalHandling;
+use codex_app_server_protocol::WorkflowRunStartParams;
+use codex_app_server_protocol::WorkflowRunStatus;
+#[cfg(test)]
 use codex_workflows::WORKFLOW_RUNTIME_EVENT_PREFIX;
+use codex_workflows::WorkflowCommand;
+use codex_workflows::WorkflowInputSource;
+#[cfg(test)]
 use codex_workflows::WorkflowRuntimeEvent;
-use tokio::io::AsyncReadExt;
+#[cfg(test)]
+use uuid::Uuid;
 
+#[cfg(test)]
 const WORKFLOW_APPROVALS_ENV: &str = "CODEX_WORKFLOW_APPROVALS";
+#[cfg(test)]
 const WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR_ENV: &str =
     "CODEX_WORKFLOW_INTERACTIVE_REQUEST_BEHAVIOR";
+#[cfg(test)]
 const WORKFLOW_OUTPUT_FORMAT_ENV: &str = "CODEX_WORKFLOW_OUTPUT_FORMAT";
+#[cfg(test)]
 const WORKFLOW_RUN_ID_ENV: &str = "CODEX_WORKFLOW_RUN_ID";
+#[cfg(test)]
 const WORKFLOW_ORIGIN_THREAD_ID_ENV: &str = "CODEX_WORKFLOW_ORIGIN_THREAD_ID";
 const WORKFLOW_COMPLETION_DEBOUNCE: Duration = Duration::from_millis(150);
 const WORKFLOW_COMPLETION_TIMEOUT: Duration = Duration::from_secs(2);
@@ -103,6 +127,113 @@ impl App {
             .apply_workflow_command_completion_result(command, input, result);
     }
 
+    pub(crate) async fn run_workflow_command_on_app_server(
+        &mut self,
+        app_server: &mut AppServerSession,
+        command: Vec<String>,
+    ) {
+        if command.is_empty() {
+            self.chat_widget
+                .add_error_message("Usage: /workflow <command>".to_string());
+            return;
+        }
+
+        let command_args = workflow_command_args(&command);
+        if command_args.is_empty() {
+            self.chat_widget
+                .add_error_message("Usage: /workflow <command>".to_string());
+            return;
+        }
+        let display_command = shlex::try_join(command.iter().map(String::as_str))
+            .unwrap_or_else(|_| command.join(" "));
+
+        let workflows = match app_server.workflow_list().await {
+            Ok(response) => response
+                .workflows
+                .into_iter()
+                .map(api_workflow_summary_to_core)
+                .collect::<Vec<_>>(),
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to list workflows: {err:#}"));
+                return;
+            }
+        };
+        let parsed =
+            match codex_workflows::parse_workflow_command_with_workflows(&command_args, &workflows)
+            {
+                Ok(command) => command,
+                Err(err) => {
+                    self.chat_widget
+                        .add_error_message(format!("Invalid workflow command: {err}"));
+                    return;
+                }
+            };
+
+        let WorkflowCommand::Run {
+            id,
+            input,
+            input_fields,
+        } = parsed
+        else {
+            match app_server.workflow_command_execute(command_args).await {
+                Ok(response) => {
+                    self.chat_widget
+                        .add_to_history(crate::history_cell::WorkflowMarkdownCell::new(
+                            response.message,
+                            self.config.cwd.as_path(),
+                        ))
+                }
+                Err(err) => self.chat_widget.add_error_message(format!(
+                    "Workflow command failed: {display_command}: {err:#}"
+                )),
+            }
+            return;
+        };
+
+        let input = match workflow_run_input(input, input_fields, self.config.cwd.as_path()) {
+            Ok(input) => input,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Invalid workflow input: {err}"));
+                return;
+            }
+        };
+        let origin_thread_id = self.current_displayed_thread_id();
+        let response = match app_server
+            .workflow_run_start(WorkflowRunStartParams {
+                id: id.clone(),
+                input,
+                thread_id: origin_thread_id.map(|thread_id| thread_id.to_string()),
+                stage_session_id: None,
+                approval_handling: Some(WorkflowRunApprovalHandling::Delegate),
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to start workflow: {display_command}: {err:#}"
+                ));
+                return;
+            }
+        };
+
+        let workflow_name = workflow_display_name(&command, &command_args, &id);
+        self.workflow_runs.insert(
+            response.run.id,
+            WorkflowRunState {
+                workflow_name: workflow_name.clone(),
+                markdown_result_emitted: false,
+            },
+        );
+        self.chat_widget.show_workflow_process_status(
+            format!("Workflow {workflow_name}: starting"),
+            /*details*/ None,
+        );
+    }
+
+    #[cfg(test)]
     pub(crate) fn run_workflow_command(&mut self, command: Vec<String>) {
         if command.is_empty() {
             self.chat_widget
@@ -112,22 +243,11 @@ impl App {
 
         let display_command = shlex::try_join(command.iter().map(String::as_str))
             .unwrap_or_else(|_| command.join(" "));
-        let workflow_name = if command.first().is_some_and(|value| value == "workflow") {
-            let target_index = match command.get(1).map(String::as_str) {
-                Some("fix" | "repair" | "show" | "validate" | "where") => 2,
-                Some(_) => 1,
-                None => 0,
-            };
-            command
-                .get(target_index)
-                .cloned()
-                .unwrap_or_else(|| display_command.clone())
-        } else {
-            command
-                .first()
-                .cloned()
-                .unwrap_or_else(|| display_command.clone())
-        };
+        let workflow_name = workflow_display_name(
+            &command,
+            &workflow_command_args(&command),
+            display_command.as_str(),
+        );
         let origin_thread_id = self.current_displayed_thread_id();
         let origin_thread_id_for_events = origin_thread_id
             .as_ref()
@@ -246,6 +366,56 @@ impl App {
         }
     }
 
+    pub(crate) fn handle_workflow_run_completed(&mut self, run: WorkflowRun) {
+        let workflow_state = self.workflow_runs.remove(&run.id);
+        let workflow_name = workflow_state
+            .as_ref()
+            .map(|state| state.workflow_name.as_str())
+            .unwrap_or(run.workflow_id.as_str());
+
+        match run.status {
+            WorkflowRunStatus::Succeeded => {
+                if !workflow_state
+                    .as_ref()
+                    .is_some_and(|state| state.markdown_result_emitted)
+                    && let Some(output) = run.output
+                {
+                    self.chat_widget
+                        .add_to_history(crate::history_cell::WorkflowJsonCell::new(output));
+                }
+            }
+            WorkflowRunStatus::Canceled => {
+                if workflow_state.is_some() {
+                    self.chat_widget
+                        .add_error_message(format!("Workflow canceled: {workflow_name}"));
+                }
+            }
+            WorkflowRunStatus::Running | WorkflowRunStatus::Failed => {}
+        }
+
+        if self.workflow_runs.is_empty() {
+            self.chat_widget.hide_workflow_process_status();
+        }
+    }
+
+    pub(crate) fn handle_workflow_run_failed(&mut self, run: WorkflowRun) {
+        let workflow_state = self.workflow_runs.remove(&run.id);
+        let workflow_name = workflow_state
+            .as_ref()
+            .map(|state| state.workflow_name.as_str())
+            .unwrap_or(run.workflow_id.as_str());
+        let error = run
+            .error
+            .unwrap_or_else(|| "workflow failed without an error message".to_string());
+        self.chat_widget
+            .add_error_message(format!("Workflow failed: {workflow_name}: {error}"));
+
+        if self.workflow_runs.is_empty() {
+            self.chat_widget.hide_workflow_process_status();
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn handle_workflow_process_finished(
         &mut self,
         run_id: String,
@@ -295,6 +465,7 @@ impl App {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn handle_workflow_progress_notification(
         &mut self,
         notification: WorkflowProgressNotification,
@@ -310,6 +481,7 @@ impl App {
         );
     }
 
+    #[cfg(test)]
     pub(crate) fn handle_workflow_markdown_result_notification(
         &mut self,
         notification: WorkflowMarkdownResultNotification,
@@ -324,6 +496,42 @@ impl App {
         self.queue_workflow_markdown_handoff(destination_thread_id, notification.markdown.clone());
         self.chat_widget
             .handle_workflow_markdown_result_notification(notification, None);
+    }
+
+    pub(crate) async fn cancel_active_workflow_runs(
+        &mut self,
+        app_server: &mut AppServerSession,
+    ) -> bool {
+        if self.workflow_runs.is_empty() {
+            return false;
+        }
+
+        let run_ids = self.workflow_runs.keys().cloned().collect::<Vec<_>>();
+        for run_id in run_ids {
+            let workflow_name = self
+                .workflow_runs
+                .get(&run_id)
+                .map(|state| state.workflow_name.clone())
+                .unwrap_or_else(|| run_id.clone());
+            match app_server.workflow_run_cancel(run_id.clone()).await {
+                Ok(()) => {
+                    if self.workflow_runs.remove(&run_id).is_some() {
+                        self.chat_widget
+                            .add_error_message(format!("Workflow canceled: {workflow_name}"));
+                    }
+                }
+                Err(err) => {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to cancel workflow {workflow_name}: {err}"
+                    ));
+                }
+            }
+        }
+
+        if self.workflow_runs.is_empty() {
+            self.chat_widget.hide_workflow_process_status();
+        }
+        true
     }
 
     pub(crate) fn queue_workflow_markdown_handoff(
@@ -360,6 +568,123 @@ impl App {
     }
 }
 
+fn workflow_command_args(command: &[String]) -> Vec<String> {
+    if command.first().is_some_and(|value| value == "workflow") {
+        command.get(1..).unwrap_or_default().to_vec()
+    } else {
+        command.to_vec()
+    }
+}
+
+fn workflow_display_name(command: &[String], command_args: &[String], id: &str) -> String {
+    if command.first().is_some_and(|value| value == "workflow") {
+        let target_index = match command_args.first().map(String::as_str) {
+            Some("fix" | "repair" | "run" | "show" | "validate" | "where") => 1,
+            Some(_) => 0,
+            None => return id.to_string(),
+        };
+        command_args
+            .get(target_index)
+            .cloned()
+            .unwrap_or_else(|| id.to_string())
+    } else {
+        command.first().cloned().unwrap_or_else(|| id.to_string())
+    }
+}
+
+fn workflow_run_input(
+    input: Option<WorkflowInputSource>,
+    input_fields: BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<Option<serde_json::Value>, String> {
+    let raw_input = match input {
+        Some(WorkflowInputSource::Inline(input)) => Some(input),
+        Some(WorkflowInputSource::File(path)) => {
+            let path = if path.is_relative() {
+                cwd.join(path)
+            } else {
+                path
+            };
+            Some(std::fs::read_to_string(&path).map_err(|err| {
+                format!("failed to read workflow input {}: {err}", path.display())
+            })?)
+        }
+        None if input_fields.is_empty() => None,
+        None => Some("{}".to_string()),
+    };
+    let Some(raw_input) = raw_input else {
+        return Ok(None);
+    };
+
+    let mut input: serde_json::Value = serde_json::from_str(&raw_input)
+        .map_err(|err| format!("workflow input must be valid JSON: {err}"))?;
+    if !input_fields.is_empty() {
+        let Some(object) = input.as_object_mut() else {
+            return Err(
+                "workflow input must be a JSON object when merging input flags".to_string(),
+            );
+        };
+        for (key, raw_value) in input_fields {
+            object.insert(key, parse_input_field_value(&raw_value));
+        }
+    }
+    Ok(Some(input))
+}
+
+fn parse_input_field_value(raw_value: &str) -> serde_json::Value {
+    serde_json::from_str(raw_value)
+        .unwrap_or_else(|_| serde_json::Value::String(raw_value.to_string()))
+}
+
+fn api_workflow_summary_to_core(
+    workflow: codex_app_server_protocol::WorkflowSummary,
+) -> codex_workflows::WorkflowSummary {
+    codex_workflows::WorkflowSummary {
+        id: workflow.id,
+        command: workflow.command,
+        title: workflow.title,
+        user_description: workflow.user_description,
+        search_terms: workflow.search_terms,
+        command_option_hints: workflow
+            .command_option_hints
+            .into_iter()
+            .map(|hint| codex_workflows::WorkflowCommandOptionHint {
+                display: hint.display,
+                description: hint.description,
+            })
+            .collect(),
+        root_label: workflow.root_label,
+        root_kind: match workflow.root_kind {
+            codex_app_server_protocol::WorkflowRootKind::Global => {
+                codex_workflows::WorkflowRootKind::Global
+            }
+            codex_app_server_protocol::WorkflowRootKind::Project => {
+                codex_workflows::WorkflowRootKind::Project
+            }
+            codex_app_server_protocol::WorkflowRootKind::SearchPath => {
+                codex_workflows::WorkflowRootKind::SearchPath
+            }
+        },
+        root_path: workflow.root_path,
+        path: workflow.path,
+        workflow_yaml_path: workflow.workflow_yaml_path,
+        mention_target: workflow.mention_target,
+        validation: codex_workflows::WorkflowValidation {
+            status: match workflow.validation.status {
+                codex_app_server_protocol::WorkflowValidationStatus::Valid => {
+                    codex_workflows::WorkflowValidationStatus::Valid
+                }
+                codex_app_server_protocol::WorkflowValidationStatus::Invalid => {
+                    codex_workflows::WorkflowValidationStatus::Invalid
+                }
+            },
+            findings: Vec::new(),
+        },
+        repair_mode: workflow.repair_mode,
+    }
+}
+
+#[cfg(test)]
 async fn read_workflow_child_stderr(
     stderr: impl tokio::io::AsyncRead + Unpin,
     app_event_tx: AppEventSender,
@@ -458,6 +783,7 @@ async fn read_workflow_child_stderr(
     raw_stderr
 }
 
+#[cfg(test)]
 fn push_stderr_line(stderr: &mut String, line: impl AsRef<str>) {
     stderr.push_str(line.as_ref());
     stderr.push('\n');

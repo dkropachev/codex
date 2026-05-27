@@ -40,13 +40,14 @@ fn collect_resume_override_mismatches(
             config_snapshot.model_provider_id
         ));
     }
-    if let Some(requested_service_tier) = request.service_tier.as_ref()
-        && requested_service_tier.as_ref().map(ApiServiceTier::as_str)
-            != config_snapshot.service_tier.as_deref()
-    {
+    if let Some(requested_service_tier) = request.service_tier.as_ref().filter(|requested| {
+        requested.as_ref().map(ApiServiceTier::as_str) != config_snapshot.service_tier.as_deref()
+    }) {
+        let requested_service_tier = requested_service_tier.as_ref().map(ApiServiceTier::as_str);
+        let active_service_tier = config_snapshot.service_tier.as_deref();
         mismatch_details.push(format!(
             "service_tier requested={:?} active={:?}",
-            requested_service_tier, config_snapshot.service_tier
+            requested_service_tier, active_service_tier
         ));
     }
     if let Some(requested_cwd) = request.cwd.as_deref() {
