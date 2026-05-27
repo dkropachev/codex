@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::Context as _;
@@ -8,8 +7,11 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 
 use crate::spec::WorkflowRuntimeKind;
+use crate::spec::normalize_runtime_entrypoint;
 use crate::validation_finding::WorkflowValidationFinding;
 use crate::validation_finding::finding_messages;
+
+pub(crate) const RUNE_BUILTIN_TEST_COMMAND: &str = "codex workflow test-rune";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,32 +65,55 @@ where
     let mut command_results = Vec::new();
 
     if let Ok(spec) = crate::spec::read_workflow_spec(&workflow.workflow_yaml_path) {
+        let mut run_validation_commands = true;
         if workflow.runtime.kind == WorkflowRuntimeKind::Rune {
-            let workflow_path = workflow.path.join(&workflow.runtime.entrypoint);
-            if workflow_path.is_file()
-                && let Err(err) = crate::rune_runtime::validate_workflow_source(&workflow_path)
-            {
-                findings.push(WorkflowValidationFinding::WorkflowRuntimeCompileFailed {
-                    path: PathBuf::from(&workflow.runtime.entrypoint),
-                    error: err.to_string(),
-                });
+            let workflow_entrypoint =
+                match normalize_runtime_entrypoint(&workflow.runtime.entrypoint) {
+                    Ok(entrypoint) => entrypoint,
+                    Err(_) => {
+                        findings.push(WorkflowValidationFinding::WorkflowPathEscapesRoot {
+                            workflow_path: workflow.path.join(&workflow.runtime.entrypoint),
+                            root_path: workflow.path.clone(),
+                        });
+                        return Ok(WorkflowValidationReport::from_findings(
+                            findings,
+                            command_results,
+                        ));
+                    }
+                };
+            let workflow_path = workflow.path.join(&workflow_entrypoint);
+            if workflow_path.is_file() {
+                if let Err(err) = crate::rune_runtime::validate_workflow_source(&workflow_path) {
+                    findings.push(WorkflowValidationFinding::WorkflowRuntimeCompileFailed {
+                        path: workflow_entrypoint,
+                        error: err.to_string(),
+                    });
+                    run_validation_commands = false;
+                }
+            } else {
+                run_validation_commands = false;
             }
         }
 
-        for command in validation_commands(&spec) {
-            let result = command_runner(&command, &workflow.path)?;
-            let command_failed = !result.succeeded;
-            if command_failed {
-                findings.push(WorkflowValidationFinding::ValidationCommandFailed {
-                    command: command.clone(),
-                    exit_code: result.exit_code,
-                    stdout: result.stdout.clone(),
-                    stderr: result.stderr.clone(),
-                });
-            }
-            command_results.push(result);
-            if command_failed {
-                break;
+        if run_validation_commands {
+            for command in validation_commands(&spec) {
+                let result = match command {
+                    ValidationCommand::RuneTests => run_rune_test_command(workflow),
+                    ValidationCommand::Shell(command) => command_runner(&command, &workflow.path),
+                }?;
+                let command_failed = !result.succeeded;
+                if command_failed {
+                    findings.push(WorkflowValidationFinding::ValidationCommandFailed {
+                        command: result.command.clone(),
+                        exit_code: result.exit_code,
+                        stdout: result.stdout.clone(),
+                        stderr: result.stderr.clone(),
+                    });
+                }
+                command_results.push(result);
+                if command_failed {
+                    break;
+                }
             }
         }
     }
@@ -125,7 +150,12 @@ pub(crate) fn run_validation_command(
     })
 }
 
-fn validation_commands(spec: &crate::spec::WorkflowSpec) -> Vec<String> {
+enum ValidationCommand {
+    RuneTests,
+    Shell(String),
+}
+
+fn validation_commands(spec: &crate::spec::WorkflowSpec) -> Vec<ValidationCommand> {
     let commands = spec
         .validation
         .get("commands")
@@ -134,17 +164,56 @@ fn validation_commands(spec: &crate::spec::WorkflowSpec) -> Vec<String> {
             commands
                 .iter()
                 .filter_map(JsonValue::as_str)
-                .map(ToString::to_string)
+                .map(|command| validation_command_for_spec(spec, command))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
     if commands.is_empty() {
         match spec.resolved_runtime().kind {
-            WorkflowRuntimeKind::Rune => vec!["true".to_string()],
-            WorkflowRuntimeKind::Typescript => vec!["npm test".to_string()],
+            WorkflowRuntimeKind::Rune => vec![ValidationCommand::RuneTests],
+            WorkflowRuntimeKind::Typescript => {
+                vec![ValidationCommand::Shell("npm test".to_string())]
+            }
         }
     } else {
         commands
+    }
+}
+
+fn validation_command_for_spec(
+    spec: &crate::spec::WorkflowSpec,
+    command: &str,
+) -> ValidationCommand {
+    if spec.resolved_runtime().kind == WorkflowRuntimeKind::Rune
+        && matches!(command.trim(), RUNE_BUILTIN_TEST_COMMAND | "true")
+    {
+        return ValidationCommand::RuneTests;
+    }
+    ValidationCommand::Shell(command.to_string())
+}
+
+fn run_rune_test_command(
+    workflow: &crate::registry::WorkflowSummary,
+) -> Result<WorkflowValidationCommandResult> {
+    match crate::rune_runtime::validate_workflow_tests(&workflow.path, &workflow.runtime.entrypoint)
+    {
+        Ok(report) => Ok(WorkflowValidationCommandResult {
+            command: RUNE_BUILTIN_TEST_COMMAND.to_string(),
+            succeeded: true,
+            exit_code: Some(0),
+            stdout: format!(
+                "compiled workflow and ran {} Rune test(s)\n",
+                report.tests_run
+            ),
+            stderr: String::new(),
+        }),
+        Err(err) => Ok(WorkflowValidationCommandResult {
+            command: RUNE_BUILTIN_TEST_COMMAND.to_string(),
+            succeeded: false,
+            exit_code: None,
+            stdout: String::new(),
+            stderr: err.to_string(),
+        }),
     }
 }
 

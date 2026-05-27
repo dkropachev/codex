@@ -138,7 +138,7 @@ fn write_valid_rune_workflow(
     )?;
     fs::write(
         workflow_dir.join("src/workflow.rn"),
-        "pub async fn run(_ctx, input) { #{ ok: true, input } }\n",
+        "pub async fn run(_ctx, input) { #{ ok: true, input } }\n\npub async fn complete(_ctx, _input) { [] }\n",
     )?;
     fs::write(
         workflow_dir.join("src/tests/workflow.positive.test.rn"),

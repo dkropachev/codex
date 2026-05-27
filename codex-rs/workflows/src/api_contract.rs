@@ -222,9 +222,13 @@ function schemaForType(type, stack = new Set()) {
     const hasNullish = nonNullableMembers.length !== members.length;
     const stringEnum = nonNullableMembers.every((member) => member.isStringLiteral());
     if (stringEnum) {
+      const enumValues = nonNullableMembers.map((member) => member.value);
+      if (hasNullish) {
+        enumValues.push(null);
+      }
       return {
         type: hasNullish ? ["string", "null"] : "string",
-        enum: nonNullableMembers.map((member) => member.value),
+        enum: enumValues,
       };
     }
 
@@ -478,6 +482,10 @@ pub(crate) fn read_published_workflow_api_contract(
     if record.workflow_id != workflow.id || record.workflow_path != workflow.path {
         return Ok(None);
     }
+    if workflow_source_digest(&workflow.path).ok().as_deref() != Some(record.source_digest.as_str())
+    {
+        return Ok(None);
+    }
     Ok(Some(record.contract))
 }
 
@@ -497,6 +505,10 @@ pub(crate) fn read_published_workflow_source_contract(
             )
         })?;
     if record.workflow_id != workflow.id || record.workflow_path != workflow.path {
+        return Ok(None);
+    }
+    if workflow_source_digest(&workflow.path).ok().as_deref() != Some(record.source_digest.as_str())
+    {
         return Ok(None);
     }
     Ok(Some(record.source_contract.unwrap_or({
@@ -936,6 +948,66 @@ mod tests {
             .expect("read contract")
             .expect("missing contract");
         assert_eq!(published, contract);
+    }
+
+    #[test]
+    fn read_workflow_api_contract_ignores_stale_source_digest() {
+        let codex_home = TempDir::new().expect("codex home");
+        let workflow_root = TempDir::new().expect("workflow root");
+        let workflow_dir = workflow_root.path().join("review/stale");
+        std::fs::create_dir_all(workflow_dir.join("src")).expect("create workflow src");
+        std::fs::write(workflow_dir.join("workflow.yaml"), "id: review/stale\n")
+            .expect("workflow yaml");
+        std::fs::write(workflow_dir.join("package.json"), "{}\n").expect("package json");
+        std::fs::write(
+            workflow_dir.join("src/workflow.ts"),
+            "export const before = 1;\n",
+        )
+        .expect("workflow ts");
+
+        let workflow = WorkflowSummary {
+            id: "review/stale".to_string(),
+            runtime: crate::spec::WorkflowRuntimeInfo::legacy_typescript(),
+            command: Some("stale".to_string()),
+            title: Some("Stale".to_string()),
+            user_description: Some("Stale workflow".to_string()),
+            search_terms: Vec::new(),
+            command_option_hints: Vec::new(),
+            root_label: "global".to_string(),
+            root_kind: WorkflowRootKind::Global,
+            root_path: workflow_root.path().to_path_buf(),
+            path: workflow_dir.clone(),
+            workflow_yaml_path: workflow_dir.join("workflow.yaml"),
+            mention_target: "workflow:///tmp#review/stale".to_string(),
+            validation: WorkflowValidation {
+                status: WorkflowValidationStatus::Valid,
+                findings: Vec::new(),
+            },
+            repair_mode: "full".to_string(),
+        };
+        publish_validated_workflow_api_contract(
+            codex_home.path(),
+            &workflow,
+            WorkflowSourceContract {
+                callable_name: Some("staleReview".to_string()),
+                input_schema: json!({ "type": "object" }),
+                output_schema: json!({ "type": "object" }),
+                format_schemas: BTreeMap::new(),
+            },
+        )
+        .expect("publish contract");
+
+        std::fs::write(
+            workflow_dir.join("src/workflow.ts"),
+            "export const after = 1;\n",
+        )
+        .expect("workflow ts");
+
+        assert_eq!(
+            read_published_workflow_api_contract(codex_home.path(), &workflow)
+                .expect("read contract"),
+            None
+        );
     }
 
     #[test]

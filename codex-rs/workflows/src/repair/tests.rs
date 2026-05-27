@@ -878,7 +878,16 @@ fn repair_workflow_command_scaffolds_rune_layout_without_typescript_files() {
         spec.runtime.unwrap().kind,
         crate::spec::WorkflowRuntimeKind::Rune
     );
-    assert_eq!(spec.validation["commands"], serde_json::json!(["true"]));
+    assert_eq!(
+        spec.validation["commands"],
+        serde_json::json!([crate::validation_runner::RUNE_BUILTIN_TEST_COMMAND])
+    );
+    assert_eq!(
+        spec.validation["contractSmoke"],
+        serde_json::json!({
+            "input": {}
+        })
+    );
 
     let readme = fs::read_to_string(workflow_dir.join("README.md")).unwrap();
     assert!(readme.contains("embedded Rune"));

@@ -22,6 +22,7 @@ mod validation_finding;
 mod validation_runner;
 mod workflow_api;
 mod workflow_client_generation;
+mod workflow_contract_smoke;
 mod workflow_contract_validation;
 #[cfg(unix)]
 mod workflow_host;

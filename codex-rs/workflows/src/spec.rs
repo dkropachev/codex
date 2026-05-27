@@ -1,13 +1,18 @@
 use std::fs;
+use std::path::Component;
 use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::anyhow;
 use codex_config::types::WorkflowsConfigToml;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
+
+use crate::validation_runner::RUNE_BUILTIN_TEST_COMMAND;
 
 pub const WORKFLOW_YAML: &str = "workflow.yaml";
 pub const TYPESCRIPT_WORKFLOW_ENTRYPOINT: &str = "src/workflow.ts";
@@ -148,6 +153,33 @@ pub fn read_workflow_spec(path: &Path) -> Result<WorkflowSpec> {
         .with_context(|| format!("failed to parse workflow spec {}", path.display()))
 }
 
+pub(crate) fn normalize_runtime_entrypoint(entrypoint: &str) -> Result<PathBuf> {
+    let entrypoint = entrypoint.trim();
+    if entrypoint.is_empty() {
+        return Err(anyhow!("runtime entrypoint must not be empty"));
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in Path::new(entrypoint).components() {
+        match component {
+            Component::Normal(component) => normalized.push(component),
+            Component::CurDir
+            | Component::ParentDir
+            | Component::RootDir
+            | Component::Prefix(_) => {
+                return Err(anyhow!(
+                    "runtime entrypoint `{entrypoint}` must be a relative path inside the workflow directory"
+                ));
+            }
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        return Err(anyhow!("runtime entrypoint must not be empty"));
+    }
+    Ok(normalized)
+}
+
 pub fn write_workflow_spec(path: &Path, spec: &WorkflowSpec) -> Result<()> {
     let contents = serde_yaml::to_string(spec)
         .with_context(|| format!("failed to serialize workflow spec {}", path.display()))?;
@@ -258,7 +290,7 @@ pub fn scaffold_workflow_spec(
 
 fn runtime_validation_commands(runtime: WorkflowRuntimeKind) -> Vec<&'static str> {
     match runtime {
-        WorkflowRuntimeKind::Rune => vec!["true"],
+        WorkflowRuntimeKind::Rune => vec![RUNE_BUILTIN_TEST_COMMAND],
         WorkflowRuntimeKind::Typescript => vec!["npm run build", "npm test"],
     }
 }

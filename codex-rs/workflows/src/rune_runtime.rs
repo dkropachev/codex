@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::future::Future;
 use std::io::BufRead;
 use std::path::Path;
@@ -7,12 +8,14 @@ use std::process::Command;
 use std::process::Stdio;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::anyhow;
+use regex::Regex;
 use rune::Any;
 use rune::Diagnostics;
 use rune::Module;
@@ -53,8 +56,39 @@ use crate::workflow_runtime::WorkflowRuntimeOutput;
 use crate::workflow_runtime::WorkflowStatusUpdate;
 use crate::workflow_runtime::WorkflowThreadStatus;
 
+static RUNE_TEST_FUNCTION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^\s*pub\s+(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+        .unwrap_or_else(|err| panic!("invalid Rune test function regex: {err}"))
+});
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuneWorkflowTestReport {
+    pub(crate) tests_run: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuneWorkflowCompletionValidationReport {
+    pub(crate) complete_defined: bool,
+    pub(crate) suggestions: Vec<WorkflowCommandCompletionSuggestion>,
+}
+
 pub(crate) fn validate_workflow_source(workflow_path: &Path) -> Result<()> {
     CompiledRuneWorkflow::compile(workflow_path).map(|_| ())
+}
+
+pub(crate) fn validate_workflow_tests(
+    workflow_dir: &Path,
+    entrypoint: &str,
+) -> Result<RuneWorkflowTestReport> {
+    let workflow_dir = workflow_dir.to_path_buf();
+    let entrypoint = entrypoint.to_string();
+    std::thread::spawn(move || {
+        run_rune_on_current_thread(async {
+            validate_workflow_tests_inner(&workflow_dir, &entrypoint).await
+        })
+    })
+    .join()
+    .map_err(|_| anyhow!("Rune workflow test validation task panicked"))?
 }
 
 pub(crate) fn run_workflow_for_validation(
@@ -74,6 +108,47 @@ pub(crate) fn run_workflow_for_validation(
     })
     .join()
     .map_err(|_| anyhow!("Rune workflow validation task panicked"))?
+}
+
+pub(crate) fn format_workflow_result_for_validation(
+    workflow_path: &Path,
+    result: JsonValue,
+    format_name: &str,
+) -> Result<Option<JsonValue>> {
+    let workflow_path = workflow_path.to_path_buf();
+    let format_name = format_name.to_string();
+    std::thread::spawn(move || {
+        run_rune_on_current_thread(async {
+            format_workflow_result_for_validation_inner(&workflow_path, result, &format_name).await
+        })
+    })
+    .join()
+    .map_err(|_| anyhow!("Rune workflow formatter validation task panicked"))?
+}
+
+pub(crate) fn complete_workflow_for_validation(
+    workflow_dir: &Path,
+    working_directory: &Path,
+    workflow_path: &Path,
+    input: &WorkflowCommandInput,
+) -> Result<RuneWorkflowCompletionValidationReport> {
+    let workflow_dir = workflow_dir.to_path_buf();
+    let working_directory = working_directory.to_path_buf();
+    let workflow_path = workflow_path.to_path_buf();
+    let input = input.clone();
+    std::thread::spawn(move || {
+        run_rune_on_current_thread(async {
+            complete_workflow_for_validation_inner(
+                &workflow_dir,
+                &working_directory,
+                &workflow_path,
+                &input,
+            )
+            .await
+        })
+    })
+    .join()
+    .map_err(|_| anyhow!("Rune workflow completion validation task panicked"))?
 }
 
 pub(crate) async fn run_workflow(
@@ -140,6 +215,140 @@ async fn run_workflow_inner(
     })
 }
 
+async fn validate_workflow_tests_inner(
+    workflow_dir: &Path,
+    entrypoint: &str,
+) -> Result<RuneWorkflowTestReport> {
+    let workflow_entrypoint = crate::spec::normalize_runtime_entrypoint(entrypoint)?;
+    let workflow_path = workflow_dir.join(workflow_entrypoint);
+    CompiledRuneWorkflow::compile(&workflow_path).with_context(|| {
+        format!(
+            "failed to compile Rune workflow source {}",
+            workflow_path.display()
+        )
+    })?;
+
+    let test_paths = rune_test_files(workflow_dir)?;
+    if test_paths.is_empty() {
+        anyhow::bail!("no Rune test files found under src/tests");
+    }
+
+    let mut tests_run = 0;
+    for test_path in test_paths {
+        let source = fs::read_to_string(&test_path)
+            .with_context(|| format!("failed to read Rune test {}", test_path.display()))?;
+        let test_names = rune_test_function_names(&source);
+        if test_names.is_empty() {
+            anyhow::bail!(
+                "Rune test {} does not export any test functions",
+                test_path.display()
+            );
+        }
+
+        let runtime = CompiledRuneWorkflow::compile(&test_path)
+            .with_context(|| format!("failed to compile Rune test {}", test_path.display()))?;
+        for test_name in test_names {
+            let result = runtime
+                .call_async(test_name.as_str(), ())
+                .await
+                .with_context(|| {
+                    format!(
+                        "Rune test {}::{test_name} failed",
+                        relative_display(workflow_dir, &test_path)
+                    )
+                })?;
+            validate_rune_test_result(&result).with_context(|| {
+                format!(
+                    "Rune test {}::{test_name} returned an invalid result",
+                    relative_display(workflow_dir, &test_path)
+                )
+            })?;
+            tests_run += 1;
+        }
+    }
+
+    Ok(RuneWorkflowTestReport { tests_run })
+}
+
+async fn format_workflow_result_for_validation_inner(
+    workflow_path: &Path,
+    result: JsonValue,
+    format_name: &str,
+) -> Result<Option<JsonValue>> {
+    if format_name != "tui.markdown.v1" {
+        anyhow::bail!("unsupported Rune workflow format {format_name}");
+    }
+    let runtime = CompiledRuneWorkflow::compile(workflow_path)?;
+    let result = json_value_to_rune_result(result)?;
+    let Some(formatted) = runtime
+        .call_optional_async("to_tui_markdown", (result,))
+        .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(rune_value_to_json(formatted)?))
+}
+
+fn rune_test_files(workflow_dir: &Path) -> Result<Vec<PathBuf>> {
+    let test_dir = workflow_dir.join("src/tests");
+    let mut files = Vec::new();
+    collect_rune_test_files(&test_dir, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+fn collect_rune_test_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Ok(());
+    };
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rune_test_files(&path, files)?;
+            continue;
+        }
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains(".test.") || name.contains(".spec."))
+            && path.extension().and_then(|extension| extension.to_str()) == Some("rn")
+        {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn rune_test_function_names(source: &str) -> Vec<String> {
+    RUNE_TEST_FUNCTION_RE
+        .captures_iter(source)
+        .filter_map(|captures| captures.get(1))
+        .map(|name| name.as_str().to_string())
+        .collect()
+}
+
+fn validate_rune_test_result(result: &Value) -> Result<()> {
+    if let Ok(value) = result.as_bool() {
+        if value {
+            return Ok(());
+        }
+        anyhow::bail!("test returned false");
+    }
+    result
+        .into_unit()
+        .map_err(|_| anyhow!("test must return true or unit"))?;
+    Ok(())
+}
+
+fn relative_display(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
 pub(crate) async fn complete_workflow(
     workflow_dir: &Path,
     working_directory: &Path,
@@ -179,6 +388,33 @@ async fn complete_workflow_inner(
         None => return Ok(Vec::new()),
     };
     normalize_completion_suggestions(result)
+}
+
+async fn complete_workflow_for_validation_inner(
+    workflow_dir: &Path,
+    working_directory: &Path,
+    workflow_path: &Path,
+    input: &WorkflowCommandInput,
+) -> Result<RuneWorkflowCompletionValidationReport> {
+    let runtime = CompiledRuneWorkflow::compile(workflow_path)?;
+    let ctx = WorkflowRuneContext::new(workflow_dir, working_directory);
+    let input = serde_json::to_value(input)
+        .and_then(serde_json::from_value::<Value>)
+        .context("failed to convert workflow completion input for Rune")?;
+
+    let Some(result) = runtime
+        .call_optional_async("complete", (ctx, input))
+        .await?
+    else {
+        return Ok(RuneWorkflowCompletionValidationReport {
+            complete_defined: false,
+            suggestions: Vec::new(),
+        });
+    };
+    Ok(RuneWorkflowCompletionValidationReport {
+        complete_defined: true,
+        suggestions: normalize_completion_suggestions(result)?,
+    })
 }
 
 fn run_rune_on_current_thread<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
@@ -926,7 +1162,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::complete_workflow;
+    use super::format_workflow_result_for_validation;
     use super::run_workflow;
+    use super::validate_workflow_tests;
     use crate::WorkflowCommandCompletionSuggestion;
     use crate::WorkflowCommandInput;
     use crate::workflow_runtime::WORKFLOW_SELF_EXE_ENV;
@@ -975,6 +1213,72 @@ mod tests {
         let mut permissions = fs::metadata(path).expect("metadata").permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions).expect("chmod");
+    }
+
+    #[test]
+    fn validate_workflow_tests_runs_exported_rune_tests() {
+        let temp = TempDir::new().expect("temp dir");
+        let (workflow_dir, _workflow_path) = write_workflow(
+            &temp,
+            "rune-test-workflow",
+            "pub async fn run(_ctx, input) { input }\n",
+        );
+        fs::create_dir_all(workflow_dir.join("src/tests")).expect("tests dir");
+        fs::write(
+            workflow_dir.join("src/tests/workflow.positive.test.rn"),
+            "pub fn passes() { true }\n",
+        )
+        .expect("test source");
+
+        let report = validate_workflow_tests(&workflow_dir, "src/workflow.rn")
+            .expect("Rune workflow tests should pass");
+
+        assert_eq!(report.tests_run, 1);
+    }
+
+    #[test]
+    fn validate_workflow_tests_rejects_false_rune_test_result() {
+        let temp = TempDir::new().expect("temp dir");
+        let (workflow_dir, _workflow_path) = write_workflow(
+            &temp,
+            "rune-test-workflow",
+            "pub async fn run(_ctx, input) { input }\n",
+        );
+        fs::create_dir_all(workflow_dir.join("src/tests")).expect("tests dir");
+        fs::write(
+            workflow_dir.join("src/tests/workflow.positive.test.rn"),
+            "pub fn fails() { false }\n",
+        )
+        .expect("test source");
+
+        let err = validate_workflow_tests(&workflow_dir, "src/workflow.rn")
+            .expect_err("false test result should fail validation");
+
+        assert!(format!("{err:#}").contains("test returned false"));
+    }
+
+    #[test]
+    fn format_workflow_result_for_validation_invokes_rune_formatter() {
+        let temp = TempDir::new().expect("temp dir");
+        let (_workflow_dir, workflow_path) = write_workflow(
+            &temp,
+            "rune-format-workflow",
+            r#"pub async fn run(_ctx, input) { input }
+
+pub fn to_tui_markdown(result) {
+    #{ markdown: result.message }
+}
+"#,
+        );
+
+        let formatted = format_workflow_result_for_validation(
+            &workflow_path,
+            json!({ "message": "done" }),
+            "tui.markdown.v1",
+        )
+        .expect("formatter should run");
+
+        assert_eq!(formatted, Some(json!({ "markdown": "done" })));
     }
 
     #[tokio::test]

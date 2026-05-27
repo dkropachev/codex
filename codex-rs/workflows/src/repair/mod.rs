@@ -30,6 +30,7 @@ use crate::spec::read_workflow_spec;
 use crate::spec::scaffold_workflow_spec;
 use crate::spec::write_workflow_spec;
 use crate::validation_finding::WorkflowValidationFinding;
+use crate::validation_runner::RUNE_BUILTIN_TEST_COMMAND;
 use crate::validation_runner::WorkflowValidationCommandResult;
 use crate::validation_runner::WorkflowValidationReport;
 use crate::validation_runner::run_validation_command;
@@ -753,6 +754,19 @@ fn build_fix_plan(
                 stdout,
                 stderr,
             } => {
+                if workflow.runtime.kind == WorkflowRuntimeKind::Rune
+                    && command == RUNE_BUILTIN_TEST_COMMAND
+                    && stderr.contains("no Rune test files found under src/tests")
+                {
+                    plan.add_coverage_markers.insert("positive".to_string());
+                    plan.add_coverage_markers.insert("negative".to_string());
+                    plan.add_coverage_markers.insert("progress".to_string());
+                    plan.add_coverage_markers.insert("finalResult".to_string());
+                    plan.add_coverage_markers.insert("failureUx".to_string());
+                    plan.add_coverage_markers.insert("load".to_string());
+                    plan.add_coverage_markers.insert("autocomplete".to_string());
+                    continue;
+                }
                 if workflow.runtime.kind != WorkflowRuntimeKind::Typescript {
                     continue;
                 }
@@ -771,8 +785,22 @@ fn build_fix_plan(
                     "workflow runtime compile failures are not repaired automatically"
                 ));
             }
-            WorkflowValidationFinding::WorkflowApiContractExtractionFailed { .. }
-            | WorkflowValidationFinding::WorkflowApiContractSmokeFailed { .. } => {
+            WorkflowValidationFinding::WorkflowApiContractExtractionFailed { .. } => {
+                return Err(anyhow!(
+                    "workflow API contract failures are not repaired automatically"
+                ));
+            }
+            WorkflowValidationFinding::WorkflowApiContractSmokeFailed {
+                command, error, ..
+            } => {
+                if workflow.runtime.kind == WorkflowRuntimeKind::Rune
+                    && command == "validation.contractSmoke"
+                    && (error.contains("must define validation.contractSmoke")
+                        || error.contains("must enable validation.contractSmoke"))
+                {
+                    plan.update_validation_yaml = true;
+                    continue;
+                }
                 return Err(anyhow!(
                     "workflow API contract failures are not repaired automatically"
                 ));
@@ -869,8 +897,17 @@ fn action_kinds_for_finding(
             vec![WorkflowRepairActionKind::AddCoverageMarkers]
         }
         WorkflowValidationFinding::ValidationCommandFailed {
-            command, exit_code, ..
+            command,
+            exit_code,
+            stderr,
+            ..
         } => {
+            if workflow.runtime.kind == WorkflowRuntimeKind::Rune
+                && command == RUNE_BUILTIN_TEST_COMMAND
+                && stderr.contains("no Rune test files found under src/tests")
+            {
+                return Some(vec![WorkflowRepairActionKind::AddCoverageMarkers]);
+            }
             if workflow.runtime.kind != WorkflowRuntimeKind::Typescript {
                 return None;
             }
@@ -886,9 +923,19 @@ fn action_kinds_for_finding(
         WorkflowValidationFinding::WorkflowRuntimeCompileFailed { .. } => {
             return None;
         }
+        WorkflowValidationFinding::WorkflowApiContractSmokeFailed { command, error, .. } => {
+            if workflow.runtime.kind == WorkflowRuntimeKind::Rune
+                && command == "validation.contractSmoke"
+                && (error.contains("must define validation.contractSmoke")
+                    || error.contains("must enable validation.contractSmoke"))
+            {
+                vec![WorkflowRepairActionKind::NormalizeValidationMetadata]
+            } else {
+                return None;
+            }
+        }
         WorkflowValidationFinding::WorkflowPathEscapesRoot { .. }
-        | WorkflowValidationFinding::WorkflowApiContractExtractionFailed { .. }
-        | WorkflowValidationFinding::WorkflowApiContractSmokeFailed { .. } => {
+        | WorkflowValidationFinding::WorkflowApiContractExtractionFailed { .. } => {
             return None;
         }
     };
@@ -958,7 +1005,9 @@ fn apply_validation_yaml_fix(
                 });
         if commands_need_fix {
             let commands = match workflow.runtime.kind {
-                WorkflowRuntimeKind::Rune => vec![JsonValue::String("true".to_string())],
+                WorkflowRuntimeKind::Rune => {
+                    vec![JsonValue::String(RUNE_BUILTIN_TEST_COMMAND.to_string())]
+                }
                 WorkflowRuntimeKind::Typescript => vec![
                     JsonValue::String("npm run build".to_string()),
                     JsonValue::String("npm test".to_string()),
@@ -1006,6 +1055,19 @@ fn apply_validation_yaml_fix(
             validation_object.insert(
                 "profile".to_string(),
                 JsonValue::String("default".to_string()),
+            );
+        }
+        if workflow.runtime.kind == WorkflowRuntimeKind::Rune
+            && matches!(
+                validation_object.get("contractSmoke"),
+                None | Some(JsonValue::Null) | Some(JsonValue::Bool(false))
+            )
+        {
+            validation_object.insert(
+                "contractSmoke".to_string(),
+                json!({
+                    "input": {}
+                }),
             );
         }
         spec.validation = validation;
@@ -1912,7 +1974,7 @@ fn readme_template(workflow: &WorkflowSummary) -> String {
         .unwrap_or_else(|| workflow.id.split('/').next_back().unwrap_or(&workflow.id));
     match workflow.runtime.kind {
         WorkflowRuntimeKind::Rune => format!(
-            "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nThis workflow runs on embedded Rune from `{entrypoint}`. Implement `pub async fn run(ctx, input)` and keep the return value as the canonical JSON result. Optional `complete(ctx, input)` provides autocomplete and optional `to_tui_markdown(result)` provides the TUI markdown view. Use `ctx.status(...)` while running, `ctx.progress(message, data)` as a shorthand, `ctx.reportToUserMarkdown(markdown)` for direct user reports, and `ctx.runWorkflow(workflow, input, options)` for child workflows. Use `ctx.createAgent(...)`, `agent.run(input, options)`, `agent.runStreamed(input, options)`, `agent.turn(input, options)`, `turn.steer(input)`, and `turn.interrupt()` for Codex agents. Define dynamic tools with `ctx.defineTool(spec, handler)` and pass them as `tools` in agent options. Use `ctx.input.*`, `ctx.api`, `ctx.artifacts`, `ctx.workflows`, `ctx.mcp`, `ctx.tools`, `ctx.fs`, and `ctx.process` for app-server-backed capabilities, with `ctx.appServer.request(method, params)` as the raw escape hatch. Do not read Codex SQLite state directly. `ctx.cwd`, `ctx.currentWorkingDirectory`, `ctx.repoRoot`, and `ctx.workingDirectory` point at the workspace that launched the workflow.\n\n## Dependencies\n\nRune workflows run inside Codex through the embedded Rune runtime. Do not require a global `rune` binary or local Node package installation for runtime execution.\n\n## Contract\n\nRune workflow contracts are manifest-defined. Keep `workflow.yaml api.inputSchema`, `api.outputSchema`, `api.formatSchemas`, and optional `api.callableName` aligned with the Rune implementation. `/workflow validate {id}` publishes that manifest contract after validation passes.\n\n## Validation\n\nRun the configured validation commands from `workflow.yaml` and keep the coverage markers aligned with the documented contract.\n\n## Maintenance\n\nUpdate `README.md`, `DESIGN.md`, `workflow.yaml`, and the test markers together when workflow behavior changes. Keep runtime state and generated artifacts under ignored `state/` or `artifacts/` paths.\n",
+            "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nThis workflow runs on embedded Rune from `{entrypoint}`. Implement `pub async fn run(ctx, input)` and keep the return value as the canonical JSON result. Optional `complete(ctx, input)` provides autocomplete and optional `to_tui_markdown(result)` provides the TUI markdown view. Use `ctx.status(...)` while running, `ctx.progress(message, data)` as a shorthand, `ctx.reportToUserMarkdown(markdown)` for direct user reports, and `ctx.runWorkflow(workflow, input, options)` for child workflows. Use `ctx.createAgent(...)`, `agent.run(input, options)`, `agent.runStreamed(input, options)`, `agent.turn(input, options)`, `turn.steer(input)`, and `turn.interrupt()` for Codex agents. Define dynamic tools with `ctx.defineTool(spec, handler)` and pass them as `tools` in agent options. Use `ctx.input.*`, `ctx.api`, `ctx.artifacts`, `ctx.workflows`, `ctx.mcp`, `ctx.tools`, `ctx.fs`, and `ctx.process` for app-server-backed capabilities, with `ctx.appServer.request(method, params)` as the raw escape hatch. Do not read Codex SQLite state directly. `ctx.cwd`, `ctx.currentWorkingDirectory`, `ctx.repoRoot`, and `ctx.workingDirectory` point at the workspace that launched the workflow.\n\n## Dependencies\n\nRune workflows run inside Codex through the embedded Rune runtime. Do not require a global `rune` binary or local Node package installation for runtime execution.\n\n## Contract\n\nRune workflow contracts are manifest-defined. Keep `workflow.yaml api.inputSchema`, `api.outputSchema`, `api.formatSchemas`, and optional `api.callableName` aligned with the Rune implementation. `/workflow validate {id}` publishes that manifest contract after validation passes.\n\n## Validation\n\nRun `codex workflow validate {id}` after changes. Rune validation compiles the manifest entrypoint, runs `{RUNE_BUILTIN_TEST_COMMAND}` over exported test functions under `src/tests/**/*.test.rn` and `src/tests/**/*.spec.rn`, requires `validation.contractSmoke`, validates input/output/format schemas, and checks `complete(ctx, input)` when autocomplete coverage is enabled. Keep smoke cases and coverage markers aligned with the documented contract.\n\n## Maintenance\n\nUpdate `README.md`, `DESIGN.md`, `workflow.yaml`, and the test markers together when workflow behavior changes. Keep runtime state and generated artifacts under ignored `state/` or `artifacts/` paths.\n",
             entrypoint = workflow.runtime.entrypoint,
             id = workflow.id,
         ),
@@ -1930,7 +1992,7 @@ fn design_template(workflow: &WorkflowSummary) -> String {
         .unwrap_or_else(|| display_title(&workflow.id));
     match workflow.runtime.kind {
         WorkflowRuntimeKind::Rune => format!(
-            "# {title} Design\n\n## Overview\n\nThis workflow is an embedded Rune workflow validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `{entrypoint}` owns the `run`, optional `complete`, and optional `to_tui_markdown` functions.\n- `workflow.yaml` owns the runtime declaration, validation commands, coverage expectations, and manifest-defined API schemas.\n- `src/tests/` carries the coverage contract for positive, load, autocomplete, negative, and recovery paths.\n- `state/` holds persistent runtime data; `artifacts/` holds generated run artifacts. Both are ignored except for `state/.gitkeep`.\n\n## Data Flow\n\n1. A registered workflow command loads the Rune entrypoint.\n2. `run(ctx, input)` validates input, emits status, and returns the canonical JSON result.\n3. If present, `to_tui_markdown(result)` provides the markdown view for the TUI and workflow-to-workflow callers.\n4. `codex workflow validate {id}` runs the configured validation commands, checks docs/layout/coverage markers, and publishes the manifest-defined contract only after validation passes.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors. When the workflow cannot satisfy its manifest contract, fail with a specific error that names the broken path.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.rn`: positive path, status, JSON result, and markdown formatter coverage.\n- `src/tests/workflow.load.test.rn`: loadability smoke.\n- `src/tests/workflow.autocomplete.test.rn`: registry and command-completion readiness smoke.\n- `src/tests/workflow.negative.test.rn`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.rn`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep `workflow.yaml` schemas aligned with Rune source. Keep `// workflow-covers:` markers aligned with `validation.coverage`, including load and autocomplete. Update this file when the workflow behavior or review expectations change. Keep runtime state and generated artifacts out of git.\n",
+            "# {title} Design\n\n## Overview\n\nThis workflow is an embedded Rune workflow validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `{entrypoint}` owns the `run`, optional `complete`, and optional `to_tui_markdown` functions.\n- `workflow.yaml` owns the runtime declaration, required contract smoke cases, validation commands, coverage expectations, and manifest-defined API schemas.\n- `src/tests/` carries the coverage contract for positive, load, autocomplete, negative, and recovery paths.\n- `state/` holds persistent runtime data; `artifacts/` holds generated run artifacts. Both are ignored except for `state/.gitkeep`.\n\n## Data Flow\n\n1. A registered workflow command loads the Rune entrypoint.\n2. `run(ctx, input)` validates input, emits status, and returns the canonical JSON result.\n3. If present, `to_tui_markdown(result)` provides the markdown view for the TUI and workflow-to-workflow callers.\n4. `codex workflow validate {id}` runs the built-in Rune tests, checks docs/layout/coverage markers, smoke-tests the required contract cases, validates declared formatters and autocomplete hooks, and publishes the manifest-defined contract only after validation passes.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors. When the workflow cannot satisfy its manifest contract, fail with a specific error that names the broken path.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.rn`: positive path, status, JSON result, and markdown formatter coverage.\n- `src/tests/workflow.load.test.rn`: loadability smoke.\n- `src/tests/workflow.autocomplete.test.rn`: registry and command-completion readiness smoke.\n- `src/tests/workflow.negative.test.rn`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.rn`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep `workflow.yaml` schemas and `validation.contractSmoke` aligned with Rune source. Keep `// workflow-covers:` markers aligned with `validation.coverage`, including load and autocomplete. Update this file when the workflow behavior or review expectations change. Keep runtime state and generated artifacts out of git.\n",
             entrypoint = workflow.runtime.entrypoint,
             id = workflow.id,
         ),
