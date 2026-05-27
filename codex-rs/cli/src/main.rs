@@ -39,6 +39,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
 use serde::Serialize;
+use std::ffi::OsString;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -134,13 +135,17 @@ struct MultitoolCli {
 }
 
 async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
+    let (cli, mut deferred_parse_error) = match parse_multitool_cli_from(std::env::args_os()) {
+        Ok(parsed) => parsed,
+        Err(err) => err.exit(),
+    };
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
         remote,
         mut interactive,
         mut subcommand,
-    } = MultitoolCli::parse();
+    } = cli;
 
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
@@ -160,7 +165,11 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             promote_workflow_alias_from_prompt(&mut interactive.prompt, &workflows)
         {
             subcommand = Some(workflow_subcommand);
+            deferred_parse_error = None;
         }
+    }
+    if let Some(err) = deferred_parse_error {
+        err.exit();
     }
 
     match subcommand {
@@ -771,6 +780,90 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn parse_multitool_cli_from<I, T>(
+    args: I,
+) -> Result<(MultitoolCli, Option<clap::Error>), clap::Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
+    match MultitoolCli::try_parse_from(args.clone()) {
+        Ok(cli) => Ok((cli, None)),
+        Err(err) if err.kind() == clap::error::ErrorKind::UnknownArgument => {
+            match try_parse_prompt_passthrough_args(&args) {
+                Some(cli) => Ok((cli, Some(err))),
+                None => Err(err),
+            }
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn try_parse_prompt_passthrough_args(args: &[OsString]) -> Option<MultitoolCli> {
+    let passthrough_index = first_prompt_passthrough_arg(args)?;
+    let mut passthrough_args = Vec::with_capacity(args.len() + 1);
+    passthrough_args.extend_from_slice(&args[..passthrough_index]);
+    passthrough_args.push(OsString::from("--"));
+    passthrough_args.extend_from_slice(&args[passthrough_index..]);
+    MultitoolCli::try_parse_from(passthrough_args).ok()
+}
+
+fn first_prompt_passthrough_arg(args: &[OsString]) -> Option<usize> {
+    let mut index = 1;
+    while index < args.len() {
+        let arg = args[index].to_str()?;
+        if arg == "--" {
+            return args.get(index + 1).map(|_| index + 1);
+        }
+        if arg.starts_with('-') {
+            index += root_option_arg_count(arg);
+            continue;
+        }
+        return Some(index);
+    }
+    None
+}
+
+fn root_option_arg_count(arg: &str) -> usize {
+    if arg.contains('=') {
+        return 1;
+    }
+    match arg {
+        "-c"
+        | "--config"
+        | "--enable"
+        | "--disable"
+        | "-m"
+        | "--model"
+        | "--local-provider"
+        | "-p"
+        | "--profile"
+        | "-s"
+        | "--sandbox"
+        | "-a"
+        | "--ask-for-approval"
+        | "-C"
+        | "--cd"
+        | "-i"
+        | "--image"
+        | "--add-dir"
+        | "--remote"
+        | "--remote-auth-token-env" => 2,
+        _ if arg.starts_with("-c")
+            || arg.starts_with("-m")
+            || arg.starts_with("-p")
+            || arg.starts_with("-s")
+            || arg.starts_with("-a")
+            || arg.starts_with("-C")
+            || arg.starts_with("-i") =>
+        {
+            1
+        }
+        _ => 1,
+    }
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -5131,6 +5224,38 @@ mod tests {
 
         assert_eq!(cli.interactive.prompt, vec!["hello".to_string()]);
         assert!(cli.interactive.web_search);
+        assert!(cli.subcommand.is_none());
+    }
+
+    #[test]
+    fn workflow_alias_prompt_passthrough_preserves_unknown_flags_for_late_promotion() {
+        let (cli, deferred_error) = parse_multitool_cli_from([
+            "codex",
+            "--enable",
+            "workflows",
+            "-C",
+            "/tmp/repo",
+            "patch-impact",
+            "--base-ref",
+            "HEAD",
+            "--include-untracked",
+            "--max-files",
+            "20",
+        ])
+        .expect("parse should fall back to prompt passthrough");
+
+        assert!(deferred_error.is_some());
+        assert_eq!(
+            cli.interactive.prompt,
+            vec![
+                "patch-impact".to_string(),
+                "--base-ref".to_string(),
+                "HEAD".to_string(),
+                "--include-untracked".to_string(),
+                "--max-files".to_string(),
+                "20".to_string(),
+            ]
+        );
         assert!(cli.subcommand.is_none());
     }
 

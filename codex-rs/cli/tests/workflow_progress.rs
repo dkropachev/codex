@@ -36,7 +36,11 @@ trust_level = "trusted"
     Ok(())
 }
 
-fn write_status_workflow(workflow_dir: &Path) -> Result<()> {
+fn write_workflow_fixture(
+    workflow_dir: &Path,
+    workflow_yaml: &str,
+    workflow_source: &str,
+) -> Result<()> {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
@@ -47,10 +51,7 @@ fn write_status_workflow(workflow_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(workflow_dir.join(".git"))?;
     std::fs::write(workflow_dir.join("README.md"), "# Code Review\n")?;
     std::fs::write(workflow_dir.join("state/.gitkeep"), "")?;
-    std::fs::write(
-        workflow_dir.join("workflow.yaml"),
-        "id: code-review\ncommand: code-review\ntitle: Code Review\nuserDescription: Emit CLI workflow progress.\n",
-    )?;
+    std::fs::write(workflow_dir.join("workflow.yaml"), workflow_yaml)?;
     std::fs::write(
         workflow_dir.join("package.json"),
         r#"{
@@ -60,27 +61,7 @@ fn write_status_workflow(workflow_dir: &Path) -> Result<()> {
 }
 "#,
     )?;
-    std::fs::write(
-        workflow_dir.join("src/workflow.ts"),
-        r#"const workflow = {
-  async run(ctx) {
-    ctx.status({
-      workflowName: "code-review",
-      workflowStatus: "initializing",
-      threads: [{ name: "initializing", status: "normalizing input and resolving refs" }],
-    });
-    ctx.status({
-      workflowName: "code-review",
-      workflowStatus: "initial_review",
-      threads: [{ name: "initial_review", status: "running analyzer for chunk-0001" }],
-    });
-    return { ok: true };
-  },
-};
-
-export default workflow;
-"#,
-    )?;
+    std::fs::write(workflow_dir.join("src/workflow.ts"), workflow_source)?;
     std::fs::write(
         workflow_dir.join("node_modules/.bin/bun"),
         format!(
@@ -116,6 +97,60 @@ process.exit(result.status ?? 1);
         std::fs::Permissions::from_mode(0o755),
     )?;
     Ok(())
+}
+
+fn write_status_workflow(workflow_dir: &Path) -> Result<()> {
+    write_workflow_fixture(
+        workflow_dir,
+        "id: code-review\ncommand: code-review\ntitle: Code Review\nuserDescription: Emit CLI workflow progress.\n",
+        r#"const workflow = {
+  async run(ctx) {
+    ctx.status({
+      workflowName: "code-review",
+      workflowStatus: "initializing",
+      threads: [{ name: "initializing", status: "normalizing input and resolving refs" }],
+    });
+    ctx.status({
+      workflowName: "code-review",
+      workflowStatus: "initial_review",
+      threads: [{ name: "initial_review", status: "running analyzer for chunk-0001" }],
+    });
+    return { ok: true };
+  },
+};
+
+export default workflow;
+"#,
+    )
+}
+
+fn write_input_workflow(workflow_dir: &Path) -> Result<()> {
+    write_workflow_fixture(
+        workflow_dir,
+        r#"id: patch-impact
+command: patch-impact
+title: Patch Impact
+userDescription: Echo workflow alias input.
+api:
+  inputSchema:
+    type: object
+    properties:
+      baseRef:
+        type: string
+      includeUntracked:
+        type: boolean
+      maxFiles:
+        type: integer
+"#,
+        r#"const workflow = {
+  async run(_ctx, input) {
+    return { ok: true, input };
+  },
+};
+
+export default workflow;
+"#,
+    )
 }
 
 #[test]
@@ -164,6 +199,77 @@ fn workflow_alias_progress_is_human_readable() -> Result<()> {
         !stderr.contains("\"workflowName\""),
         "stderr should not contain raw workflow JSON: {stderr}"
     );
+
+    Ok(())
+}
+
+#[test]
+fn workflow_alias_flags_are_mapped_to_json_input() -> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+
+    let codex_home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    write_config(codex_home.path(), workspace.path())?;
+    write_input_workflow(&codex_home.path().join("workflows/patch-impact"))?;
+
+    let run_alias = |args: &[&str]| -> Result<serde_json::Value> {
+        let output = assert_cmd::Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
+            .env("CODEX_HOME", codex_home.path())
+            .env("CODEX_WORKFLOW_RUNTIME_MODE", "process")
+            .env_remove("CODEX_WORKFLOW_RUN_ID")
+            .current_dir(workspace.path())
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        Ok(serde_json::from_slice(&output.stdout)?)
+    };
+
+    let root_args = [
+        "--enable",
+        "workflows",
+        "-C",
+        workspace.path().to_str().unwrap_or_default(),
+        "-c",
+        "analytics.enabled=false",
+        "patch-impact",
+        "--base-ref",
+        "HEAD",
+        "--include-untracked",
+        "--max-files",
+        "20",
+    ];
+    let workflow_args = [
+        "--enable",
+        "workflows",
+        "-C",
+        workspace.path().to_str().unwrap_or_default(),
+        "-c",
+        "analytics.enabled=false",
+        "workflow",
+        "patch-impact",
+        "--base-ref",
+        "HEAD",
+        "--include-untracked",
+        "--max-files",
+        "20",
+    ];
+
+    let expected = serde_json::json!({
+        "ok": true,
+        "input": {
+            "argv": ["--base-ref", "HEAD", "--include-untracked", "--max-files", "20"],
+            "baseRef": "HEAD",
+            "includeUntracked": true,
+            "maxFiles": 20,
+            "text": "--base-ref HEAD --include-untracked --max-files 20",
+        },
+    });
+    assert_eq!(run_alias(&root_args)?, expected);
+    assert_eq!(run_alias(&workflow_args)?, expected);
 
     Ok(())
 }
