@@ -1,4 +1,6 @@
 use std::env;
+#[cfg(windows)]
+use std::ffi::OsString;
 use std::fs;
 use std::io::IsTerminal;
 use std::path::Path;
@@ -639,15 +641,8 @@ async fn run_workflow_process(
     event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
 ) -> Result<WorkflowRuntimeOutput> {
     let runner_path = write_runner_script()?;
-    let tsx_path = workflow_tsx_path(workflow_dir);
-    if !tsx_path.is_file() {
-        return Err(anyhow::anyhow!(
-            "workflow runtime requires local `{}`; global package installs are ignored, so run the workflow install step in this workflow directory before executing the workflow directly",
-            tsx_path.display()
-        ));
-    }
-
-    let mut child = Command::new(&tsx_path);
+    let engine = workflow_ts_engine_command(workflow_dir)?;
+    let mut child = engine.command();
     child
         .arg(&runner_path)
         .arg("--mode")
@@ -786,12 +781,103 @@ fn write_runner_script() -> Result<PathBuf> {
     Ok(path)
 }
 
-pub(crate) fn workflow_tsx_path(workflow_dir: &Path) -> PathBuf {
+pub(crate) struct WorkflowTsEngineCommand {
+    program: PathBuf,
+    args: &'static [&'static str],
+}
+
+impl WorkflowTsEngineCommand {
+    fn new(program: impl Into<PathBuf>) -> Self {
+        Self {
+            program: program.into(),
+            args: &[],
+        }
+    }
+
+    fn with_args(program: impl Into<PathBuf>, args: &'static [&'static str]) -> Self {
+        Self {
+            program: program.into(),
+            args,
+        }
+    }
+
+    pub(crate) fn command(&self) -> Command {
+        let mut command = Command::new(&self.program);
+        command.args(self.args);
+        command
+    }
+}
+
+pub(crate) fn workflow_ts_engine_command(workflow_dir: &Path) -> Result<WorkflowTsEngineCommand> {
+    let bun_path = workflow_bun_path(workflow_dir);
+    if bun_path.is_file() {
+        return Ok(WorkflowTsEngineCommand::new(bun_path));
+    }
+
+    if command_on_path("bun") {
+        return Ok(WorkflowTsEngineCommand::new("bun"));
+    }
+
+    let tsx_path = workflow_tsx_path(workflow_dir);
+    if tsx_path.is_file() {
+        return Ok(WorkflowTsEngineCommand::new(tsx_path));
+    }
+
+    if command_on_path("npm") {
+        return Ok(WorkflowTsEngineCommand::with_args(
+            "npm",
+            &["exec", "--yes", "--package", "bun", "--", "bun"],
+        ));
+    }
+
+    Err(anyhow::anyhow!(
+        "workflow runtime requires Bun (local `{}`, `bun` on PATH, or `npm exec --package bun`); legacy local `{}` was also not found, so run the workflow install step in this workflow directory before executing the workflow directly",
+        bun_path.display(),
+        tsx_path.display()
+    ))
+}
+
+pub(crate) fn workflow_bun_path(workflow_dir: &Path) -> PathBuf {
+    if cfg!(windows) {
+        workflow_dir.join("node_modules/.bin/bun.cmd")
+    } else {
+        workflow_dir.join("node_modules/.bin/bun")
+    }
+}
+
+fn workflow_tsx_path(workflow_dir: &Path) -> PathBuf {
     if cfg!(windows) {
         workflow_dir.join("node_modules/.bin/tsx.cmd")
     } else {
         workflow_dir.join("node_modules/.bin/tsx")
     }
+}
+
+fn command_on_path(command: &str) -> bool {
+    let Some(paths) = env::var_os("PATH") else {
+        return false;
+    };
+
+    env::split_paths(&paths).any(|dir| {
+        if dir.join(command).is_file() {
+            return true;
+        }
+
+        #[cfg(windows)]
+        {
+            let extensions =
+                env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
+            for extension in env::split_paths(&extensions) {
+                let extension = extension.as_os_str().to_string_lossy();
+                let extension = extension.trim_start_matches('.');
+                if dir.join(format!("{command}.{extension}")).is_file() {
+                    return true;
+                }
+            }
+        }
+
+        false
+    })
 }
 
 #[cfg(test)]
@@ -808,7 +894,7 @@ mod tests {
     use super::WORKFLOW_RUNNER_SOURCE;
     use super::WORKFLOW_RUNTIME_EVENT_PREFIX;
     use super::complete_workflow;
-    use super::workflow_tsx_path;
+    use super::workflow_bun_path;
 
     #[test]
     fn runner_script_emits_prefixed_events() {
@@ -972,19 +1058,19 @@ export default workflow;
             .persist(workflow_path)
             .unwrap_or_else(|err| panic!("persist workflow source: {err}"));
 
-        let tsx_path = workflow_tsx_path(workflow_dir);
-        let mut tsx_file = NamedTempFile::new_in(
-            tsx_path
+        let bun_path = workflow_bun_path(workflow_dir);
+        let mut bun_file = NamedTempFile::new_in(
+            bun_path
                 .parent()
-                .expect("tsx wrapper should have a parent directory"),
+                .expect("bun wrapper should have a parent directory"),
         )
-        .expect("temporary tsx wrapper");
-        std::io::Write::write_all(&mut tsx_file, b"#!/bin/sh\nexec node \"$@\"\n")
-            .expect("tsx wrapper");
-        tsx_file
-            .persist(&tsx_path)
-            .unwrap_or_else(|err| panic!("persist tsx wrapper: {err}"));
+        .expect("temporary bun wrapper");
+        std::io::Write::write_all(&mut bun_file, b"#!/bin/sh\nexec node \"$@\"\n")
+            .expect("bun wrapper");
+        bun_file
+            .persist(&bun_path)
+            .unwrap_or_else(|err| panic!("persist bun wrapper: {err}"));
         #[cfg(unix)]
-        fs::set_permissions(&tsx_path, fs::Permissions::from_mode(0o755)).expect("tsx permissions");
+        fs::set_permissions(&bun_path, fs::Permissions::from_mode(0o755)).expect("bun permissions");
     }
 }

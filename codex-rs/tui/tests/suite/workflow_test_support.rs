@@ -78,7 +78,7 @@ pub(super) fn write_workflow_fixture_with_metadata(
     )?;
     std::fs::write(workflow_dir.join("src/workflow.ts"), workflow_source)?;
     std::fs::write(
-        workflow_dir.join("node_modules/.bin/tsx"),
+        workflow_dir.join("node_modules/.bin/bun"),
         format!(
             r#"#!{}
 const fs = require('node:fs');
@@ -108,7 +108,7 @@ process.exit(result.status ?? 1);
     )?;
     #[cfg(unix)]
     std::fs::set_permissions(
-        workflow_dir.join("node_modules/.bin/tsx"),
+        workflow_dir.join("node_modules/.bin/bun"),
         std::fs::Permissions::from_mode(0o755),
     )?;
     Ok(())

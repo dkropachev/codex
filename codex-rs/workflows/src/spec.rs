@@ -129,7 +129,7 @@ pub fn scaffold_workflow_spec(
         }),
         dependencies: json!({
             "runtime": ["@openai/codex-sdk"],
-            "development": ["typescript", "tsx", "@types/node"]
+            "development": ["bun", "typescript", "@types/node"]
         }),
         validation: json!({
             "profile": config.validation_profile.clone().unwrap_or_else(|| "default".to_string()),

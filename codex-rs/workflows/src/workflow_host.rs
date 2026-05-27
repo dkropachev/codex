@@ -13,7 +13,7 @@ use crate::workflow_runtime::WORKFLOW_RUNTIME_EVENT_PREFIX;
 use crate::workflow_runtime::WorkflowRuntimeEvent;
 use crate::workflow_runtime::WorkflowRuntimeEventHandler;
 use crate::workflow_runtime::WorkflowRuntimeOutput;
-use crate::workflow_runtime::workflow_tsx_path;
+use crate::workflow_runtime::workflow_ts_engine_command;
 use anyhow::Context as _;
 use anyhow::Result;
 use serde::Deserialize;
@@ -22,7 +22,6 @@ use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::net::UnixStream;
-use tokio::process::Command;
 use tokio::time::sleep;
 
 const WORKFLOW_RUNTIME_MODE_ENV: &str = "CODEX_WORKFLOW_RUNTIME_MODE";
@@ -241,15 +240,8 @@ async fn ensure_workflow_host(
     }
 
     let host_script = write_host_script()?;
-    let tsx_path = workflow_tsx_path(workflow_dir);
-    if !tsx_path.is_file() {
-        return Err(anyhow::anyhow!(
-            "workflow host requires local `{}`; global package installs are ignored, so run the workflow install step in this workflow directory before executing the workflow directly",
-            tsx_path.display()
-        ));
-    }
-
-    let mut command = Command::new(&tsx_path);
+    let engine = workflow_ts_engine_command(workflow_dir)?;
+    let mut command = engine.command();
     command
         .arg(&host_script)
         .arg("--serve")
@@ -967,7 +959,7 @@ export default workflow;
         )
         .unwrap();
         fs::write(
-            workflow_dir.join("node_modules/.bin/tsx"),
+            workflow_dir.join("node_modules/.bin/bun"),
             r#"#!/usr/bin/env node
 const fs = require('node:fs');
 const os = require('node:os');
@@ -1000,7 +992,7 @@ process.exit(result.status ?? 1);
         )
         .unwrap();
         fs::set_permissions(
-            workflow_dir.join("node_modules/.bin/tsx"),
+            workflow_dir.join("node_modules/.bin/bun"),
             fs::Permissions::from_mode(0o755),
         )
         .unwrap();

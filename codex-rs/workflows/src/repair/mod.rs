@@ -1308,13 +1308,13 @@ fn apply_package_manifest_fix(
     if plan.test_script || !scripts_object.contains_key("test") {
         scripts_object.insert(
             "test".to_string(),
-            JsonValue::String("node --import tsx --test src/tests/**/*.test.ts".to_string()),
+            JsonValue::String("npm exec --yes --package bun -- bun test src/tests".to_string()),
         );
     }
     if plan.run_script || !scripts_object.contains_key("run") {
         scripts_object.insert(
             "run".to_string(),
-            JsonValue::String("tsx src/workflow.ts".to_string()),
+            JsonValue::String("npm exec --yes --package bun -- bun src/workflow.ts".to_string()),
         );
     }
 
@@ -1347,7 +1347,7 @@ fn apply_package_manifest_fix(
         "@types/node".to_string(),
         JsonValue::String("latest".to_string()),
     );
-    dev_deps_object.insert("tsx".to_string(), JsonValue::String("latest".to_string()));
+    dev_deps_object.insert("bun".to_string(), JsonValue::String("latest".to_string()));
     dev_deps_object.insert(
         "typescript".to_string(),
         JsonValue::String("latest".to_string()),
@@ -1779,7 +1779,7 @@ fn design_template(workflow: &WorkflowSummary) -> String {
         .clone()
         .unwrap_or_else(|| display_title(&workflow.id));
     format!(
-        "# {title} Design\n\n## Overview\n\nThis workflow is a local TypeScript package driven by `tsx` and validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `src/workflow.ts` owns the runtime behavior and exports the named default async function, an optional `complete(...)` export, and an optional `WorkflowOutput.toTuiMarkdown(result)` companion.\n- `src/tests/` carries the coverage contract for positive, load, autocomplete, negative, and recovery paths.\n- `workflow.yaml` records validation commands, contract smoke input, and coverage expectations.\n- `state/` holds persistent runtime data; `artifacts/` holds generated run artifacts. Both are ignored except for `state/.gitkeep`.\n\n## Data Flow\n\n1. A registered workflow command loads the workflow from the local package.\n2. The named default export validates input, emits progress, and returns the canonical JSON result.\n3. If present, `WorkflowOutput.toTuiMarkdown(result)` provides the markdown view for the TUI and workflow-to-workflow callers.\n4. `codex workflow validate {id}` runs the local validation commands, checks docs/layout/coverage markers, smoke-tests the contract when configured, extracts the TS contract, and publishes it only after validation passes.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors. When the workflow cannot satisfy its contract, fail with a specific error that names the broken path.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.ts`: positive path, progress, JSON result, and markdown companion coverage.\n- `src/tests/workflow.load.test.ts`: loadability smoke.\n- `src/tests/workflow.autocomplete.test.ts`: registry and command-completion readiness smoke.\n- `src/tests/workflow.negative.test.ts`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.ts`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep dependency usage local. Keep `// workflow-covers:` markers aligned with `validation.coverage`, including load and autocomplete. Update this file when the workflow behavior or review expectations change. Keep runtime state and generated artifacts out of git.\n",
+        "# {title} Design\n\n## Overview\n\nThis workflow is a local TypeScript package driven by Bun's TypeScript runtime and validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `src/workflow.ts` owns the runtime behavior and exports the named default async function, an optional `complete(...)` export, and an optional `WorkflowOutput.toTuiMarkdown(result)` companion.\n- `src/tests/` carries the coverage contract for positive, load, autocomplete, negative, and recovery paths.\n- `workflow.yaml` records validation commands, contract smoke input, and coverage expectations.\n- `state/` holds persistent runtime data; `artifacts/` holds generated run artifacts. Both are ignored except for `state/.gitkeep`.\n\n## Data Flow\n\n1. A registered workflow command loads the workflow from the local package through Bun.\n2. The named default export validates input, emits progress, and returns the canonical JSON result.\n3. If present, `WorkflowOutput.toTuiMarkdown(result)` provides the markdown view for the TUI and workflow-to-workflow callers.\n4. `codex workflow validate {id}` runs the local validation commands, checks docs/layout/coverage markers, smoke-tests the contract when configured, extracts the TS contract, and publishes it only after validation passes.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors. When the workflow cannot satisfy its contract, fail with a specific error that names the broken path.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.ts`: positive path, progress, JSON result, and markdown companion coverage.\n- `src/tests/workflow.load.test.ts`: loadability smoke.\n- `src/tests/workflow.autocomplete.test.ts`: registry and command-completion readiness smoke.\n- `src/tests/workflow.negative.test.ts`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.ts`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep dependency usage local. Keep `// workflow-covers:` markers aligned with `validation.coverage`, including load and autocomplete. Update this file when the workflow behavior or review expectations change. Keep runtime state and generated artifacts out of git.\n",
         id = workflow.id,
     )
 }
@@ -1848,6 +1848,7 @@ fn dependency_install_fixable(stdout: &str, stderr: &str) -> bool {
         "MODULE_NOT_FOUND",
         "could not determine executable to run",
         "tsc: not found",
+        "bun: not found",
         "tsx: not found",
     ]
     .iter()
