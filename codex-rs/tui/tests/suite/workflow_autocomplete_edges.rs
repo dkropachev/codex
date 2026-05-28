@@ -179,6 +179,39 @@ async fn slash_workflow_popup_escape_dismisses_without_running_workflow() -> Res
     .await
 }
 
+#[tokio::test]
+async fn slash_workflow_dynamic_completion_ignores_stale_result_after_argument_changes()
+-> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex = ensure_codex_binary(&repo_root)?;
+    let codex_home = tempdir()?;
+    let workspace = tempdir()?;
+    write_trusted_workspace_config(codex_home.path(), workspace.path())?;
+    write_review_workflow(&codex_home.path().join("workflows/code-review"))?;
+
+    run_workflow_autocomplete_session(
+        &repo_root,
+        &codex,
+        codex_home.path(),
+        workspace.path(),
+        WorkflowAutocompleteScenario {
+            typed_prefix: "/code-review --slow",
+            completion_text: Some(" fast"),
+            popup_snippets: &["loading completions..."],
+            ordered_popup_snippets: &[],
+            run_snippets: &[],
+            post_key_snippets: &["--format fresh"],
+            forbidden_snippets: &["--slow stale", "Stale report"],
+            popup_keys: &[],
+        },
+    )
+    .await
+}
+
 fn write_two_report_workflows(codex_home: &std::path::Path) -> Result<()> {
     write_report_workflow(
         &codex_home.join("workflows/reports/alpha-report"),

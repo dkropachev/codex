@@ -269,6 +269,45 @@ async fn slash_workflow_static_option_tab_does_not_commit_placeholder() -> Resul
 }
 
 #[tokio::test]
+async fn slash_workflow_autocomplete_tab_completes_unique_dynamic_value_prefix() -> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex = ensure_codex_binary(&repo_root)?;
+    let codex_home = tempdir()?;
+    let workspace = tempdir()?;
+    write_trusted_workspace_config(codex_home.path(), workspace.path())?;
+    write_review_workflow(&codex_home.path().join("workflows/code-review"))?;
+
+    run_workflow_autocomplete_session(
+        &repo_root,
+        &codex,
+        codex_home.path(),
+        workspace.path(),
+        WorkflowAutocompleteScenario {
+            typed_prefix: "/code-review --reportId 103",
+            completion_text: None,
+            popup_snippets: &["--reportId 1034"],
+            ordered_popup_snippets: &[],
+            run_snippets: &[
+                "Input text: --reportId 1034",
+                "Input argv: --reportId 1034",
+                "Workflow Result",
+            ],
+            post_key_snippets: &[],
+            forbidden_snippets: &["Input text: --reportId 103\n"],
+            popup_keys: &[
+                WorkflowAutocompletePopupKey::Tab,
+                WorkflowAutocompletePopupKey::Enter,
+            ],
+        },
+    )
+    .await
+}
+
+#[tokio::test]
 async fn slash_workflow_autocomplete_commits_unique_dynamic_preview_and_runs_workflow_end_to_end()
 -> Result<()> {
     if cfg!(windows) {
@@ -826,6 +865,37 @@ pub(super) fn write_review_workflow(workflow_dir: &Path) -> Result<()> {
         "Code Review",
         r##"const workflow = {
   async complete(_ctx, request) {
+    if (request.text === "--slow") {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      return [
+        {
+          display: "--slow stale",
+          insertText: "--slow stale",
+          description: "Stale report",
+        },
+      ];
+    }
+
+    if (request.text === "--slow fast") {
+      return [
+        {
+          display: "--slow fast --format fresh",
+          insertText: "--slow fast --format fresh",
+          description: "Fresh report",
+        },
+      ];
+    }
+
+    if (request.text === "--reportId 103") {
+      return [
+        {
+          display: "--reportId 1034",
+          insertText: "--reportId 1034",
+          description: "Primary report",
+        },
+      ];
+    }
+
     if (request.text === "--reportId 1034") {
       return [
         {
