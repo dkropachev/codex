@@ -79,6 +79,11 @@ pub enum WorkflowValidationFindingInfo {
         path: PathBuf,
         package_name: String,
     },
+    LatestPackageDependency {
+        path: PathBuf,
+        package_name: String,
+        field: String,
+    },
     UndeclaredPackageImport {
         path: PathBuf,
         specifier: String,
@@ -148,6 +153,17 @@ pub enum WorkflowValidationFindingInfo {
     MissingCoverageMarker {
         path: PathBuf,
         key: String,
+    },
+    ScaffoldEchoSource {
+        path: PathBuf,
+    },
+    PlaceholderWorkflowTest {
+        path: PathBuf,
+        reason: String,
+    },
+    RawDevelopFlagsInMetadata {
+        path: PathBuf,
+        field: String,
     },
     CodeOutsideSrc {
         paths: Vec<PathBuf>,
@@ -325,7 +341,23 @@ pub struct WorkflowImpactResponse {
 pub struct WorkflowDevelopParams {
     pub description: String,
     #[ts(optional = nullable)]
+    pub id: Option<String>,
+    #[ts(optional = nullable)]
+    pub command: Option<String>,
+    #[ts(optional = nullable)]
+    pub title: Option<String>,
+    #[ts(optional = nullable)]
+    pub location: Option<WorkflowDevelopLocation>,
+    #[ts(optional = nullable)]
     pub stage_session_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum WorkflowDevelopLocation {
+    Project,
+    Global,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -469,6 +501,7 @@ pub struct WorkflowStageSessionActionParams {
 pub struct WorkflowCommandResponse {
     pub message: String,
     pub data: JsonValue,
+    pub exit_code: i32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -590,6 +623,7 @@ macro_rules! workflow_command_response_type {
         pub struct $name {
             pub message: String,
             pub data: JsonValue,
+            pub exit_code: i32,
         }
 
         impl From<WorkflowCommandResponse> for $name {
@@ -597,6 +631,7 @@ macro_rules! workflow_command_response_type {
                 Self {
                     message: response.message,
                     data: response.data,
+                    exit_code: response.exit_code,
                 }
             }
         }
@@ -615,6 +650,7 @@ workflow_command_response_type!(WorkflowCommandExecuteResponse);
 #[ts(export_to = "v2/")]
 pub struct WorkflowRepairResponse {
     pub message: String,
+    pub exit_code: i32,
     pub workflow: WorkflowSummary,
     pub validation: WorkflowValidationInfo,
     pub validation_command_results: Vec<WorkflowValidationCommandResult>,

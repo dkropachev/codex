@@ -23,6 +23,7 @@ use crate::repair::types::WorkflowRepairStopReason;
 use crate::repair::types::WorkflowValidationFindingInfo;
 use crate::repair::types::WorkflowValidationInfo;
 use crate::repair_mode::WorkflowRepairMode;
+use crate::spec::ScaffoldWorkflowSpecRequest;
 use crate::spec::WorkflowSpec;
 use crate::spec::read_workflow_spec;
 use crate::spec::scaffold_workflow_spec;
@@ -462,6 +463,11 @@ fn build_output(
             "validationCommandResults": validation_command_results,
             "repair": repair,
         }),
+        exit_code: if report.status == crate::registry::WorkflowValidationStatus::Valid {
+            0
+        } else {
+            1
+        },
     }
 }
 
@@ -563,6 +569,9 @@ fn build_fix_plan(
                 plan.sync_dependency_metadata = true;
                 plan.remove_package_names.insert(package_name.clone());
             }
+            WorkflowValidationFinding::LatestPackageDependency { .. } => {
+                plan.repair_package_manifest = true;
+            }
             WorkflowValidationFinding::UndeclaredPackageImport { package_name, .. } => {
                 plan.repair_package_manifest = true;
                 plan.refresh_dependencies = true;
@@ -609,6 +618,22 @@ fn build_fix_plan(
             }
             WorkflowValidationFinding::MissingCoverageMarker { key, .. } => {
                 plan.add_coverage_markers.insert(key.clone());
+            }
+            WorkflowValidationFinding::ScaffoldEchoSource { .. } => {
+                plan.create_layout = true;
+            }
+            WorkflowValidationFinding::PlaceholderWorkflowTest { .. } => {
+                plan.add_coverage_markers.insert("positive".to_string());
+                plan.add_coverage_markers.insert("negative".to_string());
+                plan.add_coverage_markers.insert("load".to_string());
+                plan.add_coverage_markers.insert("autocomplete".to_string());
+            }
+            WorkflowValidationFinding::RawDevelopFlagsInMetadata { path, .. } => {
+                if path == Path::new("README.md") {
+                    plan.repair_readme = true;
+                } else {
+                    plan.update_validation_yaml = true;
+                }
             }
             WorkflowValidationFinding::CodeOutsideSrc { paths }
             | WorkflowValidationFinding::TestsOutsideSrcTests { paths }
@@ -733,9 +758,23 @@ fn action_kinds_for_finding(
         | WorkflowValidationFinding::MissingPackageScript { .. }
         | WorkflowValidationFinding::NonBunPackageScript { .. }
         | WorkflowValidationFinding::DisallowedPackageDependency { .. }
+        | WorkflowValidationFinding::LatestPackageDependency { .. }
         | WorkflowValidationFinding::UndeclaredPackageImport { .. }
         | WorkflowValidationFinding::UnusedPackageDependency { .. } => {
             vec![WorkflowRepairActionKind::RepairPackageManifest]
+        }
+        WorkflowValidationFinding::ScaffoldEchoSource { .. } => {
+            vec![WorkflowRepairActionKind::ScaffoldWorkflowSource]
+        }
+        WorkflowValidationFinding::PlaceholderWorkflowTest { .. } => {
+            vec![WorkflowRepairActionKind::ScaffoldWorkflowTests]
+        }
+        WorkflowValidationFinding::RawDevelopFlagsInMetadata { path, .. } => {
+            if path == Path::new("README.md") {
+                vec![WorkflowRepairActionKind::RepairReadme]
+            } else {
+                vec![WorkflowRepairActionKind::NormalizeValidationMetadata]
+            }
         }
         WorkflowValidationFinding::MissingCoverageMarker { .. } => {
             vec![WorkflowRepairActionKind::AddCoverageMarkers]
@@ -772,15 +811,18 @@ fn apply_validation_yaml_fix(
     let spec_path = workflow.workflow_yaml_path.clone();
     let mut spec = read_workflow_spec(&spec_path).unwrap_or_else(|_| {
         scaffold_workflow_spec(
-            workflow.id.clone(),
-            workflow
-                .title
-                .clone()
-                .unwrap_or_else(|| display_title(&workflow.id)),
-            workflow
-                .user_description
-                .clone()
-                .unwrap_or_else(|| format!("Workflow {}", workflow.id)),
+            ScaffoldWorkflowSpecRequest {
+                id: workflow.id.clone(),
+                title: workflow
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| display_title(&workflow.id)),
+                user_description: workflow
+                    .user_description
+                    .clone()
+                    .unwrap_or_else(|| format!("Workflow {}", workflow.id)),
+                command: workflow.command.clone(),
+            },
             &codex_config::types::WorkflowsConfigToml::default(),
         )
     });
@@ -788,15 +830,18 @@ fn apply_validation_yaml_fix(
 
     if plan.spec_reset {
         spec = scaffold_workflow_spec(
-            workflow.id.clone(),
-            workflow
-                .title
-                .clone()
-                .unwrap_or_else(|| display_title(&workflow.id)),
-            workflow
-                .user_description
-                .clone()
-                .unwrap_or_else(|| format!("Workflow {}", workflow.id)),
+            ScaffoldWorkflowSpecRequest {
+                id: workflow.id.clone(),
+                title: workflow
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| display_title(&workflow.id)),
+                user_description: workflow
+                    .user_description
+                    .clone()
+                    .unwrap_or_else(|| format!("Workflow {}", workflow.id)),
+                command: workflow.command.clone(),
+            },
             &codex_config::types::WorkflowsConfigToml::default(),
         );
         changed = true;
@@ -1339,6 +1384,7 @@ fn apply_package_manifest_fix(
             JsonValue::String("bun src/workflow.ts".to_string()),
         );
     }
+    replace_latest_dependency_versions(object);
 
     let deps = object
         .entry("dependencies")
@@ -1350,10 +1396,7 @@ fn apply_package_manifest_fix(
         deps_object.remove(package_name);
     }
     for package_name in &plan.package_names {
-        deps_object.insert(
-            package_name.clone(),
-            JsonValue::String("latest".to_string()),
-        );
+        deps_object.insert(package_name.clone(), JsonValue::String("*".to_string()));
     }
 
     let dev_deps = object
@@ -1366,13 +1409,10 @@ fn apply_package_manifest_fix(
     };
     dev_deps_object.insert(
         "@types/node".to_string(),
-        JsonValue::String("latest".to_string()),
+        JsonValue::String("*".to_string()),
     );
     dev_deps_object.remove("bun");
-    dev_deps_object.insert(
-        "typescript".to_string(),
-        JsonValue::String("latest".to_string()),
-    );
+    dev_deps_object.insert("typescript".to_string(), JsonValue::String("*".to_string()));
 
     let updated_contents = serde_json::to_string_pretty(&manifest)? + "\n";
     if existing_contents.as_deref() == Some(updated_contents.as_str()) {
@@ -1390,6 +1430,24 @@ fn apply_package_manifest_fix(
         path,
         detail: "Updated package.json".to_string(),
     })
+}
+
+fn replace_latest_dependency_versions(object: &mut serde_json::Map<String, JsonValue>) {
+    for field in [
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+    ] {
+        let Some(dependencies) = object.get_mut(field).and_then(JsonValue::as_object_mut) else {
+            continue;
+        };
+        for version in dependencies.values_mut() {
+            if version.as_str() == Some("latest") {
+                *version = JsonValue::String("*".to_string());
+            }
+        }
+    }
 }
 
 fn workflow_package_name(id: &str) -> String {

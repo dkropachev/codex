@@ -100,26 +100,34 @@ pub fn write_workflow_spec(path: &Path, spec: &WorkflowSpec) -> Result<()> {
         .with_context(|| format!("failed to write workflow spec {}", path.display()))
 }
 
+pub struct ScaffoldWorkflowSpecRequest {
+    pub id: String,
+    pub title: String,
+    pub user_description: String,
+    pub command: Option<String>,
+}
+
 pub fn scaffold_workflow_spec(
-    id: String,
-    title: String,
-    user_description: String,
+    request: ScaffoldWorkflowSpecRequest,
     config: &WorkflowsConfigToml,
 ) -> WorkflowSpec {
-    let command = id
-        .split('/')
-        .next_back()
-        .filter(|command| !command.is_empty() && !command.contains('/'))
-        .map(ToString::to_string);
+    let command = request.command.or_else(|| {
+        request
+            .id
+            .split('/')
+            .next_back()
+            .filter(|command| !command.is_empty() && !command.contains('/'))
+            .map(ToString::to_string)
+    });
     let command_label = command.as_deref().unwrap_or("<cmd>");
     let repair_mode = config
         .repair_mode
         .clone()
         .unwrap_or_else(|| "full".to_string());
     WorkflowSpec {
-        id,
-        title: Some(title),
-        user_description: Some(user_description),
+        id: request.id,
+        title: Some(request.title),
+        user_description: Some(request.user_description),
         search_terms: Vec::new(),
         api: JsonValue::Null,
         usage: json!({

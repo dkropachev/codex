@@ -59,6 +59,11 @@ pub enum WorkflowValidationFinding {
         path: PathBuf,
         package_name: String,
     },
+    LatestPackageDependency {
+        path: PathBuf,
+        package_name: String,
+        field: String,
+    },
     UndeclaredPackageImport {
         path: PathBuf,
         specifier: String,
@@ -128,6 +133,17 @@ pub enum WorkflowValidationFinding {
     MissingCoverageMarker {
         path: PathBuf,
         key: String,
+    },
+    ScaffoldEchoSource {
+        path: PathBuf,
+    },
+    PlaceholderWorkflowTest {
+        path: PathBuf,
+        reason: String,
+    },
+    RawDevelopFlagsInMetadata {
+        path: PathBuf,
+        field: String,
     },
     CodeOutsideSrc {
         paths: Vec<PathBuf>,
@@ -239,6 +255,13 @@ impl WorkflowValidationFinding {
                     )
                 }
             }
+            Self::LatestPackageDependency {
+                package_name,
+                field,
+                ..
+            } => {
+                format!("package.json `{field}.{package_name}` must not use `latest`")
+            }
             Self::UndeclaredPackageImport { package_name, .. } => {
                 format!("imports undeclared package `{package_name}`")
             }
@@ -297,6 +320,21 @@ impl WorkflowValidationFinding {
             }
             Self::MissingCoverageMarker { key, .. } => {
                 format!("missing test coverage marker `// workflow-covers: {key}`")
+            }
+            Self::ScaffoldEchoSource { path } => {
+                format!(
+                    "{} still returns the default scaffold echo output",
+                    path.display()
+                )
+            }
+            Self::PlaceholderWorkflowTest { path, reason } => {
+                format!("{} is only placeholder coverage: {reason}", path.display())
+            }
+            Self::RawDevelopFlagsInMetadata { path, field } => {
+                format!(
+                    "{} field `{field}` still contains raw workflow develop flags",
+                    path.display()
+                )
             }
             Self::CodeOutsideSrc { paths } => {
                 format!(
@@ -376,6 +414,7 @@ impl WorkflowValidationFinding {
             | Self::MissingPackageScript { .. }
             | Self::NonBunPackageScript { .. }
             | Self::DisallowedPackageDependency { .. }
+            | Self::LatestPackageDependency { .. }
             | Self::UndeclaredPackageImport { .. }
             | Self::DisallowedNodeRuntimeImport { .. }
             | Self::DisallowedWorkflowRuntimeFile { .. }
@@ -399,6 +438,9 @@ impl WorkflowValidationFinding {
             | Self::NonBunValidationCommand { .. }
             | Self::MissingContractSmoke { .. }
             | Self::InvalidContractSmoke { .. }
+            | Self::ScaffoldEchoSource { .. }
+            | Self::PlaceholderWorkflowTest { .. }
+            | Self::RawDevelopFlagsInMetadata { .. }
             | Self::ValidationCommandFailed { .. }
             | Self::AmbiguousWorkflowOutputSchema { .. }
             | Self::WorkflowApiContractExtractionFailed { .. }
@@ -444,6 +486,7 @@ impl WorkflowValidationFinding {
             | Self::MissingPackageScript { path, .. }
             | Self::NonBunPackageScript { path, .. }
             | Self::DisallowedPackageDependency { path, .. }
+            | Self::LatestPackageDependency { path, .. }
             | Self::UndeclaredPackageImport { path, .. }
             | Self::DisallowedNodeRuntimeImport { path, .. }
             | Self::DisallowedWorkflowRuntimeFile { path }
@@ -463,6 +506,9 @@ impl WorkflowValidationFinding {
             | Self::InvalidCoverageKeyType { path, .. }
             | Self::CoverageKeyMustBeTrue { path, .. }
             | Self::MissingCoverageMarker { path, .. }
+            | Self::ScaffoldEchoSource { path }
+            | Self::PlaceholderWorkflowTest { path, .. }
+            | Self::RawDevelopFlagsInMetadata { path, .. }
             | Self::RuntimeStateGitignoreMissing { path, .. }
             | Self::AmbiguousWorkflowOutputSchema { path, .. }
             | Self::WorkflowApiContractExtractionFailed { path, .. } => path.clone(),

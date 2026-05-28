@@ -311,8 +311,8 @@ mod tests {
     "run": "bun src/workflow.ts"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "typescript": "latest"
+    "@types/node": "1.0.0",
+    "typescript": "1.0.0"
   }
 }
 "#,
@@ -335,7 +335,7 @@ mod tests {
         .expect("write positive test");
         fs::write(
             workflow_dir.join("src/tests/workflow.load.test.ts"),
-            "// workflow-covers: load\nexport {}\n",
+            "// workflow-covers: load\nimport \"../workflow.ts\"\n",
         )
         .expect("write load test");
         fs::write(
@@ -350,7 +350,7 @@ mod tests {
         .expect("write negative test");
         fs::write(
             workflow_dir.join("src/tests/workflow.load.test.ts"),
-            "// workflow-covers: load\nexport {}\n",
+            "// workflow-covers: load\nimport \"../workflow.ts\"\n",
         )
         .expect("write load test");
         fs::write(

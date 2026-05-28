@@ -20,6 +20,8 @@ use toml_edit::value;
 
 use crate::command::WorkflowCommand;
 use crate::command::WorkflowConfigCommand;
+use crate::command::WorkflowDevelopLocation;
+use crate::command::WorkflowDevelopRequest;
 use crate::command::WorkflowInputSource;
 use crate::id::normalize_workflow_id;
 #[cfg(test)]
@@ -27,7 +29,9 @@ use crate::quality_hook::workflow_quality_block_reason_for_path;
 use crate::quality_hook::workflow_quality_block_reason_for_workflow;
 use crate::registry::DEFAULT_MAX_REPAIR_CYCLES;
 use crate::registry::WorkflowRoot;
+use crate::registry::WorkflowRootKind;
 use crate::registry::WorkflowSummary;
+use crate::registry::WorkflowValidationStatus;
 use crate::registry::default_workflow_root;
 use crate::registry::discover_workflows;
 use crate::registry::find_workflow;
@@ -38,6 +42,7 @@ use crate::registry::workflow_impact;
 use crate::registry::workflow_roots;
 use crate::repair::repair_workflow_command;
 use crate::runtime_progress::standalone_cli_runtime_event_handler;
+use crate::spec::ScaffoldWorkflowSpecRequest;
 use crate::spec::WORKFLOW_YAML;
 use crate::spec::read_workflow_spec;
 use crate::spec::scaffold_workflow_spec;
@@ -48,6 +53,7 @@ use crate::staging::create_session_stage_root;
 use crate::staging::create_stage_root;
 use crate::staging::publish_staged_workflow;
 use crate::staging::session_stage_root_path;
+use crate::validation_finding::finding_messages;
 use crate::validation_runner::run_validation_command;
 #[cfg(test)]
 use crate::validation_runner::validate_workflow;
@@ -104,6 +110,7 @@ impl WorkflowCommandContext<'_> {
 pub struct WorkflowCommandOutput {
     pub message: String,
     pub data: JsonValue,
+    pub exit_code: i32,
 }
 
 struct StagedWorkflow {
@@ -142,7 +149,7 @@ async fn execute_workflow_command_async(
 ) -> Result<WorkflowCommandOutput> {
     match command {
         WorkflowCommand::Mode => show_mode(ctx),
-        WorkflowCommand::Develop { description } => develop(ctx, &description),
+        WorkflowCommand::Develop { request } => develop(ctx, &request),
         WorkflowCommand::Describe { id, description } => describe(ctx, &id, &description),
         WorkflowCommand::Docs { id, instruction } => docs(ctx, &id, &instruction),
         WorkflowCommand::Edit { id, instruction } => edit(ctx, &id, &instruction),
@@ -168,6 +175,7 @@ async fn execute_workflow_command_async(
             Ok(WorkflowCommandOutput {
                 message: "Workflow Mode is done.".to_string(),
                 data: json!({ "done": true }),
+                exit_code: 0,
             })
         }
     }
@@ -194,6 +202,7 @@ fn publish(ctx: WorkflowCommandContext<'_>) -> Result<WorkflowCommandOutput> {
             "workflowCount": published_workflows.len(),
             "workflows": published_workflows,
         }),
+        exit_code: 0,
     })
 }
 
@@ -218,6 +227,7 @@ fn discard(ctx: WorkflowCommandContext<'_>) -> Result<WorkflowCommandOutput> {
             "workflowCount": discarded_workflows.len(),
             "workflows": discarded_workflows,
         }),
+        exit_code: 0,
     })
 }
 
@@ -232,6 +242,7 @@ fn show_mode(ctx: WorkflowCommandContext<'_>) -> Result<WorkflowCommandOutput> {
             "workflowCount": workflows.len(),
             "defaults": effective_config(ctx.config),
         }),
+        exit_code: 0,
     })
 }
 
@@ -252,6 +263,7 @@ fn list(ctx: WorkflowCommandContext<'_>) -> Result<WorkflowCommandOutput> {
     Ok(WorkflowCommandOutput {
         message,
         data: json!({ "workflows": workflows }),
+        exit_code: 0,
     })
 }
 
@@ -261,6 +273,7 @@ fn show(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommandOutp
     Ok(WorkflowCommandOutput {
         message: serde_yaml::to_string(&spec)?,
         data: json!({ "workflow": workflow, "spec": spec }),
+        exit_code: 0,
     })
 }
 
@@ -269,6 +282,7 @@ fn where_workflow(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowC
     Ok(WorkflowCommandOutput {
         message: workflow.path.display().to_string(),
         data: json!({ "workflow": workflow }),
+        exit_code: 0,
     })
 }
 
@@ -288,6 +302,11 @@ fn validate(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommand
     Ok(WorkflowCommandOutput {
         message: validation_report_message(&report),
         data: json!({ "workflow": workflow, "validation": report }),
+        exit_code: if report.status == WorkflowValidationStatus::Valid {
+            0
+        } else {
+            1
+        },
     })
 }
 
@@ -297,6 +316,7 @@ fn impact(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommandOu
     Ok(WorkflowCommandOutput {
         message: serde_json::to_string_pretty(&impact)?,
         data: json!({ "impact": impact }),
+        exit_code: 0,
     })
 }
 
@@ -312,6 +332,7 @@ fn status(ctx: WorkflowCommandContext<'_>, id: Option<&str>) -> Result<WorkflowC
         return Ok(WorkflowCommandOutput {
             message,
             data: json!({ "workflow": workflow, "impact": impact }),
+            exit_code: 0,
         });
     }
 
@@ -319,11 +340,15 @@ fn status(ctx: WorkflowCommandContext<'_>, id: Option<&str>) -> Result<WorkflowC
     Ok(WorkflowCommandOutput {
         message: format!("{} workflow(s) discovered", workflows.len()),
         data: json!({ "workflows": workflows, "defaults": effective_config(ctx.config) }),
+        exit_code: 0,
     })
 }
 
-fn develop(ctx: WorkflowCommandContext<'_>, description: &str) -> Result<WorkflowCommandOutput> {
-    let live_root = default_workflow_root(ctx.codex_home, ctx.cwd, ctx.config);
+fn develop(
+    ctx: WorkflowCommandContext<'_>,
+    request: &WorkflowDevelopRequest,
+) -> Result<WorkflowCommandOutput> {
+    let live_root = workflow_develop_root(&ctx, request.location);
     fs::create_dir_all(&live_root.path).with_context(|| {
         format!(
             "failed to create workflow root {}",
@@ -339,27 +364,35 @@ fn develop(ctx: WorkflowCommandContext<'_>, description: &str) -> Result<Workflo
         label: live_root.label.clone(),
         path: stage_root_path.clone(),
     };
-    let slug_roots = if ctx.stage_session_id.is_some() {
-        vec![live_root.path.as_path(), stage_root.path.as_path()]
-    } else {
-        vec![live_root.path.as_path()]
-    };
-    let slug = unique_slug_in_roots(&slug_roots, &slugify(description))?;
-    let id = normalize_workflow_id(&slug)?;
+    let mut slug_root_paths = workflow_roots(ctx.codex_home, ctx.cwd, ctx.config)
+        .into_iter()
+        .map(|root| root.path)
+        .collect::<Vec<_>>();
+    if ctx.stage_session_id.is_some() {
+        slug_root_paths.push(stage_root.path.clone());
+    }
+    let slug_roots = slug_root_paths
+        .iter()
+        .map(PathBuf::as_path)
+        .collect::<Vec<_>>();
+    let WorkflowDevelopMetadata { id, title, command } =
+        workflow_develop_metadata(request, &slug_roots)?;
     let path = stage_root.path.join(&id);
     fs::create_dir_all(path.join("src"))?;
     fs::create_dir_all(path.join("src/tests"))?;
     fs::create_dir_all(path.join("state"))?;
 
-    let title = title_from_description(description);
     let spec = scaffold_workflow_spec(
-        id.clone(),
-        title.clone(),
-        description.to_string(),
+        ScaffoldWorkflowSpecRequest {
+            id: id.clone(),
+            title: title.clone(),
+            user_description: request.description.clone(),
+            command: command.clone(),
+        },
         ctx.config,
     );
     write_workflow_spec(&path.join(WORKFLOW_YAML), &spec)?;
-    write_scaffold_files(&path, &id, &title, description)?;
+    write_scaffold_files(&path, &id, &title, &request.description, command.as_deref())?;
     let live_path = live_root.path.join(&id);
     let staged = StagedWorkflow {
         _guard: ctx
@@ -370,7 +403,12 @@ fn develop(ctx: WorkflowCommandContext<'_>, description: &str) -> Result<Workflo
         path,
         live_path,
     };
-    let had_changes = finalize_staged_workflow_changes(&ctx, &staged, "Create workflow scaffold")?;
+    let had_changes = finalize_staged_workflow_changes(
+        &ctx,
+        &staged,
+        "Create workflow scaffold",
+        WorkflowCommitValidation::AllowInvalidScaffold,
+    )?;
     if had_changes && ctx.stage_session_id.is_none() {
         publish_staged_workflow(&staged.root.path, &staged.path, &staged.live_path)?;
     }
@@ -381,6 +419,7 @@ fn develop(ctx: WorkflowCommandContext<'_>, description: &str) -> Result<Workflo
     Ok(WorkflowCommandOutput {
         message: format!("Created workflow {id} at {}", workflow_path.display()),
         data: json!({ "id": workflow_id, "path": workflow_path, "workflow": workflow }),
+        exit_code: 0,
     })
 }
 
@@ -394,8 +433,12 @@ fn describe(
     let mut spec = read_workflow_spec(&workflow.workflow_yaml_path)?;
     spec.user_description = Some(description.to_string());
     write_workflow_spec(&staged.path.join(WORKFLOW_YAML), &spec)?;
-    let had_changes =
-        finalize_staged_workflow_changes(&ctx, &staged, "Update workflow description")?;
+    let had_changes = finalize_staged_workflow_changes(
+        &ctx,
+        &staged,
+        "Update workflow description",
+        WorkflowCommitValidation::Enforce,
+    )?;
     if had_changes && ctx.stage_session_id.is_none() {
         publish_staged_workflow(&staged.root.path, &staged.path, &staged.live_path)?;
     }
@@ -403,6 +446,7 @@ fn describe(
     Ok(WorkflowCommandOutput {
         message: format!("Updated description for {}", workflow.id),
         data: json!({ "workflow": workflow, "spec": spec }),
+        exit_code: 0,
     })
 }
 
@@ -414,8 +458,12 @@ fn docs(
     let workflow = resolve_workflow_for_context(&ctx, id)?;
     let staged = stage_existing_workflow(&ctx, &workflow)?;
     append_readme_note(&staged.path, "Documentation", instruction)?;
-    let had_changes =
-        finalize_staged_workflow_changes(&ctx, &staged, "Update workflow documentation")?;
+    let had_changes = finalize_staged_workflow_changes(
+        &ctx,
+        &staged,
+        "Update workflow documentation",
+        WorkflowCommitValidation::Enforce,
+    )?;
     if had_changes && ctx.stage_session_id.is_none() {
         publish_staged_workflow(&staged.root.path, &staged.path, &staged.live_path)?;
     }
@@ -423,6 +471,7 @@ fn docs(
     Ok(WorkflowCommandOutput {
         message: format!("Updated docs for {}", workflow.id),
         data: json!({ "workflow": workflow }),
+        exit_code: 0,
     })
 }
 
@@ -434,8 +483,12 @@ fn edit(
     let workflow = resolve_workflow_for_context(&ctx, id)?;
     let staged = stage_existing_workflow(&ctx, &workflow)?;
     append_readme_note(&staged.path, "Edit request", instruction)?;
-    let had_changes =
-        finalize_staged_workflow_changes(&ctx, &staged, "Record workflow edit request")?;
+    let had_changes = finalize_staged_workflow_changes(
+        &ctx,
+        &staged,
+        "Record workflow edit request",
+        WorkflowCommitValidation::Enforce,
+    )?;
     if had_changes && ctx.stage_session_id.is_none() {
         publish_staged_workflow(&staged.root.path, &staged.path, &staged.live_path)?;
     }
@@ -443,6 +496,7 @@ fn edit(
     Ok(WorkflowCommandOutput {
         message: format!("Recorded edit request for {}", workflow.id),
         data: json!({ "workflow": workflow }),
+        exit_code: 0,
     })
 }
 
@@ -459,6 +513,7 @@ async fn run(
     let workflows = discover_workflows_for_context(&ctx)?;
     let normalized_id = normalize_workflow_id(id)?;
     let workflow = resolve_workflow_for_context(&ctx, &normalized_id)?;
+    ensure_workflow_can_run(&workflow)?;
     let input = read_input(input, input_fields)?;
     let standalone_runtime_event_handler = if ctx.runtime_event_handler.is_none() {
         standalone_cli_runtime_event_handler(ctx.progress)
@@ -495,6 +550,7 @@ async fn run(
     Ok(WorkflowCommandOutput {
         message: stdout.clone(),
         data: json!({ "workflow": workflow, "stdout": stdout, "stderr": stderr }),
+        exit_code: 0,
     })
 }
 
@@ -506,6 +562,7 @@ fn config(
         WorkflowConfigCommand::Show => Ok(WorkflowCommandOutput {
             message: serde_json::to_string_pretty(&effective_config(ctx.config))?,
             data: json!({ "config": effective_config(ctx.config) }),
+            exit_code: 0,
         }),
         WorkflowConfigCommand::Set { key, value } => {
             edit_workflows_config(ctx.codex_home, |table| {
@@ -515,6 +572,7 @@ fn config(
             Ok(WorkflowCommandOutput {
                 message: format!("Set workflows.{key}"),
                 data: json!({ "key": key }),
+                exit_code: 0,
             })
         }
         WorkflowConfigCommand::Clear { key } => {
@@ -525,6 +583,7 @@ fn config(
             Ok(WorkflowCommandOutput {
                 message: format!("Cleared workflows.{key}"),
                 data: json!({ "key": key }),
+                exit_code: 0,
             })
         }
     }
@@ -775,6 +834,164 @@ fn unique_slug_in_roots(roots: &[&Path], slug: &str) -> Result<String> {
     Ok(candidate)
 }
 
+fn workflow_develop_root(
+    ctx: &WorkflowCommandContext<'_>,
+    location: Option<WorkflowDevelopLocation>,
+) -> WorkflowRoot {
+    let Some(location) = location else {
+        return default_workflow_root(ctx.codex_home, ctx.cwd, ctx.config);
+    };
+    let target_kind = match location {
+        WorkflowDevelopLocation::Project => WorkflowRootKind::Project,
+        WorkflowDevelopLocation::Global => WorkflowRootKind::Global,
+    };
+    workflow_roots(ctx.codex_home, ctx.cwd, ctx.config)
+        .into_iter()
+        .find(|root| root.kind == target_kind)
+        .unwrap_or_else(|| match location {
+            WorkflowDevelopLocation::Project => WorkflowRoot {
+                kind: WorkflowRootKind::Project,
+                label: "project".to_string(),
+                path: ctx.cwd.join(".codex/workflows"),
+            },
+            WorkflowDevelopLocation::Global => WorkflowRoot {
+                kind: WorkflowRootKind::Global,
+                label: "global".to_string(),
+                path: ctx.codex_home.join("workflows"),
+            },
+        })
+}
+
+struct WorkflowDevelopMetadata {
+    id: String,
+    title: String,
+    command: Option<String>,
+}
+
+fn workflow_develop_metadata(
+    request: &WorkflowDevelopRequest,
+    roots: &[&Path],
+) -> Result<WorkflowDevelopMetadata> {
+    let requested_id = request
+        .id
+        .as_deref()
+        .and_then(trimmed_non_empty)
+        .or_else(|| workflow_id_from_description(&request.description));
+    let command = request
+        .command
+        .as_deref()
+        .and_then(trimmed_non_empty)
+        .map(|command| normalize_workflow_command(&command))
+        .transpose()?
+        .or_else(|| workflow_command_from_description(&request.description));
+
+    let title = request.title.as_deref().and_then(trimmed_non_empty);
+    if let Some(raw_id) = requested_id {
+        let id = normalize_workflow_id(&raw_id)?;
+        ensure_workflow_id_available(roots, &id)?;
+        let title = title.unwrap_or_else(|| title_from_workflow_id(&id));
+        return Ok(WorkflowDevelopMetadata { id, title, command });
+    }
+
+    let slug = unique_slug_in_roots(roots, &slugify(&request.description))?;
+    let id = normalize_workflow_id(&slug)?;
+    let title = title.unwrap_or_else(|| title_from_description(&request.description));
+    Ok(WorkflowDevelopMetadata { id, title, command })
+}
+
+fn ensure_workflow_id_available(roots: &[&Path], id: &str) -> Result<()> {
+    if roots.iter().any(|root| root.join(id).exists()) {
+        return Err(anyhow!("workflow '{id}' already exists"));
+    }
+    Ok(())
+}
+
+fn workflow_id_from_description(description: &str) -> Option<String> {
+    description
+        .split_whitespace()
+        .find_map(|token| {
+            let token = trim_workflow_path_token(token);
+            token
+                .split_once(".codex/workflows/")
+                .and_then(|(_prefix, id)| trimmed_non_empty(trim_workflow_metadata_token(id)))
+        })
+        .or_else(|| workflow_command_from_description(description))
+}
+
+fn workflow_command_from_description(description: &str) -> Option<String> {
+    let mut next_token_is_command = false;
+    for token in description.split_whitespace() {
+        if next_token_is_command {
+            if let Ok(command) = normalize_workflow_command(token) {
+                return Some(command);
+            }
+            next_token_is_command = false;
+        }
+        if trim_workflow_metadata_token(token).eq_ignore_ascii_case("command") {
+            next_token_is_command = true;
+        }
+    }
+    None
+}
+
+fn normalize_workflow_command(value: &str) -> Result<String> {
+    let command = trim_workflow_metadata_token(value);
+    if command.is_empty() {
+        return Err(anyhow!("workflow command must not be empty"));
+    }
+    if command.contains('/') || command.contains('\\') {
+        return Err(anyhow!(
+            "workflow command '{command}' must not contain slashes"
+        ));
+    }
+    if !command
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    {
+        return Err(anyhow!(
+            "workflow command '{command}' may only contain ASCII letters, digits, '-', '_', or '.'"
+        ));
+    }
+    Ok(command.to_string())
+}
+
+fn trim_workflow_metadata_token(value: &str) -> &str {
+    value.trim_matches(|ch: char| {
+        matches!(
+            ch,
+            '`' | '"' | '\'' | '.' | ',' | ';' | ':' | '(' | ')' | '[' | ']' | '{' | '}'
+        )
+    })
+}
+
+fn trim_workflow_path_token(value: &str) -> &str {
+    value
+        .trim_matches(|ch: char| matches!(ch, '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}'))
+        .trim_end_matches(['.', ',', ';', ':'])
+}
+
+fn trimmed_non_empty(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn ensure_workflow_can_run(workflow: &WorkflowSummary) -> Result<()> {
+    if workflow.validation.status == WorkflowValidationStatus::Valid {
+        return Ok(());
+    }
+    let messages = finding_messages(&workflow.validation.findings);
+    let detail = if messages.is_empty() {
+        "workflow validation status is invalid".to_string()
+    } else {
+        messages.join("\n")
+    };
+    Err(anyhow!(
+        "workflow {} is invalid and cannot be run:\n{}",
+        workflow.id,
+        detail
+    ))
+}
+
 fn title_from_description(description: &str) -> String {
     description
         .lines()
@@ -785,12 +1002,51 @@ fn title_from_description(description: &str) -> String {
         .to_string()
 }
 
-fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -> Result<()> {
-    let command_label = id
-        .split('/')
-        .next_back()
-        .filter(|command| !command.is_empty())
-        .unwrap_or(id);
+fn title_from_workflow_id(id: &str) -> String {
+    let name = id.split('/').next_back().unwrap_or(id);
+    let words = name
+        .split(['-', '_'])
+        .filter(|word| !word.is_empty())
+        .map(|word| match word.to_ascii_lowercase().as_str() {
+            "api" => "API".to_string(),
+            "ci" => "CI".to_string(),
+            "pr" => "PR".to_string(),
+            "tui" => "TUI".to_string(),
+            "ui" => "UI".to_string(),
+            _ => {
+                let mut chars = word.chars();
+                match chars.next() {
+                    Some(first) => {
+                        let mut title = String::new();
+                        title.extend(first.to_uppercase());
+                        title.push_str(chars.as_str());
+                        title
+                    }
+                    None => String::new(),
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+    if words.is_empty() {
+        "Workflow".to_string()
+    } else {
+        words.join(" ")
+    }
+}
+
+fn write_scaffold_files(
+    path: &Path,
+    id: &str,
+    title: &str,
+    description: &str,
+    command: Option<&str>,
+) -> Result<()> {
+    let command_label = command.unwrap_or_else(|| {
+        id.split('/')
+            .next_back()
+            .filter(|command| !command.is_empty())
+            .unwrap_or(id)
+    });
     let entrypoint_name = command_label.replace('-', "_");
     fs::write(
         path.join(".gitignore"),
@@ -821,11 +1077,11 @@ fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -
     "run": "bun src/workflow.ts"
   }},
   "dependencies": {{
-    "@openai/codex-sdk": "latest"
+    "@openai/codex-sdk": "*"
   }},
   "devDependencies": {{
-    "@types/node": "latest",
-    "typescript": "latest"
+    "@types/node": "*",
+    "typescript": "*"
   }}
 }}
 "#,
@@ -1169,6 +1425,7 @@ fn finalize_staged_workflow_changes(
     ctx: &WorkflowCommandContext<'_>,
     staged: &StagedWorkflow,
     message: &str,
+    validation: WorkflowCommitValidation,
 ) -> Result<bool> {
     run_git(&staged.path, &["init"])?;
 
@@ -1182,7 +1439,9 @@ fn finalize_staged_workflow_changes(
             },
         )?;
 
-    if let Some(reason) = workflow_quality_block_reason_for_workflow(&staged_workflow)? {
+    if validation == WorkflowCommitValidation::Enforce
+        && let Some(reason) = workflow_quality_block_reason_for_workflow(&staged_workflow)?
+    {
         return Err(anyhow!(
             "workflow changes failed validation and were not committed:\n{}",
             remap_staged_workflow_reason(&reason, &staged.path, &staged.live_path)
@@ -1231,6 +1490,12 @@ fn remap_staged_workflow_reason(reason: &str, staged_path: &Path, live_path: &Pa
         &staged_path.display().to_string(),
         &live_path.display().to_string(),
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkflowCommitValidation {
+    Enforce,
+    AllowInvalidScaffold,
 }
 
 fn live_root_path_for_workflow(
@@ -1372,6 +1637,98 @@ mod tests {
             .expect("node executable should be available for workflow tests")
     }
 
+    fn write_runtime_validation_scaffold(workflow_dir: &Path, id: &str, command: Option<&str>) {
+        fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
+        fs::create_dir_all(workflow_dir.join("state")).unwrap();
+        fs::create_dir_all(workflow_dir.join(".git")).unwrap();
+        fs::write(
+            workflow_dir.join(".gitignore"),
+            "node_modules/\nartifacts/\nstate/*\n!state/.gitkeep\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("README.md"),
+            "# Runtime Fixture\n\n## Usage\n\nRun the fixture by workflow id.\n\n## Workflow Runtime\n\nThe fixture uses a local Bun shim in process runtime mode.\n\n## Dependencies\n\nThe fixture has no runtime package dependencies.\n\n## Validation\n\nStatic validation checks package metadata and coverage markers.\n\n## Maintenance\n\nKeep this fixture aligned with workflow validation requirements.\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("DESIGN.md"),
+            "# Runtime Fixture Design\n\n## Overview\n\nThis fixture exercises workflow runtime behavior.\n\n## Architecture\n\nSource lives in src/ and tests live in src/tests/.\n\n## Data Flow\n\nThe runtime invokes the workflow and returns JSON output.\n\n## Failure Handling\n\nRuntime errors are surfaced through command execution.\n\n## Recovery Behavior\n\nNo recovery behavior is required for this fixture.\n\n## Test Matrix\n\nPositive, load, autocomplete, and negative markers keep discovery validation satisfied.\n\n## Maintenance Notes\n\nKeep package scripts and validation metadata in sync.\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("package.json"),
+            r#"{
+  "name": "codex-workflow-runtime-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/workflow.ts --target=bun --outdir artifacts/build",
+    "test": "bun test src/tests",
+    "run": "bun src/workflow.ts"
+  }
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("tsconfig.json"),
+            "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"strict\": true,\n    \"noEmit\": true\n  },\n  \"include\": [\"src/**/*.ts\"]\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("src/tests/workflow.positive.test.ts"),
+            "// workflow-covers: positive progress finalResult\nimport \"../workflow.ts\";\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("src/tests/workflow.load.test.ts"),
+            "// workflow-covers: load\nimport \"../workflow.ts\";\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("src/tests/workflow.autocomplete.test.ts"),
+            "// workflow-covers: autocomplete\nimport \"../workflow.ts\";\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("src/tests/workflow.negative.test.ts"),
+            "// workflow-covers: negative failureUx\nimport \"../workflow.ts\";\n",
+        )
+        .unwrap();
+        fs::write(workflow_dir.join("state/.gitkeep"), "").unwrap();
+        write_workflow_spec(
+            &workflow_dir.join(WORKFLOW_YAML),
+            &crate::spec::WorkflowSpec {
+                id: id.to_string(),
+                command: command.map(ToString::to_string),
+                dependencies: json!({
+                    "runtime": [],
+                    "development": [],
+                }),
+                validation: json!({
+                    "commands": [
+                        "bun build src/workflow.ts --target=bun --outdir artifacts/build",
+                        "bun test src/tests"
+                    ],
+                    "contractSmoke": { "input": {} },
+                    "coverage": {
+                        "positive": true,
+                        "negative": true,
+                        "progress": true,
+                        "finalResult": true,
+                        "failureUx": true,
+                        "load": true,
+                        "autocomplete": true,
+                        "recovery": false,
+                    }
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+
     fn write_test_bun_stub(workflow_dir: &Path) {
         let bin_dir = workflow_dir.join("node_modules/.bin");
         fs::create_dir_all(&bin_dir).unwrap();
@@ -1424,8 +1781,8 @@ mod tests {
     "run": "bun src/workflow.ts"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "typescript": "latest"
+    "@types/node": "1.0.0",
+    "typescript": "1.0.0"
   }
 }
 "#,
@@ -1448,7 +1805,7 @@ mod tests {
         .unwrap();
         fs::write(
             workflow_dir.join("src/tests/workflow.load.test.ts"),
-            "// workflow-covers: load\nexport {};\n",
+            "// workflow-covers: load\nimport \"../workflow.ts\";\n",
         )
         .unwrap();
         fs::write(
@@ -1556,7 +1913,13 @@ mod tests {
                 runtime: Default::default(),
             },
             WorkflowCommand::Develop {
-                description: "Jira Summary".to_string(),
+                request: WorkflowDevelopRequest {
+                    description: "Jira Summary".to_string(),
+                    id: None,
+                    command: None,
+                    title: None,
+                    location: None,
+                },
             },
         )
         .unwrap();
@@ -1667,6 +2030,105 @@ mod tests {
     }
 
     #[test]
+    fn develop_location_project_overrides_global_default() {
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let config = WorkflowsConfigToml {
+            default_location: Some(WorkflowDefaultLocation::Global),
+            commit_policy: Some("manual".to_string()),
+            ..Default::default()
+        };
+
+        let output = execute_workflow_command(
+            WorkflowCommandContext {
+                codex_home: home.path(),
+                cwd: cwd.path(),
+                config: &config,
+                codex_self_exe: None,
+                stage_session_id: None,
+                progress: None,
+                runtime_event_handler: None,
+                runtime: Default::default(),
+            },
+            WorkflowCommand::Develop {
+                request: WorkflowDevelopRequest {
+                    description: "Project-only workflow".to_string(),
+                    id: Some("project-only".to_string()),
+                    command: Some("project-only".to_string()),
+                    title: None,
+                    location: Some(WorkflowDevelopLocation::Project),
+                },
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            output.data["id"],
+            JsonValue::String("project-only".to_string())
+        );
+        assert!(
+            cwd.path()
+                .join(".codex/workflows/project-only/workflow.yaml")
+                .is_file()
+        );
+        assert!(
+            !home
+                .path()
+                .join("workflows/project-only/workflow.yaml")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn develop_uses_requested_metadata_from_description() {
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let config = WorkflowsConfigToml {
+            default_location: Some(WorkflowDefaultLocation::Project),
+            ..Default::default()
+        };
+        let description = "Create project workflow pr-triage (command review-pr) under \
+            .codex/workflows/pr-triage. Goal: analyze a PR diff.";
+
+        let output = execute_workflow_command(
+            WorkflowCommandContext {
+                codex_home: home.path(),
+                cwd: cwd.path(),
+                config: &config,
+                codex_self_exe: None,
+                stage_session_id: None,
+                progress: None,
+                runtime_event_handler: None,
+                runtime: Default::default(),
+            },
+            WorkflowCommand::Develop {
+                request: WorkflowDevelopRequest {
+                    description: description.to_string(),
+                    id: None,
+                    command: None,
+                    title: None,
+                    location: None,
+                },
+            },
+        )
+        .unwrap();
+
+        let workflow_yaml = cwd.path().join(".codex/workflows/pr-triage/workflow.yaml");
+        let spec = read_workflow_spec(&workflow_yaml).unwrap();
+        assert_eq!(
+            output.data["id"],
+            JsonValue::String("pr-triage".to_string())
+        );
+        assert_eq!(spec.id, "pr-triage");
+        assert_eq!(spec.title, Some("PR Triage".to_string()));
+        assert_eq!(spec.command, Some("review-pr".to_string()));
+        assert_eq!(spec.user_description, Some(description.to_string()));
+        let readme =
+            fs::read_to_string(cwd.path().join(".codex/workflows/pr-triage/README.md")).unwrap();
+        assert!(readme.contains("/review-pr"));
+    }
+
+    #[test]
     fn validate_workflow_runs_validation_commands() {
         let temp_dir = TempDir::new().unwrap();
         let workflow_dir = temp_dir.path().join("review/fix");
@@ -1715,6 +2177,42 @@ mod tests {
     }
 
     #[test]
+    fn validate_command_returns_non_zero_exit_code_for_invalid_workflow() {
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let workflow_dir = home.path().join("workflows/review/fix");
+        write_validation_fixture(
+            &workflow_dir,
+            json!([
+                "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
+                "bun test src/tests"
+            ]),
+        );
+        fs::remove_file(workflow_dir.join("DESIGN.md")).unwrap();
+
+        let config = WorkflowsConfigToml::default();
+        let output = execute_workflow_command(
+            WorkflowCommandContext {
+                codex_home: home.path(),
+                cwd: cwd.path(),
+                config: &config,
+                codex_self_exe: None,
+                stage_session_id: None,
+                progress: None,
+                runtime_event_handler: None,
+                runtime: Default::default(),
+            },
+            WorkflowCommand::Validate {
+                id: "review/fix".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output.exit_code, 1);
+        assert!(output.message.contains("missing DESIGN.md"));
+    }
+
+    #[test]
     fn validate_workflow_reports_failing_validation_command() {
         let temp_dir = TempDir::new().unwrap();
         let workflow_dir = temp_dir.path().join("review/fix");
@@ -1755,6 +2253,50 @@ mod tests {
                 "validation command `bun -e \"process.exit(1)\" # build test` failed with exit code 1"
                     .to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn run_refuses_invalid_workflow_before_launching_runtime() {
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let workflow_dir = home.path().join("workflows/review/fix");
+        fs::create_dir_all(workflow_dir.join("src")).unwrap();
+        fs::write(
+            workflow_dir.join("src/workflow.ts"),
+            "export default async function workflow() { return { ok: true }; }\n",
+        )
+        .unwrap();
+        write_runtime_validation_scaffold(&workflow_dir, "review/other", None);
+
+        let config = WorkflowsConfigToml::default();
+        let err = execute_workflow_command(
+            WorkflowCommandContext {
+                codex_home: home.path(),
+                cwd: cwd.path(),
+                config: &config,
+                codex_self_exe: None,
+                stage_session_id: None,
+                progress: None,
+                runtime_event_handler: None,
+                runtime: Default::default(),
+            },
+            WorkflowCommand::Run {
+                id: "review/fix".to_string(),
+                input: Some(WorkflowInputSource::Inline("{}".to_string())),
+                input_fields: BTreeMap::new(),
+            },
+        )
+        .expect_err("invalid workflow should not run");
+
+        assert!(
+            err.to_string()
+                .contains("workflow review/fix is invalid and cannot be run")
+        );
+        assert!(
+            err.to_string().contains(
+                "workflow.yaml id 'review/other' does not match directory id 'review/fix'"
+            )
         );
     }
 
@@ -1846,9 +2388,13 @@ mod tests {
         let live_readme_before = fs::read_to_string(workflow.path.join("README.md")).unwrap();
         append_readme_note(&staged.path, "Documentation", "staged change").unwrap();
 
-        let had_changes =
-            finalize_staged_workflow_changes(&ctx, &staged, "Update workflow documentation")
-                .unwrap();
+        let had_changes = finalize_staged_workflow_changes(
+            &ctx,
+            &staged,
+            "Update workflow documentation",
+            WorkflowCommitValidation::Enforce,
+        )
+        .unwrap();
 
         assert!(had_changes);
         assert_eq!(
@@ -2167,8 +2713,7 @@ mod tests {
         fs::create_dir_all(workflow_dir.join("state")).unwrap();
         fs::create_dir_all(workflow_dir.join("node_modules/.bin")).unwrap();
         fs::create_dir_all(workflow_dir.join(".git")).unwrap();
-        fs::write(workflow_dir.join("README.md"), "# Runtime Progress\n").unwrap();
-        fs::write(workflow_dir.join("state/.gitkeep"), "").unwrap();
+        write_runtime_validation_scaffold(&workflow_dir, "reports/runtime-progress", None);
         fs::write(
             workflow_dir.join("src/helper.js"),
             r#"export function progressMessage() {
@@ -2229,14 +2774,6 @@ process.exit(result.status ?? 1);
             fs::Permissions::from_mode(0o755),
         )
         .unwrap();
-        write_workflow_spec(
-            &workflow_dir.join(WORKFLOW_YAML),
-            &crate::spec::WorkflowSpec {
-                id: "reports/runtime-progress".to_string(),
-                ..Default::default()
-            },
-        )
-        .unwrap();
 
         let output = execute_workflow_command(
             WorkflowCommandContext {
@@ -2283,8 +2820,7 @@ process.exit(result.status ?? 1);
         fs::create_dir_all(workflow_dir.join("state")).unwrap();
         fs::create_dir_all(workflow_dir.join("node_modules/.bin")).unwrap();
         fs::create_dir_all(workflow_dir.join(".git")).unwrap();
-        fs::write(workflow_dir.join("README.md"), "# Resident Host\n").unwrap();
-        fs::write(workflow_dir.join("state/.gitkeep"), "").unwrap();
+        write_runtime_validation_scaffold(&workflow_dir, "reports/resident-host", None);
         fs::write(
             workflow_dir.join("src/workflow.ts"),
             r#"let runs = 0;
@@ -2302,14 +2838,6 @@ export default workflow;
         .unwrap();
         let host_log = workflow_dir.join("host-stderr.log");
         let node_path = test_node_path();
-        write_workflow_spec(
-            &workflow_dir.join(WORKFLOW_YAML),
-            &crate::spec::WorkflowSpec {
-                id: "reports/resident-host".to_string(),
-                ..Default::default()
-            },
-        )
-        .unwrap();
 
         fs::write(
             workflow_dir.join("node_modules/.bin/bun"),

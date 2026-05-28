@@ -515,6 +515,7 @@ export type { WorkflowConfigReadResponse } from "./WorkflowConfigReadResponse";
 export type { WorkflowConfigValues } from "./WorkflowConfigValues";
 export type { WorkflowConfigWriteParams } from "./WorkflowConfigWriteParams";
 export type { WorkflowConfigWriteResponse } from "./WorkflowConfigWriteResponse";
+export type { WorkflowDevelopLocation } from "./WorkflowDevelopLocation";
 export type { WorkflowDevelopParams } from "./WorkflowDevelopParams";
 export type { WorkflowDevelopResponse } from "./WorkflowDevelopResponse";
 export type { WorkflowDiscardResponse } from "./WorkflowDiscardResponse";

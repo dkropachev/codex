@@ -178,11 +178,19 @@ impl App {
         else {
             match app_server.workflow_command_execute(command_args).await {
                 Ok(response) => {
-                    self.chat_widget
-                        .add_to_history(crate::history_cell::WorkflowMarkdownCell::new(
-                            response.message,
-                            self.config.cwd.as_path(),
-                        ))
+                    if response.exit_code == 0 {
+                        self.chat_widget.add_to_history(
+                            crate::history_cell::WorkflowMarkdownCell::new(
+                                response.message,
+                                self.config.cwd.as_path(),
+                            ),
+                        )
+                    } else {
+                        self.chat_widget.add_error_message(format!(
+                            "Workflow command failed: {display_command}\n{}",
+                            response.message
+                        ));
+                    }
                 }
                 Err(err) => self.chat_widget.add_error_message(format!(
                     "Workflow command failed: {display_command}: {err:#}"

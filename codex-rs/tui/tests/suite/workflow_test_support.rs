@@ -55,28 +55,68 @@ pub(super) fn write_workflow_fixture_with_metadata(
     use std::os::unix::fs::PermissionsExt;
 
     let node_path = test_node_path()?;
-    std::fs::create_dir_all(workflow_dir.join("src"))?;
+    std::fs::create_dir_all(workflow_dir.join("src/tests"))?;
     std::fs::create_dir_all(workflow_dir.join("state"))?;
     std::fs::create_dir_all(workflow_dir.join("node_modules/.bin"))?;
     std::fs::create_dir_all(workflow_dir.join(".git"))?;
-    std::fs::write(workflow_dir.join("README.md"), format!("# {title}\n"))?;
+    std::fs::write(
+        workflow_dir.join(".gitignore"),
+        "node_modules/\nartifacts/\nstate/*\n!state/.gitkeep\n",
+    )?;
+    std::fs::write(
+        workflow_dir.join("README.md"),
+        format!(
+            "# {title}\n\n## Usage\n\nRun this fixture through the TUI workflow path.\n\n## Workflow Runtime\n\nThe fixture uses the process workflow runtime with a local Bun shim.\n\n## Dependencies\n\nThe fixture has no runtime package dependencies.\n\n## Validation\n\nStatic validation checks package metadata and coverage markers.\n\n## Maintenance\n\nKeep this fixture aligned with workflow validation requirements.\n"
+        ),
+    )?;
+    std::fs::write(
+        workflow_dir.join("DESIGN.md"),
+        format!(
+            "# {title} Design\n\n## Overview\n\nThis fixture exercises TUI workflow rendering.\n\n## Architecture\n\nSource lives in src/ and tests live in src/tests/.\n\n## Data Flow\n\nThe TUI starts a workflow run and receives progress and markdown events.\n\n## Failure Handling\n\nRuntime errors are surfaced in the TUI failure path.\n\n## Recovery Behavior\n\nNo recovery behavior is required for this fixture.\n\n## Test Matrix\n\nPositive, load, autocomplete, and negative markers keep discovery validation satisfied.\n\n## Maintenance Notes\n\nKeep package scripts and validation metadata in sync.\n"
+        ),
+    )?;
     std::fs::write(workflow_dir.join("state/.gitkeep"), "")?;
     std::fs::write(
         workflow_dir.join("workflow.yaml"),
         format!(
-            "id: {id}\ncommand: {command}\ntitle: {title}\nuserDescription: Emit progress and final markdown for TUI integration tests.\n{extra_workflow_yaml}"
+            "id: {id}\ncommand: {command}\ntitle: {title}\nuserDescription: Emit progress and final markdown for TUI integration tests.\n{extra_workflow_yaml}dependencies:\n  runtime: []\n  development: []\nvalidation:\n  commands:\n    - bun build src/workflow.ts --target=bun --outdir artifacts/build\n    - bun test src/tests\n  contractSmoke:\n    input: {{}}\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n"
         ),
     )?;
     std::fs::write(
         workflow_dir.join("package.json"),
         r#"{
-  "name": "workflow-visibility-test",
+  "name": "codex-workflow-visibility-test",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/workflow.ts --target=bun --outdir artifacts/build",
+    "test": "bun test src/tests",
+    "run": "bun src/workflow.ts"
+  }
 }
 "#,
     )?;
+    std::fs::write(
+        workflow_dir.join("tsconfig.json"),
+        "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"strict\": true,\n    \"noEmit\": true\n  },\n  \"include\": [\"src/**/*.ts\"]\n}\n",
+    )?;
     std::fs::write(workflow_dir.join("src/workflow.ts"), workflow_source)?;
+    std::fs::write(
+        workflow_dir.join("src/tests/workflow.positive.test.ts"),
+        "// workflow-covers: positive progress finalResult\nimport \"../workflow.ts\";\n",
+    )?;
+    std::fs::write(
+        workflow_dir.join("src/tests/workflow.load.test.ts"),
+        "// workflow-covers: load\nimport \"../workflow.ts\";\n",
+    )?;
+    std::fs::write(
+        workflow_dir.join("src/tests/workflow.autocomplete.test.ts"),
+        "// workflow-covers: autocomplete\nimport \"../workflow.ts\";\n",
+    )?;
+    std::fs::write(
+        workflow_dir.join("src/tests/workflow.negative.test.ts"),
+        "// workflow-covers: negative failureUx\nimport \"../workflow.ts\";\n",
+    )?;
     std::fs::write(
         workflow_dir.join("node_modules/.bin/bun"),
         format!(

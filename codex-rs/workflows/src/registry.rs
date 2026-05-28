@@ -608,11 +608,11 @@ mod tests {
     "run": "bun src/workflow.ts"
   },
   "dependencies": {
-    "@openai/codex-sdk": "latest"
+    "@openai/codex-sdk": "1.0.0"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "typescript": "latest"
+    "@types/node": "1.0.0",
+    "typescript": "1.0.0"
   }
 }
 "#,
@@ -635,7 +635,7 @@ mod tests {
         .unwrap();
         fs::write(
             workflow.join("src/tests/workflow.load.test.ts"),
-            "// workflow-covers: load\nexport {};\n",
+            "// workflow-covers: load\nimport \"../workflow.ts\";\n",
         )
         .unwrap();
         fs::write(
@@ -710,7 +710,7 @@ mod tests {
   "private": true,
   "type": "module",
   "dependencies": {
-    "@openai/codex-sdk": "latest"
+    "@openai/codex-sdk": "1.0.0"
   }
 }
 "#,
@@ -728,7 +728,7 @@ mod tests {
         .unwrap();
         fs::write(
             dir.join("src/tests/workflow.load.test.ts"),
-            "// workflow-covers: load\nexport {};\n",
+            "// workflow-covers: load\nimport \"../workflow.ts\";\n",
         )
         .unwrap();
         fs::write(

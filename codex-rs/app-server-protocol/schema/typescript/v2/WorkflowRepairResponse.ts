@@ -6,4 +6,4 @@ import type { WorkflowSummary } from "./WorkflowSummary";
 import type { WorkflowValidationCommandResult } from "./WorkflowValidationCommandResult";
 import type { WorkflowValidationInfo } from "./WorkflowValidationInfo";
 
-export type WorkflowRepairResponse = { message: string, workflow: WorkflowSummary, validation: WorkflowValidationInfo, validationCommandResults: Array<WorkflowValidationCommandResult>, repair: WorkflowRepairResult, };
+export type WorkflowRepairResponse = { message: string, exitCode: number, workflow: WorkflowSummary, validation: WorkflowValidationInfo, validationCommandResults: Array<WorkflowValidationCommandResult>, repair: WorkflowRepairResult, };

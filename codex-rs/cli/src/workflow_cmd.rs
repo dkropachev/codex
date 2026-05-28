@@ -13,6 +13,7 @@ use codex_workflows::execute_workflow_command;
 use codex_workflows::parse_workflow_command_with_workflows;
 use serde_json::Value as JsonValue;
 use serde_json::json;
+use std::path::PathBuf;
 
 #[derive(Debug, clap::Parser)]
 #[command(bin_name = "codex workflow")]
@@ -28,6 +29,7 @@ pub struct WorkflowCli {
 pub(crate) async fn load_workflow_command_context(
     root_config_overrides: CliConfigOverrides,
     config_profile: Option<String>,
+    cwd: Option<PathBuf>,
     arg0_paths: Arg0DispatchPaths,
     stage_session_id: Option<&str>,
 ) -> Result<(Config, Vec<WorkflowSummary>)> {
@@ -36,6 +38,7 @@ pub(crate) async fn load_workflow_command_context(
         .map_err(anyhow::Error::msg)?;
     let config_overrides = ConfigOverrides {
         config_profile,
+        cwd,
         codex_self_exe: arg0_paths.codex_self_exe.clone(),
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
@@ -64,11 +67,13 @@ pub async fn run_workflow_command(
     cmd: WorkflowCli,
     root_config_overrides: CliConfigOverrides,
     config_profile: Option<String>,
+    cwd: Option<PathBuf>,
     arg0_paths: Arg0DispatchPaths,
 ) -> Result<()> {
     let (config, workflows) = load_workflow_command_context(
         root_config_overrides,
         config_profile,
+        cwd,
         arg0_paths,
         cmd.stage_session_id.as_deref(),
     )
@@ -107,6 +112,9 @@ pub async fn run_workflow_command(
         command,
     )?;
     println!("{}", output.message);
+    if output.exit_code != 0 {
+        std::process::exit(output.exit_code);
+    }
     Ok(())
 }
 

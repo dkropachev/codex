@@ -11,7 +11,7 @@ use crate::registry::WorkflowSummary;
 pub enum WorkflowCommand {
     Mode,
     Develop {
-        description: String,
+        request: WorkflowDevelopRequest,
     },
     Describe {
         id: String,
@@ -56,6 +56,21 @@ pub enum WorkflowCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowDevelopRequest {
+    pub description: String,
+    pub id: Option<String>,
+    pub command: Option<String>,
+    pub title: Option<String>,
+    pub location: Option<WorkflowDevelopLocation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowDevelopLocation {
+    Project,
+    Global,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkflowInputSource {
     Inline(String),
     File(PathBuf),
@@ -87,6 +102,10 @@ pub enum WorkflowCommandParseError {
     MissingArgument(&'static str, &'static str),
     #[error("unexpected argument '{0}'")]
     UnexpectedArgument(String),
+    #[error(
+        "workflow develop metadata flags must be passed as separate arguments, for example `develop --location project --id <id> --command <command> <description>`"
+    )]
+    MisquotedDevelopFlags,
 }
 
 pub fn parse_workflow_command_line(
@@ -111,9 +130,7 @@ pub fn parse_workflow_command(
         return Ok(WorkflowCommand::Mode);
     };
     match command {
-        "develop" => Ok(WorkflowCommand::Develop {
-            description: joined_tail(args, /*start*/ 1, "develop", "a description")?,
-        }),
+        "develop" => parse_develop(args),
         "describe" => Ok(WorkflowCommand::Describe {
             id: required(args, /*index*/ 1, "describe", "a workflow id")?.to_string(),
             description: joined_tail(args, /*start*/ 2, "describe", "a description")?,
@@ -182,6 +199,106 @@ pub fn workflow_command_input(argv: &[String]) -> WorkflowCommandInput {
         argv: argv.to_vec(),
         text: argv.join(" "),
     }
+}
+
+fn parse_develop(args: &[String]) -> Result<WorkflowCommand, WorkflowCommandParseError> {
+    let mut id = None;
+    let mut command = None;
+    let mut title = None;
+    let mut location = None;
+    let mut description_parts = Vec::new();
+    let mut index = 1;
+
+    while index < args.len() {
+        match parse_long_flag_argument(&args[index]) {
+            Some(("id", Some(value))) => {
+                id = Some(value.to_string());
+                index += 1;
+            }
+            Some(("id", None)) => {
+                id = Some(required(args, index + 1, "develop", "a workflow id")?.to_string());
+                index += 2;
+            }
+            Some(("command", Some(value))) => {
+                command = Some(value.to_string());
+                index += 1;
+            }
+            Some(("command", None)) => {
+                command = Some(required(args, index + 1, "develop", "a command")?.to_string());
+                index += 2;
+            }
+            Some(("title", Some(value))) => {
+                title = Some(value.to_string());
+                index += 1;
+            }
+            Some(("title", None)) => {
+                title = Some(required(args, index + 1, "develop", "a title")?.to_string());
+                index += 2;
+            }
+            Some(("location", Some(value))) => {
+                location = Some(parse_develop_location(value)?);
+                index += 1;
+            }
+            Some(("location", None)) => {
+                location = Some(parse_develop_location(required(
+                    args,
+                    index + 1,
+                    "develop",
+                    "project or global",
+                )?)?);
+                index += 2;
+            }
+            Some((flag, _)) => {
+                if looks_like_quoted_develop_flags(&args[index]) {
+                    return Err(WorkflowCommandParseError::MisquotedDevelopFlags);
+                }
+                return Err(WorkflowCommandParseError::UnexpectedArgument(format!(
+                    "--{flag}"
+                )));
+            }
+            None => {
+                description_parts.extend(args[index..].iter().cloned());
+                break;
+            }
+        }
+    }
+
+    if description_parts.is_empty() {
+        return Err(WorkflowCommandParseError::MissingArgument(
+            "develop",
+            "a description",
+        ));
+    }
+
+    Ok(WorkflowCommand::Develop {
+        request: WorkflowDevelopRequest {
+            description: description_parts.join(" "),
+            id,
+            command,
+            title,
+            location,
+        },
+    })
+}
+
+fn parse_develop_location(
+    value: &str,
+) -> Result<WorkflowDevelopLocation, WorkflowCommandParseError> {
+    match value {
+        "project" => Ok(WorkflowDevelopLocation::Project),
+        "global" => Ok(WorkflowDevelopLocation::Global),
+        _ => Err(WorkflowCommandParseError::UnexpectedArgument(format!(
+            "--location {value}"
+        ))),
+    }
+}
+
+fn looks_like_quoted_develop_flags(value: &str) -> bool {
+    value.starts_with("--")
+        && value.chars().any(char::is_whitespace)
+        && ["--id", "--command", "--title", "--location"]
+            .iter()
+            .any(|flag| value.contains(flag))
 }
 
 fn parse_registered_workflow_command(
@@ -490,6 +607,49 @@ mod tests {
         assert_eq!(
             parse_workflow_command_line("publish").unwrap(),
             WorkflowCommand::Publish
+        );
+        assert_eq!(
+            parse_workflow_command_line(
+                "develop --id pr-triage --command review-pr --title 'PR Triage' Analyze a PR"
+            )
+            .unwrap(),
+            WorkflowCommand::Develop {
+                request: WorkflowDevelopRequest {
+                    description: "Analyze a PR".to_string(),
+                    id: Some("pr-triage".to_string()),
+                    command: Some("review-pr".to_string()),
+                    title: Some("PR Triage".to_string()),
+                    location: None,
+                },
+            }
+        );
+        assert_eq!(
+            parse_workflow_command_line("develop --location project Jira Summary").unwrap(),
+            WorkflowCommand::Develop {
+                request: WorkflowDevelopRequest {
+                    description: "Jira Summary".to_string(),
+                    id: None,
+                    command: None,
+                    title: None,
+                    location: Some(WorkflowDevelopLocation::Project),
+                },
+            }
+        );
+        assert_eq!(
+            parse_workflow_command_line("develop Jira Summary").unwrap(),
+            WorkflowCommand::Develop {
+                request: WorkflowDevelopRequest {
+                    description: "Jira Summary".to_string(),
+                    id: None,
+                    command: None,
+                    title: None,
+                    location: None,
+                },
+            }
+        );
+        assert_eq!(
+            parse_workflow_command_line("develop '--id jira --command jira Review Jira'"),
+            Err(WorkflowCommandParseError::MisquotedDevelopFlags)
         );
         assert_eq!(
             parse_workflow_command_line("discard").unwrap(),

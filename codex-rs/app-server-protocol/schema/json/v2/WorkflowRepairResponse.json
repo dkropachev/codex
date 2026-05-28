@@ -549,6 +549,34 @@
         },
         {
           "properties": {
+            "field": {
+              "type": "string"
+            },
+            "package_name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "latestPackageDependency"
+              ],
+              "title": "LatestPackageDependencyWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "field",
+            "package_name",
+            "path",
+            "type"
+          ],
+          "title": "LatestPackageDependencyWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
             "package_name": {
               "type": "string"
             },
@@ -981,6 +1009,74 @@
         },
         {
           "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "scaffoldEchoSource"
+              ],
+              "title": "ScaffoldEchoSourceWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "ScaffoldEchoSourceWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "placeholderWorkflowTest"
+              ],
+              "title": "PlaceholderWorkflowTestWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "reason",
+            "type"
+          ],
+          "title": "PlaceholderWorkflowTestWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "rawDevelopFlagsInMetadata"
+              ],
+              "title": "RawDevelopFlagsInMetadataWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "field",
+            "path",
+            "type"
+          ],
+          "title": "RawDevelopFlagsInMetadataWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
             "paths": {
               "items": {
                 "type": "string"
@@ -1242,6 +1338,10 @@
     }
   },
   "properties": {
+    "exitCode": {
+      "format": "int32",
+      "type": "integer"
+    },
     "message": {
       "type": "string"
     },
@@ -1262,6 +1362,7 @@
     }
   },
   "required": [
+    "exitCode",
     "message",
     "repair",
     "validation",

@@ -5161,12 +5161,47 @@
       ],
       "type": "object"
     },
+    "WorkflowDevelopLocation": {
+      "enum": [
+        "project",
+        "global"
+      ],
+      "type": "string"
+    },
     "WorkflowDevelopParams": {
       "properties": {
+        "command": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "type": "string"
         },
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkflowDevelopLocation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "stageSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
           "type": [
             "string",
             "null"

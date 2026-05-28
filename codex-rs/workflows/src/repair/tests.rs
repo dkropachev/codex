@@ -85,7 +85,7 @@ export default async function run(_ctx: WorkflowContext, input: WorkflowInput): 
     .unwrap();
     fs::write(
         workflow_dir.join("workflow.load.test.ts"),
-        "// workflow-covers: load\nexport {};\n",
+        "// workflow-covers: load\nimport \"./workflow.ts\";\n",
     )
     .unwrap();
     fs::write(
@@ -149,8 +149,8 @@ fn write_command_failure_workflow_fixture(workflow_dir: &Path) {
     "run": "bun src/workflow.ts"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "typescript": "latest"
+    "@types/node": "1.0.0",
+    "typescript": "1.0.0"
   }
 }
 "#,
@@ -173,7 +173,7 @@ fn write_command_failure_workflow_fixture(workflow_dir: &Path) {
     .unwrap();
     fs::write(
         workflow_dir.join("src/tests/workflow.load.test.ts"),
-        "// workflow-covers: load\nexport {};\n",
+        "// workflow-covers: load\nimport \"../workflow.ts\";\n",
     )
     .unwrap();
     fs::write(
@@ -257,7 +257,7 @@ fn write_build_fixable_workflow_fixture(workflow_dir: &Path) {
     .unwrap();
     fs::write(
         workflow_dir.join("src/tests/workflow.load.test.ts"),
-        "// workflow-covers: load\nexport {};\n",
+        "// workflow-covers: load\nimport \"../workflow.ts\";\n",
     )
     .unwrap();
     fs::write(
@@ -394,7 +394,7 @@ fn write_tracked_runtime_state_workflow_fixture(workflow_dir: &Path) {
     .unwrap();
     fs::write(
         workflow_dir.join("src/tests/workflow.load.test.ts"),
-        "// workflow-covers: load\nexport {};\n",
+        "// workflow-covers: load\nimport \"../workflow.ts\";\n",
     )
     .unwrap();
     fs::write(
@@ -496,8 +496,8 @@ fn repair_workflow_command_repairs_validation_findings_iteratively() {
         &fs::read_to_string(workflow_dir.join("package.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(package["dependencies"]["left-pad"], "latest");
-    assert_eq!(package["dependencies"]["@openai/codex-sdk"], "latest");
+    assert_eq!(package["dependencies"]["left-pad"], "*");
+    assert_eq!(package["dependencies"]["@openai/codex-sdk"], "*");
     assert!(
         output.data["repair"]["appliedFixes"]
             .as_array()

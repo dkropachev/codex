@@ -18780,12 +18780,17 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "data": true,
+        "exitCode": {
+          "format": "int32",
+          "type": "integer"
+        },
         "message": {
           "type": "string"
         }
       },
       "required": [
         "data",
+        "exitCode",
         "message"
       ],
       "title": "WorkflowCommandExecuteResponse",
@@ -18893,13 +18898,48 @@
       "title": "WorkflowConfigWriteResponse",
       "type": "object"
     },
+    "WorkflowDevelopLocation": {
+      "enum": [
+        "project",
+        "global"
+      ],
+      "type": "string"
+    },
     "WorkflowDevelopParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "command": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "type": "string"
         },
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkflowDevelopLocation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "stageSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
           "type": [
             "string",
             "null"
@@ -18916,12 +18956,17 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "data": true,
+        "exitCode": {
+          "format": "int32",
+          "type": "integer"
+        },
         "message": {
           "type": "string"
         }
       },
       "required": [
         "data",
+        "exitCode",
         "message"
       ],
       "title": "WorkflowDevelopResponse",
@@ -18931,12 +18976,17 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "data": true,
+        "exitCode": {
+          "format": "int32",
+          "type": "integer"
+        },
         "message": {
           "type": "string"
         }
       },
       "required": [
         "data",
+        "exitCode",
         "message"
       ],
       "title": "WorkflowDiscardResponse",
@@ -18969,12 +19019,17 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "data": true,
+        "exitCode": {
+          "format": "int32",
+          "type": "integer"
+        },
         "message": {
           "type": "string"
         }
       },
       "required": [
         "data",
+        "exitCode",
         "message"
       ],
       "title": "WorkflowEditResponse",
@@ -19145,12 +19200,17 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "data": true,
+        "exitCode": {
+          "format": "int32",
+          "type": "integer"
+        },
         "message": {
           "type": "string"
         }
       },
       "required": [
         "data",
+        "exitCode",
         "message"
       ],
       "title": "WorkflowPublishResponse",
@@ -19259,6 +19319,10 @@
     "WorkflowRepairResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "exitCode": {
+          "format": "int32",
+          "type": "integer"
+        },
         "message": {
           "type": "string"
         },
@@ -19279,6 +19343,7 @@
         }
       },
       "required": [
+        "exitCode",
         "message",
         "repair",
         "validation",
@@ -19771,12 +19836,17 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "data": true,
+        "exitCode": {
+          "format": "int32",
+          "type": "integer"
+        },
         "message": {
           "type": "string"
         }
       },
       "required": [
         "data",
+        "exitCode",
         "message"
       ],
       "title": "WorkflowValidateResponse",
@@ -20124,6 +20194,34 @@
             "type"
           ],
           "title": "DisallowedPackageDependencyWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "package_name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "latestPackageDependency"
+              ],
+              "title": "LatestPackageDependencyWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "field",
+            "package_name",
+            "path",
+            "type"
+          ],
+          "title": "LatestPackageDependencyWorkflowValidationFindingInfo",
           "type": "object"
         },
         {
@@ -20556,6 +20654,74 @@
             "type"
           ],
           "title": "MissingCoverageMarkerWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "scaffoldEchoSource"
+              ],
+              "title": "ScaffoldEchoSourceWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "ScaffoldEchoSourceWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "placeholderWorkflowTest"
+              ],
+              "title": "PlaceholderWorkflowTestWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "reason",
+            "type"
+          ],
+          "title": "PlaceholderWorkflowTestWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "rawDevelopFlagsInMetadata"
+              ],
+              "title": "RawDevelopFlagsInMetadataWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "field",
+            "path",
+            "type"
+          ],
+          "title": "RawDevelopFlagsInMetadataWorkflowValidationFindingInfo",
           "type": "object"
         },
         {

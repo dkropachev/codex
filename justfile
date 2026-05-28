@@ -47,6 +47,10 @@ workflow-dev-check:
     cargo test -p codex-app-server --test all workflow_ -- --test-threads=1
     cargo test -p codex-cli workflow
 
+[no-cd]
+workflow-self-e2e:
+    {{ justfile_directory() }}/scripts/workflow_self_implementation_e2e.sh
+
 install:
     rustup show active-toolchain
     cargo fetch

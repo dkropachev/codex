@@ -138,6 +138,7 @@ pub(crate) fn validate_workflow_dir(
     ));
     findings.extend(validate_package_manifest(workflow_dir, spec.as_ref()));
     findings.extend(validate_local_package_imports(workflow_dir));
+    findings.extend(validate_unfinished_scaffold(workflow_dir, spec.as_ref()));
     if let Some(spec) = spec.as_ref() {
         findings.extend(validate_validation_commands(spec));
         findings.extend(validate_coverage_metadata(workflow_dir, spec));
@@ -289,6 +290,124 @@ fn validate_coverage_metadata(
     }
 
     findings
+}
+
+fn validate_unfinished_scaffold(
+    workflow_dir: &Path,
+    spec: Option<&crate::spec::WorkflowSpec>,
+) -> Vec<WorkflowValidationFinding> {
+    let mut findings = Vec::new();
+    findings.extend(validate_raw_develop_flags(workflow_dir, spec));
+    findings.extend(validate_scaffold_source(workflow_dir));
+    findings.extend(validate_placeholder_tests(workflow_dir));
+    findings
+}
+
+fn validate_raw_develop_flags(
+    workflow_dir: &Path,
+    spec: Option<&crate::spec::WorkflowSpec>,
+) -> Vec<WorkflowValidationFinding> {
+    let mut findings = Vec::new();
+    if let Some(spec) = spec {
+        for (field, value) in [
+            ("title", spec.title.as_deref()),
+            ("command", spec.command.as_deref()),
+            ("userDescription", spec.user_description.as_deref()),
+        ] {
+            if value.is_some_and(contains_raw_develop_flags) {
+                findings.push(WorkflowValidationFinding::RawDevelopFlagsInMetadata {
+                    path: PathBuf::from(WORKFLOW_YAML),
+                    field: field.to_string(),
+                });
+            }
+        }
+        if contains_raw_develop_flags(&spec.usage.to_string()) {
+            findings.push(WorkflowValidationFinding::RawDevelopFlagsInMetadata {
+                path: PathBuf::from(WORKFLOW_YAML),
+                field: "usage".to_string(),
+            });
+        }
+    }
+
+    if fs::read_to_string(workflow_dir.join("README.md"))
+        .is_ok_and(|readme| contains_raw_develop_flags(&readme))
+    {
+        findings.push(WorkflowValidationFinding::RawDevelopFlagsInMetadata {
+            path: PathBuf::from("README.md"),
+            field: "README.md".to_string(),
+        });
+    }
+    findings
+}
+
+fn contains_raw_develop_flags(value: &str) -> bool {
+    ["--id", "--command", "--location", "--title"]
+        .iter()
+        .any(|flag| value.contains(flag))
+}
+
+fn validate_scaffold_source(workflow_dir: &Path) -> Vec<WorkflowValidationFinding> {
+    let path = workflow_dir.join("src/workflow.ts");
+    let Ok(contents) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let normalized = compact_source(&contents);
+    if normalized.contains("return{ok:true,input:normalizedInput};")
+        || normalized.contains("return{ok:true,input};")
+    {
+        vec![WorkflowValidationFinding::ScaffoldEchoSource {
+            path: PathBuf::from("src/workflow.ts"),
+        }]
+    } else {
+        Vec::new()
+    }
+}
+
+fn validate_placeholder_tests(workflow_dir: &Path) -> Vec<WorkflowValidationFinding> {
+    workflow_test_files(workflow_dir)
+        .into_iter()
+        .filter_map(|(relative, _path, contents)| {
+            placeholder_test_reason(&relative, &contents).map(|reason| {
+                WorkflowValidationFinding::PlaceholderWorkflowTest {
+                    path: relative,
+                    reason,
+                }
+            })
+        })
+        .collect()
+}
+
+fn placeholder_test_reason(relative: &Path, contents: &str) -> Option<String> {
+    let file_name = relative.file_name().and_then(|name| name.to_str())?;
+    let without_comments = contents
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let compact = compact_source(&without_comments);
+    if file_name.contains("load.") && compact == "export{};" {
+        return Some("load test only exports an empty module".to_string());
+    }
+    if file_name.contains("autocomplete.") && asserts_empty_array_only(&compact) {
+        return Some("autocomplete test only asserts an empty suggestion list".to_string());
+    }
+    if file_name.contains("positive.")
+        && compact.contains("assert.deepEqual(output,{ok:true,input:{input:\"example\"}});")
+    {
+        return Some("positive test only asserts the scaffold echo output".to_string());
+    }
+    None
+}
+
+fn asserts_empty_array_only(compact: &str) -> bool {
+    let assert_count = compact.matches("assert.").count();
+    assert_count == 1
+        && (compact.contains("assert.deepEqual(suggestions,[]);")
+            || compact.contains("assert.deepStrictEqual(suggestions,[]);"))
+}
+
+fn compact_source(contents: &str) -> String {
+    contents.chars().filter(|ch| !ch.is_whitespace()).collect()
 }
 
 fn validate_validation_commands(
@@ -695,6 +814,7 @@ mod tests {
     use super::validate_workflow_dir;
     use crate::registry::WorkflowValidationStatus;
     use crate::spec::WorkflowSpec;
+    use crate::spec::read_workflow_spec;
     use crate::spec::write_workflow_spec;
     use crate::validation_finding::finding_messages;
 
@@ -730,11 +850,11 @@ mod tests {
     "run": "bun src/workflow.ts"
   },
   "dependencies": {
-    "@openai/codex-sdk": "latest"
+    "@openai/codex-sdk": "1.0.0"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "typescript": "latest"
+    "@types/node": "1.0.0",
+    "typescript": "1.0.0"
   }
 }
 "#,
@@ -761,7 +881,7 @@ mod tests {
 
 export interface WorkflowInput { input?: string; }
 
-export interface WorkflowOutput { ok: boolean; input: WorkflowInput; }
+export interface WorkflowOutput { ok: boolean; value: string; }
 
 export const WorkflowOutput = {
   toTuiMarkdown(_result: WorkflowOutput) {
@@ -771,7 +891,7 @@ export const WorkflowOutput = {
 
 export default async function example(ctx: WorkflowContext, input: WorkflowInput): Promise<WorkflowOutput> {
   ctx.progress("Running workflow", { input });
-  return { ok: true, input };
+  return { ok: true, value: input.input ?? "" };
 }
 
 export async function complete() {
@@ -804,7 +924,7 @@ test("workflow completes successfully", async () => {
   } as never, { input: "example" });
   const formatted = WorkflowOutput.toTuiMarkdown(output);
 
-  assert.deepEqual(output, { ok: true, input: { input: "example" } });
+  assert.deepEqual(output, { ok: true, value: "example" });
   assert.deepEqual(formatted, { markdown: "# Example\n\nDone." });
   assert.equal(events.length, 1);
 });
@@ -813,7 +933,7 @@ test("workflow completes successfully", async () => {
         .unwrap();
         fs::write(
             workflow_dir.join("src/tests/workflow.load.test.ts"),
-            "// workflow-covers: load\nexport {};\n",
+            "// workflow-covers: load\nimport \"../workflow.js\";\n",
         )
         .unwrap();
         fs::write(
@@ -834,7 +954,7 @@ test("workflow exposes complete", async () => {
     reportToUserMarkdown() {},
   } as never, { argv: [], text: "" });
 
-  assert.deepEqual(suggestions, []);
+  assert.equal(Array.isArray(suggestions), true);
 });
 "#,
         )
@@ -1107,6 +1227,135 @@ test("workflow rejects invalid input", async () => {
     }
 
     #[test]
+    fn validate_workflow_dir_rejects_default_scaffold_echo_source() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = create_valid_workflow_dir(&root, "example");
+        fs::write(
+            workflow_dir.join("src/workflow.ts"),
+            "export default async function workflow(_ctx: unknown, input: unknown) { return { ok: true, input }; }\n",
+        )
+        .unwrap();
+
+        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
+        assert!(
+            finding_messages(&validation.findings)
+                .iter()
+                .any(|message| {
+                    message
+                        .contains("src/workflow.ts still returns the default scaffold echo output")
+                })
+        );
+    }
+
+    #[test]
+    fn validate_workflow_dir_rejects_placeholder_load_test() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = create_valid_workflow_dir(&root, "example");
+        fs::write(
+            workflow_dir.join("src/tests/workflow.load.test.ts"),
+            "// workflow-covers: load\nexport {};\n",
+        )
+        .unwrap();
+
+        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
+        assert!(
+            finding_messages(&validation.findings)
+                .iter()
+                .any(|message| message.contains("load test only exports an empty module"))
+        );
+    }
+
+    #[test]
+    fn validate_workflow_dir_rejects_placeholder_autocomplete_test() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = create_valid_workflow_dir(&root, "example");
+        fs::write(
+            workflow_dir.join("src/tests/workflow.autocomplete.test.ts"),
+            r#"// workflow-covers: autocomplete
+import assert from "node:assert/strict";
+import test from "node:test";
+
+test("empty autocomplete", () => {
+  const suggestions: unknown[] = [];
+  assert.deepEqual(suggestions, []);
+});
+"#,
+        )
+        .unwrap();
+
+        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
+        assert!(
+            finding_messages(&validation.findings)
+                .iter()
+                .any(|message| message
+                    .contains("autocomplete test only asserts an empty suggestion list"))
+        );
+    }
+
+    #[test]
+    fn validate_workflow_dir_rejects_scaffold_echo_positive_test() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = create_valid_workflow_dir(&root, "example");
+        fs::write(
+            workflow_dir.join("src/tests/workflow.positive.test.ts"),
+            r#"// workflow-covers: positive progress finalResult
+import assert from "node:assert/strict";
+import test from "node:test";
+
+test("scaffold output", () => {
+  const output = { ok: true, input: { input: "example" } };
+  assert.deepEqual(output, { ok: true, input: { input: "example" } });
+});
+"#,
+        )
+        .unwrap();
+
+        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
+        assert!(
+            finding_messages(&validation.findings)
+                .iter()
+                .any(|message| message
+                    .contains("positive test only asserts the scaffold echo output"))
+        );
+    }
+
+    #[test]
+    fn validate_workflow_dir_rejects_raw_develop_flags_in_metadata() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = create_valid_workflow_dir(&root, "example");
+        let spec_path = workflow_dir.join(crate::spec::WORKFLOW_YAML);
+        let mut spec = read_workflow_spec(&spec_path).unwrap();
+        spec.command = Some("--command".to_string());
+        write_workflow_spec(&spec_path, &spec).unwrap();
+        fs::write(
+            workflow_dir.join("README.md"),
+            "# Example\n\n## Usage\n\nRun --id example --command example.\n\n## Workflow Runtime\n\nRuntime details.\n\n## Dependencies\n\nDependency details.\n\n## Validation\n\nValidation details.\n\n## Maintenance\n\nMaintenance details.\n",
+        )
+        .unwrap();
+
+        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
+        let messages = finding_messages(&validation.findings);
+        assert!(messages.iter().any(|message| {
+            message
+                .contains("workflow.yaml field `command` still contains raw workflow develop flags")
+        }));
+        assert!(messages.iter().any(|message| {
+            message
+                .contains("README.md field `README.md` still contains raw workflow develop flags")
+        }));
+    }
+
+    #[test]
     fn validate_workflow_dir_reports_dependency_metadata_drift_and_unused_runtime_deps() {
         let root = TempDir::new().unwrap();
         let workflow_dir = create_valid_workflow_dir(&root, "example");
@@ -1122,12 +1371,12 @@ test("workflow rejects invalid input", async () => {
     "run": "bun src/workflow.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "latest",
-    "@openai/codex-sdk": "latest"
+    "@modelcontextprotocol/sdk": "1.0.0",
+    "@openai/codex-sdk": "1.0.0"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "typescript": "latest"
+    "@types/node": "1.0.0",
+    "typescript": "1.0.0"
   }
 }
 "#,
@@ -1164,12 +1413,12 @@ test("workflow rejects invalid input", async () => {
     "run": "node src/workflow.ts"
   },
   "dependencies": {
-    "@openai/codex-sdk": "latest"
+    "@openai/codex-sdk": "1.0.0"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "tsx": "latest",
-    "typescript": "latest"
+    "@types/node": "1.0.0",
+    "tsx": "1.0.0",
+    "typescript": "1.0.0"
   },
   "engines": {
     "node": ">=22.5.0"

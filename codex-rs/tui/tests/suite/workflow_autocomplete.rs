@@ -603,7 +603,7 @@ pub(super) async fn run_workflow_autocomplete_session(
     .await?;
 
     let mut parser = vt100::Parser::new(
-        /*rows*/ 24, /*cols*/ 80, /*scrollback_len*/ 0,
+        /*rows*/ 32, /*cols*/ 80, /*scrollback_len*/ 0,
     );
     let mut output = Vec::new();
     let codex_utils_pty::SpawnedProcess {

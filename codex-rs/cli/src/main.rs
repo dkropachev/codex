@@ -157,6 +157,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         let (_config, workflows) = load_workflow_command_context(
             root_config_overrides.clone(),
             interactive.config_profile.clone(),
+            interactive.shared.cwd.clone(),
             arg0_paths.clone(),
             /*stage_session_id*/ None,
         )
@@ -276,6 +277,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 workflow_cli,
                 root_config_overrides,
                 interactive.config_profile.clone(),
+                interactive.shared.cwd.clone(),
                 arg0_paths.clone(),
             )
             .await?;

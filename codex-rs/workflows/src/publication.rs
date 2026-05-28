@@ -496,7 +496,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.join("src/tests/workflow.load.test.ts"),
-            "// workflow-covers: load\nexport {};\n",
+            "// workflow-covers: load\nimport \"../workflow.ts\";\n",
         )
         .unwrap();
         std::fs::write(

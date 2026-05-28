@@ -249,6 +249,32 @@ fn validate_package_manifest_shape(
             });
         }
     }
+    validate_dependency_versions(object, findings);
+}
+
+fn validate_dependency_versions(
+    object: &serde_json::Map<String, JsonValue>,
+    findings: &mut Vec<WorkflowValidationFinding>,
+) {
+    for field in [
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+    ] {
+        let Some(dependencies) = object.get(field).and_then(JsonValue::as_object) else {
+            continue;
+        };
+        for (package_name, version) in dependencies {
+            if version.as_str() == Some("latest") {
+                findings.push(WorkflowValidationFinding::LatestPackageDependency {
+                    path: PathBuf::from("package.json"),
+                    package_name: package_name.clone(),
+                    field: field.to_string(),
+                });
+            }
+        }
+    }
 }
 
 fn validate_disallowed_runtime_files(workflow_dir: &Path) -> Vec<WorkflowValidationFinding> {
@@ -633,7 +659,7 @@ mod tests {
     "run": "bun src/workflow.ts"
   },
   "dependencies": {
-    "@types/node": "latest"
+    "@types/node": "1.0.0"
   }
 }
 "#,
@@ -671,7 +697,7 @@ mod tests {
     "run": "bun src/workflow.ts"
   },
   "devDependencies": {
-    "@types/node": "latest"
+    "@types/node": "1.0.0"
   }
 }
 "#,
@@ -683,6 +709,40 @@ mod tests {
         assert_eq!(
             crate::validation_finding::finding_messages(&findings),
             Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn validate_package_manifest_rejects_latest_dependency_versions() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = root.path();
+        fs::write(
+            workflow_dir.join("package.json"),
+            r#"{
+  "name": "codex-workflow-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/workflow.ts --target=bun --outdir artifacts/build",
+    "test": "bun test src/tests",
+    "run": "bun src/workflow.ts"
+  },
+  "dependencies": {
+    "left-pad": "latest"
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let findings = validate_package_manifest(workflow_dir, /*spec*/ None);
+
+        assert_eq!(
+            crate::validation_finding::finding_messages(&findings),
+            vec![
+                "package.json `dependencies.left-pad` must not use `latest`".to_string(),
+                "package.json declares unused runtime dependency `left-pad`".to_string(),
+            ]
         );
     }
 
@@ -703,7 +763,7 @@ mod tests {
     "run": "bun src/workflow.ts"
   },
   "dependencies": {
-    "bun:sqlite": "latest"
+    "bun:sqlite": "1.0.0"
   }
 }
 "#,

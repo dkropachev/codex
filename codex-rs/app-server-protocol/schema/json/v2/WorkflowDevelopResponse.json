@@ -2,12 +2,17 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "properties": {
     "data": true,
+    "exitCode": {
+      "format": "int32",
+      "type": "integer"
+    },
     "message": {
       "type": "string"
     }
   },
   "required": [
     "data",
+    "exitCode",
     "message"
   ],
   "title": "WorkflowDevelopResponse",

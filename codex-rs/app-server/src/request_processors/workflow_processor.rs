@@ -14,6 +14,7 @@ use codex_app_server_protocol::WorkflowConfigReadResponse;
 use codex_app_server_protocol::WorkflowConfigValues;
 use codex_app_server_protocol::WorkflowConfigWriteParams;
 use codex_app_server_protocol::WorkflowConfigWriteResponse;
+use codex_app_server_protocol::WorkflowDevelopLocation as ApiWorkflowDevelopLocation;
 use codex_app_server_protocol::WorkflowDevelopParams;
 use codex_app_server_protocol::WorkflowDevelopResponse;
 use codex_app_server_protocol::WorkflowDiscardResponse;
@@ -51,6 +52,8 @@ use codex_workflows::WorkflowCommandContext;
 use codex_workflows::WorkflowCommandProgress;
 use codex_workflows::WorkflowCommandProgressHandler;
 use codex_workflows::WorkflowConfigCommand;
+use codex_workflows::WorkflowDevelopLocation;
+use codex_workflows::WorkflowDevelopRequest;
 use codex_workflows::discover_workflows_for_context;
 use codex_workflows::execute_workflow_command;
 use codex_workflows::parse_mention_target;
@@ -160,7 +163,13 @@ impl WorkflowRequestProcessor {
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.execute(
             WorkflowCommand::Develop {
-                description: params.description,
+                request: WorkflowDevelopRequest {
+                    description: params.description,
+                    id: params.id,
+                    command: params.command,
+                    title: params.title,
+                    location: params.location.map(location_from_api),
+                },
             },
             params.stage_session_id,
         )
@@ -274,6 +283,7 @@ impl WorkflowRequestProcessor {
         Ok(Some(
             WorkflowRepairResponse {
                 message: response.message,
+                exit_code: response.exit_code,
                 workflow: payload.workflow,
                 validation: payload.validation,
                 validation_command_results: payload.validation_command_results,
@@ -435,6 +445,7 @@ impl WorkflowRequestProcessor {
         .map(|output| WorkflowCommandResponse {
             message: output.message,
             data: output.data,
+            exit_code: output.exit_code,
         })
         .map(T::from)
         .map_err(|err| internal_error(format!("workflow command failed: {err}")))
@@ -533,6 +544,13 @@ fn root_to_api(root: codex_workflows::WorkflowRoot) -> WorkflowRootInfo {
     }
 }
 
+fn location_from_api(location: ApiWorkflowDevelopLocation) -> WorkflowDevelopLocation {
+    match location {
+        ApiWorkflowDevelopLocation::Project => WorkflowDevelopLocation::Project,
+        ApiWorkflowDevelopLocation::Global => WorkflowDevelopLocation::Global,
+    }
+}
+
 pub(crate) fn validation_to_api(
     validation: codex_workflows::WorkflowValidation,
 ) -> WorkflowValidationInfo {
@@ -615,6 +633,15 @@ pub(crate) fn validation_finding_to_api(
             path,
             package_name,
         } => WorkflowValidationFindingInfo::DisallowedPackageDependency { path, package_name },
+        codex_workflows::WorkflowValidationFinding::LatestPackageDependency {
+            path,
+            package_name,
+            field,
+        } => WorkflowValidationFindingInfo::LatestPackageDependency {
+            path,
+            package_name,
+            field,
+        },
         codex_workflows::WorkflowValidationFinding::UndeclaredPackageImport {
             path,
             specifier,
@@ -688,6 +715,15 @@ pub(crate) fn validation_finding_to_api(
         }
         codex_workflows::WorkflowValidationFinding::MissingCoverageMarker { path, key } => {
             WorkflowValidationFindingInfo::MissingCoverageMarker { path, key }
+        }
+        codex_workflows::WorkflowValidationFinding::ScaffoldEchoSource { path } => {
+            WorkflowValidationFindingInfo::ScaffoldEchoSource { path }
+        }
+        codex_workflows::WorkflowValidationFinding::PlaceholderWorkflowTest { path, reason } => {
+            WorkflowValidationFindingInfo::PlaceholderWorkflowTest { path, reason }
+        }
+        codex_workflows::WorkflowValidationFinding::RawDevelopFlagsInMetadata { path, field } => {
+            WorkflowValidationFindingInfo::RawDevelopFlagsInMetadata { path, field }
         }
         codex_workflows::WorkflowValidationFinding::CodeOutsideSrc { paths } => {
             WorkflowValidationFindingInfo::CodeOutsideSrc { paths }
@@ -806,6 +842,15 @@ fn validation_finding_from_api(
                 package_name,
             }
         }
+        WorkflowValidationFindingInfo::LatestPackageDependency {
+            path,
+            package_name,
+            field,
+        } => codex_workflows::WorkflowValidationFinding::LatestPackageDependency {
+            path,
+            package_name,
+            field,
+        },
         WorkflowValidationFindingInfo::UndeclaredPackageImport {
             path,
             specifier,
@@ -885,6 +930,15 @@ fn validation_finding_from_api(
         }
         WorkflowValidationFindingInfo::MissingCoverageMarker { path, key } => {
             codex_workflows::WorkflowValidationFinding::MissingCoverageMarker { path, key }
+        }
+        WorkflowValidationFindingInfo::ScaffoldEchoSource { path } => {
+            codex_workflows::WorkflowValidationFinding::ScaffoldEchoSource { path }
+        }
+        WorkflowValidationFindingInfo::PlaceholderWorkflowTest { path, reason } => {
+            codex_workflows::WorkflowValidationFinding::PlaceholderWorkflowTest { path, reason }
+        }
+        WorkflowValidationFindingInfo::RawDevelopFlagsInMetadata { path, field } => {
+            codex_workflows::WorkflowValidationFinding::RawDevelopFlagsInMetadata { path, field }
         }
         WorkflowValidationFindingInfo::CodeOutsideSrc { paths } => {
             codex_workflows::WorkflowValidationFinding::CodeOutsideSrc { paths }

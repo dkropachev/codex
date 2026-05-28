@@ -469,7 +469,11 @@ impl CommandPopup {
                     .is_some_and(|command| command.eq_ignore_ascii_case(&self.command_filter))
             })
             .flat_map(|workflow| workflow.option_hints.iter())
-            .filter_map(|option| option.display.split_whitespace().next())
+            .filter_map(|option| {
+                let mut parts = option.display.split_whitespace();
+                let option_name = parts.next()?;
+                parts.next().is_none().then_some(option_name)
+            })
             .filter(|option_name| option_name.starts_with(current_token))
             .map(str::to_string)
             .collect::<Vec<_>>();

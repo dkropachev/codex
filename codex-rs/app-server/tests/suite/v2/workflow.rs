@@ -10,6 +10,7 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::WorkflowDevelopResponse;
 use codex_app_server_protocol::WorkflowDiscardResponse;
 use codex_app_server_protocol::WorkflowEditResponse;
 use codex_app_server_protocol::WorkflowListResponse;
@@ -18,6 +19,7 @@ use codex_app_server_protocol::WorkflowReadResponse;
 use codex_app_server_protocol::WorkflowRepairActionKind;
 use codex_app_server_protocol::WorkflowRepairResponse;
 use codex_app_server_protocol::WorkflowRepairStopReason;
+use codex_app_server_protocol::WorkflowValidateResponse;
 use codex_app_server_protocol::WorkflowValidationFindingInfo;
 use codex_app_server_protocol::WorkflowValidationStatus;
 use pretty_assertions::assert_eq;
@@ -106,7 +108,7 @@ fn write_valid_workflow(
     fs::write(
         workflow_dir.join("package.json"),
         format!(
-            "{{\n  \"name\": \"codex-workflow-{}\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {{\n    \"build\": \"bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk\",\n    \"test\": \"bun test src/tests\",\n    \"run\": \"bun src/workflow.ts\"\n  }},\n  \"devDependencies\": {{\n    \"@types/node\": \"latest\",\n    \"typescript\": \"latest\"\n  }}\n}}\n",
+            "{{\n  \"name\": \"codex-workflow-{}\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {{\n    \"build\": \"bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk\",\n    \"test\": \"bun test src/tests\",\n    \"run\": \"bun src/workflow.ts\"\n  }},\n  \"devDependencies\": {{\n    \"@types/node\": \"1.0.0\",\n    \"typescript\": \"1.0.0\"\n  }}\n}}\n",
             id.replace('/', "-")
         ),
     )?;
@@ -124,7 +126,7 @@ fn write_valid_workflow(
     )?;
     fs::write(
         workflow_dir.join("src/tests/workflow.load.test.ts"),
-        "// workflow-covers: load\nexport {};\n",
+        "// workflow-covers: load\nimport \"../workflow.ts\";\n",
     )?;
     fs::write(
         workflow_dir.join("src/tests/workflow.autocomplete.test.ts"),
@@ -168,7 +170,7 @@ fn write_broken_repair_fixture(workflow_dir: &Path) -> Result<()> {
     )?;
     fs::write(
         workflow_dir.join("workflow.ts"),
-        "export interface WorkflowInput { input?: string; }\nexport interface WorkflowOutput { ok: boolean; input: WorkflowInput; }\nexport const WorkflowOutput = { toTuiMarkdown() { return { markdown: \"done\" }; } };\nexport default async function run(_ctx: unknown, input: WorkflowInput): Promise<WorkflowOutput> { return { ok: true, input }; }\n",
+        "export interface WorkflowInput { input?: string; }\nexport interface WorkflowOutput { ok: boolean; input: WorkflowInput; }\nexport const WorkflowOutput = { toTuiMarkdown() { return { markdown: \"done\" }; } };\nexport default async function run(_ctx: unknown, input: WorkflowInput): Promise<WorkflowOutput> { return { ok: true, input: { ...input } }; }\n",
     )?;
     fs::write(
         workflow_dir.join("workflow.positive.test.ts"),
@@ -176,7 +178,7 @@ fn write_broken_repair_fixture(workflow_dir: &Path) -> Result<()> {
     )?;
     fs::write(
         workflow_dir.join("workflow.load.test.ts"),
-        "// workflow-covers: load\nexport {};\n",
+        "// workflow-covers: load\nimport \"./workflow.ts\";\n",
     )?;
     fs::write(
         workflow_dir.join("workflow.autocomplete.test.ts"),
@@ -208,7 +210,7 @@ fn write_unsupported_command_fixture(workflow_dir: &Path) -> Result<()> {
     )?;
     fs::write(
         workflow_dir.join("package.json"),
-        "{\n  \"name\": \"codex-workflow-failing-command\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\n    \"build\": \"bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk\",\n    \"test\": \"bun test src/tests\",\n    \"run\": \"bun src/workflow.ts\"\n  },\n  \"devDependencies\": {\n    \"@types/node\": \"latest\",\n    \"typescript\": \"latest\"\n  }\n}\n",
+        "{\n  \"name\": \"codex-workflow-failing-command\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\n    \"build\": \"bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk\",\n    \"test\": \"bun test src/tests\",\n    \"run\": \"bun src/workflow.ts\"\n  },\n  \"devDependencies\": {\n    \"@types/node\": \"1.0.0\",\n    \"typescript\": \"1.0.0\"\n  }\n}\n",
     )?;
     fs::write(
         workflow_dir.join("tsconfig.json"),
@@ -224,7 +226,7 @@ fn write_unsupported_command_fixture(workflow_dir: &Path) -> Result<()> {
     )?;
     fs::write(
         workflow_dir.join("src/tests/workflow.load.test.ts"),
-        "// workflow-covers: load\nexport {};\n",
+        "// workflow-covers: load\nimport \"../workflow.ts\";\n",
     )?;
     fs::write(
         workflow_dir.join("src/tests/workflow.autocomplete.test.ts"),
@@ -323,6 +325,106 @@ async fn workflow_list_returns_discovered_workflows() -> Result<()> {
         response.workflows[0].validation.status,
         WorkflowValidationStatus::Valid
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_develop_location_project_overrides_global_default() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    append_workflows_config(
+        &codex_home,
+        "\n[workflows]\ndefault_location = \"global\"\n",
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request(
+            "workflow/develop",
+            Some(json!({
+                "description": "Create a project workflow",
+                "id": "project-only",
+                "command": "project-only",
+                "location": "project",
+            })),
+        )
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: WorkflowDevelopResponse = to_response(response)?;
+
+    assert_eq!(response.exit_code, 0);
+    assert!(
+        codex_home
+            .path()
+            .join(".codex/workflows/project-only/workflow.yaml")
+            .is_file()
+    );
+    assert!(
+        !codex_home
+            .path()
+            .join("workflows/project-only/workflow.yaml")
+            .exists()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_validate_response_includes_non_zero_exit_code_for_invalid_status() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    let workflow_dir = codex_home.path().join("workflows/reports/jira-summary");
+    write_valid_workflow(
+        &workflow_dir,
+        "reports/jira-summary",
+        "Jira Summary",
+        "Summarize Jira work",
+    )?;
+    fs::remove_file(workflow_dir.join("DESIGN.md"))?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request(
+            "workflow/validate",
+            Some(json!({ "id": "reports/jira-summary" })),
+        )
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: WorkflowValidateResponse = to_response(response)?;
+
+    assert_eq!(response.exit_code, 1);
+    assert!(response.message.contains("missing DESIGN.md"));
 
     Ok(())
 }
