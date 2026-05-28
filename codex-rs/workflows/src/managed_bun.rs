@@ -26,17 +26,19 @@ use sha2::Sha256;
 use tar::Archive;
 
 const BUN_VERSION: &str = "1.3.14";
-const BUN_ARCHIVE_ENTRY: &str = "package/bin/bun";
+const BUN_UNIX_ARCHIVE_ENTRY: &str = "package/bin/bun";
+const BUN_WINDOWS_ARCHIVE_ENTRY: &str = "package/bin/bun.exe";
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 const INSTALL_LOCK_TIMEOUT: Duration = Duration::from_secs(180);
 const INSTALL_LOCK_RETRY: Duration = Duration::from_millis(100);
 
 static PREFETCHED_CACHE_ROOTS: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ManagedBunPackage {
     target: &'static str,
     archive_url: &'static str,
+    archive_entry: &'static str,
     sha256: &'static str,
 }
 
@@ -88,7 +90,7 @@ pub(crate) fn ensure_managed_bun(cache_root: Option<&Path>) -> Result<Option<Pat
             .as_nanos()
     ));
     let _ = fs::remove_file(&tmp_path);
-    extract_bun_archive(&archive, &tmp_path)?;
+    extract_bun_archive(package, &archive, &tmp_path)?;
 
     #[cfg(unix)]
     {
@@ -249,41 +251,71 @@ fn bun_executable_name() -> &'static str {
 }
 
 fn current_package() -> Option<ManagedBunPackage> {
-    #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
-    {
-        Some(ManagedBunPackage {
+    package_for_target(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        current_target_env(),
+    )
+}
+
+fn package_for_target(
+    target_os: &str,
+    target_arch: &str,
+    target_env: &str,
+) -> Option<ManagedBunPackage> {
+    match (target_os, target_arch, target_env) {
+        ("linux", "x86_64", "gnu") => Some(ManagedBunPackage {
             target: "linux-x64-baseline",
             archive_url: "https://registry.npmjs.org/@oven/bun-linux-x64-baseline/-/bun-linux-x64-baseline-1.3.14.tgz",
+            archive_entry: BUN_UNIX_ARCHIVE_ENTRY,
             sha256: "1d58ab332bf81a31ef3d59d0ddaf2d60e8889b7da9e6a41762492bf5675a2be5",
-        })
-    }
-
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        Some(ManagedBunPackage {
-            target: "darwin-aarch64",
-            archive_url: "https://registry.npmjs.org/@oven/bun-darwin-aarch64/-/bun-darwin-aarch64-1.3.14.tgz",
-            sha256: "603d327a393c32fec5d9e7165c5f57afc28f1c84ef85593448870ccc41bda636",
-        })
-    }
-
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    {
-        Some(ManagedBunPackage {
+        }),
+        ("linux", "aarch64", "gnu") => Some(ManagedBunPackage {
+            target: "linux-aarch64",
+            archive_url: "https://registry.npmjs.org/@oven/bun-linux-aarch64/-/bun-linux-aarch64-1.3.14.tgz",
+            archive_entry: BUN_UNIX_ARCHIVE_ENTRY,
+            sha256: "97631ecfb616c248a4662599c555a59e2a18140a2ec1c0038a89bff08b815169",
+        }),
+        ("macos", "x86_64", "") => Some(ManagedBunPackage {
             target: "darwin-x64",
             archive_url: "https://registry.npmjs.org/@oven/bun-darwin-x64/-/bun-darwin-x64-1.3.14.tgz",
+            archive_entry: BUN_UNIX_ARCHIVE_ENTRY,
             sha256: "1a0ca6b839a1243b2a857c63e6cdb7cee1eeacf538736a27bfb08e75a0789efa",
-        })
+        }),
+        ("macos", "aarch64", "") => Some(ManagedBunPackage {
+            target: "darwin-aarch64",
+            archive_url: "https://registry.npmjs.org/@oven/bun-darwin-aarch64/-/bun-darwin-aarch64-1.3.14.tgz",
+            archive_entry: BUN_UNIX_ARCHIVE_ENTRY,
+            sha256: "603d327a393c32fec5d9e7165c5f57afc28f1c84ef85593448870ccc41bda636",
+        }),
+        ("windows", "x86_64", "msvc" | "gnu") => Some(ManagedBunPackage {
+            target: "windows-x64",
+            archive_url: "https://registry.npmjs.org/@oven/bun-windows-x64/-/bun-windows-x64-1.3.14.tgz",
+            archive_entry: BUN_WINDOWS_ARCHIVE_ENTRY,
+            sha256: "8e9c259ada7e1d3236a0e8c3fb644ba7d3214906fcc38f502e5422063eeac91b",
+        }),
+        _ => None,
     }
+}
 
-    #[cfg(not(any(
-        all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"),
-        all(target_os = "macos", target_arch = "aarch64"),
-        all(target_os = "macos", target_arch = "x86_64")
-    )))]
-    {
-        None
-    }
+#[cfg(target_env = "gnu")]
+fn current_target_env() -> &'static str {
+    "gnu"
+}
+
+#[cfg(target_env = "musl")]
+fn current_target_env() -> &'static str {
+    "musl"
+}
+
+#[cfg(target_env = "msvc")]
+fn current_target_env() -> &'static str {
+    "msvc"
+}
+
+#[cfg(not(any(target_env = "gnu", target_env = "musl", target_env = "msvc")))]
+fn current_target_env() -> &'static str {
+    ""
 }
 
 fn download_bun_archive(package: ManagedBunPackage) -> Result<Vec<u8>> {
@@ -317,7 +349,11 @@ fn download_bun_archive_blocking(package: ManagedBunPackage) -> Result<Vec<u8>> 
     Ok(archive.to_vec())
 }
 
-fn extract_bun_archive(archive: &[u8], destination: &Path) -> Result<()> {
+fn extract_bun_archive(
+    package: ManagedBunPackage,
+    archive: &[u8],
+    destination: &Path,
+) -> Result<()> {
     let decoder = GzDecoder::new(Cursor::new(archive));
     let mut archive = Archive::new(decoder);
 
@@ -329,7 +365,7 @@ fn extract_bun_archive(archive: &[u8], destination: &Path) -> Result<()> {
         let path = entry
             .path()
             .context("failed to read managed Bun archive entry path")?;
-        if path.as_ref() != Path::new(BUN_ARCHIVE_ENTRY) {
+        if path.as_ref() != Path::new(package.archive_entry) {
             continue;
         }
 
@@ -343,7 +379,8 @@ fn extract_bun_archive(archive: &[u8], destination: &Path) -> Result<()> {
     }
 
     Err(anyhow!(
-        "managed Bun archive did not contain {BUN_ARCHIVE_ENTRY}"
+        "managed Bun archive did not contain {}",
+        package.archive_entry
     ))
 }
 
@@ -351,11 +388,13 @@ fn extract_bun_archive(archive: &[u8], destination: &Path) -> Result<()> {
 mod tests {
     use std::fs;
 
+    use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
     use super::BUN_VERSION;
     use super::cached_managed_bun_path;
     use super::ensure_managed_bun;
+    use super::package_for_target;
 
     #[test]
     fn managed_bun_uses_cached_runtime_without_download() {
@@ -377,5 +416,32 @@ mod tests {
             ensure_managed_bun(Some(temp_dir.path())).unwrap(),
             Some(bun)
         );
+    }
+
+    #[test]
+    fn managed_bun_selects_supported_packages() {
+        let targets = [
+            ("linux", "x86_64", "gnu", "linux-x64-baseline"),
+            ("linux", "aarch64", "gnu", "linux-aarch64"),
+            ("macos", "x86_64", "", "darwin-x64"),
+            ("macos", "aarch64", "", "darwin-aarch64"),
+            ("windows", "x86_64", "msvc", "windows-x64"),
+            ("windows", "x86_64", "gnu", "windows-x64"),
+        ];
+
+        for (target_os, target_arch, target_env, expected_target) in targets {
+            assert_eq!(
+                package_for_target(target_os, target_arch, target_env)
+                    .expect("target should be supported")
+                    .target,
+                expected_target
+            );
+        }
+    }
+
+    #[test]
+    fn managed_bun_rejects_unsupported_packages() {
+        assert_eq!(package_for_target("linux", "riscv64", "gnu"), None);
+        assert_eq!(package_for_target("linux", "x86_64", "musl"), None);
     }
 }

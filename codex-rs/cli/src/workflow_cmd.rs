@@ -2,6 +2,7 @@ use anyhow::Result;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_features::Feature;
 use codex_utils_cli::CliConfigOverrides;
 use codex_workflows::WORKFLOW_RUNTIME_EVENT_PREFIX;
 use codex_workflows::WorkflowCommandContext;
@@ -43,6 +44,9 @@ pub(crate) async fn load_workflow_command_context(
     let config =
         Config::load_with_cli_overrides_and_harness_overrides(cli_overrides, config_overrides)
             .await?;
+    if config.features.enabled(Feature::Workflows) {
+        codex_workflows::prefetch_managed_bun_runtime(config.codex_home.as_path());
+    }
     let workflows = discover_workflows_for_context(&WorkflowCommandContext {
         codex_home: config.codex_home.as_path(),
         cwd: config.cwd.as_path(),
