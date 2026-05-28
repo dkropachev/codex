@@ -258,7 +258,29 @@ fn current_package() -> Option<ManagedBunPackage> {
         })
     }
 
-    #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        Some(ManagedBunPackage {
+            target: "darwin-aarch64",
+            archive_url: "https://registry.npmjs.org/@oven/bun-darwin-aarch64/-/bun-darwin-aarch64-1.3.14.tgz",
+            sha256: "603d327a393c32fec5d9e7165c5f57afc28f1c84ef85593448870ccc41bda636",
+        })
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        Some(ManagedBunPackage {
+            target: "darwin-x64",
+            archive_url: "https://registry.npmjs.org/@oven/bun-darwin-x64/-/bun-darwin-x64-1.3.14.tgz",
+            sha256: "1a0ca6b839a1243b2a857c63e6cdb7cee1eeacf538736a27bfb08e75a0789efa",
+        })
+    }
+
+    #[cfg(not(any(
+        all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"),
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "x86_64")
+    )))]
     {
         None
     }
