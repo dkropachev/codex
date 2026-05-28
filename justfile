@@ -40,6 +40,13 @@ fix *args:
 clippy *args:
     cargo clippy --tests "$@"
 
+workflow-dev-check:
+    cargo build -p codex-cli --bin codex
+    cargo test -p codex-workflows
+    cargo test -p codex-app-server-protocol
+    cargo test -p codex-app-server --test all workflow_ -- --test-threads=1
+    cargo test -p codex-cli workflow
+
 install:
     rustup show active-toolchain
     cargo fetch

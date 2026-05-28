@@ -302,6 +302,77 @@ async fn workflow_list_returns_discovered_workflows() -> Result<()> {
 }
 
 #[tokio::test]
+async fn workflow_read_round_trips_new_validation_finding_variants() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    let workflow_dir = codex_home.path().join("workflows/review/finding");
+    write_valid_workflow(
+        &workflow_dir,
+        "review/finding",
+        "Review Finding",
+        "Exercise validation finding serialization",
+    )?;
+    let workflow_yaml_path = workflow_dir.join("workflow.yaml");
+    let mut spec = codex_workflows::read_workflow_spec(&workflow_yaml_path)?;
+    spec.validation = json!({
+        "commands": ["bun test src/tests"],
+        "contractSmoke": { "input": { "input": "example" } },
+        "coverage": {
+            "positive": true,
+            "negative": true,
+            "progress": true,
+            "finalResult": true,
+            "failureUx": true,
+            "load": true,
+            "autocomplete": true,
+            "recovery": false,
+        }
+    });
+    codex_workflows::write_workflow_spec(&workflow_yaml_path, &spec)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request("workflow/read", Some(json!({ "id": "review/finding" })))
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: WorkflowReadResponse = to_response(response)?;
+
+    assert_eq!(
+        response.workflow.validation.status,
+        WorkflowValidationStatus::Invalid
+    );
+    let expected_finding = WorkflowValidationFindingInfo::MissingBuildValidationCommand {
+        path: Path::new("workflow.yaml").to_path_buf(),
+    };
+    assert!(
+        response
+            .workflow
+            .validation
+            .findings
+            .contains(&expected_finding),
+        "findings: {:?}",
+        response.workflow.validation.findings
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn workflow_repair_returns_structured_result() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
