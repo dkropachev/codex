@@ -206,12 +206,6 @@ pub fn workflow_runtime_api_catalog() -> ApiCatalogWorkflowRuntime {
                 "Resume a persisted Codex thread from workflow code.",
             ),
             symbol(
-                "WorkflowContext.runWorkflow",
-                ApiCatalogSymbolKind::Method,
-                "ctx.runWorkflow<Input, Output>(workflow, input?, options?): Promise<Output>",
-                "Call another workflow using the current app-server connection and approval handling. options.onStatusUpdate can forward, transform, bundle, or suppress child workflow status updates.",
-            ),
-            symbol(
                 "WorkflowContext.progress",
                 ApiCatalogSymbolKind::Method,
                 "ctx.progress(message: string, data?: unknown): void",

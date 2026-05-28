@@ -801,7 +801,6 @@ test("workflow completes successfully", async () => {
     repoRoot: process.cwd(),
     workingDirectory: process.cwd(),
     status() {},
-    runWorkflow() { throw new Error("runWorkflow() is unavailable in unit tests"); },
   } as never, { input: "example" });
   const formatted = WorkflowOutput.toTuiMarkdown(output);
 
@@ -833,7 +832,6 @@ test("workflow exposes complete", async () => {
     progress() {},
     status() {},
     reportToUserMarkdown() {},
-    runWorkflow() { throw new Error("runWorkflow() is unavailable in unit tests"); },
   } as never, { argv: [], text: "" });
 
   assert.deepEqual(suggestions, []);
@@ -858,7 +856,6 @@ test("workflow rejects invalid input", async () => {
       repoRoot: process.cwd(),
       workingDirectory: process.cwd(),
       status() {},
-      runWorkflow() { throw new Error("runWorkflow() is unavailable in unit tests"); },
     } as never, null),
     /workflow input must be a JSON object/
   );

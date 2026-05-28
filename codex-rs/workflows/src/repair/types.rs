@@ -15,7 +15,6 @@ pub enum WorkflowRepairActionKind {
     ScaffoldWorkflowSource,
     ScaffoldWorkflowTests,
     AddCoverageMarkers,
-    AiRepair,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

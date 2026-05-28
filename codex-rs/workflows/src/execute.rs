@@ -799,7 +799,7 @@ fn write_scaffold_files(path: &Path, id: &str, title: &str, description: &str) -
     fs::write(
         path.join("README.md"),
         format!(
-            "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nPrefer `ctx.status({{ workflowName, workflowStatus, threads? }})` while the workflow is running so the TUI can render `Workflow <workflowName>: <workflowStatus>` with optional `-> <threadName>: <threadStatus>` rows when more than one thread is active. `ctx.progress(message, data?)` remains available as a legacy shorthand for single-string status updates. `ctx.runWorkflow(workflow, input?, {{ onStatusUpdate }})` can intercept child workflow status updates and either forward, transform, bundle, or suppress them. Export a named default async function for the execution entrypoint and keep the return value as the canonical JSON result. Use `WorkflowOutput.toTuiMarkdown(result)` for the markdown view when the workflow has a user-facing result.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json`, reflected in `workflow.yaml` dependencies metadata, and resolved from this directory's `node_modules`. Remove unused runtime dependencies instead of carrying transitive tooling by default.\n\n## Validation\n\nRun `codex workflow validate {id}` after changes and keep build/test commands, package scripts, `tsconfig.json`, dependency metadata, contract smoke output, docs, and coverage markers aligned with the workflow implementation.\n\n## Maintenance\n\nKeep `README.md`, `DESIGN.md`, `workflow.yaml`, `package.json`, and the test coverage markers in sync when workflow behavior changes. The architect owns `DESIGN.md`; coder-side implementation changes that need design changes should raise a `DESIGN.md request` before coding continues. Update both docs together when the workflow contract changes. Keep generated or persistent runtime files under ignored `state/` or `artifacts/` paths.\n"
+            "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nPrefer `ctx.status({{ workflowName, workflowStatus, threads? }})` while the workflow is running so the TUI can render `Workflow <workflowName>: <workflowStatus>` with optional `-> <threadName>: <threadStatus>` rows when more than one thread is active. `ctx.progress(message, data?)` remains available as a legacy shorthand for single-string status updates. Export a named default async function for the execution entrypoint and keep the return value as the canonical JSON result. Use `WorkflowOutput.toTuiMarkdown(result)` for the markdown view when the workflow has a user-facing result.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json`, reflected in `workflow.yaml` dependencies metadata, and resolved from this directory's `node_modules`. Remove unused runtime dependencies instead of carrying transitive tooling by default.\n\n## Validation\n\nRun `codex workflow validate {id}` after changes and keep build/test commands, package scripts, `tsconfig.json`, dependency metadata, contract smoke output, docs, and coverage markers aligned with the workflow implementation.\n\n## Maintenance\n\nKeep `README.md`, `DESIGN.md`, `workflow.yaml`, `package.json`, and the test coverage markers in sync when workflow behavior changes. The architect owns `DESIGN.md`; coder-side implementation changes that need design changes should raise a `DESIGN.md request` before coding continues. Update both docs together when the workflow contract changes. Keep generated or persistent runtime files under ignored `state/` or `artifacts/` paths.\n"
         ),
     )?;
     fs::write(
@@ -891,7 +891,6 @@ if (import.meta.url === `file://${{process.argv[1]}}`) {{
     progress() {{}},
     reportToUserMarkdown() {{}},
     status() {{}},
-    runWorkflow() {{ throw new Error("runWorkflow() is unavailable in direct CLI smoke"); }},
     cwd: process.cwd(),
     currentWorkingDirectory: process.cwd(),
     repoRoot: process.cwd(),
@@ -922,7 +921,6 @@ test("workflow reports progress and formats markdown", async () => {{
       events.push(["report", markdown]);
     }},
     status() {{}},
-    runWorkflow() {{ throw new Error("runWorkflow() is unavailable in unit tests"); }},
     cwd: process.cwd(),
     currentWorkingDirectory: process.cwd(),
     repoRoot: process.cwd(),
@@ -958,7 +956,6 @@ test("workflow exposes autocomplete", async () => {
     progress() {},
     status() {},
     reportToUserMarkdown() {},
-    runWorkflow() { throw new Error("runWorkflow() is unavailable in unit tests"); },
   } as never);
 
   assert.deepEqual(suggestions, []);
@@ -982,7 +979,6 @@ test("workflow rejects invalid input", async () => {
       repoRoot: process.cwd(),
       workingDirectory: process.cwd(),
       status() {},
-      runWorkflow() { throw new Error("runWorkflow() is unavailable in unit tests"); },
     } as never, null),
     /workflow input must be a JSON object/
   );
@@ -1028,7 +1024,6 @@ fn write_scaffold_runtime_stubs(path: &Path) -> Result<()> {
   progress(message: string, data?: unknown): void;
   reportToUserMarkdown(markdown: string): void;
   status(status: unknown): void;
-  runWorkflow(workflow: string, input?: unknown, options?: unknown): Promise<unknown>;
 }
 
 export declare function defineWorkflow<T>(workflow: T): T;
@@ -2411,164 +2406,5 @@ process.exit(result.status ?? 1);
         assert_eq!(first_result["pid"], second_result["pid"]);
         assert_eq!(first_result["runs"], json!(1));
         assert_eq!(second_result["runs"], json!(1));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    #[serial]
-    fn run_workflow_hook_can_transform_and_attach_child_status_updates() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let home = TempDir::new().unwrap();
-        let cwd = TempDir::new().unwrap();
-        let workflow_dir = home.path().join("workflows/reports/parent-review");
-        fs::create_dir_all(workflow_dir.join("src")).unwrap();
-        fs::create_dir_all(workflow_dir.join("state")).unwrap();
-        fs::create_dir_all(workflow_dir.join("node_modules/.bin")).unwrap();
-        fs::create_dir_all(workflow_dir.join(".git")).unwrap();
-        fs::write(workflow_dir.join("README.md"), "# Parent Review\n").unwrap();
-        fs::write(workflow_dir.join("state/.gitkeep"), "").unwrap();
-        fs::write(
-            workflow_dir.join("src/workflow.ts"),
-            r##"const seen = [];
-
-const workflow = {
-  async run(ctx) {
-    await ctx.runWorkflow("child-review", { prompt: "check child" }, {
-      onStatusUpdate(update, helpers) {
-        const combined = helpers.attachOriginalChildStatus({
-          workflowName: "parent-review",
-          workflowStatus: "coordinating",
-          threads: [
-            { name: "reviewer-a", status: update.workflowStatus },
-            { name: "reviewer-b", status: "waiting" },
-          ],
-          childStatuses: [],
-        });
-        seen.push(combined);
-        helpers.reportStatus(combined);
-        return null;
-      },
-    });
-    return { seen };
-  },
-};
-
-export default workflow;
-"##,
-        )
-        .unwrap();
-        let node_path = test_node_path();
-        fs::write(
-            workflow_dir.join("node_modules/.bin/bun"),
-            format!(
-                r#"#!{}
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const {{ spawnSync }} = require('node:child_process');
-const [runner, ...args] = process.argv.slice(2);
-const workflowPathIndex = args.indexOf('--workflow-path');
-if (workflowPathIndex === -1 || workflowPathIndex + 1 >= args.length) {{
-  console.error('missing --workflow-path');
-  process.exit(1);
-}}
-const workflowPath = args[workflowPathIndex + 1];
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-runtime-'));
-const workflowDir = path.dirname(workflowPath);
-const tmpWorkflowDir = path.join(tmpDir, path.basename(workflowDir));
-fs.cpSync(workflowDir, tmpWorkflowDir, {{ recursive: true }});
-const tmpPath = path.join(tmpWorkflowDir, path.basename(workflowPath) + '.mjs');
-fs.copyFileSync(workflowPath, tmpPath);
-args[workflowPathIndex + 1] = tmpPath;
-const result = spawnSync(process.execPath, [runner, ...args], {{ stdio: 'inherit' }});
-process.exit(result.status ?? 1);
-"#,
-                node_path.display(),
-            ),
-        )
-        .unwrap();
-        fs::set_permissions(
-            workflow_dir.join("node_modules/.bin/bun"),
-            fs::Permissions::from_mode(0o755),
-        )
-        .unwrap();
-        write_workflow_spec(
-            &workflow_dir.join(WORKFLOW_YAML),
-            &crate::spec::WorkflowSpec {
-                id: "reports/parent-review".to_string(),
-                command: Some("parent-review".to_string()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let fake_codex = home.path().join("fake-codex.sh");
-        fs::write(
-            &fake_codex,
-            "#!/bin/sh\nprintf '%s\\n' '__CODEX_WORKFLOW_EVENT__{\"type\":\"status\",\"status\":{\"workflowName\":\"child-review\",\"workflowStatus\":\"scanning\",\"threads\":[],\"childStatuses\":[]}}' >&2\nprintf '%s\\n' '{\"ok\":true}'\n",
-        )
-        .unwrap();
-        fs::set_permissions(&fake_codex, fs::Permissions::from_mode(0o755)).unwrap();
-
-        let env_key = "CODEX_WORKFLOW_SELF_EXE";
-        let previous = std::env::var_os(env_key);
-        unsafe {
-            std::env::set_var(env_key, &fake_codex);
-        }
-
-        let runtime_mode_key = "CODEX_WORKFLOW_RUNTIME_MODE";
-        let previous_runtime_mode = std::env::var_os(runtime_mode_key);
-        unsafe {
-            std::env::set_var(runtime_mode_key, "process");
-        }
-
-        let output = execute_workflow_command(
-            WorkflowCommandContext {
-                codex_home: home.path(),
-                cwd: cwd.path(),
-                config: &WorkflowsConfigToml::default(),
-                codex_self_exe: None,
-                stage_session_id: None,
-                progress: None,
-                runtime_event_handler: None,
-                runtime: Default::default(),
-            },
-            WorkflowCommand::Run {
-                id: "reports/parent-review".to_string(),
-                input: Some(WorkflowInputSource::Inline("{}".to_string())),
-                input_fields: BTreeMap::new(),
-            },
-        )
-        .unwrap();
-
-        match previous_runtime_mode {
-            Some(previous_runtime_mode) => unsafe {
-                std::env::set_var(runtime_mode_key, previous_runtime_mode)
-            },
-            None => unsafe { std::env::remove_var(runtime_mode_key) },
-        }
-
-        match previous {
-            Some(previous) => unsafe { std::env::set_var(env_key, previous) },
-            None => unsafe { std::env::remove_var(env_key) },
-        }
-
-        let result: JsonValue = serde_json::from_str(&output.message).unwrap();
-        assert_eq!(result["seen"][0]["workflowName"], json!("parent-review"));
-        assert_eq!(result["seen"][0]["workflowStatus"], json!("coordinating"));
-        assert_eq!(result["seen"][0]["threads"][0]["name"], json!("reviewer-a"));
-        assert_eq!(result["seen"][0]["threads"][0]["status"], json!("scanning"));
-        assert_eq!(result["seen"][0]["threads"][1]["name"], json!("reviewer-b"));
-        assert_eq!(result["seen"][0]["threads"][1]["status"], json!("waiting"));
-        assert_eq!(
-            result["seen"][0]["childStatuses"][0]["workflowName"],
-            json!("child-review")
-        );
-        assert_eq!(
-            result["seen"][0]["childStatuses"][0]["workflowStatus"],
-            json!("scanning")
-        );
-        assert_eq!(output.data["stderr"], json!(""));
     }
 }

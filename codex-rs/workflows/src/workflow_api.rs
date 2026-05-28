@@ -209,7 +209,7 @@ fn default_contract_smoke_command(input: &JsonValue) -> Result<String> {
     let input_literal = serde_json::to_string(&input_json)
         .with_context(|| "failed to serialize validation.contractSmoke.input literal")?;
     let source = format!(
-        r#"const mod=await import("./src/workflow.ts");if(typeof mod.default!=="function"){{throw new Error("workflow default export must be a function");}}const input=JSON.parse({input_literal});const ctx={{progress(){{}},reportToUserMarkdown(){{}},status(){{}},runWorkflow(){{throw new Error("runWorkflow() is unavailable in contract smoke");}},cwd:process.cwd(),currentWorkingDirectory:process.cwd(),repoRoot:process.cwd(),workingDirectory:process.cwd()}};const output=await mod.default(ctx,input);console.log(JSON.stringify(output));"#
+        r#"const mod=await import("./src/workflow.ts");if(typeof mod.default!=="function"){{throw new Error("workflow default export must be a function");}}const input=JSON.parse({input_literal});const ctx={{progress(){{}},reportToUserMarkdown(){{}},status(){{}},cwd:process.cwd(),currentWorkingDirectory:process.cwd(),repoRoot:process.cwd(),workingDirectory:process.cwd()}};const output=await mod.default(ctx,input);console.log(JSON.stringify(output));"#
     );
     Ok(format!("bun --eval {}", shell_quote(&source)))
 }

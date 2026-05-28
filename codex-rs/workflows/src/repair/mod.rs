@@ -3,7 +3,6 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
-use std::process::Stdio;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -200,99 +199,6 @@ where
             return Ok(build_output(&workflow, last_report, repair));
         }
         if !assessment.unsupported.is_empty() {
-            if repair_mode.allows_action(WorkflowRepairActionKind::AiRepair) {
-                ctx.report_progress(
-                    "Running AI repair fallback",
-                    json!({
-                        "stage": "aiRepair",
-                        "workflowId": workflow.id.as_str(),
-                        "step": cycle,
-                        "total": max_repair_cycles,
-                        "findings": assessment.unsupported.len(),
-                    }),
-                );
-                if let Some(action) = try_ai_repair(&ctx, &workflow, &assessment.unsupported)
-                    .with_context(|| {
-                        format!(
-                            "failed to run AI repair fallback for workflow `{}`",
-                            workflow.id
-                        )
-                    })?
-                {
-                    changed = true;
-                    repair_cycles_run += 1;
-                    applied_fixes.push(action);
-                    ctx.report_progress(
-                        "AI repair fallback applied",
-                        json!({
-                            "stage": "aiRepair",
-                            "workflowId": workflow.id.as_str(),
-                            "step": cycle,
-                            "total": max_repair_cycles,
-                        }),
-                    );
-                    workflow = resolve_workflow_for_context(&ctx, id).with_context(|| {
-                        format!(
-                            "failed to refresh workflow summary for `{}` after AI repair fallback",
-                            workflow.id
-                        )
-                    })?;
-                    ctx.report_progress(
-                        "Validating repaired workflow",
-                        json!({
-                            "stage": "validating",
-                            "workflowId": workflow.id.as_str(),
-                            "step": cycle,
-                            "total": max_repair_cycles,
-                        }),
-                    );
-                    last_report =
-                        validate_workflow(&workflow, &mut command_runner).with_context(|| {
-                            format!(
-                                "failed to validate workflow `{}` after AI repair cycle {}",
-                                workflow.id, repair_cycles_run
-                            )
-                        })?;
-                    ctx.report_progress(
-                        "Validation completed",
-                        json!({
-                            "stage": "validating",
-                            "workflowId": workflow.id.as_str(),
-                            "step": cycle,
-                            "total": max_repair_cycles,
-                            "findings": last_report.findings.len(),
-                        }),
-                    );
-                    if last_report.status == crate::registry::WorkflowValidationStatus::Valid {
-                        if should_commit_changes(&ctx) {
-                            ctx.report_progress(
-                                "Committing repaired workflow",
-                                json!({
-                                    "stage": "committing",
-                                    "workflowId": workflow.id.as_str(),
-                                }),
-                            );
-                            commit_repair_changes(&workflow.path).with_context(|| {
-                                format!("failed to commit repaired workflow `{}`", workflow.id)
-                            })?;
-                        }
-                        let repair = final_repair_result(FinalRepairResultInput {
-                            repair_mode,
-                            max_repair_cycles,
-                            repair_cycles_run,
-                            changed,
-                            stop_reason: WorkflowRepairStopReason::Valid,
-                            applied_fixes,
-                            blocked_findings: Vec::new(),
-                            unsupported_findings: Vec::new(),
-                            remaining_findings: Vec::new(),
-                        });
-                        report_repair_complete(&ctx, &workflow, repair.stop_reason, repair.changed);
-                        return Ok(build_output(&workflow, last_report, repair));
-                    }
-                    continue;
-                }
-            }
             let repair = final_repair_result(FinalRepairResultInput {
                 repair_mode,
                 max_repair_cycles,
@@ -540,72 +446,6 @@ fn final_repair_result(input: FinalRepairResultInput) -> WorkflowRepairResult {
         blocked_findings: input.blocked_findings,
         unsupported_findings: input.unsupported_findings,
     }
-}
-
-fn try_ai_repair(
-    ctx: &WorkflowCommandContext<'_>,
-    workflow: &WorkflowSummary,
-    unsupported_findings: &[WorkflowValidationFinding],
-) -> Result<Option<WorkflowRepairAction>> {
-    let Some(codex_self_exe) = ctx.codex_self_exe.as_ref() else {
-        return Ok(None);
-    };
-    if !codex_self_exe_supports_exec(codex_self_exe) {
-        return Ok(None);
-    }
-
-    let prompt = build_ai_repair_prompt(workflow, unsupported_findings)?;
-    let Ok(output) = Command::new(codex_self_exe)
-        .current_dir(&workflow.path)
-        .arg("exec")
-        .arg("-C")
-        .arg(&workflow.path)
-        .arg("--skip-git-repo-check")
-        .arg("--ephemeral")
-        .arg("--sandbox")
-        .arg("workspace-write")
-        .arg("--json")
-        .arg(prompt)
-        .output()
-    else {
-        return Ok(None);
-    };
-
-    if !output.status.success() {
-        return Ok(None);
-    }
-
-    Ok(Some(WorkflowRepairAction {
-        kind: WorkflowRepairActionKind::AiRepair,
-        path: workflow.path.clone(),
-        detail: format!(
-            "Applied AI repair fallback after {} unsupported finding(s)",
-            unsupported_findings.len()
-        ),
-    }))
-}
-
-fn codex_self_exe_supports_exec(codex_self_exe: &Path) -> bool {
-    Command::new(codex_self_exe)
-        .arg("exec")
-        .arg("--help")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-fn build_ai_repair_prompt(
-    workflow: &WorkflowSummary,
-    unsupported_findings: &[WorkflowValidationFinding],
-) -> Result<String> {
-    let findings_json = serde_json::to_string_pretty(unsupported_findings)?;
-    Ok(format!(
-        "You are the workflow-coder for a Codex workflow repair pass.\n\nOnly modify files inside this workflow directory: `{workflow_dir}`. Do not edit files outside it. Keep writes inside this workflow root. Do not edit `DESIGN.md`. If the right fix requires a design change, write a `DESIGN.md request` for the parent architect instead.\n\nKeep the workflow in the standard Bun environment: TypeScript source in `src/`, tests in `src/tests/`, persistent state in `state/`, generated artifacts in `artifacts/`, a `codex-workflow-*` private ESM package, a local `tsconfig.json`, and non-empty README/DESIGN sections. Use Bun scripts (`bun build`, `bun test`, `bun src/workflow.ts`) and do not add Node/tsx/npm runtime paths, Node-only imports such as `node:sqlite`, Node engine pins, or npm/yarn/pnpm lockfiles. Use only local dependencies declared in `package.json`, remove unused runtime dependencies, and keep `workflow.yaml` `dependencies.runtime` / `dependencies.development` aligned with `package.json` `dependencies` / `devDependencies`. Keep validation metadata complete: Bun build and test commands, `validation.contractSmoke`, and coverage markers for the declared coverage keys.\n\nThe deterministic repair pass already handled known cases and stopped on these unsupported findings:\n{findings_json}\n\nFix the workflow until validation passes. Keep iterating until the workflow is clean or a design change is required.\n",
-        workflow_dir = workflow.path.display(),
-        findings_json = findings_json,
-    ))
 }
 
 fn build_output(
@@ -1942,7 +1782,6 @@ if (import.meta.url === `file://${{process.argv[1]}}`) {{
     progress() {{}},
     reportToUserMarkdown() {{}},
     status() {{}},
-    runWorkflow() {{ throw new Error("runWorkflow() is unavailable in direct CLI smoke"); }},
     cwd: process.cwd(),
     currentWorkingDirectory: process.cwd(),
     repoRoot: process.cwd(),
@@ -1971,7 +1810,7 @@ fn readme_template(workflow: &WorkflowSummary) -> String {
         .as_deref()
         .unwrap_or_else(|| workflow.id.split('/').next_back().unwrap_or(&workflow.id));
     format!(
-        "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nPrefer `ctx.status({{ workflowName, workflowStatus, threads? }})` while the workflow is running so the TUI can render `Workflow <workflowName>: <workflowStatus>` with optional `-> <threadName>: <threadStatus>` rows when more than one thread is active. `ctx.progress(message, data?)` remains available as a legacy shorthand for single-string status updates. `ctx.cwd`, `ctx.currentWorkingDirectory`, `ctx.repoRoot`, and `ctx.workingDirectory` point at the workspace that launched the workflow, while `process.cwd()` stays on the workflow package directory. `ctx.runWorkflow(workflow, input?, {{ onStatusUpdate }})` can intercept child workflow status updates and either forward, transform, bundle, or suppress them. Export a named default async function for the execution entrypoint, an optional named `complete(...)` export for autocomplete, and an optional `WorkflowOutput.toTuiMarkdown(result)` value companion for markdown rendering. `/workflow validate {id}` extracts, smoke-tests when `validation.contractSmoke` is configured, and publishes the TS contract after the workflow passes validation. Keep the default export focused on canonical JSON results.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json`, reflected in `workflow.yaml` dependencies metadata, and resolved from this directory's `node_modules`. Remove unused runtime dependencies instead of carrying transitive tooling by default.\n\n## Validation\n\nRun the configured validation commands from `workflow.yaml` and keep build/test commands, package scripts, `tsconfig.json`, coverage markers, dependency metadata, and contract smoke output aligned with the documented contract. Prefer commands that fail fast on missing dependencies or type errors.\n\n## Maintenance\n\nUpdate `README.md`, `DESIGN.md`, `workflow.yaml`, `package.json`, and the test markers together when the workflow contract changes. The architect owns `DESIGN.md`; coder-side implementation changes that need design changes should raise a `DESIGN.md request` before coding continues. Keep runtime state and generated artifacts under ignored `state/` or `artifacts/` paths.\n",
+        "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nPrefer `ctx.status({{ workflowName, workflowStatus, threads? }})` while the workflow is running so the TUI can render `Workflow <workflowName>: <workflowStatus>` with optional `-> <threadName>: <threadStatus>` rows when more than one thread is active. `ctx.progress(message, data?)` remains available as a legacy shorthand for single-string status updates. `ctx.cwd`, `ctx.currentWorkingDirectory`, `ctx.repoRoot`, and `ctx.workingDirectory` point at the workspace that launched the workflow, while `process.cwd()` stays on the workflow package directory. Export a named default async function for the execution entrypoint, an optional named `complete(...)` export for autocomplete, and an optional `WorkflowOutput.toTuiMarkdown(result)` value companion for markdown rendering. `/workflow validate {id}` extracts, smoke-tests when `validation.contractSmoke` is configured, and publishes the TS contract after the workflow passes validation. Keep the default export focused on canonical JSON results.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json`, reflected in `workflow.yaml` dependencies metadata, and resolved from this directory's `node_modules`. Remove unused runtime dependencies instead of carrying transitive tooling by default.\n\n## Validation\n\nRun the configured validation commands from `workflow.yaml` and keep build/test commands, package scripts, `tsconfig.json`, coverage markers, dependency metadata, and contract smoke output aligned with the documented contract. Prefer commands that fail fast on missing dependencies or type errors.\n\n## Maintenance\n\nUpdate `README.md`, `DESIGN.md`, `workflow.yaml`, `package.json`, and the test markers together when the workflow contract changes. The architect owns `DESIGN.md`; coder-side implementation changes that need design changes should raise a `DESIGN.md request` before coding continues. Keep runtime state and generated artifacts under ignored `state/` or `artifacts/` paths.\n",
         id = workflow.id,
     )
 }

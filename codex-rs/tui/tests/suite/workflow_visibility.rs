@@ -51,7 +51,7 @@ async fn slash_workflow_shows_single_line_status_and_final_result_in_terminal_ou
 }
 
 #[tokio::test]
-async fn slash_workflow_shows_hooked_multi_thread_status_in_terminal_output() -> Result<()> {
+async fn slash_workflow_shows_multi_thread_status_in_terminal_output() -> Result<()> {
     if cfg!(windows) {
         return Ok(());
     }
@@ -61,7 +61,7 @@ async fn slash_workflow_shows_hooked_multi_thread_status_in_terminal_output() ->
     let codex_home = tempdir()?;
     let workspace = tempdir()?;
     write_trusted_workspace_config(codex_home.path(), workspace.path())?;
-    write_nested_multi_thread_workflows(codex_home.path())?;
+    write_multi_thread_workflow(codex_home.path())?;
 
     run_workflow_visibility_session(
         &repo_root,
@@ -81,7 +81,7 @@ async fn slash_workflow_shows_hooked_multi_thread_status_in_terminal_output() ->
             "Workflow finished:".to_string(),
             "__CODEX_WORKFLOW_EVENT__".to_string(),
             "\"workflowName\"".to_string(),
-            "Workflow child-review: scanning".to_string(),
+            "child-review".to_string(),
         ],
     )
     .await?;
@@ -595,7 +595,7 @@ export default workflow;
     )
 }
 
-fn write_nested_multi_thread_workflows(codex_home: &Path) -> Result<()> {
+fn write_multi_thread_workflow(codex_home: &Path) -> Result<()> {
     write_workflow_fixture(
         &codex_home.join("workflows/parent-review"),
         "parent-review",
@@ -603,39 +603,15 @@ fn write_nested_multi_thread_workflows(codex_home: &Path) -> Result<()> {
         "Parent Review",
         r##"const workflow = {
   async run(ctx) {
-    await ctx.runWorkflow("child-review", { prompt: "check child" }, {
-      onStatusUpdate(update, helpers) {
-        helpers.reportStatus(
-          helpers.attachOriginalChildStatus({
-            workflowName: "parent-review",
-            workflowStatus: "coordinating",
-            threads: [
-              { name: "reviewer-a", status: update.workflowStatus },
-              { name: "reviewer-b", status: "waiting" },
-            ],
-            childStatuses: [],
-          }),
-        );
-        return null;
-      },
+    ctx.status({
+      workflowName: "parent-review",
+      workflowStatus: "coordinating",
+      threads: [
+        { name: "reviewer-a", status: "scanning" },
+        { name: "reviewer-b", status: "waiting" },
+      ],
     });
     ctx.reportToUserMarkdown("# Workflow Result\n\nVisible from PTY integration test.\n");
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    return { workflowStatus: "done" };
-  },
-};
-
-export default workflow;
-"##,
-    )?;
-    write_workflow_fixture(
-        &codex_home.join("workflows/child-review"),
-        "child-review",
-        "child-review",
-        "Child Review",
-        r##"const workflow = {
-  async run(ctx) {
-    ctx.status({ workflowName: "child-review", workflowStatus: "scanning" });
     await new Promise((resolve) => setTimeout(resolve, 250));
     return { workflowStatus: "done" };
   },

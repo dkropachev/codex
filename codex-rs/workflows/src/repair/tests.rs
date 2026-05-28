@@ -215,17 +215,6 @@ fn write_command_failure_workflow_fixture(workflow_dir: &Path) {
     .unwrap();
 }
 
-fn write_bun_test_failure_workflow_fixture(workflow_dir: &Path) {
-    write_command_failure_workflow_fixture(workflow_dir);
-    let spec_path = workflow_dir.join("workflow.yaml");
-    let mut spec = crate::spec::read_workflow_spec(&spec_path).unwrap();
-    spec.validation["commands"] = json!([
-        "bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk",
-        "bun test src/tests"
-    ]);
-    write_workflow_spec(&spec_path, &spec).unwrap();
-}
-
 fn write_build_fixable_workflow_fixture(workflow_dir: &Path) {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -456,18 +445,6 @@ fn write_tracked_runtime_state_workflow_fixture(workflow_dir: &Path) {
     assert!(status.success(), "git add should succeed");
 }
 
-#[cfg(unix)]
-fn write_ai_repair_exec_script(exe_path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    fs::write(
-        exe_path,
-        "#!/bin/sh\nif [ \"$1\" = \"exec\" ] && [ \"${2-}\" = \"--help\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"exec\" ]; then\n  count_file=state/ai-repair-count\n  count=0\n  if [ -f \"$count_file\" ]; then\n    count=$(cat \"$count_file\")\n  fi\n  count=$((count + 1))\n  mkdir -p state\n  printf '%s\\n' \"$count\" > \"$count_file\"\n  if [ \"$count\" -eq 1 ]; then\n    exit 0\n  fi\n  awk '{gsub(/process[.]exit[(]1[)]/, \"process.exit(0)\"); print}' workflow.yaml > workflow.yaml.tmp && mv workflow.yaml.tmp workflow.yaml\n  exit 0\nfi\nexit 1\n",
-    )
-    .unwrap();
-    fs::set_permissions(exe_path, fs::Permissions::from_mode(0o755)).unwrap();
-}
-
 #[test]
 fn repair_workflow_command_repairs_validation_findings_iteratively() {
     let home = TempDir::new().unwrap();
@@ -650,134 +627,6 @@ fn repair_workflow_command_reports_unsupported_validation_command_failures() {
             .is_some_and(|stderr| stderr.contains("err"))
     );
     assert_eq!(output.data["repair"]["changed"], false);
-}
-
-#[cfg(unix)]
-#[test]
-fn repair_workflow_command_uses_ai_fallback_for_bun_test_assertion_failures() {
-    let home = TempDir::new().unwrap();
-    let cwd = TempDir::new().unwrap();
-    let workflow_dir = home.path().join("workflows/broken/fix");
-    fs::create_dir_all(&workflow_dir).unwrap();
-    write_bun_test_failure_workflow_fixture(&workflow_dir);
-
-    let codex_self_exe = home.path().join("fake-codex");
-    write_ai_repair_exec_script(&codex_self_exe);
-
-    let config = codex_config::types::WorkflowsConfigToml {
-        commit_policy: Some("manual".to_string()),
-        ..Default::default()
-    };
-    let ctx = WorkflowCommandContext {
-        codex_home: home.path(),
-        cwd: cwd.path(),
-        config: &config,
-        codex_self_exe: Some(codex_self_exe),
-        stage_session_id: None,
-        progress: None,
-        runtime_event_handler: None,
-        runtime: Default::default(),
-    };
-    let workflow_dir_for_runner = workflow_dir.clone();
-    let command_runner =
-        move |command: &str, cwd: &Path| -> anyhow::Result<WorkflowValidationCommandResult> {
-            assert_eq!(cwd, workflow_dir_for_runner.as_path());
-            let succeeded = workflow_dir_for_runner
-                .join("state/ai-repair-count")
-                .is_file()
-                || command.contains("bun build");
-            Ok(WorkflowValidationCommandResult {
-                command: command.to_string(),
-                succeeded,
-                exit_code: Some(if succeeded { 0 } else { 1 }),
-                stdout: String::new(),
-                stderr: if succeeded {
-                    String::new()
-                } else {
-                    "AssertionError: Expected values to be strictly equal".to_string()
-                },
-            })
-        };
-    let dependency_installer = |_workflow: &WorkflowSummary, _policy: &str| {
-        Ok::<Option<WorkflowRepairAction>, anyhow::Error>(None)
-    };
-
-    let output = repair_workflow_command_with_runners(
-        ctx,
-        "broken/fix",
-        command_runner,
-        dependency_installer,
-    )
-    .unwrap();
-
-    assert!(output.message.contains("Validation passed."));
-    assert_eq!(output.data["repair"]["stopReason"], "valid");
-    assert_eq!(output.data["repair"]["changed"], true);
-    assert_eq!(
-        output.data["repair"]["appliedFixes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|fix| fix["kind"] == "aiRepair")
-            .count(),
-        1
-    );
-    assert_eq!(
-        fs::read_to_string(workflow_dir.join("state/ai-repair-count"))
-            .unwrap()
-            .trim(),
-        "1"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn repair_workflow_command_uses_ai_fallback_until_validation_passes() {
-    let home = TempDir::new().unwrap();
-    let cwd = TempDir::new().unwrap();
-    let workflow_dir = home.path().join("workflows/broken/fix");
-    fs::create_dir_all(&workflow_dir).unwrap();
-    write_command_failure_workflow_fixture(&workflow_dir);
-
-    let codex_self_exe = home.path().join("fake-codex");
-    write_ai_repair_exec_script(&codex_self_exe);
-
-    let config = codex_config::types::WorkflowsConfigToml {
-        commit_policy: Some("manual".to_string()),
-        ..Default::default()
-    };
-    let ctx = WorkflowCommandContext {
-        codex_home: home.path(),
-        cwd: cwd.path(),
-        config: &config,
-        codex_self_exe: Some(codex_self_exe),
-        stage_session_id: None,
-        progress: None,
-        runtime_event_handler: None,
-        runtime: Default::default(),
-    };
-
-    let output = repair_workflow_command(ctx, "broken/fix").unwrap();
-
-    assert!(output.message.contains("Validation passed."));
-    assert_eq!(output.data["repair"]["stopReason"], "valid");
-    assert_eq!(output.data["repair"]["changed"], true);
-    assert_eq!(output.data["validation"]["findings"], serde_json::json!([]));
-    assert_eq!(
-        output.data["repair"]["appliedFixes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|fix| fix["kind"] == "aiRepair")
-            .count(),
-        2
-    );
-    assert_eq!(
-        fs::read_to_string(workflow_dir.join("state/ai-repair-count"))
-            .unwrap()
-            .trim(),
-        "2"
-    );
 }
 
 #[test]

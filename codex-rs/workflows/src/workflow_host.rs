@@ -8,7 +8,6 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use crate::registry::WorkflowSummary;
 use crate::workflow_runtime::WORKFLOW_RUNTIME_EVENT_PREFIX;
 use crate::workflow_runtime::WorkflowRuntimeEvent;
 use crate::workflow_runtime::WorkflowRuntimeEventHandler;
@@ -47,14 +46,6 @@ struct WorkflowHostRequest {
     execution_id: String,
     origin_thread_id: Option<String>,
     output_format: Option<String>,
-    registry: Vec<WorkflowHostRegistryEntry>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkflowHostRegistryEntry {
-    id: String,
-    path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,7 +77,6 @@ pub(crate) async fn run_workflow_via_host(
     workflow_dir: &Path,
     workflow_path: &Path,
     input: &str,
-    workflows: &[WorkflowSummary],
     event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
 ) -> Result<WorkflowRuntimeOutput> {
     let socket_path = workflow_host_socket_path(codex_home);
@@ -126,13 +116,6 @@ pub(crate) async fn run_workflow_via_host(
         output_format: env::var(WORKFLOW_OUTPUT_FORMAT_ENV)
             .ok()
             .filter(|value| !value.is_empty()),
-        registry: workflows
-            .iter()
-            .map(|workflow| WorkflowHostRegistryEntry {
-                id: workflow.id.clone(),
-                path: workflow.path.display().to_string(),
-            })
-            .collect(),
     };
 
     let mut stream = UnixStream::connect(&socket_path).await.with_context(|| {
@@ -218,7 +201,6 @@ pub(crate) async fn run_workflow_via_host(
     _workflow_dir: &Path,
     _workflow_path: &Path,
     _input: &str,
-    _workflows: &[WorkflowSummary],
     _event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
 ) -> Result<WorkflowRuntimeOutput> {
     Err(anyhow::anyhow!(
@@ -481,14 +463,6 @@ function normalizeStatusUpdate(value, label = "status") {
   return { workflowName, workflowStatus, threads, childStatuses };
 }
 
-function attachChildStatus(status, childStatus) {
-  const normalized = normalizeStatusUpdate(status);
-  return {
-    ...normalized,
-    childStatuses: [...normalized.childStatuses, normalizeChildStatus(childStatus, 0)],
-  };
-}
-
 function formatLegacyProgressData(data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     return scalarValue(data);
@@ -717,42 +691,11 @@ async function emitRequestedFormat(workflowModule, workflow, result, request, em
   }
 }
 
-function registryMap(entries) {
-  return new Map(entries.map((entry) => [entry.id, entry.path]));
+function createStatusDispatcher(emit) {
+  return (status) => emit({ type: "status", status: normalizeStatusUpdate(status) });
 }
 
-function createStatusDispatcher(emit, statusHook) {
-  if (typeof statusHook !== "function") {
-    return (status) => emit({ type: "status", status: normalizeStatusUpdate(status) });
-  }
-
-  return (status) => {
-    const normalized = normalizeStatusUpdate(status);
-    let reported = false;
-    const decision = statusHook(normalized, {
-      reportStatus(nextStatus) {
-        reported = true;
-        emit({ type: "status", status: normalizeStatusUpdate(nextStatus) });
-      },
-      attachOriginalChildStatus(nextStatus) {
-        return attachChildStatus(nextStatus, normalized);
-      },
-    });
-
-    if (decision === null) {
-      return;
-    }
-    if (decision === undefined) {
-      if (!reported) {
-        emit({ type: "status", status: normalized });
-      }
-      return;
-    }
-    emit({ type: "status", status: normalizeStatusUpdate(decision) });
-  };
-}
-
-async function executeWorkflowRequest(request, registry, emit, statusHook) {
+async function executeWorkflowRequest(request, emit) {
   const restoreStdout = suppressStdout();
   const stderrCapture = captureStderr();
   let cleanupWorkflowImport = () => {};
@@ -762,8 +705,8 @@ async function executeWorkflowRequest(request, registry, emit, statusHook) {
       cleanupWorkflowImport = loadedWorkflow.cleanup;
       const workflowModule = loadedWorkflow.module;
       const workflow = workflowModule.default;
-      const status = createStatusDispatcher(emit, statusHook);
-      const context = createRuntimeContext(request, registry, emit, status);
+      const status = createStatusDispatcher(emit);
+      const context = createRuntimeContext(request, emit, status);
       const input = JSON.parse(request.input ?? "{}");
       let output;
       if (typeof workflow === "function") {
@@ -811,7 +754,7 @@ async function loadWorkflow(workflowPath, executionId) {
   }
 }
 
-function createRuntimeContext(request, registry, emit, statusSink) {
+function createRuntimeContext(request, emit, statusSink) {
   const workflowDirectory = request.cwd;
   const workingDirectory = request.workingDirectory ?? workflowDirectory;
   const workflowName = request.workflowName ?? path.basename(workflowDirectory);
@@ -828,45 +771,6 @@ function createRuntimeContext(request, registry, emit, statusSink) {
     },
     reportToUserMarkdown(markdown) {
       emit({ type: "reportToUserMarkdown", markdown });
-    },
-    async runWorkflow(workflow, input, options) {
-      const workflowId = typeof workflow === "string" ? workflow : workflow?.id;
-      if (!workflowId || typeof workflowId !== "string") {
-        throw new Error("ctx.runWorkflow(workflow, ...) requires a workflow id string or { id }");
-      }
-
-      const childPath = registry.get(workflowId);
-      if (!childPath) {
-        throw new Error(`ctx.runWorkflow(...) could not resolve workflow id ${workflowId}`);
-      }
-
-      const childRequest = {
-        ...request,
-        workflowPath: childPath,
-        cwd: path.dirname(childPath),
-        workflowName: path.basename(path.dirname(childPath)),
-        workingDirectory: request.workingDirectory ?? request.cwd,
-        outputFormat: request.outputFormat,
-        input: JSON.stringify(input ?? {}),
-        executionId: randomUUID(),
-      };
-      const childStatusHook = typeof options?.onStatusUpdate === "function"
-        ? options.onStatusUpdate
-        : undefined;
-      const childResult = await executeWorkflowRequest(
-        childRequest,
-        registry,
-        emit,
-        childStatusHook,
-      );
-      if (!childResult.success) {
-        throw new Error(
-          childResult.stderr.trim().length > 0
-            ? `child workflow ${workflowId} failed: ${childResult.stderr.trim()}`
-            : `child workflow ${workflowId} failed`,
-        );
-      }
-      return childResult.stdout.trim().length > 0 ? JSON.parse(childResult.stdout) : undefined;
     },
   };
 }
@@ -896,7 +800,6 @@ async function serve(socketPath) {
           return;
         }
         const request = JSON.parse(payload);
-        const registry = registryMap(request.registry ?? []);
         let responseStarted = false;
         const onClose = () => {
           if (!responseStarted) {
@@ -908,9 +811,7 @@ async function serve(socketPath) {
           try {
             const result = await executeWorkflowRequest(
               request,
-              registry,
               (event) => emitEvent(socket, event),
-              undefined,
             );
             responseStarted = true;
             sendResult(socket, result);
@@ -971,7 +872,6 @@ mod tests {
     use crate::spec::WORKFLOW_YAML;
     use crate::spec::write_workflow_spec;
 
-    use super::WorkflowHostRegistryEntry;
     use super::WorkflowHostRequest;
     use super::connect_to_host;
     use super::ensure_workflow_host;
@@ -1081,10 +981,6 @@ process.exit(result.status ?? 1);
             execution_id: "exec-1".to_string(),
             origin_thread_id: None,
             output_format: None,
-            registry: vec![WorkflowHostRegistryEntry {
-                id: workflow.id.clone(),
-                path: workflow.path.display().to_string(),
-            }],
         };
 
         let mut stream = UnixStream::connect(&socket_path).await.unwrap();
@@ -1114,7 +1010,6 @@ process.exit(result.status ?? 1);
                 &workflow.path,
                 &workflow.path.join("src/workflow.ts"),
                 "{}",
-                &workflows,
                 /*event_handler*/ None,
             ),
         )

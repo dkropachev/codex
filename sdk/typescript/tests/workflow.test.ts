@@ -1153,50 +1153,6 @@ describe("CodexWorkflow", () => {
     expect(fake.killed).toBe(true);
   });
 
-  it("runs child workflows in the parent workflow context", async () => {
-    const fake = new FakeAppServerProcess();
-    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
-    const workflow = await CodexWorkflow.start({ codexPathOverride: "codex" });
-    const progress: unknown[] = [];
-    const child = defineWorkflow<{ value: string }, string>({
-      name: "child",
-      run(context, input) {
-        context.progress("child", input);
-        return input.value;
-      },
-    });
-    const parent = defineWorkflow<undefined, string>({
-      name: "parent",
-      run(context) {
-        return context.runWorkflow(child, { value: "done" });
-      },
-    });
-
-    const result = await runWorkflow(parent, {
-      workflow,
-      input: undefined,
-      onProgress: (event) => progress.push(event),
-    });
-
-    expect(result).toBe("done");
-    expect(progress).toEqual([{ message: "child", data: { value: "done" } }]);
-    expect(fake.workflowNotifications).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          method: "workflowRun/progress",
-          params: expect.objectContaining({
-            message: "child",
-            data: { value: "done" },
-            runId: expect.any(String),
-          }),
-        }),
-      ]),
-    );
-    expect(fake.killed).toBe(false);
-
-    await workflow.close();
-  });
-
   it("spawns fresh agents by default", async () => {
     const fake = new FakeAppServerProcess();
     spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);

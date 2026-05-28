@@ -64,21 +64,10 @@ fn write_assertion_failure_bun_stub(workflow_dir: &Path) -> Result<()> {
     let bun_path = bin_dir.join("bun");
     fs::write(
         &bun_path,
-        "#!/bin/sh\ncase \"$*\" in *\"test src/tests\"*) if [ -f state/ai-repair-count ]; then printf '{\"ok\":true}\\n'; exit 0; fi; printf 'AssertionError: Expected values to be strictly equal\\n' >&2; exit 1;; *) printf '{\"ok\":true}\\n'; exit 0;; esac\n",
+        "#!/bin/sh\ncase \"$*\" in *\"test src/tests\"*) printf 'AssertionError: Expected values to be strictly equal\\n' >&2; exit 1;; *) printf '{\"ok\":true}\\n'; exit 0;; esac\n",
     )?;
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(&bun_path, fs::Permissions::from_mode(0o755))?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn write_ai_repair_exec_script(exe_path: &Path) -> Result<()> {
-    fs::write(
-        exe_path,
-        "#!/bin/sh\nif [ \"$1\" = \"exec\" ] && [ \"${2-}\" = \"--help\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"exec\" ]; then\n  mkdir -p state\n  printf '1\\n' > state/ai-repair-count\n  exit 0\nfi\nexit 1\n",
-    )?;
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(exe_path, fs::Permissions::from_mode(0o755))?;
     Ok(())
 }
 
@@ -460,72 +449,6 @@ async fn workflow_repair_treats_bun_test_assertion_failure_as_unsupported_e2e() 
     assert_eq!(response.validation_command_results.len(), 2);
     assert!(response.validation_command_results[0].succeeded);
     assert!(!response.validation_command_results[1].succeeded);
-
-    Ok(())
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn workflow_repair_uses_ai_fallback_for_bun_test_assertion_failure_e2e() -> Result<()> {
-    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
-    let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::new(),
-        /*auto_compact_limit*/ 1024,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "compact",
-    )?;
-    append_workflows_config(
-        &codex_home,
-        "\n[workflows]\ncommit_policy = \"manual\"\ndependency_update_policy = \"manual\"\nrepair_mode = \"threshold:3\"\n",
-    )?;
-    let workflow_dir = codex_home.path().join("workflows/broken/fix");
-    write_bun_test_assertion_failure_fixture(&workflow_dir)?;
-    let fake_codex = codex_home.path().join("fake-codex");
-    write_ai_repair_exec_script(&fake_codex)?;
-    let fake_codex = fake_codex
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("fake codex path must be UTF-8"))?;
-
-    let mut mcp = McpProcess::new_with_env(
-        codex_home.path(),
-        &[("CODEX_APP_SERVER_CODEX_SELF_EXE", Some(fake_codex))],
-    )
-    .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_raw_request("workflow/repair", Some(json!({ "id": "broken/fix" })))
-        .await?;
-    let response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: WorkflowRepairResponse = to_response(response)?;
-
-    assert_eq!(response.repair.stop_reason, WorkflowRepairStopReason::Valid);
-    assert!(response.repair.changed);
-    assert!(response.repair.applied_fixes.iter().any(|fix| {
-        fix.kind == WorkflowRepairActionKind::AiRepair
-            && fix.detail == "Applied AI repair fallback after 1 unsupported finding(s)"
-    }));
-    assert_eq!(response.validation.status, WorkflowValidationStatus::Valid);
-    assert!(response.validation.findings.is_empty());
-    assert_eq!(response.validation_command_results.len(), 2);
-    assert!(
-        response
-            .validation_command_results
-            .iter()
-            .all(|result| result.succeeded)
-    );
-    assert_eq!(
-        fs::read_to_string(workflow_dir.join("state/ai-repair-count"))?.trim(),
-        "1"
-    );
 
     Ok(())
 }

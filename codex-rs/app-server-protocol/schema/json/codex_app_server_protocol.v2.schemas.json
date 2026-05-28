@@ -19233,8 +19233,7 @@
         "repairTsconfig",
         "scaffoldWorkflowSource",
         "scaffoldWorkflowTests",
-        "addCoverageMarkers",
-        "aiRepair"
+        "addCoverageMarkers"
       ],
       "type": "string"
     },

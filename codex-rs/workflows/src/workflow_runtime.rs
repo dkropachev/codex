@@ -22,7 +22,6 @@ use crate::workflow_contract_validation::validate_json_against_schema;
 use crate::workflow_host;
 
 pub const WORKFLOW_RUNTIME_EVENT_PREFIX: &str = "__CODEX_WORKFLOW_EVENT__";
-const WORKFLOW_SELF_EXE_ENV: &str = "CODEX_WORKFLOW_SELF_EXE";
 const WORKFLOW_NAME_ENV: &str = "CODEX_WORKFLOW_NAME";
 const WORKFLOW_WORKING_DIRECTORY_ENV: &str = "CODEX_WORKFLOW_WORKING_DIRECTORY";
 const WORKFLOW_OUTPUT_FORMAT_ENV: &str = "CODEX_WORKFLOW_OUTPUT_FORMAT";
@@ -49,10 +48,8 @@ impl WorkflowRuntimeInvocationMode {
 }
 
 const WORKFLOW_RUNNER_SOURCE: &str = r#"
-import { spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
-import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 
 const EVENT_PREFIX = "__CODEX_WORKFLOW_EVENT__";
@@ -146,14 +143,6 @@ function normalizeStatusUpdate(value, label = "status") {
   return { workflowName, workflowStatus, threads, childStatuses };
 }
 
-function attachChildStatus(status, childStatus) {
-  const normalized = normalizeStatusUpdate(status);
-  return {
-    ...normalized,
-    childStatuses: [...normalized.childStatuses, normalizeChildStatus(childStatus, 0)],
-  };
-}
-
 function formatLegacyProgressData(data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     return scalarValue(data);
@@ -200,26 +189,6 @@ function legacyProgressToStatus(workflowName, message, data) {
   };
 }
 
-function parseWorkflowEventLine(line, workflowName) {
-  if (!line.startsWith(EVENT_PREFIX)) {
-    return null;
-  }
-  const payload = JSON.parse(line.slice(EVENT_PREFIX.length));
-  if (payload.type === "status") {
-    return { type: "status", status: normalizeStatusUpdate(payload.status) };
-  }
-  if (payload.type === "progress") {
-    return {
-      type: "status",
-      status: legacyProgressToStatus(workflowName, payload.message, payload.data),
-    };
-  }
-  if (payload.type === "reportToUserMarkdown") {
-    return { type: "reportToUserMarkdown", markdown: payload.markdown };
-  }
-  return null;
-}
-
 async function emitRequestedFormat(workflowModule, workflow, result) {
   const requestedFormat = stringValue(process.env[WORKFLOW_OUTPUT_FORMAT_ENV]);
   if (!requestedFormat) {
@@ -262,103 +231,6 @@ async function emitRequestedFormat(workflowModule, workflow, result) {
   }
 }
 
-async function runChildWorkflow(workflow, input, options, emitStatus) {
-  const workflowId = typeof workflow === "string" ? workflow : workflow?.id;
-  if (!workflowId || typeof workflowId !== "string") {
-    throw new Error("ctx.runWorkflow(workflow, ...) requires a workflow id string or { id }");
-  }
-
-  const codexExe = process.env.CODEX_WORKFLOW_SELF_EXE;
-  if (!codexExe) {
-    throw new Error("ctx.runWorkflow(...) requires CODEX_WORKFLOW_SELF_EXE");
-  }
-
-  const rawInput = JSON.stringify(input ?? {});
-  const workflowDirectory = process.cwd();
-  const workingDirectory = process.env[WORKFLOW_WORKING_DIRECTORY_ENV] ?? workflowDirectory;
-  const child = spawn(
-    codexExe,
-    ["workflow", "run", workflowId, "--input", rawInput],
-    {
-      cwd: workingDirectory,
-      env: {
-        ...process.env,
-        [WORKFLOW_WORKING_DIRECTORY_ENV]: workingDirectory,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-
-  let stdout = "";
-  let rawStderr = "";
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk;
-  });
-
-  const statusHook = typeof options?.onStatusUpdate === "function"
-    ? options.onStatusUpdate
-    : undefined;
-
-  const stderrTask = (async () => {
-    const lines = createInterface({ input: child.stderr, crlfDelay: Infinity });
-    for await (const line of lines) {
-      const event = parseWorkflowEventLine(line, workflowId);
-      if (!event) {
-        rawStderr += `${line}\n`;
-        continue;
-      }
-      if (event.type !== "status") {
-        continue;
-      }
-
-      const childStatus = event.status;
-      if (!statusHook) {
-        emitStatus(childStatus);
-        continue;
-      }
-
-      let reported = false;
-      const decision = await statusHook(childStatus, {
-        childWorkflowId: workflowId,
-        reportStatus: (status) => {
-          reported = true;
-          emitStatus(normalizeStatusUpdate(status));
-        },
-        attachOriginalChildStatus: (status) => attachChildStatus(status, childStatus),
-      });
-
-      if (decision === null) {
-        continue;
-      }
-      if (decision === undefined) {
-        if (!reported) {
-          emitStatus(childStatus);
-        }
-        continue;
-      }
-      emitStatus(normalizeStatusUpdate(decision));
-    }
-  })();
-
-  const exitCode = await new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", resolve);
-  });
-  await stderrTask;
-
-  if (exitCode !== 0) {
-    throw new Error(
-      rawStderr.trim().length > 0
-        ? `child workflow ${workflowId} failed with ${exitCode}: ${rawStderr.trim()}`
-        : `child workflow ${workflowId} failed with ${exitCode}`,
-    );
-  }
-
-  return stdout.trim().length > 0 ? JSON.parse(stdout) : undefined;
-}
-
 function createRuntimeContext() {
   const workflowDirectory = process.cwd();
   const workingDirectory =
@@ -373,7 +245,6 @@ function createRuntimeContext() {
     progress: (message, data) => emitStatus(legacyProgressToStatus(workflowName, message, data)),
     status: emitStatus,
     reportToUserMarkdown: (markdown) => emitEvent({ type: "reportToUserMarkdown", markdown }),
-    runWorkflow: (workflow, input, options) => runChildWorkflow(workflow, input, options, emitStatus),
   };
 }
 
@@ -556,7 +427,6 @@ pub(crate) async fn run_workflow(
             workflow_dir,
             workflow_path,
             input,
-            options.workflows,
             options.event_handler,
         )
         .await;
@@ -693,15 +563,6 @@ async fn run_workflow_process(
                 .unwrap_or_default(),
         )
         .current_dir(invocation.workflow_dir)
-        .env(
-            WORKFLOW_SELF_EXE_ENV,
-            env::var_os(WORKFLOW_SELF_EXE_ENV)
-                .map(PathBuf::from)
-                .or_else(|| env::current_exe().ok())
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string(),
-        )
         .env(
             WORKFLOW_NAME_ENV,
             invocation
@@ -893,7 +754,7 @@ mod tests {
         assert!(WORKFLOW_RUNNER_SOURCE.contains("reportToUserMarkdown"));
         assert!(WORKFLOW_RUNNER_SOURCE.contains("progress"));
         assert!(WORKFLOW_RUNNER_SOURCE.contains("status:"));
-        assert!(WORKFLOW_RUNNER_SOURCE.contains("runWorkflow:"));
+        assert!(!WORKFLOW_RUNNER_SOURCE.contains("runWorkflow"));
         assert!(WORKFLOW_RUNNER_SOURCE.contains("CODEX_WORKFLOW_WORKING_DIRECTORY"));
         assert!(WORKFLOW_RUNNER_SOURCE.contains("repoRoot: workingDirectory"));
         assert!(WORKFLOW_RUNNER_SOURCE.contains("mode === \"complete\""));

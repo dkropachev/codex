@@ -503,10 +503,6 @@ export type WorkflowContext = {
     threadId: string,
     options?: AgentResumeOptions | WorkflowTool[],
   ): Promise<AgentHandle>;
-  runWorkflow<Input = undefined, Output = unknown>(
-    workflow: DefinedWorkflow<Input, Output>,
-    input?: Input,
-  ): Promise<Output>;
   progress(message: string, data?: unknown): void;
   reportToUserMarkdown(markdown: string): void;
   result(result: unknown): void;
@@ -1053,9 +1049,7 @@ export class WorkflowApis {
     });
   }
 
-  start<Input = unknown>(
-    params: WorkflowRunStartParams<Input>,
-  ): Promise<WorkflowRunStartResponse> {
+  start<Input = unknown>(params: WorkflowRunStartParams<Input>): Promise<WorkflowRunStartResponse> {
     return this.client.request("workflowRun/start", params);
   }
 
@@ -1173,13 +1167,6 @@ class DefaultWorkflowContext implements WorkflowContext {
     options: AgentResumeOptions | WorkflowTool[] = {},
   ): Promise<AgentHandle> {
     return this.workflow.resumeAgent(threadId, options);
-  }
-
-  runWorkflow<Input = undefined, Output = unknown>(
-    workflow: DefinedWorkflow<Input, Output>,
-    input?: Input,
-  ): Promise<Output> {
-    return Promise.resolve(workflow.run(this, input as Input));
   }
 
   progress(message: string, data?: unknown): void {
