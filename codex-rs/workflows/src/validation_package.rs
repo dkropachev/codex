@@ -636,7 +636,7 @@ mod tests {
         )
         .unwrap();
 
-        let findings = validate_package_manifest(workflow_dir, None);
+        let findings = validate_package_manifest(workflow_dir, /*spec*/ None);
 
         assert_eq!(
             crate::validation_finding::finding_messages(&findings),
@@ -669,7 +669,7 @@ mod tests {
         )
         .unwrap();
 
-        let findings = validate_package_manifest(workflow_dir, None);
+        let findings = validate_package_manifest(workflow_dir, /*spec*/ None);
 
         assert_eq!(
             crate::validation_finding::finding_messages(&findings),
