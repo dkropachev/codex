@@ -46,6 +46,8 @@ class FakeAppServerProcess extends EventEmitter {
   workflowNotifications: JsonMessage[] = [];
   artifactRequests: Array<{ method: string; params: JsonMessage }> = [];
   sendApprovalRequestOnThreadStart = false;
+  threadStartAttempts = 0;
+  threadStartFailures = 0;
 
   private buffer = "";
   private startCount = 0;
@@ -95,6 +97,15 @@ class FakeAppServerProcess extends EventEmitter {
       return;
     }
     if (message.method === "thread/start") {
+      this.threadStartAttempts += 1;
+      if (this.threadStartFailures > 0) {
+        this.threadStartFailures -= 1;
+        this.write({
+          id: message.id,
+          error: { code: -32001, message: "Server overloaded; retry later." },
+        });
+        return;
+      }
       this.startCount += 1;
       this.threadId = `thread-${this.startCount}`;
       this.threadStartParams = message.params as JsonMessage;
@@ -210,12 +221,19 @@ class FakeAppServerProcess extends EventEmitter {
         return;
       }
       if (message.method === "artifact/state/list") {
-        this.write({ id: message.id, result: { states: this.artifactState ? [this.artifactState] : [] } });
+        this.write({
+          id: message.id,
+          result: { states: this.artifactState ? [this.artifactState] : [] },
+        });
         return;
       }
       if (message.method === "artifact/state/hit") {
         if (this.artifactState) {
-          this.artifactState = { ...this.artifactState, lastHitAtUnixSec: 124, updatedAtUnixSec: 124 };
+          this.artifactState = {
+            ...this.artifactState,
+            lastHitAtUnixSec: 124,
+            updatedAtUnixSec: 124,
+          };
         }
         this.write({ id: message.id, result: {} });
         return;
@@ -239,9 +257,10 @@ class FakeAppServerProcess extends EventEmitter {
       if (message.method === "artifact/file/find") {
         this.write({
           id: message.id,
-          result: this.artifactState && this.artifactFile
-            ? { entry: { state: this.artifactState, file: this.artifactFile } }
-            : { entry: null },
+          result:
+            this.artifactState && this.artifactFile
+              ? { entry: { state: this.artifactState, file: this.artifactFile } }
+              : { entry: null },
         });
         return;
       }
@@ -303,7 +322,8 @@ class FakeAppServerProcess extends EventEmitter {
                 name: "WorkflowContext.artifacts.readState",
                 kind: "method",
                 signature: "ctx.artifacts.readState(params): Promise<ArtifactStateReadResponse>",
-                description: "Read a workflow artifact state by namespace, scope key, and source key.",
+                description:
+                  "Read a workflow artifact state by namespace, scope key, and source key.",
               },
             ],
           },
@@ -534,10 +554,7 @@ class FakeUnixAppServer {
     });
   }
 
-  private drainFrames(
-    socket: Socket,
-    buffer: Buffer<ArrayBufferLike>,
-  ): Buffer<ArrayBufferLike> {
+  private drainFrames(socket: Socket, buffer: Buffer<ArrayBufferLike>): Buffer<ArrayBufferLike> {
     for (;;) {
       const frame = decodeClientFrame(buffer);
       if (!frame) {
@@ -581,9 +598,7 @@ class FakeUnixAppServer {
   }
 }
 
-function decodeClientFrame(
-  buffer: Buffer<ArrayBufferLike>,
-): {
+function decodeClientFrame(buffer: Buffer<ArrayBufferLike>): {
   opcode: number;
   payload: Buffer<ArrayBufferLike>;
   remaining: Buffer<ArrayBufferLike>;
@@ -768,6 +783,22 @@ describe("CodexWorkflow", () => {
     expect(workflow.listAgents().map((registeredAgent) => registeredAgent.threadId)).toEqual([
       "thread-existing",
     ]);
+
+    await agent.close();
+    await workflow.close();
+  });
+
+  it("retries retryable app-server overload errors", async () => {
+    const fake = new FakeAppServerProcess();
+    fake.threadStartFailures = 1;
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+
+    const workflow = await CodexWorkflow.start({ codexPathOverride: "codex" });
+    const agent = await workflow.startAgent({ workingDirectory: "/repo" });
+
+    expect(agent.threadId).toBe("thread-1");
+    expect(fake.threadStartAttempts).toBe(2);
+    expect(fake.threadStartParams).toEqual({ cwd: "/repo", dynamicTools: [] });
 
     await agent.close();
     await workflow.close();
@@ -1116,7 +1147,7 @@ describe("CodexWorkflow", () => {
             runId: expect.any(String),
           }),
         }),
-      ])
+      ]),
     );
     expect(results).toEqual(["Weather: mild"]);
     expect(fake.killed).toBe(true);
@@ -1159,7 +1190,7 @@ describe("CodexWorkflow", () => {
             runId: expect.any(String),
           }),
         }),
-      ])
+      ]),
     );
     expect(fake.killed).toBe(false);
 

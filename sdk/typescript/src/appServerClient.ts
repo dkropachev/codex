@@ -107,6 +107,21 @@ export type ServerRequestHandler = (
 
 export type NotificationHandler = (notification: AppServerNotification) => void;
 
+const APP_SERVER_OVERLOADED_ERROR_CODE = -32001;
+const REQUEST_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
+
+class AppServerRequestError extends Error {
+  readonly code: number;
+  readonly data?: unknown;
+
+  constructor(method: string, error: JsonRpcError) {
+    super(`${method} failed: ${error.message}`);
+    this.name = "AppServerRequestError";
+    this.code = error.code;
+    this.data = error.data;
+  }
+}
+
 export class AppServerClient {
   private transport: AppServerTransport;
   private nextId = 1;
@@ -149,6 +164,8 @@ export class AppServerClient {
     }
 
     if (options.appServerUrl.startsWith("unix://")) {
+      // The transport handlers close over the client that is constructed from that transport.
+      // eslint-disable-next-line prefer-const
       let client: AppServerClient;
       const transport = await unixWebSocketTransport(
         options.appServerUrl,
@@ -174,7 +191,20 @@ export class AppServerClient {
     return client;
   }
 
-  request<T = unknown>(method: string, params?: unknown): Promise<T> {
+  async request<T = unknown>(method: string, params?: unknown): Promise<T> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.sendRequest<T>(method, params);
+      } catch (error) {
+        if (!shouldRetryRequest(error, attempt) || this.closed) {
+          throw error;
+        }
+        await sleep(withJitter(REQUEST_RETRY_DELAYS_MS[attempt]!));
+      }
+    }
+  }
+
+  private sendRequest<T = unknown>(method: string, params?: unknown): Promise<T> {
     if (this.closed) {
       return Promise.reject(new Error("Codex app-server client is closed"));
     }
@@ -283,7 +313,7 @@ export class AppServerClient {
       return;
     }
     this.pending.delete(message.id);
-    pending.reject(new Error(`${pending.method} failed: ${message.error.message}`));
+    pending.reject(new AppServerRequestError(pending.method, message.error));
   }
 
   private handleNotification(notification: AppServerNotification): void {
@@ -330,6 +360,22 @@ export class AppServerClient {
     }
     this.pending.clear();
   }
+}
+
+function shouldRetryRequest(error: unknown, attempt: number): boolean {
+  return (
+    error instanceof AppServerRequestError &&
+    error.code === APP_SERVER_OVERLOADED_ERROR_CODE &&
+    attempt < REQUEST_RETRY_DELAYS_MS.length
+  );
+}
+
+function withJitter(delayMs: number): number {
+  return Math.floor(Math.random() * delayMs);
+}
+
+function sleep(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 async function unixWebSocketTransport(

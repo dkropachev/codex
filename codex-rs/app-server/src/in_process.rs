@@ -68,7 +68,6 @@ use crate::transport::ConnectionOrigin;
 use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
 use crate::transport::TransportEvent;
-use crate::transport::app_server_control_socket_path;
 use crate::transport::route_outgoing_envelope;
 use crate::transport::start_control_socket_acceptor;
 use codex_analytics::AppServerRpcTransport;
@@ -94,15 +93,18 @@ use codex_login::AuthManager;
 use codex_protocol::protocol::SessionSource;
 pub use codex_rollout::StateDbHandle;
 pub use codex_state::log_db::LogDbLayer;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
 use tracing::warn;
+use uuid::Uuid;
 
 const IN_PROCESS_CONNECTION_ID: ConnectionId = ConnectionId(0);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const WORKFLOW_APP_SERVER_SOCKET_DIR_NAME: &str = "codex-workflow-app-server";
 /// Default bounded channel capacity for in-process runtime queues.
 pub const DEFAULT_IN_PROCESS_CHANNEL_CAPACITY: usize = CHANNEL_CAPACITY;
 
@@ -110,6 +112,15 @@ type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorErro
 
 fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
     matches!(notification, ServerNotification::TurnCompleted(_))
+}
+
+fn workflow_app_server_socket_path() -> IoResult<AbsolutePathBuf> {
+    let socket_id = Uuid::now_v7();
+    AbsolutePathBuf::from_absolute_path(
+        std::env::temp_dir()
+            .join(WORKFLOW_APP_SERVER_SOCKET_DIR_NAME)
+            .join(format!("workflow-{socket_id}.sock")),
+    )
 }
 
 /// Input needed to start an in-process app-server runtime.
@@ -469,7 +480,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             mpsc::channel::<TransportEvent>(channel_capacity);
         let (workflow_transport, workflow_app_server_url, mut workflow_accept_handle) =
             if args.expose_workflow_app_server {
-                match app_server_control_socket_path(args.config.codex_home.as_path()) {
+                match workflow_app_server_socket_path() {
                     Ok(socket_path) => {
                         match start_control_socket_acceptor(
                             socket_path.clone(),
@@ -1098,6 +1109,25 @@ mod tests {
 
     async fn start_test_client(session_source: SessionSource) -> InProcessClientHandle {
         start_test_client_with_capacity(session_source, DEFAULT_IN_PROCESS_CHANNEL_CAPACITY).await
+    }
+
+    #[test]
+    fn workflow_app_server_socket_path_is_random_under_temp_dir() {
+        let first = workflow_app_server_socket_path().expect("first socket path");
+        let second = workflow_app_server_socket_path().expect("second socket path");
+        let expected_parent = std::env::temp_dir().join(WORKFLOW_APP_SERVER_SOCKET_DIR_NAME);
+
+        assert_ne!(first, second);
+        assert_eq!(first.as_path().parent(), Some(expected_parent.as_path()));
+        assert_eq!(second.as_path().parent(), Some(expected_parent.as_path()));
+
+        let file_name = first
+            .as_path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("socket path should have utf-8 file name");
+        assert!(file_name.starts_with("workflow-"));
+        assert!(file_name.ends_with(".sock"));
     }
 
     #[test]
