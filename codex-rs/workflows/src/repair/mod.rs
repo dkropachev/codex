@@ -1659,13 +1659,14 @@ fn apply_dependency_install_fix(
         return Ok(None);
     }
 
-    let mut command = if let Some(managed_bun) = crate::managed_bun::cached_managed_bun_path(None)?
+    let mut command = if let Some(managed_bun) =
+        crate::managed_bun::cached_managed_bun_path(/*cache_root*/ None)?
     {
         Command::new(managed_bun)
     } else if crate::managed_bun::command_on_path("bun") {
         Command::new("bun")
     } else {
-        let Some(managed_bun) = crate::managed_bun::ensure_managed_bun(None)? else {
+        let Some(managed_bun) = crate::managed_bun::ensure_managed_bun(/*cache_root*/ None)? else {
             return Err(anyhow!(
                 "workflow dependency refresh requires managed Bun in CODEX_HOME or `bun` on PATH"
             ));

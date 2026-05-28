@@ -251,7 +251,7 @@ impl WorkflowRunManager {
                         &run_id,
                         WorkflowRunStatus::Succeeded,
                         Some(run_output),
-                        None,
+                        /*error*/ None,
                     )
                     .await
                 {
@@ -265,7 +265,12 @@ impl WorkflowRunManager {
             }
             Err(err) => {
                 if let Some(run) = self
-                    .finish_run(&run_id, WorkflowRunStatus::Failed, None, Some(err))
+                    .finish_run(
+                        &run_id,
+                        WorkflowRunStatus::Failed,
+                        /*output*/ None,
+                        Some(err),
+                    )
                     .await
                 {
                     self.inner

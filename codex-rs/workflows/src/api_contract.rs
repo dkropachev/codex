@@ -567,12 +567,14 @@ pub(crate) fn extract_workflow_source_contract_from_typescript(
 ) -> Result<WorkflowSourceContract> {
     ensure_repo_typescript_shim(workflow_dir)?;
     let workflow_path = workflow_dir.join("src/workflow.ts");
-    let command = if let Some(managed_bun) = crate::managed_bun::cached_managed_bun_path(None)? {
+    let command = if let Some(managed_bun) =
+        crate::managed_bun::cached_managed_bun_path(/*cache_root*/ None)?
+    {
         WorkflowApiExtractorCommand::ManagedBun(managed_bun)
     } else if crate::managed_bun::command_on_path("bun") {
         WorkflowApiExtractorCommand::PathBun
     } else {
-        let Some(managed_bun) = crate::managed_bun::ensure_managed_bun(None)? else {
+        let Some(managed_bun) = crate::managed_bun::ensure_managed_bun(/*cache_root*/ None)? else {
             return Err(anyhow!(
                 "workflow API extraction requires managed Bun in CODEX_HOME or `bun` on PATH"
             ));

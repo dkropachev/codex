@@ -325,7 +325,7 @@ fn extract_bun_archive(archive: &[u8], destination: &Path) -> Result<()> {
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod tests {
     use std::fs;
 
@@ -335,7 +335,6 @@ mod tests {
     use super::cached_managed_bun_path;
     use super::ensure_managed_bun;
 
-    #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
     #[test]
     fn managed_bun_uses_cached_runtime_without_download() {
         let temp_dir = TempDir::new().unwrap();

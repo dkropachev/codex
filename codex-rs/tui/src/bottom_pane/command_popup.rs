@@ -887,8 +887,8 @@ api:
                     description: Some("Expanded report output".to_string()),
                 },
             ],
-            None,
-            false,
+            /*error*/ None,
+            /*pending*/ false,
         );
         popup.on_composer_text_change("/code-review --reportId ".to_string());
 
@@ -956,8 +956,8 @@ api:
                     ),
                 },
             ],
-            None,
-            false,
+            /*error*/ None,
+            /*pending*/ false,
         );
         popup.on_composer_text_change("/code-review --reportId ".to_string());
         popup.move_down();
