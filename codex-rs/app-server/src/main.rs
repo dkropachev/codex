@@ -15,6 +15,8 @@ use std::path::PathBuf;
 // managed config file without writing to /etc.
 const MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_APP_SERVER_MANAGED_CONFIG_PATH";
 const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
+#[cfg(debug_assertions)]
+const CODEX_SELF_EXE_ENV_VAR: &str = "CODEX_APP_SERVER_CODEX_SELF_EXE";
 
 #[derive(Debug, Parser)]
 struct AppServerArgs {
@@ -47,8 +49,14 @@ struct AppServerArgs {
 }
 
 fn main() -> anyhow::Result<()> {
-    arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
+    arg0_dispatch_or_else(|mut arg0_paths: Arg0DispatchPaths| async move {
         let args = AppServerArgs::parse();
+        #[cfg(debug_assertions)]
+        if let Ok(value) = std::env::var(CODEX_SELF_EXE_ENV_VAR)
+            && !value.is_empty()
+        {
+            arg0_paths.codex_self_exe = Some(PathBuf::from(value));
+        }
         let loader_overrides = if disable_managed_config_from_debug_env() {
             LoaderOverrides::without_managed_config_for_tests()
         } else {

@@ -788,7 +788,7 @@ fn build_fix_plan(
                 stdout,
                 stderr,
             } => {
-                if !command_fixable(command, *exit_code) {
+                if !command_fixable(command, *exit_code, stdout, stderr) {
                     continue;
                 }
                 plan.repair_package_manifest = true;
@@ -901,9 +901,12 @@ fn action_kinds_for_finding(
             vec![WorkflowRepairActionKind::AddCoverageMarkers]
         }
         WorkflowValidationFinding::ValidationCommandFailed {
-            command, exit_code, ..
+            command,
+            exit_code,
+            stdout,
+            stderr,
         } => {
-            if !command_fixable(command, *exit_code) {
+            if !command_fixable(command, *exit_code, stdout, stderr) {
                 return None;
             }
             let mut kinds = vec![WorkflowRepairActionKind::RepairPackageManifest];
@@ -2032,14 +2035,25 @@ fn is_database_path(path: &Path) -> bool {
         || file_name.ends_with(".sqlite3-shm")
 }
 
-fn command_fixable(command: &str, _exit_code: Option<i32>) -> bool {
+fn command_fixable(command: &str, _exit_code: Option<i32>, stdout: &str, stderr: &str) -> bool {
     if command.contains("exit 1") {
         return false;
     }
-    command.contains("npm run build")
-        || command.contains("npm test")
-        || command.contains("bun build")
-        || command.contains("bun test")
+    if dependency_install_fixable(stdout, stderr) {
+        return true;
+    }
+
+    let output = format!("{stdout}\n{stderr}");
+    [
+        "Missing script",
+        "missing script",
+        "Script not found",
+        "script not found",
+        "Command not found",
+        "command not found",
+    ]
+    .iter()
+    .any(|needle| output.contains(needle))
 }
 
 fn dependency_install_fixable(stdout: &str, stderr: &str) -> bool {
