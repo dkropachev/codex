@@ -345,6 +345,11 @@ fn validate_unused_runtime_dependencies(
         .collect::<BTreeSet<_>>();
     let script_text = package_scripts_text(package_json);
     for package_name in package_dependency_names(package_json, "dependencies") {
+        if is_disallowed_bun_dependency(&package_name)
+            || is_disallowed_runtime_type_dependency(&package_name)
+        {
+            continue;
+        }
         if imported_packages.contains(&package_name)
             || package_used_by_scripts(&package_name, &script_text)
         {
@@ -501,7 +506,11 @@ fn imported_specifiers(contents: &str) -> BTreeSet<String> {
 }
 
 fn package_name_from_specifier(specifier: &str) -> Option<String> {
-    if specifier.starts_with('.') || specifier.starts_with('/') || specifier.starts_with("node:") {
+    if specifier.starts_with('.')
+        || specifier.starts_with('/')
+        || specifier.starts_with("node:")
+        || specifier.starts_with("bun:")
+    {
         return None;
     }
     if let Some(rest) = specifier.strip_prefix('@') {
@@ -514,7 +523,7 @@ fn package_name_from_specifier(specifier: &str) -> Option<String> {
 }
 
 fn is_builtin_specifier(specifier: &str) -> bool {
-    if specifier.starts_with("node:") {
+    if specifier.starts_with("node:") || specifier.starts_with("bun:") {
         return true;
     }
     BARE_NODE_BUILTINS.contains(&specifier)
@@ -525,7 +534,7 @@ fn is_node_only_runtime_specifier(specifier: &str) -> bool {
 }
 
 fn is_disallowed_bun_dependency(package_name: &str) -> bool {
-    matches!(package_name, "tsx" | "bun")
+    matches!(package_name, "tsx" | "bun") || package_name.starts_with("bun:")
 }
 
 fn is_disallowed_runtime_type_dependency(package_name: &str) -> bool {
@@ -670,6 +679,84 @@ mod tests {
         .unwrap();
 
         let findings = validate_package_manifest(workflow_dir, /*spec*/ None);
+
+        assert_eq!(
+            crate::validation_finding::finding_messages(&findings),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn validate_package_manifest_rejects_bun_builtin_dependencies() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = root.path();
+        fs::create_dir_all(workflow_dir.join("src")).unwrap();
+        fs::write(
+            workflow_dir.join("package.json"),
+            r#"{
+  "name": "codex-workflow-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/workflow.ts --target=bun --outdir artifacts/build",
+    "test": "bun test src/tests",
+    "run": "bun src/workflow.ts"
+  },
+  "dependencies": {
+    "bun:sqlite": "latest"
+  }
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("src/workflow.ts"),
+            "import { Database } from \"bun:sqlite\";\nexport { Database };\n",
+        )
+        .unwrap();
+
+        let findings = validate_package_manifest(workflow_dir, /*spec*/ None);
+
+        assert_eq!(
+            crate::validation_finding::finding_messages(&findings),
+            vec![
+                "package.json dependency `bun:sqlite` is not allowed in Bun workflows".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn validate_local_package_imports_allows_bun_builtin_specifiers() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = root.path();
+        fs::create_dir_all(workflow_dir.join("src/tests")).unwrap();
+        fs::write(
+            workflow_dir.join("package.json"),
+            r#"{
+  "name": "codex-workflow-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/workflow.ts --target=bun --outdir artifacts/build",
+    "test": "bun test src/tests",
+    "run": "bun src/workflow.ts"
+  }
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("src/workflow.ts"),
+            "import { Database } from \"bun:sqlite\";\nexport { Database };\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("src/tests/workflow.test.ts"),
+            "import { expect, test } from \"bun:test\";\ntest(\"ok\", () => expect(true).toBe(true));\n",
+        )
+        .unwrap();
+
+        let findings = validate_local_package_imports(workflow_dir);
 
         assert_eq!(
             crate::validation_finding::finding_messages(&findings),
