@@ -231,7 +231,13 @@ impl WorkflowValidationFinding {
                 format!("package.json `{script}` script must use Bun, found `{command}`")
             }
             Self::DisallowedPackageDependency { package_name, .. } => {
-                format!("package.json dependency `{package_name}` is not allowed in Bun workflows")
+                if package_name == "@types/node" {
+                    "package.json dependency `@types/node` is not allowed in Bun workflows; use `@types/bun` in devDependencies instead".to_string()
+                } else {
+                    format!(
+                        "package.json dependency `{package_name}` is not allowed in Bun workflows"
+                    )
+                }
             }
             Self::UndeclaredPackageImport { package_name, .. } => {
                 format!("imports undeclared package `{package_name}`")

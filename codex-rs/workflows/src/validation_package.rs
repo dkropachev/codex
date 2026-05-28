@@ -291,7 +291,18 @@ fn validate_bun_dependency_policy(
     package_json: &JsonValue,
     findings: &mut Vec<WorkflowValidationFinding>,
 ) {
-    for field in ["dependencies", "devDependencies", "optionalDependencies"] {
+    for package_name in package_dependency_names(package_json, "dependencies") {
+        if is_disallowed_bun_dependency(&package_name)
+            || is_disallowed_runtime_type_dependency(&package_name)
+        {
+            findings.push(WorkflowValidationFinding::DisallowedPackageDependency {
+                path: PathBuf::from("package.json"),
+                package_name,
+            });
+        }
+    }
+
+    for field in ["devDependencies", "optionalDependencies"] {
         for package_name in package_dependency_names(package_json, field) {
             if is_disallowed_bun_dependency(&package_name) {
                 findings.push(WorkflowValidationFinding::DisallowedPackageDependency {
@@ -517,6 +528,10 @@ fn is_disallowed_bun_dependency(package_name: &str) -> bool {
     matches!(package_name, "tsx" | "bun")
 }
 
+fn is_disallowed_runtime_type_dependency(package_name: &str) -> bool {
+    package_name == "@types/node"
+}
+
 pub(crate) fn is_bun_runtime_command(command: &str) -> bool {
     command.to_ascii_lowercase().contains("bun") && !contains_disallowed_runtime_command(command)
 }
@@ -584,4 +599,81 @@ fn is_code_file(path: &Path) -> bool {
         path.extension().and_then(|extension| extension.to_str()),
         Some("ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    #[test]
+    fn validate_package_manifest_rejects_types_node_in_runtime_dependencies() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = root.path();
+        fs::create_dir_all(workflow_dir.join("src")).unwrap();
+        fs::write(
+            workflow_dir.join("package.json"),
+            r#"{
+  "name": "codex-workflow-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/workflow.ts --target=bun --outdir artifacts/build",
+    "test": "bun test src/tests",
+    "run": "bun src/workflow.ts"
+  },
+  "dependencies": {
+    "@types/node": "latest"
+  }
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("src/workflow.ts"),
+            "import \"@types/node\";\nexport default async function workflow() {}\n",
+        )
+        .unwrap();
+
+        let findings = validate_package_manifest(workflow_dir, None);
+
+        assert_eq!(
+            crate::validation_finding::finding_messages(&findings),
+            vec![
+                "package.json dependency `@types/node` is not allowed in Bun workflows; use `@types/bun` in devDependencies instead".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn validate_package_manifest_allows_types_node_in_dev_dependencies() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = root.path();
+        fs::write(
+            workflow_dir.join("package.json"),
+            r#"{
+  "name": "codex-workflow-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/workflow.ts --target=bun --outdir artifacts/build",
+    "test": "bun test src/tests",
+    "run": "bun src/workflow.ts"
+  },
+  "devDependencies": {
+    "@types/node": "latest"
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let findings = validate_package_manifest(workflow_dir, None);
+
+        assert_eq!(
+            crate::validation_finding::finding_messages(&findings),
+            Vec::<String>::new()
+        );
+    }
 }
