@@ -358,44 +358,36 @@ fn bun_executable_name() -> &'static str {
 }
 
 fn current_package() -> Option<ManagedBunPackage> {
-    package_for_target(
-        std::env::consts::OS,
-        std::env::consts::ARCH,
-        current_target_env(),
-    )
+    package_for_target(std::env::consts::OS, std::env::consts::ARCH)
 }
 
-fn package_for_target(
-    target_os: &str,
-    target_arch: &str,
-    target_env: &str,
-) -> Option<ManagedBunPackage> {
-    match (target_os, target_arch, target_env) {
-        ("linux", "x86_64", "gnu") => Some(ManagedBunPackage {
+fn package_for_target(target_os: &str, target_arch: &str) -> Option<ManagedBunPackage> {
+    match (target_os, target_arch) {
+        ("linux", "x86_64") => Some(ManagedBunPackage {
             target: "linux-x64-baseline",
             archive_url: "https://registry.npmjs.org/@oven/bun-linux-x64-baseline/-/bun-linux-x64-baseline-1.3.14.tgz",
             archive_entry: BUN_UNIX_ARCHIVE_ENTRY,
             sha256: "1d58ab332bf81a31ef3d59d0ddaf2d60e8889b7da9e6a41762492bf5675a2be5",
         }),
-        ("linux", "aarch64", "gnu") => Some(ManagedBunPackage {
+        ("linux", "aarch64") => Some(ManagedBunPackage {
             target: "linux-aarch64",
             archive_url: "https://registry.npmjs.org/@oven/bun-linux-aarch64/-/bun-linux-aarch64-1.3.14.tgz",
             archive_entry: BUN_UNIX_ARCHIVE_ENTRY,
             sha256: "97631ecfb616c248a4662599c555a59e2a18140a2ec1c0038a89bff08b815169",
         }),
-        ("macos", "x86_64", "") => Some(ManagedBunPackage {
+        ("macos", "x86_64") => Some(ManagedBunPackage {
             target: "darwin-x64",
             archive_url: "https://registry.npmjs.org/@oven/bun-darwin-x64/-/bun-darwin-x64-1.3.14.tgz",
             archive_entry: BUN_UNIX_ARCHIVE_ENTRY,
             sha256: "1a0ca6b839a1243b2a857c63e6cdb7cee1eeacf538736a27bfb08e75a0789efa",
         }),
-        ("macos", "aarch64", "") => Some(ManagedBunPackage {
+        ("macos", "aarch64") => Some(ManagedBunPackage {
             target: "darwin-aarch64",
             archive_url: "https://registry.npmjs.org/@oven/bun-darwin-aarch64/-/bun-darwin-aarch64-1.3.14.tgz",
             archive_entry: BUN_UNIX_ARCHIVE_ENTRY,
             sha256: "603d327a393c32fec5d9e7165c5f57afc28f1c84ef85593448870ccc41bda636",
         }),
-        ("windows", "x86_64", "msvc" | "gnu") => Some(ManagedBunPackage {
+        ("windows", "x86_64") => Some(ManagedBunPackage {
             target: "windows-x64",
             archive_url: "https://registry.npmjs.org/@oven/bun-windows-x64/-/bun-windows-x64-1.3.14.tgz",
             archive_entry: BUN_WINDOWS_ARCHIVE_ENTRY,
@@ -403,26 +395,6 @@ fn package_for_target(
         }),
         _ => None,
     }
-}
-
-#[cfg(target_env = "gnu")]
-fn current_target_env() -> &'static str {
-    "gnu"
-}
-
-#[cfg(target_env = "musl")]
-fn current_target_env() -> &'static str {
-    "musl"
-}
-
-#[cfg(target_env = "msvc")]
-fn current_target_env() -> &'static str {
-    "msvc"
-}
-
-#[cfg(not(any(target_env = "gnu", target_env = "musl", target_env = "msvc")))]
-fn current_target_env() -> &'static str {
-    ""
 }
 
 fn download_bun_archive(package: ManagedBunPackage) -> Result<Vec<u8>> {
@@ -491,7 +463,7 @@ fn extract_bun_archive(
     ))
 }
 
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 mod tests {
     use std::ffi::OsStr;
     use std::ffi::OsString;
@@ -516,7 +488,7 @@ mod tests {
         fs::write(&bun, "cached").unwrap();
         fs::write(
             &version,
-            managed_bun_version_marker(package_for_target("linux", "x86_64", "gnu").unwrap()),
+            managed_bun_version_marker(package_for_target("linux", "x86_64").unwrap()),
         )
         .unwrap();
 
@@ -533,17 +505,16 @@ mod tests {
     #[test]
     fn managed_bun_selects_supported_packages() {
         let targets = [
-            ("linux", "x86_64", "gnu", "linux-x64-baseline"),
-            ("linux", "aarch64", "gnu", "linux-aarch64"),
-            ("macos", "x86_64", "", "darwin-x64"),
-            ("macos", "aarch64", "", "darwin-aarch64"),
-            ("windows", "x86_64", "msvc", "windows-x64"),
-            ("windows", "x86_64", "gnu", "windows-x64"),
+            ("linux", "x86_64", "linux-x64-baseline"),
+            ("linux", "aarch64", "linux-aarch64"),
+            ("macos", "x86_64", "darwin-x64"),
+            ("macos", "aarch64", "darwin-aarch64"),
+            ("windows", "x86_64", "windows-x64"),
         ];
 
-        for (target_os, target_arch, target_env, expected_target) in targets {
+        for (target_os, target_arch, expected_target) in targets {
             assert_eq!(
-                package_for_target(target_os, target_arch, target_env)
+                package_for_target(target_os, target_arch)
                     .expect("target should be supported")
                     .target,
                 expected_target
@@ -553,8 +524,8 @@ mod tests {
 
     #[test]
     fn managed_bun_rejects_unsupported_packages() {
-        assert_eq!(package_for_target("linux", "riscv64", "gnu"), None);
-        assert_eq!(package_for_target("linux", "x86_64", "musl"), None);
+        assert_eq!(package_for_target("linux", "riscv64"), None);
+        assert_eq!(package_for_target("windows", "aarch64"), None);
     }
 
     #[test]
