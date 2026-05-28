@@ -567,20 +567,14 @@ pub(crate) fn extract_workflow_source_contract_from_typescript(
 ) -> Result<WorkflowSourceContract> {
     ensure_repo_typescript_shim(workflow_dir)?;
     let workflow_path = workflow_dir.join("src/workflow.ts");
-    let command = if let Some(managed_bun) =
-        crate::managed_bun::cached_managed_bun_path(/*cache_root*/ None)?
-    {
-        WorkflowApiExtractorCommand::ManagedBun(managed_bun)
-    } else if crate::managed_bun::command_on_path("bun") {
-        WorkflowApiExtractorCommand::PathBun
-    } else {
-        let Some(managed_bun) = crate::managed_bun::ensure_managed_bun(/*cache_root*/ None)? else {
+    let command =
+        if let Some(managed_bun) = crate::managed_bun::ensure_managed_bun(/*cache_root*/ None)? {
+            managed_bun
+        } else {
             return Err(anyhow!(
-                "workflow API extraction requires managed Bun in CODEX_HOME or `bun` on PATH"
+                "workflow API extraction requires managed Bun in CODEX_HOME/workflows/.bin"
             ));
         };
-        WorkflowApiExtractorCommand::ManagedBun(managed_bun)
-    };
     let output = run_workflow_api_extractor(command, workflow_dir, &workflow_path)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -604,17 +598,12 @@ pub(crate) fn extract_workflow_source_contract_from_typescript(
     Ok(extracted.into())
 }
 
-enum WorkflowApiExtractorCommand {
-    ManagedBun(PathBuf),
-    PathBun,
-}
-
 fn run_workflow_api_extractor(
-    command: WorkflowApiExtractorCommand,
+    command: PathBuf,
     workflow_dir: &Path,
     workflow_path: &Path,
 ) -> Result<Output> {
-    run_workflow_api_extractor_once(&command, workflow_dir, workflow_path).with_context(|| {
+    run_workflow_api_extractor_once(command, workflow_dir, workflow_path).with_context(|| {
         format!(
             "failed to extract workflow API from {}",
             workflow_path.display()
@@ -623,14 +612,13 @@ fn run_workflow_api_extractor(
 }
 
 fn run_workflow_api_extractor_once(
-    command: &WorkflowApiExtractorCommand,
+    command: PathBuf,
     workflow_dir: &Path,
     workflow_path: &Path,
 ) -> std::io::Result<Output> {
-    let mut command = match command {
-        WorkflowApiExtractorCommand::ManagedBun(path) => Command::new(path),
-        WorkflowApiExtractorCommand::PathBun => Command::new("bun"),
-    };
+    let mut command = Command::new(command);
+    crate::managed_bun::configure_isolated_bun_environment(&mut command, /*cache_root*/ None)
+        .map_err(std::io::Error::other)?;
     command
         .current_dir(workflow_dir)
         .args([

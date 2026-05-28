@@ -1659,20 +1659,15 @@ fn apply_dependency_install_fix(
         return Ok(None);
     }
 
-    let mut command = if let Some(managed_bun) =
-        crate::managed_bun::cached_managed_bun_path(/*cache_root*/ None)?
-    {
-        Command::new(managed_bun)
-    } else if crate::managed_bun::command_on_path("bun") {
-        Command::new("bun")
-    } else {
-        let Some(managed_bun) = crate::managed_bun::ensure_managed_bun(/*cache_root*/ None)? else {
+    let mut command =
+        if let Some(managed_bun) = crate::managed_bun::ensure_managed_bun(/*cache_root*/ None)? {
+            Command::new(managed_bun)
+        } else {
             return Err(anyhow!(
-                "workflow dependency refresh requires managed Bun in CODEX_HOME or `bun` on PATH"
+                "workflow dependency refresh requires managed Bun in CODEX_HOME/workflows/.bin"
             ));
         };
-        Command::new(managed_bun)
-    };
+    crate::managed_bun::configure_isolated_bun_environment(&mut command, /*cache_root*/ None)?;
     let output = command
         .args(["install", "--ignore-scripts"])
         .current_dir(&workflow.path)

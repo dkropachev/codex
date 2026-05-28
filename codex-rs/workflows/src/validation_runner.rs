@@ -1,3 +1,5 @@
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::path::Path;
 use std::process::Command;
 
@@ -101,7 +103,12 @@ pub(crate) fn run_validation_command(
 ) -> Result<WorkflowValidationCommandResult> {
     let mut shell_command = validation_shell_command(command);
     let local_bun = crate::workflow_runtime::workflow_bun_path(cwd);
-    if !local_bun.is_file() {
+    if local_bun.is_file() {
+        crate::managed_bun::configure_isolated_bun_environment(
+            &mut shell_command,
+            /*cache_root*/ None,
+        )?;
+    } else {
         crate::managed_bun::prepend_managed_bun_to_path(
             &mut shell_command,
             /*cache_root*/ None,
@@ -143,12 +150,21 @@ fn prepend_workflow_bin_to_path(command: &mut Command, cwd: &Path) -> Result<()>
         return Ok(());
     }
     let mut paths = vec![bin_dir];
-    if let Some(path) = std::env::var_os("PATH") {
+    if let Some(path) = command_env_os(command, "PATH") {
         paths.extend(std::env::split_paths(&path));
     }
     let paths = std::env::join_paths(paths).context("failed to build workflow validation PATH")?;
     command.env("PATH", paths);
     Ok(())
+}
+
+fn command_env_os(command: &Command, key: &str) -> Option<OsString> {
+    let key = OsStr::new(key);
+    command
+        .get_envs()
+        .find_map(|(env_key, value)| (env_key == key).then(|| value.map(OsString::from)))
+        .flatten()
+        .or_else(|| std::env::var_os(key))
 }
 
 fn validation_shell_command(command: &str) -> Command {

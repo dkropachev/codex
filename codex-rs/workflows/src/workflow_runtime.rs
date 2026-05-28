@@ -667,6 +667,10 @@ async fn run_workflow_process(
     let runner_path = write_runner_script()?;
     let engine_path = workflow_ts_engine_path(invocation.codex_home, invocation.workflow_dir)?;
     let mut child = Command::new(&engine_path);
+    crate::managed_bun::configure_isolated_bun_environment_for_tokio(
+        &mut child,
+        invocation.codex_home,
+    )?;
     child
         .arg(&runner_path)
         .arg("--mode")
@@ -836,14 +840,6 @@ pub(crate) fn workflow_ts_engine_path(
         return Ok(bun_path);
     }
 
-    if let Some(managed_bun_path) = crate::managed_bun::cached_managed_bun_path(codex_home)? {
-        return Ok(managed_bun_path);
-    }
-
-    if crate::managed_bun::command_on_path("bun") {
-        return Ok(PathBuf::from("bun"));
-    }
-
     match crate::managed_bun::ensure_managed_bun(codex_home) {
         Ok(Some(managed_bun_path)) => return Ok(managed_bun_path),
         Ok(None) => None,
@@ -852,14 +848,14 @@ pub(crate) fn workflow_ts_engine_path(
     .map_or_else(
         || {
             Err(anyhow::anyhow!(
-                "workflow runtime requires managed Bun in CODEX_HOME, local `{}`, or `bun` on PATH",
+                "workflow runtime requires managed Bun in CODEX_HOME/workflows/.bin or local `{}`",
                 bun_path.display()
             ))
         },
         |err| {
             Err(err).with_context(|| {
                 format!(
-                    "workflow runtime requires managed Bun in CODEX_HOME, local `{}`, or `bun` on PATH",
+                    "workflow runtime requires managed Bun in CODEX_HOME/workflows/.bin or local `{}`",
                     bun_path.display()
                 )
             })

@@ -243,6 +243,10 @@ async fn ensure_workflow_host(
     let host_script = write_host_script()?;
     let engine_path = workflow_ts_engine_path(Some(codex_home), workflow_dir)?;
     let mut command = Command::new(&engine_path);
+    crate::managed_bun::configure_isolated_bun_environment_for_tokio(
+        &mut command,
+        Some(codex_home),
+    )?;
     command
         .arg(&host_script)
         .arg("--serve")
