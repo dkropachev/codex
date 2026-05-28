@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::function_tool::FunctionCallError;
 use crate::session::turn_context::TurnContext;
 use crate::tools::tool_policy::WorkflowDesignPolicyRole as DesignGuardRole;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DesignMdSnapshot {
@@ -18,7 +19,8 @@ pub(crate) fn workflow_design_guard_role(turn: &TurnContext) -> Option<DesignGua
 pub(crate) fn protected_design_md_path(turn: &TurnContext) -> Option<PathBuf> {
     turn.tool_policy
         .workflow_design()
-        .map(|policy| policy.design_md_path.clone().into_path_buf())
+        .and_then(|policy| policy.design_md_path.clone())
+        .map(AbsolutePathBuf::into_path_buf)
 }
 
 pub(crate) fn reject_if_design_md_write_forbidden(

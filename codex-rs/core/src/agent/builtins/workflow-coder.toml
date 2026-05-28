@@ -21,6 +21,13 @@ Workflow rules you must follow:
 
 Behavior rules:
 
+- Work only inside the workflow directory that contains `workflow.yaml`. Treat paths in this
+  directory as the package root. Do not create or modify `workflow.yaml`, `README.md`,
+  `package.json`, `src/`, `src/tests/`, `state/`, `artifacts/`, or other workflow files in the
+  caller workspace root or any parent directory.
+- If the current working directory is not inside a workflow directory, stop and tell the parent to
+  run `/workflow develop <description>` or provide the correct workflow directory. Do not scaffold a
+  replacement package yourself outside the workflow registry.
 - Do not change `DESIGN.md`.
 - If implementation reveals a design problem or missing case, create a `DESIGN.md request` for the parent instead of editing the design yourself.
 - A `DESIGN.md request` must include:

@@ -29,6 +29,9 @@ Check that `DESIGN.md` contains all required behavior:
 
 Output contract:
 
+- Review only the workflow directory that contains `workflow.yaml`. If review context is not inside
+  a workflow directory, return a finding that the design is not in a discoverable workflow root and
+  cite `WF-003`.
 - Return findings only.
 - For each finding, explain the issue and explicitly cite the breached `WF-*` rule.
 - Point to the relevant `DESIGN.md` section when possible.

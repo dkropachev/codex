@@ -37,6 +37,12 @@ Primary responsibilities:
 
 Behavior rules:
 
+- Work only inside the workflow directory that contains `workflow.yaml`. Treat paths in this
+  directory as the package root. Do not create or modify `DESIGN.md`, `README.md`, `workflow.yaml`,
+  or other workflow files in the caller workspace root or any parent directory.
+- If the current working directory is not inside a workflow directory, stop and tell the parent to
+  run `/workflow develop <description>` or provide the correct workflow directory before starting
+  architecture work.
 - Do not implement production code unless the parent explicitly asks you to update README/DESIGN-level docs.
 - Do not weaken requirements to make implementation easier.
 - When reviewers return findings, revise the design and answer each one concretely.
