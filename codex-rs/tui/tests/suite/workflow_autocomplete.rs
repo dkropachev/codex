@@ -269,6 +269,45 @@ async fn slash_workflow_static_option_tab_does_not_commit_placeholder() -> Resul
 }
 
 #[tokio::test]
+async fn slash_workflow_static_option_tab_completes_unique_option_name_prefix() -> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex = ensure_codex_binary(&repo_root)?;
+    let codex_home = tempdir()?;
+    let workspace = tempdir()?;
+    write_trusted_workspace_config(codex_home.path(), workspace.path())?;
+    write_review_workflow(&codex_home.path().join("workflows/code-review"))?;
+
+    run_workflow_autocomplete_session(
+        &repo_root,
+        &codex,
+        codex_home.path(),
+        workspace.path(),
+        WorkflowAutocompleteScenario {
+            typed_prefix: "/code-review --appl",
+            completion_text: None,
+            popup_snippets: &["--apply-patch", "Apply patch"],
+            ordered_popup_snippets: &[],
+            run_snippets: &[
+                "Input text: --apply-patch",
+                "Input argv: --apply-patch",
+                "Workflow Result",
+            ],
+            post_key_snippets: &[],
+            forbidden_snippets: &[],
+            popup_keys: &[
+                WorkflowAutocompletePopupKey::Tab,
+                WorkflowAutocompletePopupKey::Enter,
+            ],
+        },
+    )
+    .await
+}
+
+#[tokio::test]
 async fn slash_workflow_autocomplete_tab_completes_unique_dynamic_value_prefix() -> Result<()> {
     if cfg!(windows) {
         return Ok(());
@@ -965,6 +1004,9 @@ export default workflow;
       archive:
         type: boolean
         description: Archive the reviewed branch
+      applyPatch:
+        type: boolean
+        description: Apply patch
       allComments:
         type: boolean
         description: Include all comment bodies

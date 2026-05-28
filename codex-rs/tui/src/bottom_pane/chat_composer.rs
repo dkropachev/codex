@@ -1871,8 +1871,23 @@ impl ChatComposer {
             } => {
                 // Ensure popup filtering/selection reflects the latest composer text
                 // before applying completion.
-                let first_line = self.textarea.text().lines().next().unwrap_or("");
-                popup.on_composer_text_change(first_line.to_string());
+                let first_line = self
+                    .textarea
+                    .text()
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                popup.on_composer_text_change(first_line.clone());
+                if let Some(option_name) = popup.unique_workflow_option_name_completion()
+                    && Self::replace_workflow_command_current_argument_token(
+                        &mut self.textarea,
+                        &option_name,
+                    )
+                {
+                    self.is_bash_mode = false;
+                    return (InputResult::None, true);
+                }
                 let selected_command = selected_command_for_popup(&*popup);
                 if let Some(selected_command) = &selected_command {
                     match selected_command {
@@ -4252,6 +4267,50 @@ impl ChatComposer {
         );
         textarea.set_text_with_elements(&new_text, &text_elements);
         textarea.set_cursor(new_first_line.len());
+    }
+
+    fn replace_workflow_command_current_argument_token(
+        textarea: &mut TextArea,
+        option_name: &str,
+    ) -> bool {
+        let text = textarea.text().to_string();
+        let first_line_end = text.find('\n').unwrap_or(text.len());
+        let cursor = textarea.cursor();
+        if cursor != first_line_end {
+            return false;
+        }
+        let first_line = &text[..first_line_end];
+        let Some((_name, rest_after_name, rest_offset)) = parse_slash_name(first_line) else {
+            return false;
+        };
+        let (token_start_in_rest, current_token) = rest_after_name
+            .char_indices()
+            .rev()
+            .find_map(|(idx, ch)| {
+                ch.is_whitespace()
+                    .then(|| (idx + ch.len_utf8(), &rest_after_name[idx + ch.len_utf8()..]))
+            })
+            .unwrap_or((0, rest_after_name));
+        if current_token.is_empty()
+            || !current_token.starts_with('-')
+            || !option_name.starts_with(current_token)
+        {
+            return false;
+        }
+
+        let token_start = rest_offset + token_start_in_rest;
+        let inserted = format!("{option_name} ");
+        let mut new_text = text[..token_start].to_string();
+        new_text.push_str(&inserted);
+        new_text.push_str(&text[first_line_end..]);
+        let text_elements = Self::text_elements_after_replacement(
+            &textarea.text_elements(),
+            token_start..first_line_end,
+            inserted.len(),
+        );
+        textarea.set_text_with_elements(&new_text, &text_elements);
+        textarea.set_cursor(token_start + inserted.len());
+        true
     }
 
     /// Synchronize `self.command_popup` with the current text in the

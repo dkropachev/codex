@@ -447,6 +447,41 @@ impl CommandPopup {
         selectable_items.len() == 1 && matches!(selectable_items[0], CommandItem::Workflow(_))
     }
 
+    pub(crate) fn unique_workflow_option_name_completion(&self) -> Option<String> {
+        let current_token = self
+            .workflow_argument_filter
+            .rsplit(char::is_whitespace)
+            .next()
+            .unwrap_or("")
+            .trim();
+        if current_token.is_empty() || !current_token.starts_with('-') {
+            return None;
+        }
+
+        let mut candidates = self
+            .workflows
+            .iter()
+            .filter(|workflow| {
+                workflow
+                    .workflow
+                    .command
+                    .as_deref()
+                    .is_some_and(|command| command.eq_ignore_ascii_case(&self.command_filter))
+            })
+            .flat_map(|workflow| workflow.option_hints.iter())
+            .filter_map(|option| option.display.split_whitespace().next())
+            .filter(|option_name| option_name.starts_with(current_token))
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        candidates.sort_unstable();
+        candidates.dedup();
+
+        let [candidate] = candidates.as_slice() else {
+            return None;
+        };
+        Some(candidate.clone())
+    }
+
     fn item_is_disabled(item: &CommandItem) -> bool {
         matches!(
             item,
@@ -854,6 +889,65 @@ api:
             "workflow_exact_command_a_prefix_options",
             render_popup(&popup, /*width*/ 88)
         );
+    }
+
+    #[test]
+    fn exact_workflow_command_completes_unique_option_name_prefix() {
+        let workflow = workflow_summary_with_command_options(
+            "code-review",
+            "Code Review",
+            "code-review",
+            vec![
+                codex_workflows::WorkflowCommandOptionHint {
+                    display: "--all-comments".to_string(),
+                    description: Some("Include all comment bodies".to_string()),
+                },
+                codex_workflows::WorkflowCommandOptionHint {
+                    display: "--apply-patch".to_string(),
+                    description: Some("Apply the generated patch".to_string()),
+                },
+            ],
+        );
+
+        let mut popup = CommandPopup::new(CommandPopupFlags {
+            workflows_enabled: true,
+            ..CommandPopupFlags::default()
+        });
+        popup.set_workflows(Some(std::slice::from_ref(&workflow)));
+        popup.on_composer_text_change("/code-review --appl".to_string());
+
+        assert_eq!(
+            popup.unique_workflow_option_name_completion(),
+            Some("--apply-patch".to_string())
+        );
+    }
+
+    #[test]
+    fn exact_workflow_command_does_not_complete_ambiguous_option_name_prefix() {
+        let workflow = workflow_summary_with_command_options(
+            "code-review",
+            "Code Review",
+            "code-review",
+            vec![
+                codex_workflows::WorkflowCommandOptionHint {
+                    display: "--all-comments".to_string(),
+                    description: Some("Include all comment bodies".to_string()),
+                },
+                codex_workflows::WorkflowCommandOptionHint {
+                    display: "--apply-patch".to_string(),
+                    description: Some("Apply the generated patch".to_string()),
+                },
+            ],
+        );
+
+        let mut popup = CommandPopup::new(CommandPopupFlags {
+            workflows_enabled: true,
+            ..CommandPopupFlags::default()
+        });
+        popup.set_workflows(Some(std::slice::from_ref(&workflow)));
+        popup.on_composer_text_change("/code-review --a".to_string());
+
+        assert_eq!(popup.unique_workflow_option_name_completion(), None);
     }
 
     #[test]
