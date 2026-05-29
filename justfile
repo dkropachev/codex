@@ -51,6 +51,10 @@ workflow-dev-check:
 workflow-self-e2e:
     {{ justfile_directory() }}/scripts/workflow_self_implementation_e2e.sh
 
+[no-cd]
+workflow-self-real-world-e2e:
+    {{ justfile_directory() }}/scripts/workflow_self_implementation_real_world_e2e.sh
+
 install:
     rustup show active-toolchain
     cargo fetch
