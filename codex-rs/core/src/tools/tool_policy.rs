@@ -128,7 +128,7 @@ fn writable_roots_confined_to_workflow_dir(
         return vec![workflow_dir.clone()];
     }
 
-    file_system_sandbox_policy
+    let mut writable_roots: Vec<AbsolutePathBuf> = file_system_sandbox_policy
         .get_writable_roots_with_cwd(cwd.as_path())
         .into_iter()
         .filter_map(|writable_root| {
@@ -147,7 +147,17 @@ fn writable_roots_confined_to_workflow_dir(
                 None
             }
         })
-        .collect()
+        .collect();
+    // macOS may normalize `/var` writable roots to `/private/var`; keep the
+    // logical cwd root too so direct policy checks against cwd-relative paths
+    // continue to match.
+    if cwd.as_path().starts_with(workflow_dir.as_path())
+        && file_system_sandbox_policy.can_write_path_with_cwd(cwd.as_path(), cwd.as_path())
+        && !writable_roots.iter().any(|root| root == cwd)
+    {
+        writable_roots.push(cwd.clone());
+    }
+    writable_roots
 }
 
 fn file_system_sandbox_policy_without_write_access(
