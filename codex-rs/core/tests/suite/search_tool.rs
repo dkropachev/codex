@@ -132,15 +132,19 @@ fn configure_search_capable_apps(config: &mut Config, apps_base_url: &str) {
         .features
         .enable(Feature::Apps)
         .expect("test config should allow feature update");
+    config
+        .features
+        .enable(Feature::ToolRouter)
+        .expect("test config should allow feature update");
     config.chatgpt_base_url = apps_base_url.to_string();
     configure_search_capable_model(config);
 }
 
-fn configure_apps_without_tool_search(config: &mut Config, apps_base_url: &str) {
+fn configure_apps_without_tool_router(config: &mut Config, apps_base_url: &str) {
     configure_search_capable_apps(config, apps_base_url);
     config
         .features
-        .disable(Feature::ToolSearch)
+        .disable(Feature::ToolRouter)
         .expect("test config should allow feature update");
 }
 
@@ -239,7 +243,7 @@ async fn submit_turn_with_collaboration_mode(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn search_tool_enabled_by_default_adds_tool_search() -> Result<()> {
+async fn tool_router_enabled_adds_tool_search() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -343,7 +347,7 @@ async fn always_defer_feature_hides_small_app_tool_sets() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tool_search_disabled_exposes_apps_tools_directly() -> Result<()> {
+async fn tool_router_disabled_exposes_apps_tools_directly() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -361,7 +365,7 @@ async fn tool_search_disabled_exposes_apps_tools_directly() -> Result<()> {
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
-            configure_apps_without_tool_search(config, apps_server.chatgpt_base_url.as_str())
+            configure_apps_without_tool_router(config, apps_server.chatgpt_base_url.as_str())
         });
     let test = builder.build(&server).await?;
 
@@ -1166,7 +1170,13 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
         defer_loading: true,
     };
 
-    let mut builder = test_codex().with_config(configure_search_capable_model);
+    let mut builder = test_codex().with_config(|config| {
+        configure_search_capable_model(config);
+        config
+            .features
+            .enable(Feature::ToolRouter)
+            .expect("test config should allow feature update");
+    });
     let base_test = builder.build(&server).await?;
     let new_thread = base_test
         .thread_manager

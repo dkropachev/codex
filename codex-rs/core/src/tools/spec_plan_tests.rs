@@ -1399,7 +1399,7 @@ fn search_tool_description_lists_each_mcp_source_once() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
-    features.enable(Feature::ToolSearch);
+    features.enable(Feature::ToolRouter);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -1485,7 +1485,7 @@ fn search_tool_description_lists_each_mcp_source_once() {
 }
 
 #[test]
-fn search_tool_requires_model_capability_and_enabled_feature() {
+fn search_tool_requires_model_capability_and_tool_router() {
     let model_info = search_capable_model_info();
     let deferred_mcp_tools = Some(vec![deferred_mcp_tool(
         "_create_event",
@@ -1495,7 +1495,8 @@ fn search_tool_requires_model_capability_and_enabled_feature() {
         /*description*/ None,
     )]);
 
-    let features = Features::with_defaults();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ToolRouter);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &ModelInfo {
@@ -1518,12 +1519,11 @@ fn search_tool_requires_model_capability_and_enabled_feature() {
     );
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
 
-    let mut features_without_tool_search = Features::with_defaults();
-    features_without_tool_search.disable(Feature::ToolSearch);
+    let features_without_tool_router = Features::with_defaults();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
         available_models: &available_models,
-        features: &features_without_tool_search,
+        features: &features_without_tool_router,
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -1561,7 +1561,7 @@ fn search_tool_requires_model_capability_and_enabled_feature() {
 fn search_tool_is_hidden_when_only_deferred_namespace_tools_are_available() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
-    features.enable(Feature::ToolSearch);
+    features.enable(Feature::ToolRouter);
     let available_models = Vec::new();
     let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -1596,7 +1596,7 @@ fn search_tool_is_hidden_when_only_deferred_namespace_tools_are_available() {
 fn search_tool_registers_for_deferred_dynamic_tools() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
-    features.enable(Feature::ToolSearch);
+    features.enable(Feature::ToolRouter);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -1673,7 +1673,7 @@ fn search_tool_registers_for_deferred_dynamic_tools() {
 fn search_tool_keeps_plain_deferred_dynamic_tools_when_namespace_tools_are_disabled() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
-    features.enable(Feature::ToolSearch);
+    features.enable(Feature::ToolRouter);
     let available_models = Vec::new();
     let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -1719,7 +1719,7 @@ fn search_tool_keeps_plain_deferred_dynamic_tools_when_namespace_tools_are_disab
 fn request_plugin_install_is_not_registered_without_feature_flag() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
-    features.enable(Feature::ToolSearch);
+    features.enable(Feature::ToolRouter);
     features.enable(Feature::Apps);
     features.enable(Feature::Plugins);
     features.disable(Feature::ToolSuggest);
@@ -1809,7 +1809,7 @@ fn request_plugin_install_description_lists_discoverable_tools() {
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
     features.enable(Feature::Plugins);
-    features.enable(Feature::ToolSearch);
+    features.enable(Feature::ToolRouter);
     features.enable(Feature::ToolSuggest);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {

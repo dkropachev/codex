@@ -156,8 +156,6 @@ pub enum Feature {
     EnableMcpApps,
     /// Use the new path for the built-in apps MCP server.
     AppsMcpPathOverride,
-    /// Enable the tool_search tool for apps.
-    ToolSearch,
     /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
     ToolSearchAlwaysDeferMcpTools,
     /// Expose placeholder tools for unavailable historical tool calls.
@@ -430,6 +428,9 @@ impl Features {
                 "image_detail_original" => {
                     continue;
                 }
+                "tool_search" => {
+                    continue;
+                }
                 "use_legacy_landlock" => {
                     self.record_legacy_usage_force(
                         "features.use_legacy_landlock",
@@ -619,6 +620,7 @@ impl FeaturesToml {
         for key in legacy::legacy_feature_keys() {
             entries.remove(key);
         }
+        entries.remove("tool_search");
         for spec in FEATURES {
             let enabled = features.enabled(spec.id);
             if spec.id == Feature::MultiAgentV2 {
@@ -936,12 +938,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "apps_mcp_path_override",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::ToolSearch,
-        key: "tool_search",
-        stage: Stage::Stable,
-        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ToolSearchAlwaysDeferMcpTools,

@@ -14,7 +14,7 @@ const MCP_CONTEXT_INTRO: &str = concat!(
 );
 const MCP_CONTEXT_SEARCH_HINT: &str = concat!(
     "MCP tools may be directly exposed or lazy-loaded through `tool_search` depending on the ",
-    "active model and feature flags."
+    "active model and tool-router configuration."
 );
 const EMPTY_MCP_INVENTORY_CONTEXT: &str = concat!(
     "Codex backend has MCP integrations configured for delegated work, but no ready tool ",
@@ -233,7 +233,7 @@ mod tests {
         assert_eq!(
             format_realtime_tool_context(&tools, /*configured_servers*/ &[]).expect("tool context"),
             "Codex backend has MCP integrations available for delegated work. Do not claim an app or MCP integration is unavailable only because it is absent from the realtime tool list.\n\
-MCP tools may be directly exposed or lazy-loaded through `tool_search` depending on the active model and feature flags.\n\
+MCP tools may be directly exposed or lazy-loaded through `tool_search` depending on the active model and tool-router configuration.\n\
 \n\
 Available MCP inventory:\n\
 - App `Calendar`: 1 tool; Manage calendar events.; examples: mcp__codex_apps__calendar_create_event\n\
@@ -250,7 +250,7 @@ Available MCP inventory:\n\
             )
             .expect("tool context"),
             "Codex backend has MCP integrations available for delegated work. Do not claim an app or MCP integration is unavailable only because it is absent from the realtime tool list.\n\
-MCP tools may be directly exposed or lazy-loaded through `tool_search` depending on the active model and feature flags.\n\
+MCP tools may be directly exposed or lazy-loaded through `tool_search` depending on the active model and tool-router configuration.\n\
 \n\
 Configured MCP servers with no ready tool inventory at realtime startup: calendar, docs. The backend can refresh inventory during delegated work."
         );

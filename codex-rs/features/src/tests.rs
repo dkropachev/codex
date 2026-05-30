@@ -172,12 +172,6 @@ fn tool_suggest_is_stable_and_enabled_by_default() {
 }
 
 #[test]
-fn tool_search_is_stable_and_enabled_by_default() {
-    assert_eq!(Feature::ToolSearch.stage(), Stage::Stable);
-    assert_eq!(Feature::ToolSearch.default_enabled(), true);
-}
-
-#[test]
 fn browser_controls_are_stable_and_enabled_by_default() {
     assert_eq!(Feature::InAppBrowser.stage(), Stage::Stable);
     assert_eq!(Feature::InAppBrowser.default_enabled(), true);
@@ -231,6 +225,11 @@ fn tool_router_is_under_development_and_disabled_by_default() {
     assert_eq!(Feature::ToolRouter.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::ToolRouter.default_enabled(), false);
     assert_eq!(feature_for_key("tool_router"), Some(Feature::ToolRouter));
+}
+
+#[test]
+fn tool_search_feature_key_is_retired() {
+    assert_eq!(feature_for_key("tool_search"), None);
 }
 
 #[test]
@@ -551,7 +550,6 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
     let mut features = Features::with_defaults();
     features.enable(Feature::CodeMode);
     features.enable(Feature::MultiAgentV2);
-    features.disable(Feature::ToolSearch);
 
     let mut features_toml = FeaturesToml {
         multi_agent_v2: Some(FeatureToml::Config(crate::MultiAgentV2ConfigToml {
@@ -559,7 +557,10 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
             min_wait_timeout_ms: Some(2500),
             ..Default::default()
         })),
-        entries: BTreeMap::from([("include_apply_patch_tool".to_string(), true)]),
+        entries: BTreeMap::from([
+            ("include_apply_patch_tool".to_string(), true),
+            ("tool_search".to_string(), false),
+        ]),
         ..Default::default()
     };
 
@@ -567,6 +568,7 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
 
     let entries = features_toml.entries();
     assert_eq!(entries.get("include_apply_patch_tool"), None);
+    assert_eq!(entries.get("tool_search"), None);
     for spec in crate::FEATURES {
         assert_eq!(
             entries.get(spec.key),
