@@ -1137,7 +1137,7 @@ mod tests {
 export interface WorkflowInput { input?: string; }
 export interface WorkflowOutput { ok: boolean; input: WorkflowInput; }
 export const WorkflowOutput = { toTuiMarkdown() { return { markdown: "done" }; } };
-export default async function run(_ctx: WorkflowContext, input: WorkflowInput): Promise<WorkflowOutput> { return { ok: true, input }; }
+export default async function run(_ctx: WorkflowContext, input: WorkflowInput): Promise<WorkflowOutput> { return { ok: Boolean(input.input), input: { input: input.input?.trim() } }; }
 "#,
         )
         .unwrap();
@@ -1148,7 +1148,7 @@ export default async function run(_ctx: WorkflowContext, input: WorkflowInput): 
         .unwrap();
         fs::write(
             workflow_dir.join("workflow.load.test.ts"),
-            "// workflow-covers: load\nexport {};\n",
+            "// workflow-covers: load\nimport \"./workflow.ts\";\n",
         )
         .unwrap();
         fs::write(
@@ -1267,7 +1267,11 @@ export default async function run(_ctx: WorkflowContext, input: WorkflowInput): 
         };
 
         assert!(response.message.contains("Repairing workflow"));
-        assert!(response.message.contains("Validation passed."));
+        assert!(
+            response.message.contains("Validation passed."),
+            "unexpected repair message: {}",
+            response.message
+        );
         assert_eq!(
             response.repair.stop_reason,
             codex_app_server_protocol::WorkflowRepairStopReason::Valid

@@ -1,5 +1,11 @@
 use crate::start_memories_startup_task;
 use codex_config::config_toml::ModelRouterCandidateToml;
+use codex_config::config_toml::ModelRouterLifecycleDefaultsToml;
+use codex_config::config_toml::ModelRouterLifecycleToml;
+use codex_config::config_toml::ModelRouterModelRuleToml;
+use codex_config::config_toml::ModelRouterModelRuleTypeToml;
+use codex_config::config_toml::ModelRouterModelSelectorToml;
+use codex_config::config_toml::ModelRouterModelsToml;
 use codex_config::config_toml::ModelRouterToml;
 use codex_features::Feature;
 use codex_git_utils::diff_since_latest_init;
@@ -306,6 +312,25 @@ async fn memories_startup_phase1_routes_model_for_prompt() -> anyhow::Result<()>
                     model: Some("gpt-5.3-codex-spark".to_string()),
                     ..Default::default()
                 }],
+                models: Some(ModelRouterModelsToml {
+                    rules: vec![ModelRouterModelRuleToml {
+                        id: Some("memories-extract-spark".to_string()),
+                        rule_type: ModelRouterModelRuleTypeToml::Require,
+                        tasks: vec!["module.memories.extract".to_string()],
+                        except_tasks: Vec::new(),
+                        models: vec![ModelRouterModelSelectorToml {
+                            provider: None,
+                            model: Some("gpt-5.3-codex-spark".to_string()),
+                        }],
+                    }],
+                }),
+                lifecycle: Some(ModelRouterLifecycleToml {
+                    defaults: Some(ModelRouterLifecycleDefaultsToml {
+                        shadow_allowed: Some(false),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
                 ..Default::default()
             });
             config

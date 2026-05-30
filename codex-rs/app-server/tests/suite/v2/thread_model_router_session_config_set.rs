@@ -252,6 +252,9 @@ fn create_config_toml(
 [model_router]
 enabled = false
 
+[model_router.lifecycle.defaults]
+shadow_allowed = false
+
 [[model_router.candidates]]
 id = "chat-routed"
 model = "mock-routed-model"

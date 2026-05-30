@@ -78,60 +78,73 @@ E2E verdict: failed. The implementation produced a plausible standalone package,
 ## Issues found
 
 1. The generated workflow is not discoverable by Codex.
+
    - Files were placed at the disposable workspace root (`workflow.yaml`, `src/`, `package.json`) instead of a registered project workflow location.
    - `codex workflow list` did not show `pr-triage`.
    - `/pr-triage` and `codex workflow run pr-triage` were therefore unavailable.
 
 2. The self-implementation accepted a failed required validation step.
+
    - The coder observed that `codex workflow validate pr-triage` could not find the workflow.
    - It switched to local package checks instead of fixing registration/discovery.
 
 3. Workflow validation UX did not make the registration problem easy to repair.
+
    - `workflow validate pr-triage` only reported `workflow id 'pr-triage' was not found`.
    - The output did not point to the expected project workflow directory, registration command, or config key.
 
 4. Large pasted prompts are hard to submit in the TUI.
+
    - The prompt rendered as `[Pasted Content 1024 chars]`.
    - Pressing Enter did not submit in this run; Tab was needed.
    - This is surprising during `/workflow` setup because the feature naturally invites long, structured prompts.
 
 5. Project trust override still led to an interactive trust prompt.
+
    - The TUI was launched with `-c projects."/tmp/.../workspace".trust_level="trusted"`.
    - It still prompted for trust and required Enter before the workflow test could continue.
 
 6. Workflow mode showed one model/effort but trace logs showed another.
+
    - The UI displayed `gpt-5.3-codex-spark medium`.
    - The trace showed model requests using `gpt-5.5` with `xhigh`.
    - This makes cost, latency, and behavior hard to reason about during workflow creation.
 
 7. Isolated `CODEX_HOME` testing hit auth refresh failure.
+
    - A first attempt with a temporary `CODEX_HOME` and linked auth/config failed because the access token could not be refreshed.
    - This makes clean, hermetic TUI e2e runs brittle.
 
 8. `/workflow` startup was noisy due unrelated MCP/app setup.
+
    - The run surfaced Slack MCP token errors, hook review warnings, and limit warnings.
    - These were unrelated to workflow authoring and increased the noise floor for the e2e.
 
 9. The coder ran an unbounded root filesystem search.
+
    - It executed `find / -path '*workflow.yaml' -type f 2>/dev/null | head -100`.
    - This became long-running enough to require interruption/cleanup attempts.
    - A workflow authoring agent should search scoped locations first.
 
 10. The coder over-relied on stale temp examples.
+
     - It read old workflows from `/tmp/...` before implementing the requested workflow.
     - This risks copying stale or environment-specific patterns instead of using the current product contract.
 
 11. The staged workflow loop was very slow for a small workflow.
+
     - The initial architecture pass produced only `DESIGN.md`.
     - A 5-minute wait for the coder timed out before implementation files existed.
     - The actual implementation arrived much later, after extensive exploration.
 
 12. Generated dependency metadata is not reproducible.
+
     - `package.json` used `"@types/node": "latest"` and `"typescript": "latest"`.
     - The coder ran `npm install --no-package-lock --ignore-scripts`, producing `node_modules` but no committed lockfile.
     - This is fragile for a workflow that is supposed to validate reliably.
 
 13. Generated workflow metadata contained duplicated coverage keys.
+
     - `workflow.yaml` included both camelCase and kebab-case forms such as `finalResult` and `final-result`.
     - This suggests the agent was guessing at schema shape rather than using one canonical contract.
 
