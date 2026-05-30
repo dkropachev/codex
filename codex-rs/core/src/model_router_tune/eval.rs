@@ -423,7 +423,6 @@ async fn run_model_tune_turn(
                 if let Some(usage) = usage {
                     token_usage = usage;
                 }
-                break;
             }
             ResponseEvent::Created
             | ResponseEvent::OutputItemAdded(_)

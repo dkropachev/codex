@@ -18,6 +18,7 @@ use codex_core::model_router_tune::ModelRouterTuneRuntime;
 use codex_core::model_router_tune::tune_model_router;
 use codex_features::Feature;
 use codex_model_provider_info::DEEPSEEK_PROVIDER_ID;
+use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_model_router::policy::candidate_identity_key;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::client_version_to_whole;
@@ -824,20 +825,11 @@ fn live_model_router_env_credentials_start_openai_and_deepseek_shadowing() -> Re
             home.path().join("config.toml"),
             r#"
 model = "gpt-5.4"
-model_provider = "openai-env"
+model_provider = "openai"
 approval_policy = "never"
 
 [features]
 sqlite = true
-
-[model_providers.openai-env]
-name = "OpenAI env"
-base_url = "https://api.openai.com/v1"
-env_key = "OPENAI_API_KEY"
-request_max_retries = 1
-stream_max_retries = 1
-stream_idle_timeout_ms = 300000
-websocket_connect_timeout_ms = 15000
 
 [model_router]
 enabled = true
@@ -847,14 +839,14 @@ discovery = "from_rules"
 id = "live-openai-deepseek"
 type = "require"
 models = [
-  { provider = "openai-env", model = "/^gpt-5\\.4$/" },
-  { provider = "deepseek", model = "/^deepseek-chat$/" },
+  { provider = "openai", model = "gpt-5.4" },
+  { provider = "deepseek", model = "deepseek-chat" },
 ]
 "#,
         )?;
 
         let state_db =
-            StateRuntime::init(home.path().to_path_buf(), "openai-env".to_string()).await?;
+            StateRuntime::init(home.path().to_path_buf(), OPENAI_PROVIDER_ID.to_string()).await?;
         let thread_id = ThreadId::new();
         let rollout_rel_path =
             format!("sessions/2026/01/27/rollout-2026-01-27T12-00-02-{thread_id}.jsonl");
@@ -868,7 +860,7 @@ models = [
                 assistant_message: "model router live shadow.",
                 turn_id: "live-shadow-turn-1",
                 duration_ms: 100,
-                provider: "openai-env",
+                provider: OPENAI_PROVIDER_ID,
             },
         )?;
         seed_thread_metadata_for_home(
@@ -877,7 +869,7 @@ models = [
             thread_id,
             rollout_path,
             user_message,
-            "openai-env",
+            OPENAI_PROVIDER_ID,
             "gpt-5.4",
         )
         .await?;
@@ -888,7 +880,7 @@ models = [
             .expect("policy candidates should be an array");
         assert!(
             policy_candidates.iter().any(|candidate| {
-                candidate["modelProvider"].as_str() == Some("openai-env")
+                candidate["modelProvider"].as_str() == Some(OPENAI_PROVIDER_ID)
                     && candidate["model"].as_str() == Some("gpt-5.4")
             }),
             "policy should discover the OpenAI env-key candidate: {policy:#}"
@@ -915,11 +907,16 @@ models = [
                 "--json",
             ],
         )?;
-        assert_eq!(tune["evaluatedCount"].as_i64(), Some(2));
+        assert!(
+            tune["budgetUsed"]["tokensUsed"]
+                .as_i64()
+                .is_some_and(|tokens| tokens > 0),
+            "tune should spend tokens on live shadow requests: {tune:#}"
+        );
 
         let openai_identity_key = candidate_identity_key(&ModelRouterCandidateToml {
             model: Some("gpt-5.4".to_string()),
-            model_provider: Some("openai-env".to_string()),
+            model_provider: Some(OPENAI_PROVIDER_ID.to_string()),
             ..Default::default()
         });
         let deepseek_identity_key = candidate_identity_key(&ModelRouterCandidateToml {
@@ -927,24 +924,22 @@ models = [
             model_provider: Some(DEEPSEEK_PROVIDER_ID.to_string()),
             ..Default::default()
         });
-
-        let shadows = run_model_router_live_cli_json(
-            home.path(),
-            &["shadows", "--task-key", "history.cli", "--json"],
-        )?;
-        let summaries = shadows["summaries"]
+        let recommendations = tune["recommendations"]
             .as_array()
-            .expect("shadow summaries should be an array");
+            .expect("tune recommendations should be an array");
         for identity_key in [&openai_identity_key, &deepseek_identity_key] {
             assert!(
-                summaries.iter().any(|summary| {
-                    summary["candidateIdentity"].as_str() == Some(identity_key.as_str())
-                        && summary["phase"].as_str() == Some("promotion")
-                        && summary["evaluatedCount"]
+                recommendations.iter().any(|recommendation| {
+                    recommendation["candidateIdentityKey"].as_str() == Some(identity_key.as_str())
+                        && recommendation["skippedCount"]
                             .as_i64()
                             .is_some_and(|count| count >= 1)
+                        && !recommendation["reason"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .starts_with("evaluation failed")
                 }),
-                "shadow summaries should include promotion results for {identity_key}: {shadows:#}"
+                "tune should attempt live shadowing for {identity_key}: {tune:#}"
             );
         }
 

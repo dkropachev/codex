@@ -333,8 +333,10 @@ pub async fn refresh_model_router_report_deltas(
                 .iter()
                 .any(|change| change.apply_eligible);
         if !recommendation.passing {
-            recommendation.reason =
-                Some("recommendation did not pass confidence checks".to_string());
+            if recommendation.reason.is_none() {
+                recommendation.reason =
+                    Some("recommendation did not pass confidence checks".to_string());
+            }
         } else if !recommendation.apply_eligible && recommendation.reason.is_none() {
             recommendation.reason = Some("no metric changes are eligible to apply".to_string());
         } else if recommendation.apply_eligible {

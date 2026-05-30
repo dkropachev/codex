@@ -6,7 +6,6 @@
 use assert_cmd::prelude::*;
 use predicates::prelude::*;
 use std::process::Command;
-use std::process::Stdio;
 use tempfile::TempDir;
 
 const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
@@ -24,95 +23,18 @@ fn skip_if_missing_openai_api_key(test_name: &str) -> Option<String> {
 /// Helper that spawns the binary inside a TempDir with minimal flags. Returns (Assert, TempDir).
 fn run_live(prompt: &str, openai_api_key: &str) -> (assert_cmd::assert::Assert, TempDir) {
     #![expect(clippy::unwrap_used)]
-    use std::io::Read;
-    use std::io::Write;
-    use std::thread;
-
     let dir = TempDir::new().unwrap();
 
-    // Build a plain `std::process::Command` so we have full control over the underlying stdio
-    // handles. `assert_cmd`’s own `Command` wrapper always forces stdout/stderr to be piped
-    // internally which prevents us from streaming them live to the terminal (see its `spawn`
-    // implementation). Instead we configure the std `Command` ourselves, then later hand the
-    // resulting `Output` to `assert_cmd` for the familiar assertions.
-
-    let mut cmd = Command::new(codex_utils_cargo_bin::cargo_bin("codex-rs").unwrap());
-    cmd.current_dir(dir.path());
-    cmd.env(OPENAI_API_KEY_ENV_VAR, openai_api_key);
-
-    // We want three things at once:
-    //   1. live streaming of the child’s stdout/stderr while the test is running
-    //   2. captured output so we can keep using assert_cmd’s `Assert` helpers
-    //   3. cross‑platform behavior (best effort)
-    //
-    // To get that we:
-    //   • set both stdout and stderr to `piped()` so we can read them programmatically
-    //   • spawn a thread for each stream that copies bytes into two sinks:
-    //       – the parent process’ stdout/stderr for live visibility
-    //       – an in‑memory buffer so we can pass it to `assert_cmd` later
-
-    // Pass the prompt through the `--` separator so the CLI knows when user input ends.
-    cmd.arg("--allow-no-git-exec")
-        .arg("-v")
-        .arg("--")
+    let mut cmd = Command::new(codex_utils_cargo_bin::cargo_bin("codex").unwrap());
+    cmd.env(OPENAI_API_KEY_ENV_VAR, openai_api_key)
+        .arg("exec")
+        .arg("--skip-git-repo-check")
+        .arg("--dangerously-bypass-approvals-and-sandbox")
+        .arg("--cd")
+        .arg(dir.path())
         .arg(prompt);
 
-    cmd.stdin(Stdio::piped());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-
-    let mut child = cmd.spawn().expect("failed to spawn codex-rs");
-
-    // Send the terminating newline so Session::run exits after the first turn.
-    child
-        .stdin
-        .as_mut()
-        .expect("child stdin unavailable")
-        .write_all(b"\n")
-        .expect("failed to write to child stdin");
-
-    // Helper that tees a ChildStdout/ChildStderr into both the parent’s stdio and a Vec<u8>.
-    fn tee<R: Read + Send + 'static>(
-        mut reader: R,
-        mut writer: impl Write + Send + 'static,
-    ) -> thread::JoinHandle<Vec<u8>> {
-        thread::spawn(move || {
-            let mut buf = Vec::new();
-            let mut chunk = [0u8; 4096];
-            loop {
-                match reader.read(&mut chunk) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        writer.write_all(&chunk[..n]).ok();
-                        writer.flush().ok();
-                        buf.extend_from_slice(&chunk[..n]);
-                    }
-                    Err(_) => break,
-                }
-            }
-            buf
-        })
-    }
-
-    let stdout_handle = tee(
-        child.stdout.take().expect("child stdout"),
-        std::io::stdout(),
-    );
-    let stderr_handle = tee(
-        child.stderr.take().expect("child stderr"),
-        std::io::stderr(),
-    );
-
-    let status = child.wait().expect("failed to wait on child");
-    let stdout = stdout_handle.join().expect("stdout thread panicked");
-    let stderr = stderr_handle.join().expect("stderr thread panicked");
-
-    let output = std::process::Output {
-        status,
-        stdout,
-        stderr,
-    };
-
+    let output = cmd.output().expect("failed to run codex exec");
     (output.assert(), dir)
 }
 
