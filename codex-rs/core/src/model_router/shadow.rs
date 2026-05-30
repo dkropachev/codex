@@ -264,7 +264,7 @@ mod tests {
         config.model = Some("gpt-5.5".to_string());
         config.model_router = Some(ModelRouterToml {
             enabled: true,
-            lifecycle: Some(lifecycle_with_min_evaluated(2)),
+            lifecycle: Some(lifecycle_with_min_evaluated(/*min_evaluated*/ 2)),
             ..Default::default()
         });
         let available_models = vec![
@@ -306,7 +306,7 @@ mod tests {
         config.model = Some("gpt-5.5".to_string());
         config.model_router = Some(ModelRouterToml {
             enabled: true,
-            lifecycle: Some(lifecycle_with_min_evaluated(1)),
+            lifecycle: Some(lifecycle_with_min_evaluated(/*min_evaluated*/ 1)),
             ..Default::default()
         });
         let available_models = vec![available_model("openai", "gpt-5.3-codex-spark")];

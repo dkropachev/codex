@@ -2267,7 +2267,7 @@ mod tests {
             "export default async function workflow() { return { ok: true }; }\n",
         )
         .unwrap();
-        write_runtime_validation_scaffold(&workflow_dir, "review/other", None);
+        write_runtime_validation_scaffold(&workflow_dir, "review/other", /*command*/ None);
 
         let config = WorkflowsConfigToml::default();
         let err = execute_workflow_command(
@@ -2713,7 +2713,11 @@ mod tests {
         fs::create_dir_all(workflow_dir.join("state")).unwrap();
         fs::create_dir_all(workflow_dir.join("node_modules/.bin")).unwrap();
         fs::create_dir_all(workflow_dir.join(".git")).unwrap();
-        write_runtime_validation_scaffold(&workflow_dir, "reports/runtime-progress", None);
+        write_runtime_validation_scaffold(
+            &workflow_dir,
+            "reports/runtime-progress",
+            /*command*/ None,
+        );
         fs::write(
             workflow_dir.join("src/helper.js"),
             r#"export function progressMessage() {
@@ -2820,7 +2824,11 @@ process.exit(result.status ?? 1);
         fs::create_dir_all(workflow_dir.join("state")).unwrap();
         fs::create_dir_all(workflow_dir.join("node_modules/.bin")).unwrap();
         fs::create_dir_all(workflow_dir.join(".git")).unwrap();
-        write_runtime_validation_scaffold(&workflow_dir, "reports/resident-host", None);
+        write_runtime_validation_scaffold(
+            &workflow_dir,
+            "reports/resident-host",
+            /*command*/ None,
+        );
         fs::write(
             workflow_dir.join("src/workflow.ts"),
             r#"let runs = 0;
