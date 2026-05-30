@@ -40,6 +40,7 @@ members = [
     "core-api",
     "core-plugins",
     "core-skills",
+    "e2e-tests",
     "hooks",
     "secrets",
     "exec",

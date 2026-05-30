@@ -2693,6 +2693,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-e2e-tests"
+version = "0.129.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "codex-config",
+ "codex-model-provider-info",
+ "codex-model-router",
+ "codex-protocol",
+ "codex-state",
+ "codex-utils-cargo-bin",
+ "pretty_assertions",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
+ "walkdir",
+]
+
+[[package]]
 name = "codex-exec"
 version = "0.129.0"
 dependencies = [

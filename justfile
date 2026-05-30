@@ -47,13 +47,17 @@ workflow-dev-check:
     cargo test -p codex-app-server --test all workflow_ -- --test-threads=1
     cargo test -p codex-cli workflow
 
-[no-cd]
 workflow-self-e2e:
-    {{ justfile_directory() }}/scripts/workflow_self_implementation_e2e.sh
+    cargo build -p codex-cli --bin codex
+    cargo test -p codex-e2e-tests --test workflow_self_e2e -- --nocapture --test-threads=4
 
-[no-cd]
 workflow-self-real-world-e2e:
-    {{ justfile_directory() }}/scripts/workflow_self_implementation_real_world_e2e.sh
+    cargo build -p codex-cli --bin codex
+    cargo test -p codex-e2e-tests --test workflow_self_e2e -- --nocapture --test-threads=4
+
+model-router-live-e2e:
+    cargo build -p codex-cli --bin codex
+    cargo test -p codex-e2e-tests --test model_router_live_e2e -- --nocapture
 
 install:
     rustup show active-toolchain

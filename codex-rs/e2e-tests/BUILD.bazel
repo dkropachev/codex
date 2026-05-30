@@ -1,0 +1,10 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "e2e-tests",
+    crate_name = "codex_e2e_tests",
+    extra_binaries = [
+        "//codex-rs/cli:codex",
+    ],
+    integration_test_timeout = "long",
+)

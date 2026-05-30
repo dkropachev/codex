@@ -51,9 +51,17 @@ cargo test --all-features
 
 Live provider smoke tests are included in the normal `codex-core` suite and
 self-skip when their credentials are missing. Set `OPENAI_API_KEY` to enable the
-real OpenAI `/v1/responses` CLI smoke tests. Set both `OPENAI_API_KEY` and
-`DEEPSEEK_API_KEY` to enable the live model-router shadowing e2e test. Keep
-these credentials in your local environment; do not commit them to the repo.
+real OpenAI `/v1/responses` CLI smoke tests. The workflow self-e2e is a Rust
+integration test in `codex-e2e-tests` that isolates `CODEX_HOME`, asks live Codex
+to implement a project workflow, then runs that generated workflow against
+fixture cases. Run `just workflow-self-e2e` from the repo root with an OpenAI
+credential available from `OPENAI_API_KEY`, `[model_providers.openai].token`, or
+current Codex ChatGPT auth. The live model-router shadowing e2e is also a Rust
+integration test in `codex-e2e-tests`: provide that OpenAI credential plus a
+DeepSeek credential from `DEEPSEEK_API_KEY` or
+`[model_providers.deepseek].token`, then run `just model-router-live-e2e` from
+the repo root. Missing credentials fail these e2e tests. Keep credentials in
+your local environment or Codex config; do not commit them to the repo.
 
 ## Tracing / verbose logging
 
