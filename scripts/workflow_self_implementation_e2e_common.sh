@@ -32,25 +32,405 @@ snapshot_global() {
   fi
 }
 
+snapshot_fixture_outside_workflow() {
+  local workflow_dir="$1"
+  SNAPSHOT_ROOT="$fixture_repo" SNAPSHOT_EXCLUDE="$workflow_dir" python3 - <<'PY'
+import hashlib
+import os
+from pathlib import Path
+
+root = Path(os.environ["SNAPSHOT_ROOT"]).resolve()
+exclude = Path(os.environ["SNAPSHOT_EXCLUDE"]).resolve()
+
+def is_excluded(path: Path) -> bool:
+    try:
+        path.relative_to(exclude)
+        return True
+    except ValueError:
+        return False
+
+entries = []
+for path in root.rglob("*"):
+    resolved = path.resolve()
+    if is_excluded(resolved):
+        continue
+    relative = path.relative_to(root).as_posix()
+    if path.is_symlink():
+        entries.append(f"L {relative} -> {os.readlink(path)}")
+    elif path.is_dir():
+        entries.append(f"D {relative}/")
+    elif path.is_file():
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        entries.append(f"F {digest} {relative}")
+
+print("\n".join(sorted(entries)))
+PY
+}
+
+assert_fixture_outside_workflow_unchanged() {
+  local label="$1"
+  local before="$2"
+  local after
+  after="$(snapshot_fixture_outside_workflow "$workflow_dir")"
+  if [[ "$before" != "$after" ]]; then
+    echo "fixture files outside $workflow_dir changed $label" >&2
+    diff -u <(printf '%s\n' "$before") <(printf '%s\n' "$after") >&2 || true
+    exit 1
+  fi
+}
+
+assert_real_world_auth_is_isolated() {
+  if [[ "$mode" != "real-world" ]]; then
+    return
+  fi
+
+  AUTH_PATH="$isolated_home/auth.json" python3 - <<'PY'
+import base64
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+auth_path = Path(os.environ["AUTH_PATH"])
+try:
+    auth = json.loads(auth_path.read_text())
+except Exception as exc:
+    print(f"failed to read isolated auth file: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
+api_key = auth.get("OPENAI_API_KEY")
+tokens = auth.get("tokens") or {}
+access_token = tokens.get("access_token")
+refresh_token = tokens.get("refresh_token")
+
+if isinstance(refresh_token, str) and refresh_token.strip():
+    print("isolated real-world auth retained a reusable refresh token", file=sys.stderr)
+    raise SystemExit(1)
+
+if isinstance(api_key, str) and api_key.strip():
+    raise SystemExit(0)
+
+if not isinstance(access_token, str) or not access_token.strip():
+    print("isolated real-world auth has neither an API key nor a ChatGPT access token", file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    payload_segment = access_token.split(".")[1]
+    payload_segment += "=" * (-len(payload_segment) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(payload_segment.encode()))
+    expires_at = payload.get("exp")
+except Exception as exc:
+    print(f"failed to inspect isolated ChatGPT access token expiry: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
+if not isinstance(expires_at, (int, float)) or expires_at <= time.time() + 300:
+    print("isolated ChatGPT access token expires in less than five minutes", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
+print_sanitized_log() {
+  local log_path="$1"
+  if [[ "$mode" != "real-world" ]]; then
+    cat "$log_path" >&2
+    return
+  fi
+
+  AUTH_PATH="$isolated_home/auth.json" LOG_PATH="$log_path" python3 - <<'PY' >&2
+import json
+import os
+from pathlib import Path
+
+auth = json.loads(Path(os.environ["AUTH_PATH"]).read_text())
+secrets = []
+api_key = auth.get("OPENAI_API_KEY")
+if isinstance(api_key, str) and api_key:
+    secrets.append(api_key)
+tokens = auth.get("tokens") or {}
+for key in ("access_token", "refresh_token"):
+    value = tokens.get(key)
+    if isinstance(value, str) and value:
+        secrets.append(value)
+
+text = Path(os.environ["LOG_PATH"]).read_text(errors="replace")
+for secret in secrets:
+    text = text.replace(secret, "[REDACTED_AUTH_TOKEN]")
+print(text, end="")
+PY
+}
+
+assert_no_auth_token_leaked() {
+  if [[ "$mode" != "real-world" ]]; then
+    return
+  fi
+
+  AUTH_PATH="$isolated_home/auth.json" SEARCH_ROOT="$tmp_root" python3 - <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+auth_path = Path(os.environ["AUTH_PATH"]).resolve()
+root = Path(os.environ["SEARCH_ROOT"])
+auth = json.loads(auth_path.read_text())
+secrets = []
+api_key = auth.get("OPENAI_API_KEY")
+if isinstance(api_key, str) and api_key.strip():
+    secrets.append(("API key", api_key.encode()))
+tokens = auth.get("tokens") or {}
+access_token = tokens.get("access_token")
+if isinstance(access_token, str) and access_token.strip():
+    secrets.append(("ChatGPT access token", access_token.encode()))
+
+if not secrets:
+    raise SystemExit(0)
+
+for path in root.rglob("*"):
+    if not path.is_file() or path.resolve() == auth_path:
+        continue
+    try:
+        contents = path.read_bytes()
+    except OSError:
+        continue
+    for label, secret in secrets:
+        if secret in contents:
+            relative = path.relative_to(root)
+            print(f"{label} leaked into {relative}", file=sys.stderr)
+            raise SystemExit(1)
+PY
+}
+
+run_exec_implementation() {
+  local log_path="$tmp_root/codex-exec.log"
+  set +e
+  env "${codex_env[@]}" "$codex_bin" exec \
+    -C "$workflow_dir" \
+    --sandbox workspace-write \
+    --skip-git-repo-check \
+    "$exec_prompt" \
+    >"$log_path" 2>&1
+  local status="$?"
+  set -e
+
+  assert_no_auth_token_leaked
+
+  if [[ "$status" != "0" ]]; then
+    echo "codex exec failed during workflow self-implementation:" >&2
+    print_sanitized_log "$log_path"
+    exit "$status"
+  fi
+}
+
+assert_generated_tests_replaced() {
+  WORKFLOW_DIR="$workflow_dir" python3 - <<'PY'
+import os
+import sys
+from pathlib import Path
+
+workflow_dir = Path(os.environ["WORKFLOW_DIR"])
+
+def compact_without_comments(path: Path) -> str:
+    lines = []
+    for line in path.read_text().splitlines():
+        if not line.lstrip().startswith("//"):
+            lines.append(line)
+    return "".join("".join(lines).split())
+
+checks = [
+    (
+        "src/tests/workflow.load.test.ts",
+        lambda compact: compact == "export{};",
+        "load test still only exports an empty module",
+    ),
+    (
+        "src/tests/workflow.autocomplete.test.ts",
+        lambda compact: (
+            "assert.deepEqual(suggestions,[]);" in compact
+            or "assert.deepStrictEqual(suggestions,[]);" in compact
+        ),
+        "autocomplete test still asserts an empty suggestion list",
+    ),
+    (
+        "src/tests/workflow.positive.test.ts",
+        lambda compact: "{ok:true,input" in compact,
+        "positive test still asserts scaffold echo output",
+    ),
+]
+
+for relative, is_placeholder, message in checks:
+    path = workflow_dir / relative
+    if not path.is_file():
+        print(f"missing generated test: {relative}", file=sys.stderr)
+        raise SystemExit(1)
+    if is_placeholder(compact_without_comments(path)):
+        print(message, file=sys.stderr)
+        raise SystemExit(1)
+PY
+}
+
+assert_run_output() {
+  local input_json="$1"
+  local expected_items="$2"
+  local output
+  output="$(env "${codex_env[@]}" "$codex_bin" -C "$fixture_repo" workflow run todo-sweep --input "$input_json")"
+  printf '%s\n' "$output" > "$tmp_root/workflow-run-$expected_items.log"
+  RUN_OUTPUT="$output" EXPECTED_ITEMS="$expected_items" python3 - <<'PY'
+import json
+import os
+import sys
+
+expected_by_tag = {"TODO": 4, "FIXME": 3, "XXX": 3}
+skip_segments = {".codex", ".git", "node_modules", "artifacts", "state"}
+data = json.loads(os.environ["RUN_OUTPUT"])
+expected_items = int(os.environ["EXPECTED_ITEMS"])
+
+if set(data) != {"total", "byTag", "items", "summaryMarkdown"}:
+    print(f"unexpected top-level output fields: {sorted(data)}", file=sys.stderr)
+    raise SystemExit(1)
+if data.get("ok") is True and "input" in data:
+    print("workflow returned scaffold echo output", file=sys.stderr)
+    raise SystemExit(1)
+if data["total"] != 10:
+    print(f"expected total 10 markers, got {data['total']}", file=sys.stderr)
+    raise SystemExit(1)
+if data["byTag"] != expected_by_tag:
+    print(f"expected byTag {expected_by_tag}, got {data['byTag']}", file=sys.stderr)
+    raise SystemExit(1)
+if not isinstance(data["summaryMarkdown"], str) or not data["summaryMarkdown"].strip():
+    print("summaryMarkdown must be a non-empty string", file=sys.stderr)
+    raise SystemExit(1)
+items = data["items"]
+if not isinstance(items, list) or len(items) != expected_items:
+    print(f"expected {expected_items} items, got {len(items) if isinstance(items, list) else type(items).__name__}", file=sys.stderr)
+    raise SystemExit(1)
+for index, item in enumerate(items):
+    if set(item) != {"tag", "file", "line", "text"}:
+        print(f"item {index} has unexpected fields: {sorted(item)}", file=sys.stderr)
+        raise SystemExit(1)
+    path = item["file"]
+    if not isinstance(path, str):
+        print(f"item {index} file must be a string", file=sys.stderr)
+        raise SystemExit(1)
+    parts = set(path.replace("\\", "/").split("/"))
+    blocked = parts & skip_segments
+    if blocked:
+        print(f"item {index} included ignored path segment(s): {sorted(blocked)} in {path}", file=sys.stderr)
+        raise SystemExit(1)
+PY
+}
+
+assert_invalid_workflow_gate() {
+  local workflow_yaml="$workflow_dir/workflow.yaml"
+  local backup="$tmp_root/workflow.yaml.valid"
+  cp "$workflow_yaml" "$backup"
+  WORKFLOW_YAML="$workflow_yaml" python3 - <<'PY'
+import os
+import re
+from pathlib import Path
+
+path = Path(os.environ["WORKFLOW_YAML"])
+contents = path.read_text()
+corrupted, count = re.subn(r"^id:\s*todo-sweep\s*$", "id: todo-sweep-corrupted", contents, count=1, flags=re.MULTILINE)
+if count != 1:
+    raise SystemExit("failed to corrupt workflow.yaml id")
+path.write_text(corrupted)
+PY
+
+  set +e
+  invalid_validate_output="$(env "${codex_env[@]}" "$codex_bin" -C "$fixture_repo" workflow validate todo-sweep 2>&1)"
+  invalid_validate_status="$?"
+  invalid_run_output="$(env "${codex_env[@]}" "$codex_bin" -C "$fixture_repo" workflow run todo-sweep --input '{"maxItems":1}' 2>&1)"
+  invalid_run_status="$?"
+  set -e
+  cp "$backup" "$workflow_yaml"
+
+  printf '%s\n' "$invalid_validate_output" > "$tmp_root/workflow-invalid-validate.log"
+  printf '%s\n' "$invalid_run_output" > "$tmp_root/workflow-invalid-run.log"
+
+  if [[ "$invalid_validate_status" == "0" ]]; then
+    echo "corrupted workflow unexpectedly validated successfully" >&2
+    print_sanitized_log "$tmp_root/workflow-invalid-validate.log"
+    exit 1
+  fi
+  if printf '%s\n' "$invalid_validate_output" | awk '$0 == "valid" { found = 1 } END { exit found ? 0 : 1 }'; then
+    echo "corrupted workflow validation printed a standalone valid line" >&2
+    print_sanitized_log "$tmp_root/workflow-invalid-validate.log"
+    exit 1
+  fi
+  if [[ "$invalid_run_status" == "0" ]]; then
+    echo "corrupted workflow unexpectedly ran successfully" >&2
+    print_sanitized_log "$tmp_root/workflow-invalid-run.log"
+    exit 1
+  fi
+  if [[ "$invalid_run_output" != *"invalid and cannot be run"* ]]; then
+    echo "corrupted workflow did not report that invalid workflows cannot run" >&2
+    print_sanitized_log "$tmp_root/workflow-invalid-run.log"
+    exit 1
+  fi
+}
+
 write_fixture_repo() {
-  mkdir -p "$fixture_repo"
+  mkdir -p \
+    "$fixture_repo/.codex" \
+    "$fixture_repo/artifacts" \
+    "$fixture_repo/docs" \
+    "$fixture_repo/node_modules/ignored-package" \
+    "$fixture_repo/scripts" \
+    "$fixture_repo/src/nested/deeper" \
+    "$fixture_repo/src/nested" \
+    "$fixture_repo/state"
   cat > "$fixture_repo/README.md" <<'EOF'
 # Fixture Repository
 
 This repository intentionally contains markers for the todo-sweep workflow.
 EOF
-  cat > "$fixture_repo/src-a.ts" <<'EOF'
+  cat > "$fixture_repo/src/main.ts" <<'EOF'
 // TODO: tighten config parsing.
-export const a = 1;
-EOF
-  cat > "$fixture_repo/src-b.ts" <<'EOF'
 // FIXME: preserve user edits during rewrite.
 // XXX: document retry policy.
-export const b = 2;
+export const main = 1;
+EOF
+  cat > "$fixture_repo/src/nested/worker.ts" <<'EOF'
+// TODO: handle batch retries.
+// TODO: normalize Windows paths.
+// FIXME: avoid duplicate diagnostics.
+// XXX: investigate parallel scan ordering.
+export const worker = 2;
+EOF
+  cat > "$fixture_repo/src/nested/deeper/feature.ts" <<'EOF'
+// TODO: cover release notes.
+// FIXME: validate CLI options.
+// XXX: remove temporary adapter.
+export const feature = 3;
+EOF
+  cat > "$fixture_repo/docs/notes.md" <<'EOF'
+# Notes
+
+This file intentionally has no counted task markers.
+EOF
+  cat > "$fixture_repo/scripts/ops.sh" <<'EOF'
+#!/usr/bin/env bash
+echo ok
+EOF
+  cat > "$fixture_repo/.codex/ignored.ts" <<'EOF'
+// TODO: ignored Codex metadata marker.
+EOF
+  cat > "$fixture_repo/node_modules/ignored-package/index.js" <<'EOF'
+// FIXME: ignored dependency marker.
+EOF
+  cat > "$fixture_repo/artifacts/report.txt" <<'EOF'
+XXX: ignored artifact marker.
+EOF
+  cat > "$fixture_repo/state/cache.txt" <<'EOF'
+TODO: ignored state marker.
 EOF
   git -C "$fixture_repo" init >/dev/null
   git -C "$fixture_repo" add .
   git -C "$fixture_repo" -c user.name=Codex -c user.email=codex@openai.com commit -m fixture >/dev/null
+  cat > "$fixture_repo/.git/ignored-marker.txt" <<'EOF'
+TODO: ignored git metadata marker.
+EOF
 }
 
 start_mock_api() {
@@ -264,6 +644,7 @@ case "$mode" in
     mkdir -p "$isolated_home"
     seed_managed_bun_runtime
     seed_real_world_auth
+    assert_real_world_auth_is_isolated
     write_config
     codex_env=(CODEX_HOME="$isolated_home")
     ;;
@@ -288,13 +669,18 @@ if [[ "$workflow_dir" != "$expected_workflow_dir" ]]; then
   echo "workflow where returned '$workflow_dir', expected '$expected_workflow_dir'" >&2
   exit 1
 fi
+outside_after_scaffold="$(snapshot_fixture_outside_workflow "$workflow_dir")"
 
-exec_prompt="Implement the todo-sweep workflow in this workflow directory only. It must scan ctx.cwd for TODO, FIXME, and XXX comments, honor input maxItems, return JSON with total, byTag, items, and summaryMarkdown, and make codex workflow validate todo-sweep print exactly valid. Do not edit files outside this workflow directory."
+exec_prompt="Implement the todo-sweep workflow in this workflow directory only. It must scan every regular text file under ctx.cwd for TODO, FIXME, and XXX comments without filtering by file extension; skip .codex, .git, node_modules, artifacts, and state directories recursively; honor input maxItems by limiting only the returned items array after computing all matches; keep total and byTag as full-repository counts regardless of maxItems; return JSON with exactly the top-level fields total, byTag, items, and summaryMarkdown; use byTag keys TODO, FIXME, and XXX; use item fields tag, file, line, and text; and make codex workflow validate todo-sweep print exactly valid. Do not edit files outside this workflow directory."
 if [[ "$mode" == "real-world" ]]; then
   real_world_prompt="$(cat <<'EOF'
 Real-world e2e constraints:
 - The workflow validator extracts the API contract from src/workflow.ts with limited local typings. If you import node:fs/promises or node:path, add src/types.d.ts with declarations for the exact APIs you use and put the triple-slash reference path directive at the top of src/workflow.ts.
 - Replace every scaffold placeholder test. The load test must do more than export {}; autocomplete must assert a non-empty useful suggestion; the positive test must assert real TODO/FIXME/XXX scan output, not { ok: true, input }.
+- The repository includes ignored directories with extra markers. Do not count markers below .codex, .git, node_modules, artifacts, or state.
+- Do not restrict scanning to a hard-coded extension allowlist; traverse regular text files and handle unreadable or binary files by skipping them.
+- Preserve the exact output shape: total number, byTag object with TODO/FIXME/XXX counts, items array of { tag, file, line, text }, and non-empty summaryMarkdown string. Do not add scaffold fields such as ok or input.
+- maxItems limits only the returned items array. total and byTag must always describe every marker found before truncation.
 - Do not write generated artifacts inside this workflow directory from tests. Use temporary directories under /tmp for fixture files.
 - Keep package.json dependency versions pinned; do not use latest.
 - Run codex workflow validate todo-sweep from the fixture repository root until stdout is exactly valid.
@@ -305,43 +691,26 @@ EOF
 $real_world_prompt"
 fi
 
-env "${codex_env[@]}" "$codex_bin" exec \
-  -C "$workflow_dir" \
-  --sandbox workspace-write \
-  --skip-git-repo-check \
-  "$exec_prompt"
+run_exec_implementation
+assert_fixture_outside_workflow_unchanged "during implementation" "$outside_after_scaffold"
 
 set +e
 validate_output="$(env "${codex_env[@]}" "$codex_bin" -C "$fixture_repo" workflow validate todo-sweep 2>&1)"
 validate_status="$?"
 set -e
+printf '%s\n' "$validate_output" > "$tmp_root/workflow-validate.log"
 if [[ "$validate_status" != "0" || "$validate_output" != "valid" ]]; then
   echo "validation output was not exactly valid:" >&2
-  printf '%s\n' "$validate_output" >&2
+  print_sanitized_log "$tmp_root/workflow-validate.log"
   exit 1
 fi
 
-run_output="$(env "${codex_env[@]}" "$codex_bin" -C "$fixture_repo" workflow run todo-sweep --input '{"maxItems":10}')"
-RUN_OUTPUT="$run_output" python3 - <<'PY'
-import json
-import os
-import sys
-
-data = json.loads(os.environ["RUN_OUTPUT"])
-for key in ("total", "byTag", "items", "summaryMarkdown"):
-    if key not in data:
-        print(f"missing key: {key}", file=sys.stderr)
-        sys.exit(1)
-if data.get("ok") is True and "input" in data:
-    print("workflow returned scaffold echo output", file=sys.stderr)
-    sys.exit(1)
-if data["total"] < 3:
-    print(f"expected at least 3 markers, got {data['total']}", file=sys.stderr)
-    sys.exit(1)
-if not isinstance(data["items"], list) or not data["items"]:
-    print("items must be a non-empty list", file=sys.stderr)
-    sys.exit(1)
-PY
+assert_generated_tests_replaced
+assert_run_output '{"maxItems":10}' 10
+assert_run_output '{"maxItems":3}' 3
+assert_fixture_outside_workflow_unchanged "during validation and run checks" "$outside_after_scaffold"
+assert_invalid_workflow_gate
+assert_no_auth_token_leaked
 
 after_global="$(snapshot_global "$real_codex_home")"
 if [[ "$before_global" != "$after_global" ]]; then
