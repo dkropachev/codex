@@ -96,6 +96,10 @@ pub enum WorkflowValidationFindingInfo {
     DisallowedWorkflowRuntimeFile {
         path: PathBuf,
     },
+    DisallowedWorkflowArtifactApi {
+        path: PathBuf,
+        method: String,
+    },
     UnusedPackageDependency {
         path: PathBuf,
         package_name: String,

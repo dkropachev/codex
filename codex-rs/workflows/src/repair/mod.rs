@@ -579,6 +579,7 @@ fn build_fix_plan(
                 plan.package_names.insert(package_name.clone());
             }
             WorkflowValidationFinding::DisallowedNodeRuntimeImport { .. } => {}
+            WorkflowValidationFinding::DisallowedWorkflowArtifactApi { .. } => {}
             WorkflowValidationFinding::DisallowedWorkflowRuntimeFile { .. } => {
                 plan.create_layout = true;
             }
@@ -796,6 +797,7 @@ fn action_kinds_for_finding(
         }
         WorkflowValidationFinding::WorkflowPathEscapesRoot { .. }
         | WorkflowValidationFinding::DisallowedNodeRuntimeImport { .. }
+        | WorkflowValidationFinding::DisallowedWorkflowArtifactApi { .. }
         | WorkflowValidationFinding::WorkflowApiContractExtractionFailed { .. }
         | WorkflowValidationFinding::WorkflowApiContractSmokeFailed { .. } => {
             return None;

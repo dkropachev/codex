@@ -1,7 +1,7 @@
 import * as child_process from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, type Socket } from "node:net";
@@ -319,11 +319,10 @@ class FakeAppServerProcess extends EventEmitter {
             importSpecifier: "@openai/codex-sdk/workflow",
             symbols: [
               {
-                name: "WorkflowContext.artifacts.readState",
+                name: "WorkflowContext.artifacts.cache.ensure",
                 kind: "method",
-                signature: "ctx.artifacts.readState(params): Promise<ArtifactStateReadResponse>",
-                description:
-                  "Read a workflow artifact state by namespace, scope key, and source key.",
+                signature: "ctx.artifacts.cache.ensure(options): Promise<ArtifactCacheArtifact>",
+                description: "Build or reuse generated artifacts from a content-scoped cache.",
               },
             ],
           },
@@ -968,7 +967,7 @@ describe("CodexWorkflow", () => {
     );
     expect(
       catalog.workflowRuntime.symbols.some(
-        (symbol) => symbol.name === "WorkflowContext.artifacts.readState",
+        (symbol) => symbol.name === "WorkflowContext.artifacts.cache.ensure",
       ),
     ).toBe(true);
     expect(catalog.workflows).toEqual([]);
@@ -976,78 +975,101 @@ describe("CodexWorkflow", () => {
     await workflow.close();
   });
 
-  it("exposes artifact storage APIs on workflow contexts", async () => {
+  it("exposes content-scoped artifact cache APIs on workflow contexts", async () => {
     const fake = new FakeAppServerProcess();
     spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+    const root = mkdtempSync(join(tmpdir(), "codex-sdk-artifacts-"));
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "tool.ts"), "export const value = 1;\n");
 
-    const result = await runWorkflow(
-      defineWorkflow<{ key: string }, string>({
-        name: "artifact-context",
-        async run(context, input) {
-          const register = await context.artifacts.registerState({
-            namespace: "workflow",
-            scopeKey: input.key,
-            sourceKey: `${input.key}:state`,
-            stateDir: "/tmp/workflow-state",
-            sources: [{ path: "report.txt", kind: "report", sha256: "abc123" }],
-            metadata: { revision: 1 },
-          });
-          const read = await context.artifacts.readState({
-            namespace: "workflow",
-            scopeKey: input.key,
-            sourceKey: `${input.key}:state`,
-          });
-          const hit = await context.artifacts.recordStateHit({
-            namespace: "workflow",
-            stateDir: "/tmp/workflow-state",
-          });
-          const index = await context.artifacts.indexFile({
-            namespace: "workflow",
-            stateDir: "/tmp/workflow-state",
-            relativePath: "report.txt",
-          });
-          const cacheWrite = await context.artifacts.writeCacheEntry({
-            namespace: "workflow",
-            key: input.key,
-            artifactId: `${input.key}:state`,
-            status: "fresh",
-            metadata: { revision: 1 },
-          });
-          const cacheRead = await context.artifacts.readCacheEntry({
-            namespace: "workflow",
-            key: input.key,
-          });
-          await context.artifacts.deleteCacheEntry({
-            namespace: "workflow",
-            key: input.key,
-          });
+    try {
+      const result = await runWorkflow(
+        defineWorkflow<
+          { key: string },
+          { builds: number; manifestHash: string; scopeHash: string }
+        >({
+          name: "artifact-context",
+          async run(context, input) {
+            let builds = 0;
+            const cacheOptions = {
+              namespace: "workflow",
+              key: input.key,
+              scope: {
+                root,
+                include: ["src/**/*.ts"],
+              },
+              output: {
+                dir: "artifacts/tool-bundle",
+              },
+            };
 
-          expect(register.state.namespace).toBe("workflow");
-          expect(read.state?.sourceKey).toBe(`${input.key}:state`);
-          expect(hit).toEqual({});
-          expect(index.file.relativePath).toBe("report.txt");
-          expect(cacheRead.entry).toEqual(cacheWrite.entry);
-          return read.state?.namespace ?? "missing";
+            const first = await context.artifacts.cache.ensure({
+              ...cacheOptions,
+              build: async ({ outputDir, reason, scope, previous }) => {
+                builds += 1;
+                expect(reason).toBe("initial");
+                expect(previous).toBeNull();
+                expect(scope.changed).toEqual([
+                  {
+                    path: "src/tool.ts",
+                    change: "added",
+                    newSha256: expect.any(String),
+                  },
+                ]);
+                writeFileSync(
+                  join(outputDir, "manifest.json"),
+                  JSON.stringify({ inputHash: scope.hash }),
+                );
+                return {
+                  metadata: {
+                    manifest: "manifest.json",
+                  },
+                };
+              },
+            });
+            const second = await context.artifacts.cache.ensure({
+              ...cacheOptions,
+              build: () => {
+                throw new Error("build should not run for an unchanged cache");
+              },
+            });
+            const manifest = JSON.parse(readFileSync(second.path("manifest.json"), "utf8")) as {
+              inputHash: string;
+            };
+
+            expect(first.rebuilt).toBe(true);
+            expect(first.reason).toBe("initial");
+            expect(second.rebuilt).toBe(false);
+            expect(second.reason).toBe("cacheHit");
+            expect(second.metadata).toEqual({ manifest: "manifest.json" });
+            expect(second.outputDir).toBe(join(root, "artifacts", "tool-bundle"));
+            return {
+              builds,
+              manifestHash: manifest.inputHash,
+              scopeHash: second.scope.hash,
+            };
+          },
+        }),
+        {
+          codexPathOverride: "codex",
+          input: { key: "reports/jira" },
         },
-      }),
-      {
-        codexPathOverride: "codex",
-        input: { key: "reports/jira" },
-      },
-    );
+      );
 
-    expect(result).toBe("workflow");
-    expect(fake.artifactRequests.map((request) => request.method)).toEqual([
-      "artifact/state/register",
-      "artifact/state/read",
-      "artifact/state/hit",
-      "artifact/file/index",
-      "artifact/cache/write",
-      "artifact/cache/read",
-      "artifact/cache/delete",
-    ]);
-
-    expect(fake.killed).toBe(true);
+      expect(result.builds).toBe(1);
+      expect(result.manifestHash).toBe(result.scopeHash);
+      expect(fake.artifactRequests.map((request) => request.method)).toEqual([
+        "artifact/cache/read",
+        "artifact/state/register",
+        "artifact/state/hit",
+        "artifact/cache/write",
+        "artifact/cache/read",
+        "artifact/state/hit",
+      ]);
+      expect(fake.killed).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("wraps workflow registry commands", async () => {

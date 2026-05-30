@@ -8,7 +8,7 @@ The workflow APIs were moved behind app-server and are now async. The wire-level
 - `workflowRun/*` controls live asynchronous workflow executions.
 - Agent turns, command execution, MCP calls, artifacts, and dynamic tools also go through app-server-backed APIs.
 
-The client-side SDK should stop exposing raw RPC-shaped calls as the primary workflow authoring experience. Keep low-level methods for compatibility, but add clear handle-based APIs that encode user intent.
+The client-side SDK should stop exposing raw RPC-shaped calls as the primary workflow authoring experience. App-server can keep low-level RPCs as implementation details where needed, but workflow code should use clear handle-based APIs that encode user intent.
 
 ## Runtime Blocker
 
@@ -276,31 +276,32 @@ Keep existing methods for low-level access.
 
 ## Artifacts API
 
-Current artifact API forces callers to repeat namespace, scope keys, source keys, and state dirs across calls.
-
-Add namespace/scope/state handles:
+The workflow authoring API should expose content-scoped caches instead of storage-shaped artifact
+RPCs. Workflow code defines the input scope, Codex hashes the matched files, runs the builder only
+when needed, and returns the generated output directory.
 
 ```ts
-const bucket = ctx.artifacts.bucket("workflow-tools", scopeKey);
-
-const state = await bucket.register({
-  sourceKey,
-  stateDir,
-  sources,
-  metadata,
+const artifact = await ctx.artifacts.cache.ensure({
+  namespace: "workflow-tools",
+  key: "code-review/tool-bundle",
+  scope: {
+    include: ["src/tools/**", "package.json", "bun.lock"],
+    exclude: ["node_modules/**", "artifacts/**", "state/**"],
+  },
+  build: async ({ outputDir, reason, scope }) => {
+    await Bun.$`bun build src/tools/index.ts --outdir ${outputDir}`;
+    return { metadata: { entrypoint: "index.js", reason, inputHash: scope.hash } };
+  },
 });
 
-await state.indexFile("manifest.json");
-await state.hit();
-
-await bucket.cache.write(key, artifactId, metadata);
-const entry = await bucket.cache.read(key);
+const entrypoint = artifact.path("index.js");
 ```
 
 Plan:
 
-- Keep low-level `registerState`, `readState`, `listStates`, `indexFile`, `findFile`, and cache methods.
-- Add ergonomic scoped handles for common workflow use.
+- Keep low-level app-server artifact RPCs as private SDK implementation detail.
+- Advertise `ctx.artifacts.cache.ensure(...)` as the workflow-facing API.
+- Workflow validation rejects direct low-level artifact calls in workflow source.
 
 ## API Catalog
 

@@ -8,6 +8,25 @@ import {
   type AppServerRequest,
   type ClientInfo,
 } from "./appServerClient";
+import { WorkflowArtifacts } from "./workflowArtifacts";
+
+export { WorkflowArtifactCache, WorkflowArtifacts } from "./workflowArtifacts";
+export type {
+  ArtifactBuildContext,
+  ArtifactBuildResult,
+  ArtifactCacheArtifact,
+  ArtifactCacheBuildFunction,
+  ArtifactCacheBuildReason,
+  ArtifactCacheEnsureOptions,
+  ArtifactCacheEntry,
+  ArtifactCacheOutput,
+  ArtifactCacheResultReason,
+  ArtifactCacheRetention,
+  ArtifactCacheScope,
+  ArtifactCacheScopeSnapshot,
+  ArtifactScopeFile,
+  ArtifactScopeFileChange,
+} from "./workflowArtifacts";
 
 export type WorkflowUserInput =
   | string
@@ -54,144 +73,6 @@ export type DynamicToolHandler = (
 export type WorkflowTool = WorkflowToolSpec & {
   handler: DynamicToolHandler;
 };
-
-export type ArtifactSource = {
-  path: string;
-  kind: string;
-  sha256: string;
-};
-
-export type ArtifactState = {
-  id: number;
-  namespace: string;
-  scopeKey: string;
-  sourceKey: string;
-  stateDir: string;
-  metadata: unknown;
-  createdAtUnixSec: number;
-  updatedAtUnixSec: number;
-  lastHitAtUnixSec: number | null;
-};
-
-export type ArtifactFile = {
-  stateId: number;
-  relativePath: string;
-  sizeBytes: number;
-  sha256: string;
-  updatedAtUnixSec: number;
-};
-
-export type ArtifactFileMatch = {
-  state: ArtifactState;
-  file: ArtifactFile;
-};
-
-export type ArtifactCacheEntry = {
-  namespace: string;
-  key: string;
-  artifactId: string;
-  status: string;
-  metadata: unknown;
-  createdAtUnixSec: number;
-  updatedAtUnixSec: number;
-  lastHitAtUnixSec: number | null;
-};
-
-export type ArtifactStateRegisterParams = {
-  namespace: string;
-  scopeKey: string;
-  sourceKey: string;
-  stateDir: string;
-  sources: ArtifactSource[];
-  metadata: unknown;
-};
-
-export type ArtifactStateRegisterResponse = {
-  state: ArtifactState;
-};
-
-export type ArtifactStateReadParams = {
-  namespace: string;
-  scopeKey: string;
-  sourceKey: string;
-};
-
-export type ArtifactStateReadResponse = {
-  state: ArtifactState | null;
-};
-
-export type ArtifactStateListParams = {
-  namespace: string;
-  scopeKey: string;
-};
-
-export type ArtifactStateListResponse = {
-  states: ArtifactState[];
-};
-
-export type ArtifactStateHitParams = {
-  namespace: string;
-  stateDir: string;
-};
-
-export type ArtifactStateHitResponse = Record<string, never>;
-
-export type ArtifactStatePruneParams = {
-  namespace: string;
-  retentionSecs: number;
-  throttleSecs: number;
-};
-
-export type ArtifactStatePruneResponse = {
-  pruned: number;
-};
-
-export type ArtifactFileIndexParams = {
-  namespace: string;
-  stateDir: string;
-  relativePath: string;
-};
-
-export type ArtifactFileIndexResponse = {
-  file: ArtifactFile;
-};
-
-export type ArtifactFileFindParams = {
-  namespace: string;
-  relativePath: string;
-};
-
-export type ArtifactFileFindResponse = {
-  entry: ArtifactFileMatch | null;
-};
-
-export type ArtifactCacheReadParams = {
-  namespace: string;
-  key: string;
-};
-
-export type ArtifactCacheReadResponse = {
-  entry: ArtifactCacheEntry | null;
-};
-
-export type ArtifactCacheWriteParams = {
-  namespace: string;
-  key: string;
-  artifactId: string;
-  status: string;
-  metadata: unknown;
-};
-
-export type ArtifactCacheWriteResponse = {
-  entry: ArtifactCacheEntry;
-};
-
-export type ArtifactCacheDeleteParams = {
-  namespace: string;
-  key: string;
-};
-
-export type ArtifactCacheDeleteResponse = Record<string, never>;
 
 export type WorkflowConnection = "auto" | "require-existing" | "spawn" | { appServerUrl: string };
 
@@ -967,50 +848,6 @@ export class WorkflowMcp {
       arguments: params.arguments,
       _meta: params.meta,
     });
-  }
-}
-
-export class WorkflowArtifacts {
-  constructor(private client: AppServerClient) {}
-
-  registerState(params: ArtifactStateRegisterParams): Promise<ArtifactStateRegisterResponse> {
-    return this.client.request("artifact/state/register", params);
-  }
-
-  readState(params: ArtifactStateReadParams): Promise<ArtifactStateReadResponse> {
-    return this.client.request("artifact/state/read", params);
-  }
-
-  listStates(params: ArtifactStateListParams): Promise<ArtifactStateListResponse> {
-    return this.client.request("artifact/state/list", params);
-  }
-
-  recordStateHit(params: ArtifactStateHitParams): Promise<ArtifactStateHitResponse> {
-    return this.client.request("artifact/state/hit", params);
-  }
-
-  pruneStates(params: ArtifactStatePruneParams): Promise<ArtifactStatePruneResponse> {
-    return this.client.request("artifact/state/prune", params);
-  }
-
-  indexFile(params: ArtifactFileIndexParams): Promise<ArtifactFileIndexResponse> {
-    return this.client.request("artifact/file/index", params);
-  }
-
-  findFile(params: ArtifactFileFindParams): Promise<ArtifactFileFindResponse> {
-    return this.client.request("artifact/file/find", params);
-  }
-
-  readCacheEntry(params: ArtifactCacheReadParams): Promise<ArtifactCacheReadResponse> {
-    return this.client.request("artifact/cache/read", params);
-  }
-
-  writeCacheEntry(params: ArtifactCacheWriteParams): Promise<ArtifactCacheWriteResponse> {
-    return this.client.request("artifact/cache/write", params);
-  }
-
-  deleteCacheEntry(params: ArtifactCacheDeleteParams): Promise<ArtifactCacheDeleteResponse> {
-    return this.client.request("artifact/cache/delete", params);
   }
 }
 

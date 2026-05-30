@@ -100,6 +100,10 @@ type AppServerTransport = {
   isClosed(): boolean;
 };
 
+type InitializeResponse = {
+  codexHome?: string;
+};
+
 export type ServerRequestHandler = (
   request: AppServerRequest,
   client: AppServerClient,
@@ -123,6 +127,8 @@ class AppServerRequestError extends Error {
 }
 
 export class AppServerClient {
+  codexHome: string | null = null;
+
   private transport: AppServerTransport;
   private nextId = 1;
   private pending = new Map<JsonRpcId, PendingRequest>();
@@ -253,7 +259,7 @@ export class AppServerClient {
   }
 
   private async initialize(options: AppServerClientOptions): Promise<void> {
-    await this.request("initialize", {
+    const response = await this.request<InitializeResponse>("initialize", {
       clientInfo: options.clientInfo ?? {
         name: "codex_sdk_ts_workflow",
         title: "Codex TypeScript Workflow SDK",
@@ -263,6 +269,9 @@ export class AppServerClient {
         experimentalApi: options.experimentalApi ?? true,
       },
     });
+    if (typeof response.codexHome === "string") {
+      this.codexHome = response.codexHome;
+    }
     this.notify("initialized");
   }
 

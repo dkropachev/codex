@@ -658,6 +658,10 @@ pub(crate) fn validation_finding_to_api(
         codex_workflows::WorkflowValidationFinding::DisallowedWorkflowRuntimeFile { path } => {
             WorkflowValidationFindingInfo::DisallowedWorkflowRuntimeFile { path }
         }
+        codex_workflows::WorkflowValidationFinding::DisallowedWorkflowArtifactApi {
+            path,
+            method,
+        } => WorkflowValidationFindingInfo::DisallowedWorkflowArtifactApi { path, method },
         codex_workflows::WorkflowValidationFinding::UnusedPackageDependency {
             path,
             package_name,
@@ -868,6 +872,12 @@ fn validation_finding_from_api(
         }
         WorkflowValidationFindingInfo::DisallowedWorkflowRuntimeFile { path } => {
             codex_workflows::WorkflowValidationFinding::DisallowedWorkflowRuntimeFile { path }
+        }
+        WorkflowValidationFindingInfo::DisallowedWorkflowArtifactApi { path, method } => {
+            codex_workflows::WorkflowValidationFinding::DisallowedWorkflowArtifactApi {
+                path,
+                method,
+            }
         }
         WorkflowValidationFindingInfo::UnusedPackageDependency { path, package_name } => {
             codex_workflows::WorkflowValidationFinding::UnusedPackageDependency {

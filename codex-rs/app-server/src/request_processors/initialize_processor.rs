@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -20,6 +21,7 @@ pub(crate) struct InitializeRequestProcessor {
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
     rpc_transport: AppServerRpcTransport,
+    ephemeral_workflow_artifacts_cleaned: Arc<AtomicBool>,
 }
 
 impl InitializeRequestProcessor {
@@ -36,6 +38,7 @@ impl InitializeRequestProcessor {
             config,
             config_warnings: Arc::new(config_warnings),
             rpc_transport,
+            ephemeral_workflow_artifacts_cleaned: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -89,6 +92,7 @@ impl InitializeRequestProcessor {
         let originator = name.clone();
         let user_agent_suffix = format!("{name}; {version}");
         let codex_home = self.config.codex_home.clone();
+        self.cleanup_ephemeral_workflow_artifacts_once(&codex_home);
         if session
             .initialize(InitializedConnectionSessionState {
                 experimental_api_enabled,
@@ -148,6 +152,26 @@ impl InitializeRequestProcessor {
         }
 
         Ok(false)
+    }
+
+    fn cleanup_ephemeral_workflow_artifacts_once(&self, codex_home: &std::path::Path) {
+        if self
+            .ephemeral_workflow_artifacts_cleaned
+            .swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        let path = codex_home.join(".tmp").join("workflow-artifacts");
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    "failed to clean ephemeral workflow artifact cache: {err}"
+                );
+            }
+        }
     }
 
     pub(crate) async fn send_initialize_notifications_to_connection(

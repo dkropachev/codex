@@ -71,6 +71,30 @@ const REQUIRED_TRUE_COVERAGE_KEYS: &[&str] = &[
 const WORKFLOW_TEST_MARKER_PREFIX: &str = "workflow-covers:";
 const RUNTIME_STATE_GITIGNORE_PATTERNS: &[&str] =
     &["node_modules/", "artifacts/", "state/*", "!state/.gitkeep"];
+const LOW_LEVEL_ARTIFACT_METHODS: &[&str] = &[
+    "registerState",
+    "readState",
+    "listStates",
+    "recordStateHit",
+    "pruneStates",
+    "indexFile",
+    "findFile",
+    "readCacheEntry",
+    "writeCacheEntry",
+    "deleteCacheEntry",
+];
+const LOW_LEVEL_ARTIFACT_RPC_METHODS: &[&str] = &[
+    "artifact/state/register",
+    "artifact/state/read",
+    "artifact/state/list",
+    "artifact/state/hit",
+    "artifact/state/prune",
+    "artifact/file/index",
+    "artifact/file/find",
+    "artifact/cache/read",
+    "artifact/cache/write",
+    "artifact/cache/delete",
+];
 
 pub(crate) fn validate_workflow_dir(
     root: &Path,
@@ -138,6 +162,7 @@ pub(crate) fn validate_workflow_dir(
     ));
     findings.extend(validate_package_manifest(workflow_dir, spec.as_ref()));
     findings.extend(validate_local_package_imports(workflow_dir));
+    findings.extend(validate_low_level_artifact_api_usage(workflow_dir));
     findings.extend(validate_unfinished_scaffold(workflow_dir, spec.as_ref()));
     if let Some(spec) = spec.as_ref() {
         findings.extend(validate_validation_commands(spec));
@@ -361,6 +386,38 @@ fn validate_scaffold_source(workflow_dir: &Path) -> Vec<WorkflowValidationFindin
     } else {
         Vec::new()
     }
+}
+
+fn validate_low_level_artifact_api_usage(workflow_dir: &Path) -> Vec<WorkflowValidationFinding> {
+    let mut findings = Vec::new();
+    visit_workflow_files(workflow_dir, workflow_dir, &mut |relative, path| {
+        if !is_code_file(relative) {
+            return;
+        }
+        let Ok(contents) = fs::read_to_string(path) else {
+            return;
+        };
+        let compact = compact_source(&contents);
+        let mut methods = BTreeSet::new();
+        for method in LOW_LEVEL_ARTIFACT_METHODS {
+            if compact.contains(&format!("artifacts.{method}(")) {
+                methods.insert((*method).to_string());
+            }
+        }
+        for method in LOW_LEVEL_ARTIFACT_RPC_METHODS {
+            if contents.contains(method) {
+                methods.insert((*method).to_string());
+            }
+        }
+        findings.extend(methods.into_iter().map(|method| {
+            WorkflowValidationFinding::DisallowedWorkflowArtifactApi {
+                path: relative.to_path_buf(),
+                method,
+            }
+        }));
+    });
+    findings.sort_by_key(WorkflowValidationFinding::message);
+    findings
 }
 
 fn validate_placeholder_tests(workflow_dir: &Path) -> Vec<WorkflowValidationFinding> {
@@ -1141,6 +1198,42 @@ test("workflow rejects invalid input", async () => {
 
         assert_eq!(validation.status, WorkflowValidationStatus::Valid);
         assert!(validation.findings.is_empty());
+    }
+
+    #[test]
+    fn validate_workflow_dir_rejects_low_level_artifact_api_usage() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = create_valid_workflow_dir(&root, "example");
+        fs::write(
+            workflow_dir.join("src/workflow.ts"),
+            r#"import { WorkflowContext } from "@openai/codex-sdk/workflow";
+
+export default async function workflow(ctx: WorkflowContext) {
+  await ctx.artifacts.readState({
+    namespace: "workflow",
+    scopeKey: "reports",
+    sourceKey: "hash",
+  });
+  await ctx.apis.appServer.request("artifact/cache/read", {
+    namespace: "workflow",
+    key: "reports",
+  });
+  return { ok: true, value: "done" };
+}
+"#,
+        )
+        .unwrap();
+
+        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
+        assert_eq!(
+            finding_messages(&validation.findings),
+            vec![
+                "workflow uses low-level artifact API `artifact/cache/read`; use `ctx.artifacts.cache.ensure(...)` instead".to_string(),
+                "workflow uses low-level artifact API `readState`; use `ctx.artifacts.cache.ensure(...)` instead".to_string(),
+            ]
+        );
     }
 
     #[test]

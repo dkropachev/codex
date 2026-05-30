@@ -104,7 +104,7 @@ async fn api_catalog_read_returns_methods_tools_and_workflow_runtime() -> Result
             .workflow_runtime
             .symbols
             .iter()
-            .any(|symbol| symbol.name == "WorkflowContext.artifacts.readState")
+            .any(|symbol| symbol.name == "WorkflowContext.artifacts.cache.ensure")
     );
     assert_eq!(response.workflows, Vec::new());
 

@@ -649,6 +649,30 @@
         },
         {
           "properties": {
+            "method": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "disallowedWorkflowArtifactApi"
+              ],
+              "title": "DisallowedWorkflowArtifactApiWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "method",
+            "path",
+            "type"
+          ],
+          "title": "DisallowedWorkflowArtifactApiWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
             "package_name": {
               "type": "string"
             },

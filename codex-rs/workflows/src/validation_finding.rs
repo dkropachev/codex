@@ -76,6 +76,10 @@ pub enum WorkflowValidationFinding {
     DisallowedWorkflowRuntimeFile {
         path: PathBuf,
     },
+    DisallowedWorkflowArtifactApi {
+        path: PathBuf,
+        method: String,
+    },
     UnusedPackageDependency {
         path: PathBuf,
         package_name: String,
@@ -271,6 +275,9 @@ impl WorkflowValidationFinding {
             Self::DisallowedWorkflowRuntimeFile { path } => {
                 format!("{} is not allowed for Bun workflows", path.display())
             }
+            Self::DisallowedWorkflowArtifactApi { method, .. } => format!(
+                "workflow uses low-level artifact API `{method}`; use `ctx.artifacts.cache.ensure(...)` instead"
+            ),
             Self::UnusedPackageDependency { package_name, .. } => {
                 format!("package.json declares unused runtime dependency `{package_name}`")
             }
@@ -421,6 +428,7 @@ impl WorkflowValidationFinding {
             | Self::UnusedPackageDependency { .. }
             | Self::InvalidWorkflowDependencyMetadata { .. }
             | Self::WorkflowDependencyMetadataMismatch { .. } => "WF-004",
+            Self::DisallowedWorkflowArtifactApi { .. } => "WF-012",
             Self::MissingCoverageMetadata { .. } => "WF-008",
             Self::MissingCoverageKey { key, .. }
             | Self::InvalidCoverageKeyType { key, .. }
@@ -468,6 +476,7 @@ impl WorkflowValidationFinding {
             "WF-008" => "Positive-path coverage is missing or inaccurate",
             "WF-009" => "Negative and failure-path coverage is missing or inaccurate",
             "WF-010" => "Recovery coverage is missing or inaccurate",
+            "WF-012" => "Workflow runtime API usage is invalid",
             _ => "Workflow validation surfaced a stability or correctness issue",
         }
     }
@@ -490,6 +499,7 @@ impl WorkflowValidationFinding {
             | Self::UndeclaredPackageImport { path, .. }
             | Self::DisallowedNodeRuntimeImport { path, .. }
             | Self::DisallowedWorkflowRuntimeFile { path }
+            | Self::DisallowedWorkflowArtifactApi { path, .. }
             | Self::UnusedPackageDependency { path, .. }
             | Self::InvalidWorkflowDependencyMetadata { path, .. }
             | Self::WorkflowDependencyMetadataMismatch { path, .. }
