@@ -49,6 +49,12 @@ just test
 cargo test --all-features
 ```
 
+Live provider smoke tests are included in the normal `codex-core` suite and
+self-skip when their credentials are missing. Set `OPENAI_API_KEY` to enable the
+real OpenAI `/v1/responses` CLI smoke tests. Set both `OPENAI_API_KEY` and
+`DEEPSEEK_API_KEY` to enable the live model-router shadowing e2e test. Keep
+these credentials in your local environment; do not commit them to the repo.
+
 ## Tracing / verbose logging
 
 Codex is written in Rust, so it honors the `RUST_LOG` environment variable to configure its logging behavior.

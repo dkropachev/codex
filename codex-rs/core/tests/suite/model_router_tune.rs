@@ -803,6 +803,155 @@ enabled = true
     Ok(())
 }
 
+#[test]
+fn live_model_router_env_credentials_start_openai_and_deepseek_shadowing() -> Result<()> {
+    let missing = ["OPENAI_API_KEY", "DEEPSEEK_API_KEY"]
+        .into_iter()
+        .filter(|name| !std::env::var(name).is_ok_and(|value| !value.trim().is_empty()))
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        eprintln!(
+            "skipping live_model_router_env_credentials_start_openai_and_deepseek_shadowing; missing {}",
+            missing.join(", ")
+        );
+        return Ok(());
+    }
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async {
+        let home = TempDir::new()?;
+        fs::write(
+            home.path().join("config.toml"),
+            r#"
+model = "gpt-5.4"
+model_provider = "openai-env"
+approval_policy = "never"
+
+[features]
+sqlite = true
+
+[model_providers.openai-env]
+name = "OpenAI env"
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+request_max_retries = 1
+stream_max_retries = 1
+stream_idle_timeout_ms = 300000
+websocket_connect_timeout_ms = 15000
+
+[model_router]
+enabled = true
+discovery = "from_rules"
+
+[[model_router.models.rules]]
+id = "live-openai-deepseek"
+type = "require"
+models = [
+  { provider = "openai-env", model = "/^gpt-5\\.4$/" },
+  { provider = "deepseek", model = "/^deepseek-chat$/" },
+]
+"#,
+        )?;
+
+        let state_db =
+            StateRuntime::init(home.path().to_path_buf(), "openai-env".to_string()).await?;
+        let thread_id = ThreadId::new();
+        let rollout_rel_path =
+            format!("sessions/2026/01/27/rollout-2026-01-27T12-00-02-{thread_id}.jsonl");
+        let user_message = "Reply with exactly: model router live shadow.";
+        let rollout_path = write_completed_rollout(
+            home.path(),
+            thread_id,
+            CompletedRolloutSpec {
+                rollout_rel_path: &rollout_rel_path,
+                user_message,
+                assistant_message: "model router live shadow.",
+                turn_id: "live-shadow-turn-1",
+                duration_ms: 100,
+                provider: "openai-env",
+            },
+        )?;
+        seed_thread_metadata_for_home(
+            &state_db,
+            home.path(),
+            thread_id,
+            rollout_path,
+            user_message,
+            "openai-env",
+            "gpt-5.4",
+        )
+        .await?;
+
+        let policy = run_model_router_live_cli_json(home.path(), &["policy", "--json"])?;
+        let policy_candidates = policy["candidates"]
+            .as_array()
+            .expect("policy candidates should be an array");
+        assert!(
+            policy_candidates.iter().any(|candidate| {
+                candidate["modelProvider"].as_str() == Some("openai-env")
+                    && candidate["model"].as_str() == Some("gpt-5.4")
+            }),
+            "policy should discover the OpenAI env-key candidate: {policy:#}"
+        );
+        assert!(
+            policy_candidates.iter().any(|candidate| {
+                candidate["modelProvider"].as_str() == Some(DEEPSEEK_PROVIDER_ID)
+                    && candidate["model"].as_str() == Some("deepseek-chat")
+            }),
+            "policy should discover the DeepSeek env-key candidate: {policy:#}"
+        );
+
+        let tune = run_model_router_live_cli_json(
+            home.path(),
+            &[
+                "tune",
+                "--window",
+                "all",
+                "--token-budget",
+                "8000",
+                "--cost-budget-usd",
+                "0.10",
+                "--dry-run",
+                "--json",
+            ],
+        )?;
+        assert_eq!(tune["evaluatedCount"].as_i64(), Some(2));
+
+        let openai_identity_key = candidate_identity_key(&ModelRouterCandidateToml {
+            model: Some("gpt-5.4".to_string()),
+            model_provider: Some("openai-env".to_string()),
+            ..Default::default()
+        });
+        let deepseek_identity_key = candidate_identity_key(&ModelRouterCandidateToml {
+            model: Some("deepseek-chat".to_string()),
+            model_provider: Some(DEEPSEEK_PROVIDER_ID.to_string()),
+            ..Default::default()
+        });
+
+        let shadows = run_model_router_live_cli_json(
+            home.path(),
+            &["shadows", "--task-key", "history.cli", "--json"],
+        )?;
+        let summaries = shadows["summaries"]
+            .as_array()
+            .expect("shadow summaries should be an array");
+        for identity_key in [&openai_identity_key, &deepseek_identity_key] {
+            assert!(
+                summaries.iter().any(|summary| {
+                    summary["candidateIdentity"].as_str() == Some(identity_key.as_str())
+                        && summary["phase"].as_str() == Some("promotion")
+                        && summary["evaluatedCount"]
+                            .as_i64()
+                            .is_some_and(|count| count >= 1)
+                }),
+                "shadow summaries should include promotion results for {identity_key}: {shadows:#}"
+            );
+        }
+
+        Ok::<(), anyhow::Error>(())
+    })
+}
+
 fn request_model_counts(requests: &[responses::ResponsesRequest]) -> BTreeMap<String, usize> {
     let mut counts = BTreeMap::new();
     for request in requests {
@@ -830,11 +979,31 @@ fn run_model_router_cli(codex_home: &Path, args: &[&str]) -> Result<std::process
         .output()?)
 }
 
+fn run_model_router_live_cli(codex_home: &Path, args: &[&str]) -> Result<std::process::Output> {
+    Ok(Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
+        .env("CODEX_HOME", codex_home)
+        .env("CODEX_SQLITE_HOME", codex_home)
+        .arg("model-router")
+        .args(args)
+        .output()?)
+}
+
 fn run_model_router_cli_json(codex_home: &Path, args: &[&str]) -> Result<Value> {
     let output = run_model_router_cli(codex_home, args)?;
     assert!(
         output.status.success(),
         "model-router command failed with args {args:?}:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+fn run_model_router_live_cli_json(codex_home: &Path, args: &[&str]) -> Result<Value> {
+    let output = run_model_router_live_cli(codex_home, args)?;
+    assert!(
+        output.status.success(),
+        "live model-router command failed with args {args:?}:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -1055,11 +1224,32 @@ async fn seed_thread_metadata(
     default_provider: &str,
     model: &str,
 ) -> Result<()> {
+    seed_thread_metadata_for_home(
+        state_db,
+        test.codex_home_path(),
+        thread_id,
+        rollout_path,
+        user_message,
+        default_provider,
+        model,
+    )
+    .await
+}
+
+async fn seed_thread_metadata_for_home(
+    state_db: &StateRuntime,
+    codex_home: &Path,
+    thread_id: ThreadId,
+    rollout_path: PathBuf,
+    user_message: &str,
+    default_provider: &str,
+    model: &str,
+) -> Result<()> {
     let now = Utc::now();
     let mut builder = ThreadMetadataBuilder::new(thread_id, rollout_path, now, SessionSource::Cli);
     builder.updated_at = Some(now);
     builder.model_provider = Some(default_provider.to_string());
-    builder.cwd = test.codex_home_path().to_path_buf();
+    builder.cwd = codex_home.to_path_buf();
     builder.cli_version = Some("test".to_string());
 
     let mut metadata = builder.build(default_provider);

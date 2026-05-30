@@ -1,8 +1,7 @@
 #![expect(clippy::expect_used)]
 
-//! Optional smoke tests that hit the real OpenAI /v1/responses endpoint. They are `#[ignore]` by
-//! default so CI stays deterministic and free. Developers can run them locally with
-//! `cargo test --test live_cli -- --ignored` provided they set a valid `OPENAI_API_KEY`.
+//! Optional smoke tests that hit the real OpenAI /v1/responses endpoint. They run with the rest of
+//! the core suite but self-skip unless `OPENAI_API_KEY` is set in the local environment.
 
 use assert_cmd::prelude::*;
 use predicates::prelude::*;
@@ -10,13 +9,20 @@ use std::process::Command;
 use std::process::Stdio;
 use tempfile::TempDir;
 
-fn require_api_key() -> String {
-    std::env::var("OPENAI_API_KEY")
-        .expect("OPENAI_API_KEY env var not set — skip running live tests")
+const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
+
+fn skip_if_missing_openai_api_key(test_name: &str) -> Option<String> {
+    let api_key = std::env::var(OPENAI_API_KEY_ENV_VAR)
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    if api_key.is_none() {
+        eprintln!("skipping {test_name} - {OPENAI_API_KEY_ENV_VAR} not set");
+    }
+    api_key
 }
 
 /// Helper that spawns the binary inside a TempDir with minimal flags. Returns (Assert, TempDir).
-fn run_live(prompt: &str) -> (assert_cmd::assert::Assert, TempDir) {
+fn run_live(prompt: &str, openai_api_key: &str) -> (assert_cmd::assert::Assert, TempDir) {
     #![expect(clippy::unwrap_used)]
     use std::io::Read;
     use std::io::Write;
@@ -32,7 +38,7 @@ fn run_live(prompt: &str) -> (assert_cmd::assert::Assert, TempDir) {
 
     let mut cmd = Command::new(codex_utils_cargo_bin::cargo_bin("codex-rs").unwrap());
     cmd.current_dir(dir.path());
-    cmd.env("OPENAI_API_KEY", require_api_key());
+    cmd.env(OPENAI_API_KEY_ENV_VAR, openai_api_key);
 
     // We want three things at once:
     //   1. live streaming of the child’s stdout/stderr while the test is running
@@ -110,16 +116,15 @@ fn run_live(prompt: &str) -> (assert_cmd::assert::Assert, TempDir) {
     (output.assert(), dir)
 }
 
-#[ignore]
 #[test]
 fn live_create_file_hello_txt() {
-    if std::env::var("OPENAI_API_KEY").is_err() {
-        eprintln!("skipping live_create_file_hello_txt – OPENAI_API_KEY not set");
+    let Some(openai_api_key) = skip_if_missing_openai_api_key("live_create_file_hello_txt") else {
         return;
-    }
+    };
 
     let (assert, dir) = run_live(
         "Use the shell tool with the apply_patch command to create a file named hello.txt containing the text 'hello'.",
+        &openai_api_key,
     );
 
     assert.success();
@@ -132,15 +137,17 @@ fn live_create_file_hello_txt() {
     assert_eq!(contents.trim(), "hello");
 }
 
-#[ignore]
 #[test]
 fn live_print_working_directory() {
-    if std::env::var("OPENAI_API_KEY").is_err() {
-        eprintln!("skipping live_print_working_directory – OPENAI_API_KEY not set");
+    let Some(openai_api_key) = skip_if_missing_openai_api_key("live_print_working_directory")
+    else {
         return;
-    }
+    };
 
-    let (assert, dir) = run_live("Print the current working directory using the shell function.");
+    let (assert, dir) = run_live(
+        "Print the current working directory using the shell function.",
+        &openai_api_key,
+    );
 
     assert
         .success()
