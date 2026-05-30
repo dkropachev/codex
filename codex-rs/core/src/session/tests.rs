@@ -2951,6 +2951,15 @@ async fn model_router_session_override_controls_chat_turn_routing() -> anyhow::R
                     }],
                 }],
             }),
+            lifecycle: Some(codex_config::config_toml::ModelRouterLifecycleToml {
+                defaults: Some(
+                    codex_config::config_toml::ModelRouterLifecycleDefaultsToml {
+                        shadow_allowed: Some(false),
+                        ..Default::default()
+                    },
+                ),
+                ..Default::default()
+            }),
             ..Default::default()
         });
     });
@@ -3022,6 +3031,15 @@ async fn normal_chat_turn_applies_model_router_and_records_usage() -> anyhow::Re
                         model: Some("gpt-5.3-codex-spark".to_string()),
                     }],
                 }],
+            }),
+            lifecycle: Some(codex_config::config_toml::ModelRouterLifecycleToml {
+                defaults: Some(
+                    codex_config::config_toml::ModelRouterLifecycleDefaultsToml {
+                        shadow_allowed: Some(false),
+                        ..Default::default()
+                    },
+                ),
+                ..Default::default()
             }),
             ..Default::default()
         });

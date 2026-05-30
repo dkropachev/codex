@@ -41,6 +41,7 @@ use crate::parse_turn_item;
 use crate::plugins::build_plugin_injections;
 use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
+use crate::session::model_router_shadow::spawn_model_router_shadow_evaluation;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -474,6 +475,7 @@ pub(crate) async fn run_turn(
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
         let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
+        let shadow_prompt_input = sampling_request_input.clone();
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
@@ -648,6 +650,12 @@ pub(crate) async fn run_turn(
                         .await;
                         return None;
                     }
+                    spawn_model_router_shadow_evaluation(
+                        Arc::clone(&sess),
+                        Arc::clone(&turn_context),
+                        shadow_prompt_input,
+                        last_agent_message.clone(),
+                    );
                     break;
                 }
                 continue;

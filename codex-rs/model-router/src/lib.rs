@@ -238,7 +238,7 @@ pub fn select_candidate_with_score_bias(
     let estimated_task_usage = estimate_task_usage(prompt_bytes, task_class);
     let mut enriched = Vec::with_capacity(candidates.len());
     for candidate in candidates {
-        let metrics = infer_missing_metrics(candidate);
+        let metrics = candidate.metrics;
         if !fits_context_window(candidate, estimated_task_usage.total_tokens) {
             enriched.push(None);
             continue;
@@ -378,44 +378,6 @@ pub fn estimate_task_usage(prompt_bytes: usize, task_class: RouterTaskClass) -> 
     }
 }
 
-fn infer_missing_metrics(candidate: &CandidateRoute) -> CandidateMetrics {
-    let model = candidate.model.as_deref().unwrap_or_default();
-    CandidateMetrics {
-        intelligence_score: candidate
-            .metrics
-            .intelligence_score
-            .or_else(|| inferred_intelligence_score(model)),
-        success_rate: candidate.metrics.success_rate,
-        median_latency_ms: candidate.metrics.median_latency_ms,
-        estimated_cost_usd_micros: candidate.metrics.estimated_cost_usd_micros,
-    }
-}
-
-fn inferred_intelligence_score(model: &str) -> Option<f64> {
-    let model = model.to_ascii_lowercase();
-    if model.is_empty() {
-        return None;
-    }
-    let score = if model.contains("gpt-5.5") {
-        0.98
-    } else if model.contains("gpt-5.4") {
-        0.94
-    } else if model.contains("gpt-5.3") {
-        0.90
-    } else if model.contains("gpt-5") {
-        0.86
-    } else if model.contains("gpt-4.1") || model.contains("gpt-4o") {
-        0.78
-    } else if model.contains("mini") {
-        0.62
-    } else if model.contains("spark") || model.contains("nano") {
-        0.52
-    } else {
-        0.55
-    };
-    Some(score)
-}
-
 fn metric_range(values: impl Iterator<Item = f64>) -> Option<(f64, f64)> {
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
@@ -533,19 +495,19 @@ mod tests {
     }
 
     #[test]
-    fn missing_latency_does_not_use_model_name_heuristics() {
+    fn missing_metrics_do_not_use_model_name_heuristics() {
         let candidates = vec![
-            CandidateRoute {
-                id: Some("spark".to_string()),
-                model: Some("gpt-5.3-codex-spark".to_string()),
-                model_provider: Some("openai".to_string()),
-                usable_context_window_tokens: Some(100_000),
-                is_incumbent: false,
-                metrics: CandidateMetrics::default(),
-            },
             CandidateRoute {
                 id: Some("quality".to_string()),
                 model: Some("gpt-5.5".to_string()),
+                model_provider: Some("openai".to_string()),
+                usable_context_window_tokens: Some(100_000),
+                is_incumbent: true,
+                metrics: CandidateMetrics::default(),
+            },
+            CandidateRoute {
+                id: Some("spark".to_string()),
+                model: Some("gpt-5.3-codex-spark".to_string()),
                 model_provider: Some("openai".to_string()),
                 usable_context_window_tokens: Some(100_000),
                 is_incumbent: false,
@@ -560,7 +522,7 @@ mod tests {
                 &candidates
             )
             .map(|selection| selection.index),
-            Some(1)
+            Some(0)
         );
     }
 
@@ -586,6 +548,7 @@ mod tests {
                 usable_context_window_tokens: Some(100_000),
                 is_incumbent: false,
                 metrics: CandidateMetrics {
+                    intelligence_score: Some(0.95),
                     estimated_cost_usd_micros: Some(10_000),
                     ..Default::default()
                 },

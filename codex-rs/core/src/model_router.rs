@@ -5,6 +5,7 @@ use std::time::Instant;
 
 mod auto_candidates;
 mod failover;
+mod shadow;
 
 use chrono::Utc;
 use codex_config::config_toml::AccountPoolDefinitionToml;
@@ -54,6 +55,8 @@ use crate::config::ModelRouterAccounting;
 pub(crate) use failover::ModelRouterAppliedRoute;
 pub(crate) use failover::ModelRouterRouteExclusion;
 use failover::selectable_routes;
+pub(crate) use shadow::ModelRouterShadowPlan;
+pub(crate) use shadow::model_router_shadow_plan;
 
 const LIFECYCLE_PHASE_PROMOTION: &str = "promotion";
 const LIFECYCLE_PHASE_MONITORING: &str = "monitoring";
@@ -2486,11 +2489,13 @@ mod tests {
                 ModelRouterCandidateToml {
                     id: Some("small".to_string()),
                     model: Some("gpt-5.3-codex-spark".to_string()),
+                    intelligence_score: Some(0.5),
                     ..Default::default()
                 },
                 ModelRouterCandidateToml {
                     id: Some("large".to_string()),
                     model: Some("gpt-5.5".to_string()),
+                    intelligence_score: Some(0.95),
                     ..Default::default()
                 },
             ],
@@ -2544,6 +2549,7 @@ mod tests {
                 id: Some("broken".to_string()),
                 model: Some("gpt-5.5".to_string()),
                 model_provider: Some("missing-provider".to_string()),
+                intelligence_score: Some(1.0),
                 ..Default::default()
             }],
             ..Default::default()

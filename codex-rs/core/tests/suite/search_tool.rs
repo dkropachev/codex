@@ -2,6 +2,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
+use codex_config::config_toml::ModelRouterLifecycleDefaultsToml;
+use codex_config::config_toml::ModelRouterLifecycleToml;
 use codex_config::config_toml::ModelRouterToml;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
@@ -170,6 +172,13 @@ fn configured_builder_with_cwd(
             config.model_router = Some(ModelRouterToml {
                 enabled: true,
                 candidates: Vec::new(),
+                lifecycle: Some(ModelRouterLifecycleToml {
+                    defaults: Some(ModelRouterLifecycleDefaultsToml {
+                        shadow_allowed: Some(false),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
                 ..Default::default()
             });
         })

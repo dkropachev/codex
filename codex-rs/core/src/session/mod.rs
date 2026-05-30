@@ -188,6 +188,7 @@ use codex_protocol::exec_output::StreamOutput;
 
 mod handlers;
 mod mcp;
+mod model_router_shadow;
 mod model_router_turn;
 mod review;
 mod rollout_reconstruction;

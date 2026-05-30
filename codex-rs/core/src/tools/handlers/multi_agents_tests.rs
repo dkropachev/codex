@@ -434,6 +434,8 @@ async fn spawn_agent_model_router_updates_thread_config_snapshot() {
         candidates: vec![ModelRouterCandidateToml {
             model: Some("gpt-5.3-codex-spark".to_string()),
             reasoning_effort: Some(ModelRouterReasoningEffortToml::Inherit),
+            intelligence_score: Some(1.0),
+            median_latency_ms: Some(1),
             ..Default::default()
         }],
         ..Default::default()
