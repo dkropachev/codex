@@ -500,7 +500,10 @@ impl MessageProcessor {
         }
     }
 
-    pub(crate) fn clear_runtime_references(&self) {
+    pub(crate) async fn clear_runtime_references(&self) {
+        self.workflow_processor
+            .cancel_all_runs("app-server runtime is shutting down")
+            .await;
         self.account_processor.clear_external_auth();
     }
 

@@ -4,6 +4,10 @@ use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -574,7 +578,8 @@ async fn run_workflow_process(
         .env_remove("NODE_PATH")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     if let Some(run_id) = &invocation.runtime.run_id {
         child.env(WORKFLOW_RUN_ID_ENV, run_id);
     }
@@ -615,8 +620,12 @@ async fn run_workflow_process(
             .map(|_| stdout_text)
     });
 
-    let (status, stderr) =
-        tokio::join!(child.wait(), read_stderr(stderr, invocation.event_handler));
+    let wait_for_child =
+        wait_for_child_with_cancellation(&mut child, invocation.runtime.cancellation_flag.clone());
+    let (status, stderr) = tokio::join!(
+        wait_for_child,
+        read_stderr(stderr, invocation.event_handler)
+    );
     let status = status.context("failed to wait for workflow runtime process")?;
     let stderr = stderr?;
     let stdout = stdout_task
@@ -632,6 +641,29 @@ async fn run_workflow_process(
         success: status.success(),
         exit_status: status.to_string(),
     })
+}
+
+async fn wait_for_child_with_cancellation(
+    child: &mut tokio::process::Child,
+    cancellation_flag: Option<Arc<AtomicBool>>,
+) -> std::io::Result<std::process::ExitStatus> {
+    let Some(cancellation_flag) = cancellation_flag else {
+        return child.wait().await;
+    };
+
+    tokio::select! {
+        status = child.wait() => status,
+        () = wait_for_cancellation(&cancellation_flag) => {
+            let _ = child.start_kill();
+            child.wait().await
+        }
+    }
+}
+
+async fn wait_for_cancellation(cancellation_flag: &AtomicBool) {
+    while !cancellation_flag.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 async fn read_stderr(
@@ -736,6 +768,9 @@ pub(crate) fn workflow_bun_path(workflow_dir: &Path) -> PathBuf {
 mod tests {
     use std::fs;
     use std::path::Path;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
 
     use pretty_assertions::assert_eq;
     use tempfile::NamedTempFile;
@@ -746,6 +781,7 @@ mod tests {
     use super::WORKFLOW_RUNNER_SOURCE;
     use super::WORKFLOW_RUNTIME_EVENT_PREFIX;
     use super::complete_workflow;
+    use super::run_workflow_legacy;
     use super::workflow_bun_path;
 
     #[test]
@@ -895,6 +931,49 @@ export default workflow;
                 insert_text: workspace_cwd.display().to_string(),
                 description: None,
             }]
+        );
+    }
+
+    #[tokio::test]
+    async fn run_workflow_legacy_kills_runtime_process_when_canceled() {
+        let temp = TempDir::new().expect("temp dir");
+        let codex_home = temp.path().join("codex-home");
+        let workflow_dir = temp.path().join("summary");
+        let workflow_path = workflow_dir.join("workflow.mjs");
+        fs::create_dir_all(&codex_home).expect("codex home");
+        write_test_workflow(
+            &workflow_dir,
+            &workflow_path,
+            r#"const workflow = {
+  async run() {
+    await new Promise(() => {});
+  },
+};
+
+export default workflow;
+"#,
+        );
+
+        let cancellation_flag = Arc::new(AtomicBool::new(true));
+        let output = run_workflow_legacy(
+            &codex_home,
+            temp.path(),
+            &workflow_dir,
+            &workflow_path,
+            "{}",
+            &crate::execute::WorkflowRuntimeContext {
+                cancellation_flag: Some(Arc::clone(&cancellation_flag)),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .expect("canceled workflow runtime should be reaped");
+
+        assert!(cancellation_flag.load(Ordering::SeqCst));
+        assert!(
+            !output.success,
+            "killed workflow runtime should not report success: {output:?}"
         );
     }
 

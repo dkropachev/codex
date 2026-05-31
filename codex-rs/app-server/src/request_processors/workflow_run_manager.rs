@@ -221,6 +221,40 @@ impl WorkflowRunManager {
         })
     }
 
+    pub(crate) async fn cancel_all(&self, reason: &str) {
+        let notifications = {
+            let mut runs = self.inner.runs.lock().await;
+            let now = now_unix_seconds();
+            runs.values_mut()
+                .filter_map(|record| {
+                    if is_terminal(record.run.status) {
+                        return None;
+                    }
+                    record.canceled.store(true, Ordering::SeqCst);
+                    if let Some(abort_handle) = record.abort_handle.take() {
+                        abort_handle.abort();
+                    }
+                    record.run.status = WorkflowRunStatus::Canceled;
+                    record.run.completed_at = Some(now);
+                    record.run.error = Some(reason.to_string());
+                    Some(ServerNotification::WorkflowRunCompleted(
+                        WorkflowRunCompletedNotification {
+                            run: record.run.clone(),
+                        },
+                    ))
+                })
+                .collect::<Vec<_>>()
+        };
+
+        self.inner.notify.notify_waiters();
+        for notification in notifications {
+            self.inner
+                .outgoing
+                .send_server_notification(notification)
+                .await;
+        }
+    }
+
     async fn read_run(&self, run_id: &str) -> Result<WorkflowRun, JSONRPCErrorError> {
         self.inner
             .runs
@@ -367,6 +401,7 @@ async fn run_workflow_blocking(
             interactive_request_behavior,
             output_format: Some("tui.markdown.v1".to_string()),
             force_process_runtime: true,
+            cancellation_flag: Some(Arc::clone(&canceled)),
         };
         let thread_id = args.thread_id.clone();
         let runtime_event_handler = |event: &WorkflowRuntimeEvent| {
@@ -554,6 +589,45 @@ mod tests {
             panic!("expected workflowRun/completed notification");
         };
         assert_eq!(notification.run.status, WorkflowRunStatus::Canceled);
+    }
+
+    #[tokio::test]
+    async fn cancel_all_marks_running_runs_canceled_and_emits_completion() {
+        let (manager, mut outgoing_rx) = test_manager();
+        insert_running(&manager, running_run("run-1")).await;
+        let canceled = manager
+            .inner
+            .runs
+            .lock()
+            .await
+            .get("run-1")
+            .expect("run exists")
+            .canceled
+            .clone();
+
+        manager.cancel_all("runtime shutting down").await;
+
+        let run = manager
+            .read_run("run-1")
+            .await
+            .expect("canceled run should still be readable");
+        assert_eq!(run.status, WorkflowRunStatus::Canceled);
+        assert_eq!(run.error.as_deref(), Some("runtime shutting down"));
+        assert!(canceled.load(Ordering::SeqCst));
+        let envelope = outgoing_rx
+            .recv()
+            .await
+            .expect("cancel_all should emit a completion notification");
+        let OutgoingEnvelope::Broadcast { message } = envelope else {
+            panic!("expected broadcast notification");
+        };
+        let OutgoingMessage::AppServerNotification(ServerNotification::WorkflowRunCompleted(
+            notification,
+        )) = message
+        else {
+            panic!("expected workflowRun/completed notification");
+        };
+        assert_eq!(notification.run, run);
     }
 
     #[tokio::test]

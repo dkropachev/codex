@@ -2,14 +2,30 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+#[cfg(unix)]
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+#[cfg(unix)]
+use anyhow::bail;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
+#[cfg(unix)]
+use codex_app_server::in_process;
+#[cfg(unix)]
+use codex_app_server::in_process::InProcessStartArgs;
+#[cfg(unix)]
+use codex_app_server_protocol::ClientInfo;
+#[cfg(unix)]
+use codex_app_server_protocol::ClientRequest;
+#[cfg(unix)]
+use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::RequestId;
+#[cfg(unix)]
+use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::WorkflowDevelopResponse;
 use codex_app_server_protocol::WorkflowDiscardResponse;
 use codex_app_server_protocol::WorkflowEditResponse;
@@ -19,9 +35,27 @@ use codex_app_server_protocol::WorkflowReadResponse;
 use codex_app_server_protocol::WorkflowRepairActionKind;
 use codex_app_server_protocol::WorkflowRepairResponse;
 use codex_app_server_protocol::WorkflowRepairStopReason;
+#[cfg(unix)]
+use codex_app_server_protocol::WorkflowRunStartParams;
+#[cfg(unix)]
+use codex_app_server_protocol::WorkflowRunStartResponse;
+#[cfg(unix)]
+use codex_app_server_protocol::WorkflowRunStatus;
 use codex_app_server_protocol::WorkflowValidateResponse;
 use codex_app_server_protocol::WorkflowValidationFindingInfo;
 use codex_app_server_protocol::WorkflowValidationStatus;
+#[cfg(unix)]
+use codex_arg0::Arg0DispatchPaths;
+#[cfg(unix)]
+use codex_config::CloudRequirementsLoader;
+#[cfg(unix)]
+use codex_config::LoaderOverrides;
+#[cfg(unix)]
+use codex_core::config::ConfigBuilder;
+#[cfg(unix)]
+use codex_exec_server::EnvironmentManager;
+#[cfg(unix)]
+use codex_feedback::CodexFeedback;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -138,6 +172,17 @@ fn write_valid_workflow(
     )?;
     fs::write(workflow_dir.join("state/.gitkeep"), "")?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn process_is_alive(pid: u32) -> bool {
+    let pid = pid.to_string();
+    std::process::Command::new("kill")
+        .args(["-0", pid.as_str()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 #[cfg(unix)]
@@ -325,6 +370,125 @@ async fn workflow_list_returns_discovered_workflows() -> Result<()> {
         response.workflows[0].validation.status,
         WorkflowValidationStatus::Valid
     );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn workflow_run_shutdown_kills_active_runtime_process_e2e() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    let workflow_dir = codex_home.path().join("workflows/reports/stuck-review");
+    write_valid_workflow(
+        &workflow_dir,
+        "reports/stuck-review",
+        "Stuck Review",
+        "Exercise workflow runtime shutdown",
+    )?;
+    let pid_path = codex_home.path().join("stuck-workflow-runtime.pid");
+    let bin_dir = workflow_dir.join("node_modules/.bin");
+    fs::create_dir_all(&bin_dir)?;
+    let bun_path = bin_dir.join("bun");
+    let pid_path_display = pid_path.display();
+    fs::write(
+        &bun_path,
+        format!("#!/bin/sh\nprintf '%s\\n' \"$$\" > '{pid_path_display}'\nexec sleep 600\n"),
+    )?;
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&bun_path, fs::Permissions::from_mode(0o755))?;
+
+    let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .loader_overrides(loader_overrides.clone())
+        .build()
+        .await?;
+    let client = in_process::start(InProcessStartArgs {
+        arg0_paths: Arg0DispatchPaths::default(),
+        config: Arc::new(config),
+        cli_overrides: Vec::new(),
+        loader_overrides,
+        cloud_requirements: CloudRequirementsLoader::default(),
+        thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
+        feedback: CodexFeedback::new(),
+        log_db: None,
+        state_db: None,
+        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+        config_warnings: Vec::new(),
+        session_source: SessionSource::Cli.into(),
+        enable_codex_api_key_env: false,
+        initialize: InitializeParams {
+            client_info: ClientInfo {
+                name: "codex-app-server-tests".to_string(),
+                title: None,
+                version: "0.1.0".to_string(),
+            },
+            capabilities: None,
+        },
+        channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        expose_workflow_app_server: true,
+    })
+    .await?;
+    let result = client
+        .request(ClientRequest::WorkflowRunStart {
+            request_id: RequestId::Integer(1),
+            params: WorkflowRunStartParams {
+                id: "reports/stuck-review".to_string(),
+                input: Some(json!({})),
+                thread_id: None,
+                stage_session_id: None,
+                approval_handling: None,
+            },
+        })
+        .await?
+        .map_err(|err| anyhow::anyhow!("{err:?}"))?;
+    let response: WorkflowRunStartResponse = serde_json::from_value(result)?;
+    assert_eq!(response.run.status, WorkflowRunStatus::Running);
+
+    let pid = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            if let Ok(pid) = fs::read_to_string(&pid_path)
+                && let Ok(pid) = pid.trim().parse::<u32>()
+            {
+                return pid;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("timed out waiting for workflow runtime pid file"))?;
+    assert!(
+        process_is_alive(pid),
+        "workflow runtime process should be alive before shutdown"
+    );
+
+    client.shutdown().await?;
+    if timeout(DEFAULT_READ_TIMEOUT, async {
+        while process_is_alive(pid) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .is_err()
+    {
+        let pid = pid.to_string();
+        let _ = std::process::Command::new("kill")
+            .args(["-9", pid.as_str()])
+            .status();
+        bail!("workflow runtime process {pid} stayed alive after app-server shutdown");
+    }
 
     Ok(())
 }

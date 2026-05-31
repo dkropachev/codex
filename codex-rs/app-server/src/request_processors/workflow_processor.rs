@@ -243,6 +243,10 @@ impl WorkflowRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn cancel_all_runs(&self, reason: &str) {
+        self.workflow_runs.cancel_all(reason).await;
+    }
+
     pub(crate) async fn validate(
         &self,
         params: WorkflowValidateParams,

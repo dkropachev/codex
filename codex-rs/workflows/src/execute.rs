@@ -3,6 +3,8 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use anyhow::Context as _;
 use anyhow::Result;
@@ -85,6 +87,7 @@ pub struct WorkflowRuntimeContext {
     pub interactive_request_behavior: Option<String>,
     pub output_format: Option<String>,
     pub force_process_runtime: bool,
+    pub cancellation_flag: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
