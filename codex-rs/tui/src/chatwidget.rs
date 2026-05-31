@@ -2151,7 +2151,7 @@ impl ChatWidget {
             if self.suppress_initial_user_message_submit {
                 self.initial_user_message = Some(user_message);
             } else {
-                self.submit_user_message(user_message);
+                self.submit_initial_user_message(user_message);
             }
         }
         if display == SessionConfiguredDisplay::Normal
@@ -2170,7 +2170,7 @@ impl ChatWidget {
 
     pub(crate) fn submit_initial_user_message_if_pending(&mut self) {
         if let Some(user_message) = self.initial_user_message.take() {
-            self.submit_user_message(user_message);
+            self.submit_initial_user_message(user_message);
         }
     }
 
@@ -5656,6 +5656,17 @@ impl ChatWidget {
             user_message,
             UserMessageHistoryRecord::UserMessageText,
         );
+    }
+
+    fn submit_initial_user_message(&mut self, user_message: UserMessage) {
+        if user_message.text.starts_with('/')
+            && user_message.local_images.is_empty()
+            && user_message.remote_image_urls.is_empty()
+        {
+            self.submit_queued_slash_prompt(user_message);
+        } else {
+            self.submit_user_message(user_message);
+        }
     }
 
     fn submit_user_message_with_history_record(

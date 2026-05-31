@@ -118,6 +118,40 @@ async fn workflow_alias_with_args_emits_run_workflow_event() {
 }
 
 #[tokio::test]
+async fn initial_prompt_workflow_alias_with_args_emits_run_workflow_event() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    chat.bottom_pane
+        .set_workflow_mentions(Some(vec![workflow_summary(
+            "reports/jira-summary",
+            "jira-summary",
+        )]));
+
+    chat.submit_initial_user_message(UserMessage {
+        text: "/jira-summary --project COD".to_string(),
+        local_images: Vec::new(),
+        remote_image_urls: Vec::new(),
+        text_elements: Vec::new(),
+        mention_bindings: Vec::new(),
+    });
+
+    match rx.try_recv() {
+        Ok(AppEvent::RunWorkflow { command }) => {
+            assert_eq!(
+                command,
+                vec![
+                    "jira-summary".to_string(),
+                    "--project".to_string(),
+                    "COD".to_string(),
+                ]
+            );
+        }
+        other => panic!("expected RunWorkflow event, got {other:?}"),
+    }
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
 async fn workflow_alias_without_args_emits_run_workflow_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
