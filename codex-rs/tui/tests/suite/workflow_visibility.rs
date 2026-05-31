@@ -242,7 +242,7 @@ async fn run_workflow_visibility_session(
                             tokio::spawn(async move {
                                 sleep(Duration::from_secs(/*secs*/ 1)).await;
                                 let _ = workflow_writer.send(workflow_command.into_bytes()).await;
-                                sleep(Duration::from_millis(/*millis*/ 100)).await;
+                                sleep(Duration::from_secs(/*secs*/ 1)).await;
                                 let _ = workflow_writer.send(b"\r".to_vec()).await;
                             });
                         }
@@ -424,7 +424,7 @@ async fn run_workflow_active_interrupt_session(
                             tokio::spawn(async move {
                                 sleep(Duration::from_secs(/*secs*/ 1)).await;
                                 let _ = workflow_writer.send(workflow_command.into_bytes()).await;
-                                sleep(Duration::from_millis(/*millis*/ 100)).await;
+                                sleep(Duration::from_secs(/*secs*/ 1)).await;
                                 let _ = workflow_writer.send(b"\r".to_vec()).await;
                             });
                         }

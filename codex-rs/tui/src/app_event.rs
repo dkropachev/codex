@@ -58,6 +58,7 @@ use codex_workflows::WorkflowCommandInput;
 use codex_workflows::WorkflowSummary;
 
 use crate::history_cell::HistoryCell;
+#[cfg(unix)]
 use crossterm::event::KeyEvent;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -249,6 +250,7 @@ pub(crate) enum AppEvent {
     #[allow(dead_code)]
     FatalExitRequest(String),
 
+    #[cfg(unix)]
     /// Deliver a key produced outside the crossterm input stream, such as SIGINT.
     SyntheticKey(KeyEvent),
 

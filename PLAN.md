@@ -290,7 +290,9 @@ const artifact = await ctx.artifacts.cache.ensure({
   },
   build: async ({ outputDir, reason, scope }) => {
     await Bun.$`bun build src/tools/index.ts --outdir ${outputDir}`;
-    return { metadata: { entrypoint: "index.js", reason, inputHash: scope.hash } };
+    return {
+      metadata: { entrypoint: "index.js", reason, inputHash: scope.hash },
+    };
   },
 });
 

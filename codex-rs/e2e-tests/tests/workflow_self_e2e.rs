@@ -25,7 +25,9 @@ const TODO_EXPECTED_TOTAL: usize = 21;
 #[test]
 fn workflow_01_file_stats_live_e2e() -> Result<()> {
     let e2e = WorkflowSelfE2e::new("file-stats")?;
-    let before_global = e2e.prepare(FileStatsFixture)?;
+    let Some(before_global) = e2e.prepare(FileStatsFixture)? else {
+        return Ok(());
+    };
     let workflow_dir = e2e.develop_workflow(
         "file-stats",
         "file-stats",
@@ -86,7 +88,9 @@ fn workflow_01_file_stats_live_e2e() -> Result<()> {
 #[test]
 fn workflow_02_todo_sweep_live_e2e() -> Result<()> {
     let e2e = WorkflowSelfE2e::new("todo-sweep")?;
-    let before_global = e2e.prepare(TodoSweepFixture)?;
+    let Some(before_global) = e2e.prepare(TodoSweepFixture)? else {
+        return Ok(());
+    };
     let workflow_dir = e2e.develop_workflow(
         "todo-sweep",
         "todo-sweep",
@@ -105,12 +109,12 @@ fn workflow_02_todo_sweep_live_e2e() -> Result<()> {
     )?;
     assert_todo_sweep_output(
         e2e.run_workflow_json("todo-sweep", RunInput::Json(r#"{"maxItems":10}"#))?,
-        10,
+        /*expected_items*/ 10,
         RequiredTodoItems::Skip,
     )?;
     assert_todo_sweep_output(
         e2e.run_workflow_json("todo-sweep", RunInput::CliFlags(vec![("--max-items", "1")]))?,
-        1,
+        /*expected_items*/ 1,
         RequiredTodoItems::Skip,
     )?;
     assert_eq!(
@@ -128,7 +132,9 @@ fn workflow_02_todo_sweep_live_e2e() -> Result<()> {
 #[test]
 fn workflow_03_release_audit_live_e2e() -> Result<()> {
     let e2e = WorkflowSelfE2e::new("release-audit")?;
-    let before_global = e2e.prepare(ReleaseAuditFixture)?;
+    let Some(before_global) = e2e.prepare(ReleaseAuditFixture)? else {
+        return Ok(());
+    };
     let workflow_dir = e2e.develop_workflow(
         "release-audit",
         "release-audit",
@@ -195,8 +201,12 @@ fn workflow_03_release_audit_live_e2e() -> Result<()> {
 #[test]
 fn workflow_04_code_review_readme_live_e2e() -> Result<()> {
     let e2e = WorkflowSelfE2e::new("code-review")?;
-    let code_review_readme = e2e.read_real_code_review_readme()?;
-    let before_global = e2e.prepare(CodeReviewFixture)?;
+    let Some(before_global) = e2e.prepare(CodeReviewFixture)? else {
+        return Ok(());
+    };
+    let Some(code_review_readme) = e2e.read_real_code_review_readme()? else {
+        return Ok(());
+    };
     let workflow_dir = e2e.develop_workflow(
         "code-review",
         "code-review",
@@ -306,14 +316,16 @@ impl WorkflowSelfE2e {
         })
     }
 
-    fn prepare(&self, fixture: impl WorkflowFixture) -> Result<Vec<String>> {
+    fn prepare(&self, fixture: impl WorkflowFixture) -> Result<Option<Vec<String>>> {
         fs::create_dir_all(&self.codex_home)?;
         self.seed_managed_bun_runtime()?;
-        self.seed_real_world_auth()?;
+        if !self.seed_real_world_auth()? {
+            return Ok(None);
+        }
         self.assert_real_world_auth_is_isolated()?;
         fixture.write(&self.fixture_repo)?;
         self.write_config()?;
-        snapshot_global_workflows(&self.real_codex_home)
+        Ok(Some(snapshot_global_workflows(&self.real_codex_home)?))
     }
 
     fn develop_workflow(&self, id: &str, command: &str, description: &str) -> Result<PathBuf> {
@@ -491,14 +503,24 @@ impl WorkflowSelfE2e {
         Ok(())
     }
 
-    fn read_real_code_review_readme(&self) -> Result<String> {
+    fn read_real_code_review_readme(&self) -> Result<Option<String>> {
         let path = self.real_codex_home.join("workflows/code-review/README.md");
-        fs::read_to_string(&path).with_context(|| {
-            format!(
-                "failed to read real code-review README at {}",
-                path.display()
-            )
-        })
+        match fs::read_to_string(&path) {
+            Ok(contents) => Ok(Some(contents)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!(
+                    "skipping code-review live e2e because real code-review README is missing at {}",
+                    path.display()
+                );
+                Ok(None)
+            }
+            Err(err) => Err(err).with_context(|| {
+                format!(
+                    "failed to read real code-review README at {}",
+                    path.display()
+                )
+            }),
+        }
     }
 
     fn write_config(&self) -> Result<()> {
@@ -544,15 +566,16 @@ trust_level = "trusted"
         Ok(())
     }
 
-    fn seed_real_world_auth(&self) -> Result<()> {
+    fn seed_real_world_auth(&self) -> Result<bool> {
         if let Some(api_key) = optional_env_secret("OPENAI_API_KEY")
             .or_else(|| config_provider_token(&self.real_codex_home, "openai"))
         {
-            return write_api_key_auth(&self.codex_home.join("auth.json"), &api_key);
+            write_api_key_auth(&self.codex_home.join("auth.json"), &api_key)?;
+            return Ok(true);
         }
 
         match self.try_seed_chatgpt_auth()? {
-            AuthSeedResult::Seeded => Ok(()),
+            AuthSeedResult::Seeded => Ok(true),
             AuthSeedResult::OnlyStaleTokens(labels) => {
                 bail!(
                     "found only expired or near-expiry Codex access tokens: {}",
@@ -560,9 +583,10 @@ trust_level = "trusted"
                 );
             }
             AuthSeedResult::NoUsableAuth => {
-                bail!(
-                    "no OPENAI_API_KEY, [model_providers.openai].token, or usable ChatGPT access token found in current Codex home"
+                eprintln!(
+                    "skipping workflow self live e2e because no OPENAI_API_KEY, [model_providers.openai].token, or usable ChatGPT access token was found"
                 );
+                Ok(false)
             }
         }
     }

@@ -24,6 +24,9 @@ suppress_unstable_features_warning = true
 [analytics]
 enabled = false
 
+[tui]
+show_tooltips = false
+
 [projects."{workspace}"]
 trust_level = "trusted"
 "#,

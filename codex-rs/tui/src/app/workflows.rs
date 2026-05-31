@@ -41,7 +41,7 @@ const WORKFLOW_RUN_ID_ENV: &str = "CODEX_WORKFLOW_RUN_ID";
 #[cfg(test)]
 const WORKFLOW_ORIGIN_THREAD_ID_ENV: &str = "CODEX_WORKFLOW_ORIGIN_THREAD_ID";
 const WORKFLOW_COMPLETION_DEBOUNCE: Duration = Duration::from_millis(150);
-const WORKFLOW_COMPLETION_TIMEOUT: Duration = Duration::from_secs(2);
+const WORKFLOW_COMPLETION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub(crate) struct WorkflowRunState {

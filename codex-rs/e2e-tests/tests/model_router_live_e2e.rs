@@ -45,7 +45,9 @@ struct CompletedRolloutSpec<'a> {
 #[test]
 fn live_model_router_env_credentials_start_openai_and_deepseek_shadowing() -> Result<()> {
     let real_codex_home = real_codex_home()?;
-    let credentials = LiveCredentials::load(&real_codex_home)?;
+    let Some(credentials) = LiveCredentials::load(&real_codex_home)? else {
+        return Ok(());
+    };
 
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async {
@@ -220,23 +222,33 @@ enum OpenAiCredential {
 }
 
 impl LiveCredentials {
-    fn load(codex_home: &Path) -> Result<Self> {
+    fn load(codex_home: &Path) -> Result<Option<Self>> {
         let openai = if let Some(api_key) = optional_env_secret("OPENAI_API_KEY")
             .or_else(|| config_provider_token(codex_home, "openai"))
         {
-            OpenAiCredential::ApiKey(api_key)
+            Some(OpenAiCredential::ApiKey(api_key))
         } else {
             load_chatgpt_tokens(codex_home)?
         };
-        let deepseek_api_key = optional_env_secret("DEEPSEEK_API_KEY")
+
+        let Some(openai) = openai else {
+            eprintln!("skipping live model router e2e because no OpenAI credential is configured");
+            return Ok(None);
+        };
+
+        let Some(deepseek_api_key) = optional_env_secret("DEEPSEEK_API_KEY")
             .or_else(|| config_provider_token(codex_home, "deepseek"))
-            .context(
-                "missing DeepSeek credential: set DEEPSEEK_API_KEY or configure [model_providers.deepseek].token",
-            )?;
-        Ok(Self {
+        else {
+            eprintln!(
+                "skipping live model router e2e because no DeepSeek credential is configured"
+            );
+            return Ok(None);
+        };
+
+        Ok(Some(Self {
             openai,
             deepseek_api_key,
-        })
+        }))
     }
 
     fn seed_openai_auth(&self, codex_home: &Path) -> Result<()> {
@@ -261,7 +273,7 @@ fn real_codex_home() -> Result<PathBuf> {
         .context("CODEX_HOME is unset and HOME is unavailable")
 }
 
-fn load_chatgpt_tokens(codex_home: &Path) -> Result<OpenAiCredential> {
+fn load_chatgpt_tokens(codex_home: &Path) -> Result<Option<OpenAiCredential>> {
     let mut stale_tokens = Vec::new();
     for (label, path) in auth_candidates(codex_home)? {
         let Some(data) = read_json_file(&path)? else {
@@ -279,7 +291,7 @@ fn load_chatgpt_tokens(codex_home: &Path) -> Result<OpenAiCredential> {
         };
         match token_expires_at(access_token) {
             Ok(expires_at) if expires_at > Utc::now().timestamp() + 300 => {
-                return Ok(OpenAiCredential::ChatgptTokens(tokens.clone()));
+                return Ok(Some(OpenAiCredential::ChatgptTokens(tokens.clone())));
             }
             Ok(_) => stale_tokens.push(label),
             Err(err) => {
@@ -291,9 +303,7 @@ fn load_chatgpt_tokens(codex_home: &Path) -> Result<OpenAiCredential> {
     }
 
     if stale_tokens.is_empty() {
-        bail!(
-            "missing OpenAI credential: set OPENAI_API_KEY, configure [model_providers.openai].token, or log in with Codex ChatGPT auth"
-        );
+        return Ok(None);
     }
     bail!(
         "found only expired or near-expiry Codex access tokens: {}",

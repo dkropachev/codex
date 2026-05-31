@@ -374,6 +374,7 @@ impl App {
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
+            #[cfg(unix)]
             AppEvent::SyntheticKey(key_event) => {
                 return self
                     .handle_tui_event(tui, app_server, TuiEvent::Key(key_event))

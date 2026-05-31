@@ -965,7 +965,7 @@ export default workflow;
                 cancellation_flag: Some(Arc::clone(&cancellation_flag)),
                 ..Default::default()
             },
-            None,
+            /*event_handler*/ None,
         )
         .await
         .expect("canceled workflow runtime should be reaped");
