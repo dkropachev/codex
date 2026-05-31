@@ -5,6 +5,8 @@ use std::io::Result;
 use std::io::Stdout;
 use std::io::stdin;
 use std::io::stdout;
+#[cfg(unix)]
+use std::mem::MaybeUninit;
 use std::panic;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -102,12 +104,78 @@ mod tests {
             /*terminal_focused*/ false
         ));
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn raw_mode_keeps_terminal_interrupt_signals_enabled() {
+        struct Fd(libc::c_int);
+
+        impl Drop for Fd {
+            fn drop(&mut self) {
+                // SAFETY: The fd is owned by this guard.
+                let _ = unsafe { libc::close(self.0) };
+            }
+        }
+
+        let mut master = -1;
+        let mut slave = -1;
+        // SAFETY: `openpty` initializes `master` and `slave` on success.
+        let rc = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        assert_eq!(rc, 0, "openpty failed: {}", std::io::Error::last_os_error());
+        let _master = Fd(master);
+        let slave = Fd(slave);
+
+        let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: `tcgetattr` initializes the termios struct on success.
+        assert_eq!(
+            unsafe { libc::tcgetattr(slave.0, termios.as_mut_ptr()) },
+            0,
+            "tcgetattr failed: {}",
+            std::io::Error::last_os_error()
+        );
+        // SAFETY: The previous `tcgetattr` call succeeded.
+        let mut termios = unsafe { termios.assume_init() };
+        termios.c_lflag &= !libc::ISIG;
+        // SAFETY: `termios` was initialized from this fd.
+        assert_eq!(
+            unsafe { libc::tcsetattr(slave.0, libc::TCSANOW, &termios) },
+            0,
+            "tcsetattr failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        super::enable_interrupt_signal(slave.0).expect("enable interrupt signal");
+
+        let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: `tcgetattr` initializes the termios struct on success.
+        assert_eq!(
+            unsafe { libc::tcgetattr(slave.0, termios.as_mut_ptr()) },
+            0,
+            "tcgetattr failed: {}",
+            std::io::Error::last_os_error()
+        );
+        // SAFETY: The previous `tcgetattr` call succeeded.
+        let termios = unsafe { termios.assume_init() };
+        assert_ne!(termios.c_lflag & libc::ISIG, 0);
+        assert_eq!(termios.c_cc[libc::VQUIT], libc::_POSIX_VDISABLE);
+        assert_eq!(termios.c_cc[libc::VSUSP], libc::_POSIX_VDISABLE);
+    }
 }
 
 pub fn set_modes() -> Result<()> {
     execute!(stdout(), EnableBracketedPaste)?;
 
     enable_raw_mode()?;
+    #[cfg(unix)]
+    enable_terminal_interrupt_signals()?;
     // Enable keyboard enhancement flags so modifiers for keys like Enter are disambiguated.
     // chat_composer.rs is using a keyboard event listener to enter for any modified keys
     // to create a new line that require this.
@@ -117,6 +185,30 @@ pub fn set_modes() -> Result<()> {
     keyboard_modes::enable_keyboard_enhancement();
 
     let _ = execute!(stdout(), EnableFocusChange);
+    Ok(())
+}
+
+#[cfg(unix)]
+pub(crate) fn enable_terminal_interrupt_signals() -> Result<()> {
+    enable_interrupt_signal(libc::STDIN_FILENO)
+}
+
+#[cfg(unix)]
+fn enable_interrupt_signal(fd: libc::c_int) -> Result<()> {
+    let mut termios = MaybeUninit::<libc::termios>::uninit();
+    // SAFETY: `tcgetattr` initializes the termios struct on success.
+    if unsafe { libc::tcgetattr(fd, termios.as_mut_ptr()) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: The previous `tcgetattr` call succeeded, so `termios` is initialized.
+    let mut termios = unsafe { termios.assume_init() };
+    termios.c_lflag |= libc::ISIG;
+    termios.c_cc[libc::VQUIT] = libc::_POSIX_VDISABLE;
+    termios.c_cc[libc::VSUSP] = libc::_POSIX_VDISABLE;
+    // SAFETY: `termios` was read from this fd and then modified in place.
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &termios) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
     Ok(())
 }
 

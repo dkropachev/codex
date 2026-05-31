@@ -162,6 +162,7 @@ mod session_log;
 mod session_resume;
 mod session_state;
 mod shimmer;
+mod signal_interrupt;
 mod skills_helpers;
 mod slash_command;
 mod status;
@@ -1114,6 +1115,9 @@ async fn run_ratatui_app(
         tracing::error!("panic: {info}");
         prev_hook(info);
     }));
+    #[cfg(unix)]
+    let sigint_handler = signal_interrupt::SigintHandler::spawn();
+
     let mut terminal = tui::init()?;
     terminal.clear()?;
 
@@ -1535,6 +1539,8 @@ async fn run_ratatui_app(
         app_remote_auth_token,
         state_db,
         environment_manager,
+        #[cfg(unix)]
+        Some(&sigint_handler),
     )
     .await;
 

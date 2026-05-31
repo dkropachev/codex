@@ -10,6 +10,8 @@ use tokio::select;
 use tokio::time::sleep;
 use tokio::time::timeout;
 
+use super::workflow_test_support::ensure_codex_binary;
+
 #[tokio::test]
 async fn resume_startup_does_not_consume_model_availability_nux_count() -> Result<()> {
     // run_codex_cli() does not work on Windows due to PTY limitations.
@@ -70,17 +72,7 @@ trust_level = "trusted"
 
     let fixture_path =
         codex_utils_cargo_bin::find_resource!("../core/tests/cli_responses_fixture.sse")?;
-    let codex = if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
-        path
-    } else {
-        let fallback = repo_root.join("codex-rs/target/debug/codex");
-        if fallback.is_file() {
-            fallback
-        } else {
-            eprintln!("skipping integration test because codex binary is unavailable");
-            return Ok(());
-        }
-    };
+    let codex = ensure_codex_binary(&repo_root)?;
 
     let exec_output = std::process::Command::new(&codex)
         .arg("exec")

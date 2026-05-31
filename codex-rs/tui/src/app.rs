@@ -627,6 +627,7 @@ impl App {
         remote_app_server_auth_token: Option<String>,
         state_db: Option<StateDbHandle>,
         environment_manager: Arc<EnvironmentManager>,
+        #[cfg(unix)] sigint_handler: Option<&crate::signal_interrupt::SigintHandler>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -963,6 +964,15 @@ See the Codex keymap documentation for supported actions and examples."
                     tx,
                 );
             }
+        }
+
+        #[cfg(unix)]
+        if let Some(sigint_handler) = sigint_handler {
+            sigint_handler.attach_app_event_tx(app.app_event_tx.clone());
+        }
+        #[cfg(unix)]
+        if let Err(err) = crate::tui::enable_terminal_interrupt_signals() {
+            tracing::warn!("failed to enable terminal interrupt signals: {err}");
         }
 
         let tui_events = tui.event_stream();

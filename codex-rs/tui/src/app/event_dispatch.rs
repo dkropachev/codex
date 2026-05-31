@@ -374,6 +374,11 @@ impl App {
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
+            AppEvent::SyntheticKey(key_event) => {
+                return self
+                    .handle_tui_event(tui, app_server, TuiEvent::Key(key_event))
+                    .await;
+            }
             AppEvent::CodexOp(op) => {
                 if matches!(op, AppCommand::Interrupt)
                     && self.cancel_active_workflow_runs(app_server).await

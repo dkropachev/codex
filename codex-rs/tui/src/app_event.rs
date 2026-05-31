@@ -58,6 +58,7 @@ use codex_workflows::WorkflowCommandInput;
 use codex_workflows::WorkflowSummary;
 
 use crate::history_cell::HistoryCell;
+use crossterm::event::KeyEvent;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RealtimeAudioDeviceKind {
@@ -247,6 +248,9 @@ pub(crate) enum AppEvent {
     /// Request to exit the application due to a fatal error.
     #[allow(dead_code)]
     FatalExitRequest(String),
+
+    /// Deliver a key produced outside the crossterm input stream, such as SIGINT.
+    SyntheticKey(KeyEvent),
 
     /// Forward a command to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
