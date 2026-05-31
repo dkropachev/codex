@@ -806,7 +806,16 @@ fn visit_workflow_files(workflow_dir: &Path, dir: &Path, visitor: &mut impl FnMu
 fn should_skip_layout_dir(path: &Path) -> bool {
     matches!(
         path.file_name().and_then(|name| name.to_str()),
-        Some(".git" | "node_modules" | "target" | "dist" | "build" | "coverage")
+        Some(
+            ".git"
+                | "node_modules"
+                | "target"
+                | "dist"
+                | "build"
+                | "coverage"
+                | "state"
+                | "artifacts"
+        )
     )
 }
 
@@ -1074,6 +1083,29 @@ test("workflow rejects invalid input", async () => {
     fn validate_workflow_dir_accepts_complete_workflow() {
         let root = TempDir::new().unwrap();
         let workflow_dir = create_valid_workflow_dir(&root, "example");
+
+        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Valid);
+        assert!(validation.findings.is_empty());
+    }
+
+    #[test]
+    fn validate_workflow_dir_ignores_untracked_runtime_state_layout_files() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = create_valid_workflow_dir(&root, "example");
+        fs::create_dir_all(workflow_dir.join("state/tmp/fixture/src")).unwrap();
+        fs::create_dir_all(workflow_dir.join("artifacts/run-1/tests")).unwrap();
+        fs::write(
+            workflow_dir.join("state/tmp/fixture/src/index.js"),
+            "export {};\n",
+        )
+        .unwrap();
+        fs::write(
+            workflow_dir.join("artifacts/run-1/tests/workflow.test.ts"),
+            "export {};\n",
+        )
+        .unwrap();
 
         let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
 

@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -1112,7 +1113,8 @@ fn live_implementation_constraints(workflow_id: &str) -> String {
 - Replace every scaffold placeholder test. The load test must do more than export {{}}; autocomplete must assert a non-empty useful suggestion; the positive test must assert real workflow output, not {{ ok: true, input }}.
 - If you import node:fs, node:fs/promises, node:path, node:child_process, node:crypto, node:os, node:url, or other Node/Bun built-ins, add src/types.d.ts with declarations for the exact APIs you use and put the triple-slash reference path directive at the top of src/workflow.ts.
 - Do not edit files outside this workflow directory.
-- Do not write generated artifacts inside this workflow directory from tests. Use temporary directories under /tmp for test fixture files.
+- Do not write generated artifacts or temporary test fixtures inside this workflow directory, including under state/, state/tmp/, artifacts/, or tmp/. Use temporary directories under /tmp for test fixture files.
+- The workflow API contract extractor rejects schema-exposed any types. Export concrete input/output interfaces and use unknown, Record<string, unknown>, or explicit JSON object types instead of any for default-export parameters, return values, autocomplete inputs, and types reachable from them.
 - Keep package.json dependency versions pinned; do not use latest or *.
 - Do not rely on globally installed third-party packages. Prefer built-in platform APIs.
 - If you call ctx.status, always pass an object with non-empty workflowName and workflowStatus fields, for example ctx.status({{ workflowName: "{workflow_id}", workflowStatus: "running" }}). ctx.progress("message", data) is also acceptable.
@@ -1317,10 +1319,71 @@ fn snapshot_global_workflows(codex_home: &Path) -> Result<Vec<String>> {
         .max_depth(/*depth*/ 3)
         .into_iter()
         .filter_map(std::result::Result::ok)
+        .filter(|entry| !is_mutable_global_workflow_entry(&root, entry.path()))
         .map(|entry| entry.path().display().to_string())
         .collect::<Vec<_>>();
     entries.sort();
     Ok(entries)
+}
+
+fn is_mutable_global_workflow_entry(root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    let components = relative
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => Some(value),
+            Component::CurDir
+            | Component::ParentDir
+            | Component::RootDir
+            | Component::Prefix(_) => None,
+        })
+        .collect::<Vec<_>>();
+    if components.len() > 2
+        && components[0] == OsStr::new(".env")
+        && components[1] == OsStr::new("runtime-transpiler-cache")
+    {
+        return true;
+    }
+    let Some(workflow_id) = components.first() else {
+        return false;
+    };
+    if workflow_id.to_string_lossy().starts_with('.') {
+        return false;
+    }
+    matches!(components.get(1), Some(segment) if *segment == OsStr::new("state"))
+}
+
+#[test]
+fn snapshot_global_workflows_ignores_mutable_runtime_entries() -> Result<()> {
+    let temp = TempDir::new()?;
+    let root = temp.path().join("workflows");
+    fs::create_dir_all(root.join(".env/install/cache"))?;
+    fs::create_dir_all(root.join(".env/runtime-transpiler-cache"))?;
+    fs::create_dir_all(root.join("code-review/state"))?;
+    fs::create_dir_all(root.join("code-review/src"))?;
+    fs::write(root.join(".env/runtime-transpiler-cache/old.pile"), "")?;
+    fs::write(root.join("code-review/state/reviews.json"), "{}")?;
+    fs::write(root.join("code-review/src/workflow.ts"), "export {};\n")?;
+
+    assert_eq!(
+        snapshot_global_workflows(temp.path())?,
+        vec![
+            root.join(".env").display().to_string(),
+            root.join(".env/install").display().to_string(),
+            root.join(".env/install/cache").display().to_string(),
+            root.join(".env/runtime-transpiler-cache")
+                .display()
+                .to_string(),
+            root.join("code-review").display().to_string(),
+            root.join("code-review/src").display().to_string(),
+            root.join("code-review/src/workflow.ts")
+                .display()
+                .to_string(),
+        ]
+    );
+    Ok(())
 }
 
 fn snapshot_fixture_outside_workflow(root: &Path, workflow_dir: &Path) -> Result<Vec<String>> {
