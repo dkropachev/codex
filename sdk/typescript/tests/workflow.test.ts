@@ -17,6 +17,7 @@ import {
   PromptContextPreset,
   ToolPolicyMode,
   ToolRouterPolicy,
+  WorkflowTurnError,
   defineTool,
   defineWorkflow,
   runWorkflow,
@@ -56,6 +57,7 @@ class FakeAppServerProcess extends EventEmitter {
   sendApprovalRequestOnThreadStart = false;
   threadStartAttempts = 0;
   threadStartFailures = 0;
+  failNextTurnWithUsageLimit = false;
 
   private buffer = "";
   private startCount = 0;
@@ -190,6 +192,34 @@ class FakeAppServerProcess extends EventEmitter {
         id: message.id,
         result: { turn: { id: this.turnId, status: "inProgress", items: [] } },
       });
+      if (this.failNextTurnWithUsageLimit) {
+        this.failNextTurnWithUsageLimit = false;
+        setImmediate(() => {
+          const agentItem = { id: "item-agent", type: "agentMessage", text: "{\"summary\":" };
+          this.write({
+            method: "item/completed",
+            params: { threadId: this.threadId, turnId: this.turnId, item: agentItem },
+          });
+          this.write({
+            method: "turn/completed",
+            params: {
+              threadId: this.threadId,
+              usage: { inputTokens: 12, outputTokens: 3 },
+              turn: {
+                id: this.turnId,
+                status: "failed",
+                items: [agentItem],
+                error: {
+                  message: "Usage limit reached.",
+                  codexErrorInfo: "usageLimitExceeded",
+                  additionalDetails: "limit_id=codex",
+                },
+              },
+            },
+          });
+        });
+        return;
+      }
       setImmediate(() => {
         this.write({
           id: "tool-request-1",
@@ -935,6 +965,62 @@ describe("CodexWorkflow", () => {
     await workflow.close();
   });
 
+  it("throws resumable WorkflowTurnError details for failed app-server turns", async () => {
+    const fake = new FakeAppServerProcess();
+    fake.failNextTurnWithUsageLimit = true;
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+
+    const workflow = await CodexWorkflow.start({ codexPathOverride: "codex" });
+    const agent = await workflow.startAgent();
+
+    try {
+      await agent.run("Return JSON");
+      throw new Error("expected turn failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(WorkflowTurnError);
+      const turnError = error as WorkflowTurnError;
+      expect({
+        message: turnError.message,
+        threadId: turnError.threadId,
+        turnId: turnError.turnId,
+        status: turnError.status,
+        partialFinalResponse: turnError.partialFinalResponse,
+        error: turnError.error,
+        codexErrorInfo: turnError.codexErrorInfo,
+        additionalDetails: turnError.additionalDetails,
+        usage: turnError.usage,
+      }).toEqual({
+        message: "Usage limit reached.",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        status: "failed",
+        partialFinalResponse: "{\"summary\":",
+        error: {
+          message: "Usage limit reached.",
+          codexErrorInfo: "usageLimitExceeded",
+          additionalDetails: "limit_id=codex",
+        },
+        codexErrorInfo: "usageLimitExceeded",
+        additionalDetails: "limit_id=codex",
+        usage: { inputTokens: 12, outputTokens: 3 },
+      });
+    }
+
+    const resumed = await workflow.resumeAgent(agent.threadId, {
+      approvalPolicy: "never",
+      sandboxMode: "danger-full-access",
+    });
+    expect(resumed.threadId).toBe("thread-1");
+    expect(fake.threadResumeParams).toEqual({
+      threadId: "thread-1",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+
+    await resumed.close();
+    await workflow.close();
+  });
+
   it("tracks forked agents", async () => {
     const fake = new FakeAppServerProcess();
     spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
@@ -1362,6 +1448,34 @@ describe("CodexWorkflow", () => {
       ]),
     );
     expect(results).toEqual(["Weather: mild"]);
+    expect(fake.killed).toBe(true);
+  });
+
+  it("propagates failed standalone workflow turns with resumable context", async () => {
+    const fake = new FakeAppServerProcess();
+    fake.failNextTurnWithUsageLimit = true;
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+    const workflow = defineWorkflow<{ prompt: string }, string>({
+      name: "standalone-failure-test",
+      async run(context, input) {
+        const agent = await context.createAgent();
+        const turn = await agent.run(input.prompt);
+        return turn.finalResponse;
+      },
+    });
+
+    await expect(
+      runWorkflow(workflow, {
+        codexPathOverride: "codex",
+        input: { prompt: "Return JSON" },
+      }),
+    ).rejects.toMatchObject({
+      message: "Usage limit reached.",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      status: "failed",
+      partialFinalResponse: "{\"summary\":",
+    });
     expect(fake.killed).toBe(true);
   });
 

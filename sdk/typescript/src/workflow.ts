@@ -305,11 +305,51 @@ export type WorkflowTurnResult = {
   finalResponse: string;
   usage: unknown;
   status: string | null;
+  error: WorkflowTurnFailure | null;
 };
 
 export type WorkflowStreamedTurn = {
   events: AsyncGenerator<AppServerNotification>;
 };
+
+export type WorkflowTurnFailure = {
+  message: string;
+  codexErrorInfo?: unknown;
+  additionalDetails?: unknown;
+  [key: string]: unknown;
+};
+
+export class WorkflowTurnError extends Error {
+  readonly name = "WorkflowTurnError";
+  readonly threadId: string;
+  readonly turnId: string | null;
+  readonly status: string | null;
+  readonly error: WorkflowTurnFailure | null;
+  readonly turn: WorkflowTurnResult["turn"];
+  readonly items: WorkflowTurnResult["items"];
+  readonly finalResponse: string;
+  readonly partialFinalResponse: string;
+  readonly usage: unknown;
+  readonly codexErrorInfo: unknown;
+  readonly additionalDetails: unknown;
+
+  constructor(result: WorkflowTurnResult) {
+    const message = result.error?.message ?? `Codex turn failed for thread ${result.threadId}`;
+    super(message);
+    this.threadId = result.threadId;
+    this.turnId = result.turn?.id ?? null;
+    this.status = result.status;
+    this.error = result.error;
+    this.turn = result.turn;
+    this.items = result.items;
+    this.finalResponse = result.finalResponse;
+    this.partialFinalResponse = result.finalResponse;
+    this.usage = result.usage;
+    this.codexErrorInfo = result.error?.codexErrorInfo;
+    this.additionalDetails = result.error?.additionalDetails;
+    Object.setPrototypeOf(this, WorkflowTurnError.prototype);
+  }
+}
 
 export type WorkflowProgressEvent = {
   message: string;
@@ -545,6 +585,7 @@ type AppServerTurn = {
   id: string;
   status?: string;
   items?: AppServerThreadItem[];
+  error?: unknown;
 };
 
 type AppServerThreadItem = {
@@ -934,7 +975,7 @@ export class AgentHandle {
 
   async run(input: WorkflowUserInput, options: AgentRunOptions = {}): Promise<WorkflowTurnResult> {
     const streamed = await this.runStreamed(input, options);
-    const result = collectTurn(this.threadId, streamed.events);
+    const result = collectTurn(this.threadId, streamed.events).then(throwOnFailedTurn);
     this.activeRun = result;
     return result;
   }
@@ -1348,6 +1389,7 @@ async function collectTurn(
   let usage: unknown = null;
   let turn: AppServerTurn | null = null;
   let status: string | null = null;
+  let error: WorkflowTurnFailure | null = null;
 
   for await (const event of events) {
     if (event.method === "item/completed") {
@@ -1360,6 +1402,7 @@ async function collectTurn(
       const params = event.params as TurnCompletedParams & { usage?: unknown };
       turn = params.turn;
       status = params.turn.status ?? null;
+      error = workflowTurnFailure(params.turn.error);
       usage = params.usage ?? null;
       if (Array.isArray(params.turn.items)) {
         for (const item of params.turn.items) {
@@ -1371,7 +1414,30 @@ async function collectTurn(
     }
   }
 
-  return { threadId, turn, items, finalResponse, usage, status };
+  return { threadId, turn, items, finalResponse, usage, status, error };
+}
+
+function throwOnFailedTurn(result: WorkflowTurnResult): WorkflowTurnResult {
+  if (result.status === "failed") {
+    throw new WorkflowTurnError(result);
+  }
+  return result;
+}
+
+function workflowTurnFailure(value: unknown): WorkflowTurnFailure | null {
+  if (!isRecord(value) || typeof value.message !== "string") {
+    return null;
+  }
+  return {
+    ...value,
+    message: value.message,
+    codexErrorInfo: value.codexErrorInfo,
+    additionalDetails: value.additionalDetails,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isTurnNotification(
