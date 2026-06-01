@@ -2691,8 +2691,14 @@ fn format_model_router_lifecycle_report(
 
     let totals = &report.stats.totals;
     lines.push(format!(
-        "Events: {} promoted, {} demoted, {} blocked (auto {}, manual {})",
-        totals.promoted, totals.demoted, totals.promotion_blocked, totals.auto, totals.manual
+        "Events: {} promoted, {} demoted, {} evaluating, {} rejected, {} blocked (auto {}, manual {})",
+        totals.promoted,
+        totals.demoted,
+        totals.evaluating,
+        totals.rejected,
+        totals.promotion_blocked,
+        totals.auto,
+        totals.manual
     ));
     if report.stats.candidates.is_empty() {
         lines.push("No lifecycle state found.".to_string());
@@ -2712,12 +2718,14 @@ fn format_model_router_lifecycle_report(
             );
             let reason = candidate.last_reason.as_deref().unwrap_or("<none>");
             lines.push(format!(
-                "- {} {}: status {}, promoted {}, demoted {}, blocked {}, auto/manual {}/{}, last {}, reason {}",
+                "- {} {}: status {}, promoted {}, demoted {}, evaluating {}, rejected {}, blocked {}, auto/manual {}/{}, last {}, reason {}",
                 candidate.task_key,
                 candidate.candidate_identity,
                 status,
                 candidate.counts.promoted,
                 candidate.counts.demoted,
+                candidate.counts.evaluating,
+                candidate.counts.rejected,
                 candidate.counts.promotion_blocked,
                 candidate.counts.auto,
                 candidate.counts.manual,
@@ -4150,7 +4158,9 @@ mod tests {
                 totals: codex_state::ModelRouterLifecycleEventCounts {
                     promoted: 1,
                     demoted: 1,
+                    evaluating: 1,
                     promotion_blocked: 1,
+                    rejected: 1,
                     auto: 2,
                     manual: 1,
                 },
@@ -4169,7 +4179,9 @@ mod tests {
                     counts: codex_state::ModelRouterLifecycleEventCounts {
                         promoted: 1,
                         demoted: 1,
+                        evaluating: 1,
                         promotion_blocked: 1,
+                        rejected: 1,
                         auto: 2,
                         manual: 1,
                     },
@@ -4215,7 +4227,9 @@ mod tests {
             &report,
             ModelRouterLifecycleTimelineDisplay::Shown,
         );
-        assert!(output.contains("Events: 1 promoted, 1 demoted, 1 blocked (auto 2, manual 1)"));
+        assert!(output.contains(
+            "Events: 1 promoted, 1 demoted, 1 evaluating, 1 rejected, 1 blocked (auto 2, manual 1)"
+        ));
         assert!(output.contains("status promoted"));
         assert!(output.contains("failed_gates=min_success_rate"));
 

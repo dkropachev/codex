@@ -15,7 +15,9 @@ use super::model_router_lifecycle_promotion_from_row;
 
 pub const MODEL_ROUTER_LIFECYCLE_EVENT_PROMOTED: &str = "promoted";
 pub const MODEL_ROUTER_LIFECYCLE_EVENT_DEMOTED: &str = "demoted";
+pub const MODEL_ROUTER_LIFECYCLE_EVENT_EVALUATING: &str = "evaluating";
 pub const MODEL_ROUTER_LIFECYCLE_EVENT_PROMOTION_BLOCKED: &str = "promotion_blocked";
+pub const MODEL_ROUTER_LIFECYCLE_EVENT_REJECTED: &str = "rejected";
 pub const MODEL_ROUTER_LIFECYCLE_SOURCE_AUTO: &str = "auto";
 pub const MODEL_ROUTER_LIFECYCLE_SOURCE_MANUAL: &str = "manual";
 
@@ -93,7 +95,9 @@ pub struct ModelRouterLifecycleStatsQuery {
 pub struct ModelRouterLifecycleEventCounts {
     pub promoted: i64,
     pub demoted: i64,
+    pub evaluating: i64,
     pub promotion_blocked: i64,
+    pub rejected: i64,
     pub auto: i64,
     pub manual: i64,
 }
@@ -103,7 +107,9 @@ impl ModelRouterLifecycleEventCounts {
         match event.event_type.as_str() {
             MODEL_ROUTER_LIFECYCLE_EVENT_PROMOTED => self.promoted += 1,
             MODEL_ROUTER_LIFECYCLE_EVENT_DEMOTED => self.demoted += 1,
+            MODEL_ROUTER_LIFECYCLE_EVENT_EVALUATING => self.evaluating += 1,
             MODEL_ROUTER_LIFECYCLE_EVENT_PROMOTION_BLOCKED => self.promotion_blocked += 1,
+            MODEL_ROUTER_LIFECYCLE_EVENT_REJECTED => self.rejected += 1,
             _ => {}
         }
         match event.source.as_str() {
@@ -146,9 +152,49 @@ pub struct ModelRouterLifecycleStatsSummary {
 }
 
 impl StateRuntime {
+    pub async fn mark_model_router_lifecycle_candidate_evaluating(
+        &self,
+        record: ModelRouterLifecyclePromotionRecord,
+        context: ModelRouterLifecycleTransitionContext,
+    ) -> anyhow::Result<()> {
+        self.upsert_model_router_lifecycle_status_with_event(
+            record,
+            MODEL_ROUTER_LIFECYCLE_EVENT_EVALUATING,
+            context,
+        )
+        .await
+    }
+
     pub async fn promote_model_router_lifecycle_promotion(
         &self,
         record: ModelRouterLifecyclePromotionRecord,
+        context: ModelRouterLifecycleTransitionContext,
+    ) -> anyhow::Result<()> {
+        self.upsert_model_router_lifecycle_status_with_event(
+            record,
+            MODEL_ROUTER_LIFECYCLE_EVENT_PROMOTED,
+            context,
+        )
+        .await
+    }
+
+    pub async fn reject_model_router_lifecycle_candidate(
+        &self,
+        record: ModelRouterLifecyclePromotionRecord,
+        context: ModelRouterLifecycleTransitionContext,
+    ) -> anyhow::Result<()> {
+        self.upsert_model_router_lifecycle_status_with_event(
+            record,
+            MODEL_ROUTER_LIFECYCLE_EVENT_REJECTED,
+            context,
+        )
+        .await
+    }
+
+    async fn upsert_model_router_lifecycle_status_with_event(
+        &self,
+        record: ModelRouterLifecyclePromotionRecord,
+        event_type: &str,
         context: ModelRouterLifecycleTransitionContext,
     ) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
@@ -160,8 +206,9 @@ impl StateRuntime {
         .await?;
         upsert_model_router_lifecycle_promotion_tx(&mut tx, &record).await?;
 
-        let mut event = lifecycle_event_from_promotion_transition(
+        let mut event = lifecycle_event_from_status_transition(
             &record,
+            event_type,
             previous.as_ref().map(|record| record.status.clone()),
             context,
         );
@@ -597,21 +644,22 @@ fn model_router_lifecycle_event_from_row(
     })
 }
 
-fn lifecycle_event_from_promotion_transition(
+fn lifecycle_event_from_status_transition(
     record: &ModelRouterLifecyclePromotionRecord,
+    event_type: &str,
     previous_status: Option<String>,
     context: ModelRouterLifecycleTransitionContext,
 ) -> ModelRouterLifecycleEventRecord {
     let mut event = ModelRouterLifecycleEventRecord {
         id: None,
         created_at_ms: record.updated_at_ms,
-        event_type: MODEL_ROUTER_LIFECYCLE_EVENT_PROMOTED.to_string(),
+        event_type: event_type.to_string(),
         source: context.source,
         task_key: record.task_key.clone(),
         candidate_identity: record.candidate_identity.clone(),
         base_candidate_identity: record.base_candidate_identity.clone(),
         previous_status,
-        next_status: Some(MODEL_ROUTER_LIFECYCLE_EVENT_PROMOTED.to_string()),
+        next_status: Some(record.status.clone()),
         rule_id: record.rule_id.clone(),
         reason: record.reason.clone(),
         production_model_provider: record.production_model_provider.clone(),

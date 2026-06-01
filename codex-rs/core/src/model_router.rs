@@ -37,10 +37,9 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_state::MODEL_ROUTER_LIFECYCLE_EVENT_PROMOTED;
-use codex_state::MODEL_ROUTER_LIFECYCLE_EVENT_PROMOTION_BLOCKED;
+use codex_state::MODEL_ROUTER_LIFECYCLE_EVENT_REJECTED;
 use codex_state::MODEL_ROUTER_LIFECYCLE_SOURCE_AUTO;
 use codex_state::ModelRouterLedgerEntry;
-use codex_state::ModelRouterLifecycleEventRecord;
 use codex_state::ModelRouterLifecyclePromotionRecord;
 use codex_state::ModelRouterLifecycleTransitionContext;
 use codex_state::ModelRouterMetricOverlay;
@@ -61,6 +60,8 @@ pub(crate) use shadow::model_router_shadow_plan;
 const LIFECYCLE_PHASE_PROMOTION: &str = "promotion";
 const LIFECYCLE_PHASE_MONITORING: &str = "monitoring";
 const LIFECYCLE_STATUS_PROMOTED: &str = MODEL_ROUTER_LIFECYCLE_EVENT_PROMOTED;
+const LIFECYCLE_STATUS_EVALUATING: &str = codex_state::MODEL_ROUTER_LIFECYCLE_EVENT_EVALUATING;
+const LIFECYCLE_STATUS_REJECTED: &str = MODEL_ROUTER_LIFECYCLE_EVENT_REJECTED;
 const ADDITIONAL_PROVIDER_DISCOVERY_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,6 +127,8 @@ pub(crate) fn apply_model_router_with_exclusions(
         available_models,
         &[],
         &[],
+        &[],
+        None,
         exclusions,
         /*enforce_lifecycle*/ false,
     )
@@ -158,9 +161,12 @@ pub(crate) async fn apply_model_router_with_state_and_exclusions(
     state_db: Option<&StateRuntime>,
     exclusions: &[ModelRouterRouteExclusion],
 ) -> Result<Option<ModelRouterAppliedRoute>, String> {
-    let overlays = load_metric_overlays(config, state_db).await;
     let task_key = source.task_key();
+    let overlays = load_metric_overlays(config, available_models, state_db).await;
     let promotions = load_lifecycle_promotions(&task_key, state_db).await;
+    let route_max_observed_total_tokens =
+        load_route_max_observed_total_tokens(&task_key, state_db).await;
+    let shadow_summaries = load_shadow_summaries(&task_key, state_db).await;
     let promotions = apply_lifecycle_transitions(
         LifecycleTransitionInputs {
             config,
@@ -168,6 +174,7 @@ pub(crate) async fn apply_model_router_with_state_and_exclusions(
             prompt_bytes,
             available_models,
             overlays: &overlays,
+            route_max_observed_total_tokens,
             state_db,
             exclusions,
         },
@@ -181,6 +188,8 @@ pub(crate) async fn apply_model_router_with_state_and_exclusions(
         available_models,
         &overlays,
         &promotions,
+        &shadow_summaries,
+        route_max_observed_total_tokens,
         exclusions,
         /*enforce_lifecycle*/ state_db.is_some(),
     )
@@ -193,6 +202,8 @@ fn apply_model_router_with_overlays_and_exclusions(
     available_models: &[AvailableRouterModel],
     overlays: &[ModelRouterMetricOverlay],
     promotions: &[ModelRouterLifecyclePromotionRecord],
+    shadow_summaries: &[ModelRouterShadowEvaluationSummary],
+    route_max_observed_total_tokens: Option<i64>,
     exclusions: &[ModelRouterRouteExclusion],
     enforce_lifecycle: bool,
 ) -> Result<Option<ModelRouterAppliedRoute>, String> {
@@ -205,8 +216,16 @@ fn apply_model_router_with_overlays_and_exclusions(
     }
 
     let task_key = source.task_key();
-    let candidate_set =
-        build_candidate_set(config, &task_key, prompt_bytes, available_models, overlays)?;
+    let candidate_set = build_candidate_set(
+        config,
+        &task_key,
+        prompt_bytes,
+        available_models,
+        overlays,
+        promotions,
+        shadow_summaries,
+        route_max_observed_total_tokens,
+    )?;
     tracing::debug!(
         task_key = task_key,
         candidates = model_router.candidates.len(),
@@ -238,27 +257,19 @@ fn apply_model_router_with_overlays_and_exclusions(
         .iter()
         .map(|decision| decision.score_bias)
         .collect::<Vec<_>>();
-    let selected_route_index = promoted_policy_route_index(
+    let selected_route_index = select_lifecycle_production_route_index(
+        model_router,
         &task_key,
+        prompt_bytes,
         &candidate_set,
         &selectable_routes,
+        &policy_routes,
         &policy_application,
+        &filtered_routes,
+        &score_biases,
         promotions,
-    )
-    .or_else(|| {
-        select_lifecycle_production_route_index(
-            model_router,
-            &task_key,
-            prompt_bytes,
-            &candidate_set,
-            &selectable_routes,
-            &policy_routes,
-            &policy_application,
-            &filtered_routes,
-            &score_biases,
-            enforce_lifecycle,
-        )
-    });
+        enforce_lifecycle,
+    );
     let Some(selected_route_index) = selected_route_index else {
         return Ok(None);
     };
@@ -351,6 +362,7 @@ struct LifecycleTransitionInputs<'a> {
     prompt_bytes: usize,
     available_models: &'a [AvailableRouterModel],
     overlays: &'a [ModelRouterMetricOverlay],
+    route_max_observed_total_tokens: Option<i64>,
     state_db: Option<&'a StateRuntime>,
     exclusions: &'a [ModelRouterRouteExclusion],
 }
@@ -365,6 +377,7 @@ async fn apply_lifecycle_transitions(
         prompt_bytes,
         available_models,
         overlays,
+        route_max_observed_total_tokens,
         state_db,
         exclusions,
     } = inputs;
@@ -383,6 +396,9 @@ async fn apply_lifecycle_transitions(
         prompt_bytes,
         available_models,
         overlays,
+        &promotions,
+        &[],
+        route_max_observed_total_tokens,
     ) {
         Ok(candidate_set) => candidate_set,
         Err(err) => {
@@ -439,6 +455,9 @@ async fn apply_lifecycle_transitions(
         if !lifecycle.shadow_allowed {
             continue;
         }
+        if !candidate_set.route_history_fits(selectable_route.index) {
+            continue;
+        }
         let window_start_ms = lifecycle_window_start_ms(&lifecycle.window);
         let summaries = match state_db
             .model_router_shadow_evaluation_summaries_since(Some(task_key), window_start_ms)
@@ -450,13 +469,11 @@ async fn apply_lifecycle_transitions(
                 continue;
             }
         };
-        if promotions.iter().any(|promotion| {
-            promotion.task_key == task_key
-                && promotion.candidate_identity == candidate_identity
-                && promotion
-                    .status
-                    .eq_ignore_ascii_case(LIFECYCLE_STATUS_PROMOTED)
-        }) {
+        let status = lifecycle_status(&promotions, task_key, &candidate_identity);
+        if status.is_some_and(|status| status.eq_ignore_ascii_case(LIFECYCLE_STATUS_REJECTED)) {
+            continue;
+        }
+        if status.is_some_and(|status| status.eq_ignore_ascii_case(LIFECYCLE_STATUS_PROMOTED)) {
             if let Some(summary) =
                 lifecycle_monitoring_failed_summary(&summaries, &candidate_identity, &lifecycle)
                 && lifecycle.auto_demote
@@ -487,25 +504,28 @@ async fn apply_lifecycle_transitions(
         if !lifecycle.auto_promote {
             continue;
         }
+        if !status.is_some_and(|status| status.eq_ignore_ascii_case(LIFECYCLE_STATUS_EVALUATING)) {
+            continue;
+        }
         let Some(summary) =
             matching_lifecycle_summary(&summaries, LIFECYCLE_PHASE_PROMOTION, &candidate_identity)
         else {
             continue;
         };
-        if !lifecycle_summary_has_enough_samples(summary, &lifecycle) {
+        if !lifecycle_summary_ready_for_assessment(summary, &lifecycle) {
             continue;
         }
         if !lifecycle_summary_passes_gates(summary, &lifecycle) {
-            record_model_router_lifecycle_promotion_blocked(
+            reject_model_router_lifecycle_candidate(
                 state_db,
                 task_key,
                 &candidate_identity,
                 selectable_route,
                 summary,
                 &lifecycle,
-                &promotions,
             )
             .await;
+            changed = true;
             continue;
         }
         let now_ms = Utc::now().timestamp_millis();
@@ -561,6 +581,7 @@ fn select_lifecycle_production_route_index(
     policy_application: &policy::PolicyApplication,
     filtered_routes: &[CandidateRoute],
     score_biases: &[f64],
+    promotions: &[ModelRouterLifecyclePromotionRecord],
     enforce_lifecycle: bool,
 ) -> Option<usize> {
     if !enforce_lifecycle {
@@ -586,11 +607,28 @@ fn select_lifecycle_production_route_index(
         let Some(candidate_route) = filtered_routes.get(policy_index) else {
             continue;
         };
-        if !candidate_route.is_incumbent
-            && !candidate_route_is_lifecycle_exempt(candidate_set, selectable_route.index)
-            && route_requires_lifecycle_promotion(model_router, task_key, route)
-        {
-            continue;
+        if !candidate_route.is_incumbent {
+            if lifecycle_status_is(
+                promotions,
+                task_key,
+                candidate_set,
+                selectable_route.index,
+                LIFECYCLE_STATUS_REJECTED,
+            ) || !candidate_set.route_history_fits(selectable_route.index)
+            {
+                continue;
+            }
+            if route_requires_lifecycle_promotion(model_router, task_key, route)
+                && !lifecycle_status_is(
+                    promotions,
+                    task_key,
+                    candidate_set,
+                    selectable_route.index,
+                    LIFECYCLE_STATUS_PROMOTED,
+                )
+            {
+                continue;
+            }
         }
         production_routes.push(candidate_route.clone());
         production_score_biases.push(*score_biases.get(policy_index).unwrap_or(&0.0));
@@ -598,13 +636,7 @@ fn select_lifecycle_production_route_index(
     }
 
     if production_routes.is_empty() {
-        return select_candidate_with_score_bias(
-            task_key,
-            prompt_bytes,
-            filtered_routes,
-            score_biases,
-        )
-        .map(|selection| selection.index);
+        return None;
     }
 
     select_candidate_with_score_bias(
@@ -626,15 +658,25 @@ fn route_requires_lifecycle_promotion(
         .unwrap_or(false)
 }
 
-fn candidate_route_is_lifecycle_exempt(candidate_set: &CandidateSet, route_index: usize) -> bool {
-    let Some(candidate_index) = route_index.checked_sub(1) else {
+fn lifecycle_status_is(
+    promotions: &[ModelRouterLifecyclePromotionRecord],
+    task_key: &str,
+    candidate_set: &CandidateSet,
+    route_index: usize,
+    status: &str,
+) -> bool {
+    let Some(candidate) = route_index
+        .checked_sub(1)
+        .and_then(|candidate_index| candidate_set.candidates.get(candidate_index))
+    else {
         return false;
     };
-    let exempt_start = candidate_set
-        .candidates
-        .len()
-        .saturating_sub(candidate_set.lifecycle_exempt_candidate_count);
-    candidate_index >= exempt_start && candidate_index < candidate_set.candidates.len()
+    let candidate_identity = model_router_candidate_identity_key(candidate);
+    promotions.iter().any(|promotion| {
+        promotion.task_key == task_key
+            && promotion.candidate_identity == candidate_identity
+            && promotion.status.eq_ignore_ascii_case(status)
+    })
 }
 
 fn candidate_for_selectable_route<'a>(
@@ -657,6 +699,19 @@ fn matching_lifecycle_summary<'a>(
         .find(|summary| summary.phase == phase && summary.candidate_identity == candidate_identity)
 }
 
+fn lifecycle_status<'a>(
+    promotions: &'a [ModelRouterLifecyclePromotionRecord],
+    task_key: &str,
+    candidate_identity: &str,
+) -> Option<&'a str> {
+    promotions
+        .iter()
+        .find(|promotion| {
+            promotion.task_key == task_key && promotion.candidate_identity == candidate_identity
+        })
+        .map(|promotion| promotion.status.as_str())
+}
+
 fn lifecycle_summary_passes_gates(
     summary: &ModelRouterShadowEvaluationSummary,
     lifecycle: &policy::EffectiveLifecycle,
@@ -675,6 +730,22 @@ fn lifecycle_summary_has_enough_samples(
     summary.evaluated_count >= i64::try_from(lifecycle.min_evaluated).unwrap_or(i64::MAX)
 }
 
+fn lifecycle_summary_ready_for_assessment(
+    summary: &ModelRouterShadowEvaluationSummary,
+    lifecycle: &policy::EffectiveLifecycle,
+) -> bool {
+    lifecycle_summary_has_enough_samples(summary, lifecycle)
+        || lifecycle_shadow_budget_exhausted(summary, lifecycle)
+}
+
+fn lifecycle_shadow_budget_exhausted(
+    summary: &ModelRouterShadowEvaluationSummary,
+    lifecycle: &policy::EffectiveLifecycle,
+) -> bool {
+    summary.tokens_used >= i64::try_from(lifecycle.token_budget).unwrap_or(i64::MAX)
+        || summary.cost_used_usd_micros >= lifecycle_cost_budget_usd_micros(lifecycle)
+}
+
 fn lifecycle_monitoring_failed_summary<'a>(
     summaries: &'a [ModelRouterShadowEvaluationSummary],
     candidate_identity: &str,
@@ -690,58 +761,44 @@ fn lifecycle_monitoring_failed_summary<'a>(
     .then_some(summary)
 }
 
-async fn record_model_router_lifecycle_promotion_blocked(
+async fn reject_model_router_lifecycle_candidate(
     state_db: &StateRuntime,
     task_key: &str,
     candidate_identity: &str,
     selectable_route: &failover::SelectableRoute,
     summary: &ModelRouterShadowEvaluationSummary,
     lifecycle: &policy::EffectiveLifecycle,
-    promotions: &[ModelRouterLifecyclePromotionRecord],
 ) {
+    let now_ms = Utc::now().timestamp_millis();
     let (base_model_provider, base_model) =
         model_provider_and_model_from_identity_key(&summary.base_candidate_identity);
-    let current_status = promotions
-        .iter()
-        .find(|promotion| {
-            promotion.task_key == task_key && promotion.candidate_identity == candidate_identity
-        })
-        .map(|promotion| promotion.status.clone());
-    let mut event = ModelRouterLifecycleEventRecord {
-        id: None,
-        created_at_ms: Utc::now().timestamp_millis(),
-        event_type: MODEL_ROUTER_LIFECYCLE_EVENT_PROMOTION_BLOCKED.to_string(),
-        source: MODEL_ROUTER_LIFECYCLE_SOURCE_AUTO.to_string(),
-        task_key: task_key.to_string(),
-        candidate_identity: candidate_identity.to_string(),
-        base_candidate_identity: summary.base_candidate_identity.clone(),
-        previous_status: current_status.clone(),
-        next_status: current_status,
-        rule_id: lifecycle.matched_rule_ids.first().cloned(),
-        reason: Some("promotion shadow gates failed".to_string()),
-        production_model_provider: Some(selectable_route.key.model_provider.clone()),
-        production_model: selectable_route.key.model.clone(),
-        base_model_provider,
-        base_model,
-        lifecycle_window: Some(lifecycle.window.clone()),
-        shadow_phase: None,
-        shadow_evaluated_count: None,
-        shadow_success_count: None,
-        shadow_success_rate: None,
-        shadow_average_score: None,
-        shadow_average_confidence: None,
-        shadow_cost_used_usd_micros: None,
-        shadow_tokens_used: None,
-        shadow_latest_evaluation_id: None,
-        shadow_latest_evaluation_at_ms: None,
-        failed_gates_json: lifecycle_failed_gates_json(summary, lifecycle),
-    };
-    event.apply_shadow_summary(LIFECYCLE_PHASE_PROMOTION, summary);
     if let Err(err) = state_db
-        .record_model_router_lifecycle_event_once(event)
+        .reject_model_router_lifecycle_candidate(
+            ModelRouterLifecyclePromotionRecord {
+                task_key: task_key.to_string(),
+                candidate_identity: candidate_identity.to_string(),
+                base_candidate_identity: summary.base_candidate_identity.clone(),
+                status: LIFECYCLE_STATUS_REJECTED.to_string(),
+                rule_id: lifecycle.matched_rule_ids.first().cloned(),
+                production_model_provider: Some(selectable_route.key.model_provider.clone()),
+                production_model: selectable_route.key.model.clone(),
+                base_model_provider,
+                base_model,
+                promoted_at_ms: now_ms,
+                updated_at_ms: now_ms,
+                reason: Some("promotion shadow gates failed".to_string()),
+            },
+            ModelRouterLifecycleTransitionContext {
+                source: MODEL_ROUTER_LIFECYCLE_SOURCE_AUTO.to_string(),
+                lifecycle_window: Some(lifecycle.window.clone()),
+                shadow_phase: Some(LIFECYCLE_PHASE_PROMOTION.to_string()),
+                shadow_summary: Some(summary.clone()),
+                failed_gates_json: lifecycle_failed_gates_json(summary, lifecycle),
+            },
+        )
         .await
     {
-        tracing::debug!(task_key, candidate_identity, error = %err, "failed to record blocked model router lifecycle promotion");
+        tracing::debug!(task_key, candidate_identity, error = %err, "failed to reject model router lifecycle candidate");
     }
 }
 
@@ -750,6 +807,14 @@ fn lifecycle_failed_gates_json(
     lifecycle: &policy::EffectiveLifecycle,
 ) -> Option<String> {
     let mut failed_gates = Vec::new();
+    let min_evaluated = i64::try_from(lifecycle.min_evaluated).unwrap_or(i64::MAX);
+    if summary.evaluated_count < min_evaluated {
+        failed_gates.push(serde_json::json!({
+            "gate": "min_evaluated",
+            "actual": summary.evaluated_count,
+            "threshold": min_evaluated,
+        }));
+    }
     if summary.average_confidence < lifecycle.min_confidence {
         failed_gates.push(serde_json::json!({
             "gate": "min_confidence",
@@ -825,6 +890,7 @@ fn model_provider_and_model_from_identity_key(
 
 async fn load_metric_overlays(
     config: &Config,
+    available_models: &[AvailableRouterModel],
     state_db: Option<&StateRuntime>,
 ) -> Vec<ModelRouterMetricOverlay> {
     let Some(state_db) = state_db else {
@@ -833,9 +899,20 @@ async fn load_metric_overlays(
     let Some(model_router) = config.model_router.as_ref() else {
         return Vec::new();
     };
+    let candidates = match build_model_router_candidate_pool(config, available_models) {
+        Ok(pool) => pool.candidates,
+        Err(err) => {
+            tracing::debug!(error = %err, "failed to build model router candidate pool for metric overlays");
+            model_router.candidates.clone()
+        }
+    };
     let mut overlays = Vec::new();
-    for candidate in &model_router.candidates {
+    let mut seen = std::collections::BTreeSet::new();
+    for candidate in &candidates {
         let identity = model_router_candidate_identity_key(candidate);
+        if !seen.insert(identity.clone()) {
+            continue;
+        }
         match state_db.lookup_model_router_metric_overlay(&identity).await {
             Ok(Some(overlay)) => overlays.push(overlay),
             Ok(None) => {}
@@ -845,6 +922,42 @@ async fn load_metric_overlays(
         }
     }
     overlays
+}
+
+async fn load_route_max_observed_total_tokens(
+    task_key: &str,
+    state_db: Option<&StateRuntime>,
+) -> Option<i64> {
+    let state_db = state_db?;
+    match state_db
+        .model_router_route_max_observed_total_tokens(task_key)
+        .await
+    {
+        Ok(max_observed_total_tokens) => max_observed_total_tokens,
+        Err(err) => {
+            tracing::debug!(task_key, error = %err, "failed to load model router route max observed tokens");
+            None
+        }
+    }
+}
+
+async fn load_shadow_summaries(
+    task_key: &str,
+    state_db: Option<&StateRuntime>,
+) -> Vec<ModelRouterShadowEvaluationSummary> {
+    let Some(state_db) = state_db else {
+        return Vec::new();
+    };
+    match state_db
+        .model_router_shadow_evaluation_summaries(Some(task_key))
+        .await
+    {
+        Ok(summaries) => summaries,
+        Err(err) => {
+            tracing::debug!(task_key, error = %err, "failed to load model router shadow summaries");
+            Vec::new()
+        }
+    }
 }
 
 async fn load_lifecycle_promotions(
@@ -864,34 +977,6 @@ async fn load_lifecycle_promotions(
             Vec::new()
         }
     }
-}
-
-fn promoted_policy_route_index(
-    task_key: &str,
-    candidate_set: &CandidateSet,
-    selectable_routes: &[failover::SelectableRoute],
-    policy_application: &policy::PolicyApplication,
-    promotions: &[ModelRouterLifecyclePromotionRecord],
-) -> Option<usize> {
-    for promotion in promotions.iter().filter(|promotion| {
-        promotion.task_key == task_key && promotion.status.eq_ignore_ascii_case("promoted")
-    }) {
-        for (candidate_index, candidate) in candidate_set.candidates.iter().enumerate() {
-            if model_router_candidate_identity_key(candidate) != promotion.candidate_identity {
-                continue;
-            }
-            let candidate_route_index = candidate_index + 1;
-            let policy_route_index = policy_application.routes.iter().position(|decision| {
-                selectable_routes
-                    .get(decision.route_index)
-                    .is_some_and(|route| route.index == candidate_route_index)
-            });
-            if let Some(policy_route_index) = policy_route_index {
-                return Some(policy_route_index);
-            }
-        }
-    }
-    None
 }
 
 pub(crate) fn auth_manager_for_config(
@@ -1154,13 +1239,21 @@ struct CandidateSet {
     routes: Vec<CandidateRoute>,
     candidates: Vec<ModelRouterCandidateToml>,
     auto_candidate_count: usize,
-    lifecycle_exempt_candidate_count: usize,
+    route_history_fits: Vec<bool>,
+}
+
+impl CandidateSet {
+    fn route_history_fits(&self, route_index: usize) -> bool {
+        self.route_history_fits
+            .get(route_index)
+            .copied()
+            .unwrap_or(true)
+    }
 }
 
 struct ModelRouterCandidatePool {
     candidates: Vec<ModelRouterCandidateToml>,
     auto_candidate_count: usize,
-    lifecycle_exempt_candidate_count: usize,
 }
 
 pub(crate) fn model_router_candidate_pool(
@@ -1188,14 +1281,12 @@ fn build_model_router_candidate_pool(
         return Ok(ModelRouterCandidatePool {
             candidates: Vec::new(),
             auto_candidate_count: 0,
-            lifecycle_exempt_candidate_count: 0,
         });
     };
     if !model_router.enabled {
         return Ok(ModelRouterCandidatePool {
             candidates: Vec::new(),
             auto_candidate_count: 0,
-            lifecycle_exempt_candidate_count: 0,
         });
     }
     let auto_candidates =
@@ -1221,15 +1312,10 @@ fn build_model_router_candidate_pool(
         ModelRouterDiscoveryToml::Manual => 0,
         ModelRouterDiscoveryToml::FromRules => candidates.len(),
     };
-    let lifecycle_exempt_candidate_count = match discovery {
-        ModelRouterDiscoveryToml::Curated => auto_candidates.len(),
-        ModelRouterDiscoveryToml::Manual | ModelRouterDiscoveryToml::FromRules => 0,
-    };
 
     Ok(ModelRouterCandidatePool {
         candidates,
         auto_candidate_count,
-        lifecycle_exempt_candidate_count,
     })
 }
 
@@ -1239,21 +1325,24 @@ fn build_candidate_set(
     prompt_bytes: usize,
     available_models: &[AvailableRouterModel],
     overlays: &[ModelRouterMetricOverlay],
+    promotions: &[ModelRouterLifecyclePromotionRecord],
+    shadow_summaries: &[ModelRouterShadowEvaluationSummary],
+    route_max_observed_total_tokens: Option<i64>,
 ) -> Result<CandidateSet, String> {
     if config.model_router.is_none() {
         return Ok(CandidateSet {
             routes: Vec::new(),
             candidates: Vec::new(),
             auto_candidate_count: 0,
-            lifecycle_exempt_candidate_count: 0,
+            route_history_fits: Vec::new(),
         });
     }
     let candidate_pool = build_model_router_candidate_pool(config, available_models)?;
     let candidates = candidate_pool.candidates;
     let auto_candidate_count = candidate_pool.auto_candidate_count;
-    let lifecycle_exempt_candidate_count = candidate_pool.lifecycle_exempt_candidate_count;
 
     let mut routes = Vec::with_capacity(candidates.len() + 1);
+    let mut route_history_fits = Vec::with_capacity(candidates.len() + 1);
     routes.push(CandidateRoute {
         id: Some("incumbent".to_string()),
         model: config.model.clone(),
@@ -1267,32 +1356,47 @@ fn build_candidate_set(
         is_incumbent: true,
         metrics: CandidateMetrics::default(),
     });
+    route_history_fits.push(true);
     let task_class = RouterTaskClass::infer(task_key, prompt_bytes);
-    routes.extend(candidates.iter().map(|candidate| {
+    for candidate in &candidates {
         let overlay = overlay_for_candidate(candidate, overlays);
         let model_provider = candidate
             .model_provider
             .clone()
             .unwrap_or_else(|| config.model_provider_id.clone());
-        CandidateRoute {
+        let usable_context_window_tokens = usable_context_window_tokens(
+            config,
+            &model_provider,
+            candidate.model.as_deref().or(config.model.as_deref()),
+            available_models,
+        );
+        let candidate_identity = model_router_candidate_identity_key(candidate);
+        let shadow_summary =
+            promoted_shadow_summary(task_key, &candidate_identity, promotions, shadow_summaries);
+        routes.push(CandidateRoute {
             id: candidate.id.clone(),
             model: candidate.model.clone().or_else(|| config.model.clone()),
             model_provider: Some(model_provider.clone()),
-            usable_context_window_tokens: usable_context_window_tokens(
-                config,
-                &model_provider,
-                candidate.model.as_deref().or(config.model.as_deref()),
-                available_models,
-            ),
+            usable_context_window_tokens,
             is_incumbent: false,
-            metrics: candidate_metrics(candidate, task_class, prompt_bytes, overlay),
-        }
-    }));
+            metrics: candidate_metrics(
+                candidate,
+                task_class,
+                prompt_bytes,
+                overlay,
+                shadow_summary,
+            ),
+        });
+        route_history_fits.push(route_history_fits_context(
+            usable_context_window_tokens,
+            route_max_observed_total_tokens,
+        ));
+    }
     Ok(CandidateSet {
         routes,
         candidates,
         auto_candidate_count,
-        lifecycle_exempt_candidate_count,
+        route_history_fits,
     })
 }
 
@@ -1314,6 +1418,30 @@ fn usable_context_window_tokens(
         .or_else(|| configured_usable_context_window_tokens(config))
 }
 
+fn route_history_fits_context(
+    usable_context_window_tokens: Option<i64>,
+    route_max_observed_total_tokens: Option<i64>,
+) -> bool {
+    match (
+        usable_context_window_tokens,
+        route_max_observed_total_tokens,
+    ) {
+        (Some(usable_context_window_tokens), Some(route_max_observed_total_tokens)) => {
+            route_max_observed_total_tokens <= usable_context_window_tokens
+        }
+        _ => true,
+    }
+}
+
+fn route_fits_current_request(task_key: &str, prompt_bytes: usize, route: &CandidateRoute) -> bool {
+    let Some(usable_context_window_tokens) = route.usable_context_window_tokens else {
+        return true;
+    };
+    let task_class = RouterTaskClass::infer(task_key, prompt_bytes);
+    let estimated_total_tokens = estimate_task_usage(prompt_bytes, task_class).total_tokens;
+    usable_context_window_tokens > 0 && estimated_total_tokens <= usable_context_window_tokens
+}
+
 fn configured_usable_context_window_tokens(config: &Config) -> Option<i64> {
     config
         .model_context_window
@@ -1326,6 +1454,7 @@ fn candidate_metrics(
     task_class: RouterTaskClass,
     prompt_bytes: usize,
     overlay: Option<&ModelRouterMetricOverlay>,
+    shadow_summary: Option<&ModelRouterShadowEvaluationSummary>,
 ) -> CandidateMetrics {
     let explicit_estimated_cost_usd_micros = token_price_from_candidate(candidate).map(|price| {
         estimate_token_cost(
@@ -1338,16 +1467,43 @@ fn candidate_metrics(
     CandidateMetrics {
         intelligence_score: candidate
             .intelligence_score
-            .or_else(|| overlay.and_then(|overlay| overlay.intelligence_score)),
+            .or_else(|| overlay.and_then(|overlay| overlay.intelligence_score))
+            .or_else(|| shadow_summary.and_then(|summary| summary.average_score)),
         success_rate: candidate
             .success_rate
-            .or_else(|| overlay.and_then(|overlay| overlay.success_rate)),
+            .or_else(|| overlay.and_then(|overlay| overlay.success_rate))
+            .or_else(|| shadow_summary.map(|summary| summary.success_rate)),
         median_latency_ms: candidate
             .median_latency_ms
             .or_else(|| overlay.and_then(|overlay| overlay.median_latency_ms)),
         estimated_cost_usd_micros: explicit_estimated_cost_usd_micros
-            .or_else(|| overlay.and_then(|overlay| overlay.estimated_cost_usd_micros)),
+            .or_else(|| overlay.and_then(|overlay| overlay.estimated_cost_usd_micros))
+            .or_else(|| shadow_summary.and_then(average_shadow_cost_usd_micros)),
     }
+}
+
+fn promoted_shadow_summary<'a>(
+    task_key: &str,
+    candidate_identity: &str,
+    promotions: &[ModelRouterLifecyclePromotionRecord],
+    summaries: &'a [ModelRouterShadowEvaluationSummary],
+) -> Option<&'a ModelRouterShadowEvaluationSummary> {
+    if !promotions.iter().any(|promotion| {
+        promotion.task_key == task_key
+            && promotion.candidate_identity == candidate_identity
+            && promotion
+                .status
+                .eq_ignore_ascii_case(LIFECYCLE_STATUS_PROMOTED)
+    }) {
+        return None;
+    }
+    matching_lifecycle_summary(summaries, LIFECYCLE_PHASE_MONITORING, candidate_identity).or_else(
+        || matching_lifecycle_summary(summaries, LIFECYCLE_PHASE_PROMOTION, candidate_identity),
+    )
+}
+
+fn average_shadow_cost_usd_micros(summary: &ModelRouterShadowEvaluationSummary) -> Option<i64> {
+    (summary.evaluated_count > 0).then(|| summary.cost_used_usd_micros / summary.evaluated_count)
 }
 
 fn build_model_router_accounting(
@@ -1570,6 +1726,7 @@ mod tests {
     use codex_protocol::config_types::ServiceTier;
     use codex_protocol::openai_models::ModelsResponse;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_state::ModelRouterLedgerEntry;
     use codex_state::ModelRouterLifecyclePromotionRecord;
     use codex_state::ModelRouterMetricOverlay;
     use codex_state::ModelRouterShadowEvaluationRecord;
@@ -1692,6 +1849,9 @@ mod tests {
             /*prompt_bytes*/ 80,
             &available_models,
             &[],
+            &[],
+            &[],
+            None,
         )
         .expect("candidate set should build");
 
@@ -1740,6 +1900,9 @@ mod tests {
             /*prompt_bytes*/ 80,
             &available_models,
             &[],
+            &[],
+            &[],
+            None,
         )
         .expect("candidate set should build");
 
@@ -1788,6 +1951,9 @@ mod tests {
             /*prompt_bytes*/ 80,
             &available_models,
             &[],
+            &[],
+            &[],
+            None,
         )
         .expect("candidate set should build");
 
@@ -1826,6 +1992,9 @@ mod tests {
             /*prompt_bytes*/ 80,
             &available_models,
             &[],
+            &[],
+            &[],
+            None,
         )
         .expect("candidate set should build");
 
@@ -1875,6 +2044,9 @@ mod tests {
             /*prompt_bytes*/ 80,
             &available_models,
             &[],
+            &[],
+            &[],
+            None,
         )
         .expect("candidate set should build");
 
@@ -1911,6 +2083,9 @@ mod tests {
             /*prompt_bytes*/ 80,
             &available_models,
             &[],
+            &[],
+            &[],
+            None,
         )
         .expect("candidate set should build");
 
@@ -2680,8 +2855,8 @@ mod tests {
         runtime
             .upsert_model_router_lifecycle_promotion(ModelRouterLifecyclePromotionRecord {
                 task_key: "subagent.review".to_string(),
-                candidate_identity: promoted_identity,
-                base_candidate_identity: "base".to_string(),
+                candidate_identity: promoted_identity.clone(),
+                base_candidate_identity: incumbent_identity_key(&config),
                 status: "promoted".to_string(),
                 rule_id: Some("review".to_string()),
                 production_model_provider: Some("openai".to_string()),
@@ -2694,6 +2869,16 @@ mod tests {
             })
             .await
             .expect("upsert promotion");
+        record_shadow(
+            runtime.as_ref(),
+            "subagent.review",
+            LIFECYCLE_PHASE_PROMOTION,
+            &promoted_identity,
+            &incumbent_identity_key(&config),
+            /*success*/ true,
+            /*created_at_ms*/ 1,
+        )
+        .await;
 
         apply_model_router_with_state(
             &mut config,
@@ -2706,6 +2891,102 @@ mod tests {
         .expect("router should apply");
 
         assert_eq!(config.model.as_deref(), Some("gpt-5.3-codex-spark"));
+    }
+
+    #[tokio::test]
+    async fn route_max_observed_context_excludes_candidate_from_production_and_shadow() {
+        let (_codex_home, runtime) = state_runtime().await;
+        let mut config = config::test_config().await;
+        config.model = Some("gpt-5.4".to_string());
+        let candidate = ModelRouterCandidateToml {
+            id: Some("spark".to_string()),
+            model: Some("gpt-5.3-codex-spark".to_string()),
+            ..Default::default()
+        };
+        let candidate_identity = model_router_candidate_identity_key(&candidate);
+        let base_identity = incumbent_identity_key(&config);
+        config.model_router = Some(ModelRouterToml {
+            enabled: true,
+            candidates: vec![candidate],
+            ..Default::default()
+        });
+        runtime
+            .upsert_model_router_lifecycle_promotion(ModelRouterLifecyclePromotionRecord {
+                task_key: "module.review.triage".to_string(),
+                candidate_identity: candidate_identity.clone(),
+                base_candidate_identity: base_identity.clone(),
+                status: LIFECYCLE_STATUS_PROMOTED.to_string(),
+                rule_id: None,
+                production_model_provider: Some("openai".to_string()),
+                production_model: Some("gpt-5.3-codex-spark".to_string()),
+                base_model_provider: Some("openai".to_string()),
+                base_model: Some("gpt-5.4".to_string()),
+                promoted_at_ms: 1,
+                updated_at_ms: 1,
+                reason: None,
+            })
+            .await
+            .expect("upsert promotion");
+        record_shadow(
+            runtime.as_ref(),
+            "module.review.triage",
+            LIFECYCLE_PHASE_PROMOTION,
+            &candidate_identity,
+            &base_identity,
+            /*success*/ true,
+            /*created_at_ms*/ 1,
+        )
+        .await;
+        runtime
+            .record_model_router_ledger_entry(ModelRouterLedgerEntry {
+                task_key: "module.review.triage".to_string(),
+                request_kind: RouterRequestKind::Production,
+                model_provider: Some("openai".to_string()),
+                model: Some("gpt-5.4".to_string()),
+                account_id: None,
+                token_usage: TokenUsage {
+                    input_tokens: 2_000,
+                    cached_input_tokens: 0,
+                    output_tokens: 0,
+                    reasoning_output_tokens: 0,
+                    total_tokens: 2_000,
+                },
+                actual_cost_usd_micros: 0,
+                counterfactual_cost_usd_micros: 0,
+                price_confidence: 0.0,
+                outcome: Some("completed".to_string()),
+            })
+            .await
+            .expect("record route history");
+        let available_models = vec![available_model_with_context(
+            "gpt-5.3-codex-spark",
+            Some(1_000),
+            Some(1_000),
+        )];
+
+        apply_model_router_with_state(
+            &mut config,
+            ModelRouterSource::Module("review.triage"),
+            /*prompt_bytes*/ 80,
+            &available_models,
+            Some(runtime.as_ref()),
+        )
+        .await
+        .expect("router should apply");
+
+        assert_eq!(config.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(
+            model_router_shadow_plan(
+                &config,
+                "module.review.triage",
+                /*prompt_bytes*/ 80,
+                &available_models,
+                Some(runtime.as_ref()),
+                &[],
+            )
+            .await,
+            None
+        );
     }
 
     #[tokio::test]
@@ -2812,6 +3093,18 @@ mod tests {
             /*created_at_ms*/ 2,
         )
         .await;
+        assert_eq!(
+            model_router_shadow_plan(
+                &config,
+                "module.review.triage",
+                /*prompt_bytes*/ 80,
+                &[],
+                Some(runtime.as_ref()),
+                &[],
+            )
+            .await,
+            None
+        );
 
         apply_model_router_with_state(
             &mut config,
@@ -2834,7 +3127,7 @@ mod tests {
             Some(LIFECYCLE_STATUS_PROMOTED)
         );
         let events = lifecycle_events(runtime.as_ref(), "module.review.triage").await;
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), 2);
         assert_eq!(
             events[0].event_type,
             codex_state::MODEL_ROUTER_LIFECYCLE_EVENT_PROMOTED
@@ -2845,6 +3138,10 @@ mod tests {
         );
         assert_eq!(events[0].shadow_phase.as_deref(), Some("promotion"));
         assert_eq!(events[0].shadow_evaluated_count, Some(2));
+        assert_eq!(
+            events[1].event_type,
+            codex_state::MODEL_ROUTER_LIFECYCLE_EVENT_EVALUATING
+        );
     }
 
     #[tokio::test]
@@ -2942,7 +3239,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lifecycle_records_blocked_promotion_after_failed_gates() {
+    async fn lifecycle_rejects_candidate_after_failed_gates() {
         let (_codex_home, runtime) = state_runtime().await;
         let mut config = config::test_config().await;
         config.model = Some("gpt-5.4".to_string());
@@ -2982,16 +3279,18 @@ mod tests {
             /*created_at_ms*/ 2,
         )
         .await;
-
-        apply_model_router_with_state(
-            &mut config,
-            ModelRouterSource::Module("review.triage"),
-            /*prompt_bytes*/ 80,
-            &[],
-            Some(runtime.as_ref()),
-        )
-        .await
-        .expect("router should apply");
+        assert_eq!(
+            model_router_shadow_plan(
+                &config,
+                "module.review.triage",
+                /*prompt_bytes*/ 80,
+                &[],
+                Some(runtime.as_ref()),
+                &[],
+            )
+            .await,
+            None
+        );
         apply_model_router_with_state(
             &mut config,
             ModelRouterSource::Module("review.triage"),
@@ -3003,11 +3302,20 @@ mod tests {
         .expect("router should apply again");
 
         assert_eq!(config.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(
+            runtime
+                .model_router_lifecycle_promotions(Some("module.review.triage"))
+                .await
+                .expect("promotions")
+                .first()
+                .map(|promotion| promotion.status.as_str()),
+            Some(LIFECYCLE_STATUS_REJECTED)
+        );
         let events = lifecycle_events(runtime.as_ref(), "module.review.triage").await;
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), 2);
         assert_eq!(
             events[0].event_type,
-            codex_state::MODEL_ROUTER_LIFECYCLE_EVENT_PROMOTION_BLOCKED
+            codex_state::MODEL_ROUTER_LIFECYCLE_EVENT_REJECTED
         );
         assert_eq!(events[0].shadow_phase.as_deref(), Some("promotion"));
         assert_eq!(events[0].shadow_latest_evaluation_id, Some(2));
@@ -3017,10 +3325,14 @@ mod tests {
                 .as_deref()
                 .is_some_and(|json| json.contains("min_success_rate"))
         );
+        assert_eq!(
+            events[1].event_type,
+            codex_state::MODEL_ROUTER_LIFECYCLE_EVENT_EVALUATING
+        );
     }
 
     #[tokio::test]
-    async fn lifecycle_does_not_record_blocked_promotion_without_enough_samples() {
+    async fn lifecycle_does_not_reject_without_enough_samples() {
         let (_codex_home, runtime) = state_runtime().await;
         let mut config = config::test_config().await;
         config.model = Some("gpt-5.4".to_string());

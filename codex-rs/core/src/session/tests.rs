@@ -3140,6 +3140,15 @@ async fn routed_bedrock_cmb_turn_uses_candidate_provider_client() -> anyhow::Res
                         }],
                     }],
                 }),
+                lifecycle: Some(codex_config::config_toml::ModelRouterLifecycleToml {
+                    defaults: Some(
+                        codex_config::config_toml::ModelRouterLifecycleDefaultsToml {
+                            shadow_allowed: Some(false),
+                            ..Default::default()
+                        },
+                    ),
+                    ..Default::default()
+                }),
                 ..Default::default()
             });
         });
@@ -3271,6 +3280,15 @@ async fn routed_turn_execution_never_uses_provider_with_broken_catalog() -> anyh
                         }],
                         score_bias: 1000.0,
                     }],
+                }),
+                lifecycle: Some(codex_config::config_toml::ModelRouterLifecycleToml {
+                    defaults: Some(
+                        codex_config::config_toml::ModelRouterLifecycleDefaultsToml {
+                            shadow_allowed: Some(false),
+                            ..Default::default()
+                        },
+                    ),
+                    ..Default::default()
                 }),
                 ..Default::default()
             });

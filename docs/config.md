@@ -164,10 +164,26 @@ make the built-in Bedrock provider ready for router discovery unless
 ## Model router
 
 `[model_router]` enables adaptive routing for internal Codex model calls.
-The router treats the current model config as the implicit incumbent, builds a
-candidate pool according to `discovery`, applies hard policy rules, then scores
-eligible routes with task-class heuristics, candidate metrics, price estimates,
-context limits, and optional score biases.
+The supported default is deliberately small:
+
+```toml
+[model_router]
+enabled = true
+```
+
+That is enough to make the router work out of the box. With default
+`discovery = "curated"`, Codex treats the current model config as the implicit
+incumbent, discovers available alternatives from the active provider catalog and
+ready configured providers, keeps the incumbent as the production fallback, and
+records live shadow/judge samples for alternatives. Alternatives become
+production-selectable automatically after passing the lifecycle gates. Built-in
+or catalog-discovered alternatives such as Spark must not require
+`[[model_router.candidates]]`, `model_router.models.rules`,
+`model_router.bias.rules`, lifecycle tuning, or any separate `model_policy`
+configuration just to participate.
+
+The remaining keys are advanced controls for constraining or tuning the router,
+not prerequisites for normal automatic routing:
 
 ```toml
 [model_router]
@@ -248,10 +264,17 @@ Amazon Bedrock is opt-in for curated discovery: set
 ready.
 Provider-specific model managers are used, so OpenAI-compatible providers expand
 through `/models` and static-catalog providers expand through their local
-catalog. Auto-discovered curated candidates are production-selectable
-immediately; use explicit candidates and lifecycle rules when a provider needs a
-controlled shadow rollout. `manual` uses only the incumbent plus explicit
-candidates. `from_rules` uses the incumbent plus candidates inferred from
+catalog. Auto-discovered curated candidates enter the automatic learn-then-route
+lifecycle: for each `task_key` and provider, every eligible non-incumbent model
+gets at least one bootstrap shadow sample, then the router evaluates one model
+at a time until it reaches the effective gates. Passing candidates are promoted
+for production routing; failing candidates are marked rejected for that
+`task_key` and are not retried automatically. Use explicit candidates, hard model
+rules, bias rules, or lifecycle rules only when you need to override the
+automatic behavior, pin accounts, force or exclude specific models, add measured
+metrics, or run a deliberately controlled rollout. `manual` uses only the
+incumbent plus explicit candidates. `from_rules` uses the
+incumbent plus candidates inferred from
 `model_router.models.rules`, `model_router.bias.rules`, and
 `model_router.lifecycle.rules`; exact model selectors create candidates directly,
 while regex selectors expand only against discovered provider catalogs.
@@ -266,9 +289,11 @@ A candidate may set `model`, `model_provider`, `service_tier`, `reasoning_effort
 `account_pool`, `account`, optional observed metrics such as
 `intelligence_score`, `success_rate`, and `median_latency_ms`, and optional
 token prices. When model discovery reports a context window for a candidate,
-the router excludes that candidate if the estimated request would not fit in the
-model's effective context window. Candidates with unknown context limits remain
-eligible.
+the router excludes that candidate if either the estimated current request or
+the largest observed `production`/`shadow` ledger token total for the same
+`task_key` would not fit in the model's effective context window. Judge and
+router-overhead ledger rows do not count toward that route maximum. Candidates
+with unknown context limits remain eligible.
 `reasoning_effort = "inherit"` keeps the reasoning level from the parent or
 default config. `account_pool` references an existing
 `[account_pool.pools.<name>]`; `account` routes to one account id under
@@ -286,13 +311,17 @@ Lifecycle state is stored in SQLite. Promotion records live in
 `model_router_lifecycle_promotions`, transition and blocked-promotion history
 lives in `model_router_lifecycle_events`, and shadow validation/monitoring
 samples live in `model_router_shadow_evaluations`. With lifecycle shadowing
-enabled, candidate routes remain shadows until their promotion samples pass the
-effective gates; promoted candidates become production routes when they are
-still present after failover and hard policy filtering. Monitoring samples can
-demote a promoted candidate when they fall below gates and `auto_demote = true`;
-demoted records are ignored by production selection. Re-promoting a candidate
-updates the promotion cache timestamp; previous promotions remain visible in the
-event history.
+enabled, candidate routes remain shadows until their promotion samples satisfy
+`min_evaluated`, `min_confidence`, `min_success_rate`, `cost_budget_usd`, and
+`token_budget`. The lifecycle status table uses `evaluating`, `promoted`,
+`rejected`, and `demoted` statuses. A promoted candidate becomes production
+selectable when it is still present after failover, hard policy filtering, and
+context eligibility. A rejected candidate is excluded from future production and
+shadow selection for that `task_key` unless lifecycle state is changed manually.
+Monitoring samples can demote a promoted candidate when they fall below gates
+and `auto_demote = true`; demoted records are ignored by production selection.
+Re-promoting a candidate updates the promotion cache timestamp; previous
+promotions remain visible in the event history.
 
 Inspect lifecycle history with a read-only SQLite connection. If the database is
 live in WAL mode, either use `sqlite3 -readonly` against the live path or copy
@@ -310,6 +339,14 @@ ORDER BY created_at_ms DESC, id DESC
 LIMIT 50;
 ```
 
+```sql
+SELECT task_key, MAX(total_tokens) AS max_observed_total_tokens
+FROM model_router_ledger
+WHERE request_kind IN ('production', 'shadow')
+GROUP BY task_key
+ORDER BY task_key;
+```
+
 Inside the TUI, `/model-router enable|disable|inherit|status` temporarily overrides
 whether the current thread uses the configured model router. This override lasts
 until the session ends or you return to `inherit`, and `enable` requires an
@@ -318,10 +355,11 @@ existing `[model_router]` configuration.
 The CLI exposes maintenance surfaces under `codex model-router`: `policy` shows
 effective candidates, hard-rule eligibility, score bias, and lifecycle gates;
 `lifecycle --events --window 30d --candidate-identity <key>` shows current
-status, promotion/demotion/blocked counts, auto/manual splits, reasons, and the
-event timeline; `shadows` lists shadow evaluation summaries and recent samples;
-`promote` and `demote` update lifecycle state and append manual events; `tune`
-replays candidate shadows and persists promotion samples while `report
+status, promotion/demotion/evaluating/rejected/blocked counts, auto/manual
+splits, reasons, and the event timeline; `shadows` lists shadow evaluation
+summaries and recent samples; `promote` and `demote` update lifecycle state and
+append manual events; `tune` replays candidate shadows and persists promotion
+samples while `report
 show|apply` keeps managing metric overlays.
 
 ## Custom CA Certificates
