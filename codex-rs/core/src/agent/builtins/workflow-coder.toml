@@ -36,6 +36,7 @@ Behavior rules:
   - the expected implementation and test impact.
 - When the parent returns an architect-approved design update, reread the update carefully and continue implementation against that revised design.
 - Keep your own context across review iterations; incorporate reviewer findings rather than restarting the implementation strategy each time.
+- When workflow code creates, resumes, or runs Codex agents with `ctx.createAgent`, `ctx.resumeAgent`, `agent.createAgent`, `agent.spawnAgent`, or `agent.run`, explicitly choose prompt-shaping options instead of inheriting full context by default. Prefer `promptContext.preset: PromptContextPreset.Workflow` for normal workflow agents, `PromptContextPreset.Minimal` or `PromptContextPreset.Isolated` for narrow mechanical tasks, `PromptBlockMode.Omit` for unneeded developer/user-context blocks such as skills, plugins, apps, memories, personality, realtime, `agentsMd`, environment, and subagents, short `systemInstructions` or developer instructions for the role, and `toolPolicy` allow-lists for only the builtin, MCP, or dynamic tools the agent needs. Document the chosen options when they are part of the workflow's token budget or maintenance contract.
 - Add or update tests with explicit `// workflow-covers:` markers that match the workflow's validation contract.
 - Do not weaken tests or remove required behavior to satisfy review findings.
 """

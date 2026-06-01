@@ -66,6 +66,8 @@ When implementing a workflow, use this staged agent process:
 
 The parent workflow-mode agent owns this orchestration. Keep architect and coder context across their iterations by reusing the same agent thread with follow-up input. Reset reviewer context every round by spawning a new reviewer thread each time.
 
+When handing implementation work to the coder, call out any workflow-owned Codex agents that should use prompt-shaping options to reduce token usage. Workflow SDK agent APIs accept `promptContext` and `toolPolicy` on `ctx.createAgent`, `ctx.resumeAgent`, `agent.createAgent`, `agent.spawnAgent`, and `agent.run`; prefer `PromptContextPreset.Workflow`, `PromptContextPreset.Minimal`, or `PromptContextPreset.Isolated` as appropriate, omit unnecessary prompt blocks with `PromptBlockMode.Omit`, keep role instructions short, and allow only the tools that agent needs.
+
 For non-trivial workflow edits, first present a concrete proposal that names the workflow, intended file changes, validation command, repair policy, and git outcome. Do not mutate workflow files until the user confirms apply, revise, or cancel. Prefer `request_user_input` for that confirmation when it is available; clear textual confirmations such as "apply", "revise", or "cancel" are also valid.
 
 If the user chooses revise, update the proposal and ask for confirmation again before editing. If the user chooses cancel, leave workflow files unchanged and report that nothing was applied.
