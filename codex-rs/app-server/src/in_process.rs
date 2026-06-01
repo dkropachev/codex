@@ -216,6 +216,7 @@ enum InProcessOutboundControlEvent {
         initialized: Arc<AtomicBool>,
         experimental_api_enabled: Arc<AtomicBool>,
         opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
+        registered_tx: oneshot::Sender<()>,
     },
     Closed {
         connection_id: ConnectionId,
@@ -288,6 +289,8 @@ pub struct InProcessClientHandle {
     client: InProcessClientSender,
     event_rx: mpsc::Receiver<InProcessServerEvent>,
     runtime_handle: tokio::task::JoinHandle<()>,
+    #[cfg(test)]
+    workflow_app_server_url: Option<String>,
     #[cfg(test)]
     _test_codex_home: Option<tempfile::TempDir>,
 }
@@ -402,6 +405,16 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
     let channel_capacity = args.channel_capacity.max(1);
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
     let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
+    let workflow_socket_path = if args.expose_workflow_app_server {
+        Some(workflow_app_server_socket_path())
+    } else {
+        None
+    };
+    #[cfg(test)]
+    let workflow_app_server_url_for_handle = workflow_socket_path
+        .as_ref()
+        .and_then(|socket_path| socket_path.as_ref().ok())
+        .map(|socket_path| format!("unix://{}", socket_path.display()));
 
     let runtime_handle = tokio::spawn(async move {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(channel_capacity);
@@ -447,6 +460,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                                 initialized,
                                 experimental_api_enabled,
                                 opted_out_notification_methods,
+                                registered_tx,
                             } => {
                                 outbound_connections.insert(
                                     connection_id,
@@ -458,6 +472,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                                         disconnect_sender,
                                     ),
                                 );
+                                let _ = registered_tx.send(());
                             }
                             InProcessOutboundControlEvent::Closed { connection_id } => {
                                 outbound_connections.remove(&connection_id);
@@ -479,39 +494,36 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
         let (workflow_transport_event_tx, mut workflow_transport_event_rx) =
             mpsc::channel::<TransportEvent>(channel_capacity);
         let (workflow_transport, workflow_app_server_url, mut workflow_accept_handle) =
-            if args.expose_workflow_app_server {
-                match workflow_app_server_socket_path() {
-                    Ok(socket_path) => {
-                        match start_control_socket_acceptor(
-                            socket_path.clone(),
-                            workflow_transport_event_tx,
-                            workflow_socket_shutdown_token.clone(),
-                        )
-                        .await
-                        {
-                            Ok(handle) => (
-                                Some(AppServerTransport::UnixSocket {
-                                    socket_path: socket_path.clone(),
-                                }),
-                                Some(format!("unix://{}", socket_path.display())),
-                                Some(handle),
-                            ),
-                            Err(err) => {
-                                warn!(
-                                    socket_path = %socket_path.display(),
-                                    "failed to expose embedded app-server workflow socket: {err}"
-                                );
-                                (None, None, None)
-                            }
+            match workflow_socket_path {
+                Some(Ok(socket_path)) => {
+                    match start_control_socket_acceptor(
+                        socket_path.clone(),
+                        workflow_transport_event_tx,
+                        workflow_socket_shutdown_token.clone(),
+                    )
+                    .await
+                    {
+                        Ok(handle) => (
+                            Some(AppServerTransport::UnixSocket {
+                                socket_path: socket_path.clone(),
+                            }),
+                            Some(format!("unix://{}", socket_path.display())),
+                            Some(handle),
+                        ),
+                        Err(err) => {
+                            warn!(
+                                socket_path = %socket_path.display(),
+                                "failed to expose embedded app-server workflow socket: {err}"
+                            );
+                            (None, None, None)
                         }
                     }
-                    Err(err) => {
-                        warn!("failed to resolve embedded app-server workflow socket path: {err}");
-                        (None, None, None)
-                    }
                 }
-            } else {
-                (None, None, None)
+                Some(Err(err)) => {
+                    warn!("failed to resolve embedded app-server workflow socket path: {err}");
+                    (None, None, None)
+                }
+                None => (None, None, None),
             };
         let config_manager = ConfigManager::new(
             args.config.codex_home.to_path_buf(),
@@ -607,6 +619,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                                     Arc::new(AtomicBool::new(false));
                                 let outbound_opted_out_notification_methods =
                                     Arc::new(RwLock::new(HashSet::new()));
+                                let (registered_tx, registered_rx) = oneshot::channel();
                                 if outbound_control_tx
                                     .send(InProcessOutboundControlEvent::Opened {
                                         connection_id,
@@ -619,10 +632,14 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                                         opted_out_notification_methods: Arc::clone(
                                             &outbound_opted_out_notification_methods,
                                         ),
+                                        registered_tx,
                                     })
                                     .await
                                     .is_err()
                                 {
+                                    break;
+                                }
+                                if registered_rx.await.is_err() {
                                     break;
                                 }
                                 workflow_connection_states.insert(
@@ -1003,6 +1020,8 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
         event_rx,
         runtime_handle,
         #[cfg(test)]
+        workflow_app_server_url: workflow_app_server_url_for_handle,
+        #[cfg(test)]
         _test_codex_home: None,
     })
 }
@@ -1072,6 +1091,30 @@ mod tests {
         session_source: SessionSource,
         channel_capacity: usize,
     ) -> InProcessClientHandle {
+        start_test_client_with_capacity_and_workflow_socket(
+            session_source,
+            channel_capacity,
+            /*expose_workflow_app_server*/ false,
+        )
+        .await
+    }
+
+    async fn start_test_client_with_workflow_socket(
+        session_source: SessionSource,
+    ) -> InProcessClientHandle {
+        start_test_client_with_capacity_and_workflow_socket(
+            session_source,
+            DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+            /*expose_workflow_app_server*/ true,
+        )
+        .await
+    }
+
+    async fn start_test_client_with_capacity_and_workflow_socket(
+        session_source: SessionSource,
+        channel_capacity: usize,
+        expose_workflow_app_server: bool,
+    ) -> InProcessClientHandle {
         let codex_home = TempDir::new().expect("temp dir");
         let config = Arc::new(build_test_config(codex_home.path()).await);
         let state_db = codex_rollout::state_db::try_init(config.as_ref())
@@ -1100,7 +1143,7 @@ mod tests {
                 capabilities: None,
             },
             channel_capacity,
-            expose_workflow_app_server: false,
+            expose_workflow_app_server,
         };
         let mut client = start(args).await.expect("in-process runtime should start");
         client._test_codex_home = Some(codex_home);
@@ -1128,6 +1171,74 @@ mod tests {
             .expect("socket path should have utf-8 file name");
         assert!(file_name.starts_with("workflow-"));
         assert!(file_name.ends_with(".sock"));
+    }
+
+    #[test]
+    fn exposed_workflow_app_server_socket_initializes_websocket_client() {
+        run_async_test_on_large_stack(|| async {
+            use futures::SinkExt;
+            use futures::StreamExt;
+            use tokio::time::Duration;
+            use tokio::time::timeout;
+            use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
+
+            let client = start_test_client_with_workflow_socket(SessionSource::Cli).await;
+            let app_server_url = client
+                .workflow_app_server_url
+                .as_ref()
+                .expect("workflow app-server URL should be exposed");
+            let socket_path = app_server_url
+                .strip_prefix("unix://")
+                .expect("workflow app-server URL should use unix transport")
+                .to_string();
+
+            let stream = tokio::net::UnixStream::connect(socket_path)
+                .await
+                .expect("workflow socket should accept connection");
+            let (mut websocket, upgrade_response) =
+                tokio_tungstenite::client_async("ws://localhost/rpc", stream)
+                    .await
+                    .expect("websocket upgrade should work");
+            assert_eq!(upgrade_response.status().as_u16(), 101);
+
+            let request = serde_json::json!({
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "clientInfo": {
+                        "name": "codex-workflow-socket-test",
+                        "title": null,
+                        "version": "0.0.0"
+                    },
+                    "capabilities": {
+                        "experimentalApi": true
+                    }
+                }
+            });
+            websocket
+                .send(WebSocketMessage::Text(request.to_string().into()))
+                .await
+                .expect("initialize request should send");
+
+            let message = timeout(Duration::from_secs(1), websocket.next())
+                .await
+                .expect("initialize response should arrive")
+                .expect("workflow socket should stay open")
+                .expect("initialize response should be readable");
+            let response = match message {
+                WebSocketMessage::Text(text) => serde_json::from_str::<serde_json::Value>(&text)
+                    .expect("initialize response should be valid JSON"),
+                other => panic!("expected text response, got {other:?}"),
+            };
+
+            assert_eq!(response["id"], 1);
+            assert!(response["result"]["codexHome"].is_string());
+
+            client
+                .shutdown()
+                .await
+                .expect("in-process runtime should shutdown cleanly");
+        });
     }
 
     #[test]

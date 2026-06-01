@@ -179,7 +179,8 @@ impl ConnectionOrigin {
     }
 }
 
-static CONNECTION_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+// ConnectionId(0) is reserved by codex-app-server for embedded in-process clients.
+static CONNECTION_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 fn next_connection_id() -> ConnectionId {
     ConnectionId(CONNECTION_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
