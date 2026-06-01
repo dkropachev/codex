@@ -80,6 +80,7 @@ pub(crate) struct ToolRouterParams<'a> {
     pub(crate) remembered_tool_selectors: Vec<ToolRouterRememberedToolSelector>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
     pub(crate) workflow_tools: Option<Vec<WorkflowPublishedTool>>,
+    pub(crate) tool_policy: crate::prompt_context::ToolPolicy,
 }
 
 #[derive(Clone, Copy)]
@@ -123,7 +124,33 @@ impl ToolRouter {
             remembered_tool_selectors: _,
             dynamic_tools,
             workflow_tools,
+            tool_policy,
         } = params;
+        let mcp_tools = mcp_tools.map(|tools| {
+            tool_policy
+                .filter_mcp_tools(
+                    tools.into_values().collect::<Vec<_>>(),
+                    |tool| tool.server_name.as_str(),
+                    codex_mcp::ToolInfo::canonical_tool_name,
+                )
+                .into_iter()
+                .map(|tool| (tool.canonical_tool_name().display(), tool))
+                .collect::<HashMap<_, _>>()
+        });
+        let deferred_mcp_tools = deferred_mcp_tools.map(|tools| {
+            tool_policy
+                .filter_mcp_tools(
+                    tools.into_values().collect::<Vec<_>>(),
+                    |tool| tool.server_name.as_str(),
+                    codex_mcp::ToolInfo::canonical_tool_name,
+                )
+                .into_iter()
+                .map(|tool| (tool.canonical_tool_name().display(), tool))
+                .collect::<HashMap<_, _>>()
+        });
+        let dynamic_tools = tool_policy.filter_dynamic_tools(dynamic_tools.to_vec(), |tool| {
+            ToolName::new(tool.namespace.clone(), tool.name.clone())
+        });
         let deferred_routed_specs: Vec<ToolSpec> = build_tool_search_entries(
             deferred_mcp_tools.as_ref(),
             &dynamic_tools
@@ -141,10 +168,11 @@ impl ToolRouter {
             deferred_mcp_tools,
             unavailable_called_tools,
             discoverable_tools,
-            dynamic_tools,
+            dynamic_tools.as_slice(),
             workflow_tools.as_deref(),
         );
         let (specs, registry) = builder.build();
+        let specs = tool_policy.filter_configured_tool_specs(specs);
         let index = ToolRouterIndex::build(&specs, &registry, &parallel_mcp_server_names);
         let unwrapped_model_visible_specs: Vec<ToolSpec> = if config.code_mode_only_enabled {
             specs
@@ -170,7 +198,7 @@ impl ToolRouter {
             tool_router_token_estimates,
             tool_router_prompt_info,
             tool_router_toolset_hash,
-        ) = if config.tool_router {
+        ) = if tool_policy.tool_router_enabled(config.tool_router) {
             let model_visible_specs = unwrapped_model_visible_specs;
             let token_estimates = ToolRouterTokenEstimates {
                 visible_router_schema_tokens: estimate_tool_schema_tokens(&model_visible_specs),

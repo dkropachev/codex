@@ -16,6 +16,8 @@ use crate::config_loader::Sourced;
 use crate::config_loader::load_config_layers_state;
 use crate::config_loader::project_trust_key;
 use crate::path_utils::normalize_for_native_workdir;
+use crate::prompt_context::PromptContextPolicy;
+use crate::prompt_context::ToolPolicy;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
@@ -452,6 +454,12 @@ pub struct Config {
 
     /// Whether to inject the `<environment_context>` user block.
     pub include_environment_context: bool,
+
+    /// Prompt context policy for workflow/API-created turns.
+    pub prompt_context_policy: PromptContextPolicy,
+
+    /// Tool visibility policy for workflow/API-created turns.
+    pub tool_policy: ToolPolicy,
 
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
@@ -1652,6 +1660,8 @@ pub struct ConfigOverrides {
     pub zsh_path: Option<PathBuf>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
+    pub prompt_context_policy: Option<PromptContextPolicy>,
+    pub tool_policy: Option<ToolPolicy>,
     pub personality: Option<Personality>,
     pub compact_prompt: Option<String>,
     pub include_apply_patch_tool: Option<bool>,
@@ -1877,6 +1887,8 @@ impl Config {
             zsh_path: zsh_path_override,
             base_instructions,
             developer_instructions,
+            prompt_context_policy,
+            tool_policy,
             personality,
             compact_prompt,
             include_apply_patch_tool: include_apply_patch_tool_override,
@@ -2636,6 +2648,8 @@ impl Config {
             include_apps_instructions,
             include_skill_instructions,
             include_environment_context,
+            prompt_context_policy: prompt_context_policy.unwrap_or_default(),
+            tool_policy: tool_policy.unwrap_or_default(),
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             cli_auth_credentials_store_mode: resolve_cli_auth_credentials_store_mode(

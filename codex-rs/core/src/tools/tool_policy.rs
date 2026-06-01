@@ -1,3 +1,4 @@
+use crate::prompt_context::ToolPolicy;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -30,16 +31,28 @@ pub(crate) struct WorkflowDesignPolicy {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TurnToolPolicy {
     workflow_design: Option<WorkflowDesignPolicy>,
+    visibility: ToolPolicy,
 }
 
 impl TurnToolPolicy {
-    pub(crate) fn for_turn(session_source: &SessionSource, cwd: &AbsolutePathBuf) -> Self {
+    pub(crate) fn for_turn(
+        session_source: &SessionSource,
+        cwd: &AbsolutePathBuf,
+        visibility: ToolPolicy,
+    ) -> Self {
         let workflow_design = workflow_design_policy(session_source, cwd);
-        Self { workflow_design }
+        Self {
+            workflow_design,
+            visibility,
+        }
     }
 
     pub(crate) fn workflow_design(&self) -> Option<&WorkflowDesignPolicy> {
         self.workflow_design.as_ref()
+    }
+
+    pub(crate) fn visibility(&self) -> &ToolPolicy {
+        &self.visibility
     }
 
     pub(crate) fn protected_read_only_paths(&self) -> Vec<AbsolutePathBuf> {
@@ -185,6 +198,7 @@ fn file_system_sandbox_policy_without_write_access(
 
 #[cfg(test)]
 mod tests {
+    use crate::prompt_context::ToolPolicy;
     use codex_protocol::ThreadId;
     use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
@@ -231,7 +245,11 @@ mod tests {
         let cwd = AbsolutePathBuf::try_from(tmp.path().to_path_buf()).unwrap();
         let design_md = AbsolutePathBuf::try_from(tmp.path().join("DESIGN.md")).unwrap();
 
-        let policy = TurnToolPolicy::for_turn(&workflow_session_source("workflow-coder"), &cwd);
+        let policy = TurnToolPolicy::for_turn(
+            &workflow_session_source("workflow-coder"),
+            &cwd,
+            ToolPolicy::default(),
+        );
         let overlaid = policy.apply_file_system_overlay(writable_root_policy(&cwd), &cwd);
 
         assert_eq!(
@@ -253,7 +271,11 @@ mod tests {
         let design_md = workflow_dir.join("DESIGN.md");
         let workspace_readme = tmp.path().join("README.md");
 
-        let policy = TurnToolPolicy::for_turn(&workflow_session_source("workflow-coder"), &cwd);
+        let policy = TurnToolPolicy::for_turn(
+            &workflow_session_source("workflow-coder"),
+            &cwd,
+            ToolPolicy::default(),
+        );
         let overlaid =
             policy.apply_file_system_overlay(FileSystemSandboxPolicy::unrestricted(), &cwd);
 
@@ -272,7 +294,11 @@ mod tests {
         let design_md = workflow_dir.join("DESIGN.md");
         let workspace_readme = tmp.path().join("README.md");
 
-        let policy = TurnToolPolicy::for_turn(&workflow_session_source("workflow-architect"), &cwd);
+        let policy = TurnToolPolicy::for_turn(
+            &workflow_session_source("workflow-architect"),
+            &cwd,
+            ToolPolicy::default(),
+        );
         let overlaid =
             policy.apply_file_system_overlay(FileSystemSandboxPolicy::unrestricted(), &cwd);
 
@@ -286,7 +312,11 @@ mod tests {
         let cwd = AbsolutePathBuf::try_from(tmp.path().to_path_buf()).unwrap();
         let root_workflow_yaml = tmp.path().join("workflow.yaml");
 
-        let policy = TurnToolPolicy::for_turn(&workflow_session_source("workflow-coder"), &cwd);
+        let policy = TurnToolPolicy::for_turn(
+            &workflow_session_source("workflow-coder"),
+            &cwd,
+            ToolPolicy::default(),
+        );
         let overlaid = policy.apply_file_system_overlay(writable_root_policy(&cwd), &cwd);
 
         assert_eq!(
@@ -308,7 +338,11 @@ mod tests {
         let workflow_package = workflow_dir.join("package.json");
         let workspace_readme = tmp.path().join("README.md");
 
-        let policy = TurnToolPolicy::for_turn(&workflow_session_source("workflow-coder"), &cwd);
+        let policy = TurnToolPolicy::for_turn(
+            &workflow_session_source("workflow-coder"),
+            &cwd,
+            ToolPolicy::default(),
+        );
         let overlaid = policy.apply_file_system_overlay(writable_root_policy(&cwd), &cwd);
 
         assert!(overlaid.can_write_path_with_cwd(workflow_src.as_path(), cwd.as_path()));
@@ -323,7 +357,11 @@ mod tests {
         let cwd = AbsolutePathBuf::try_from(tmp.path().to_path_buf()).unwrap();
         let design_md = AbsolutePathBuf::try_from(tmp.path().join("DESIGN.md")).unwrap();
 
-        let policy = TurnToolPolicy::for_turn(&workflow_session_source("workflow-architect"), &cwd);
+        let policy = TurnToolPolicy::for_turn(
+            &workflow_session_source("workflow-architect"),
+            &cwd,
+            ToolPolicy::default(),
+        );
         let overlaid = policy.apply_file_system_overlay(writable_root_policy(&cwd), &cwd);
 
         assert_eq!(

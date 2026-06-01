@@ -109,6 +109,41 @@ const review = await reviewAgent.wait();
 console.log(review?.finalResponse);
 ```
 
+Pass `promptContext` and `toolPolicy` when a workflow agent needs a narrower prompt or tool surface than the default
+Codex session. `systemInstructions` is allowed when starting or resuming an agent; per-turn `run()` options can update
+developer/user-context blocks and tool visibility. `InstructionMode.Update` reads the current instruction text from
+the app-server thread before calling your updater and sends the result back as a concrete `Set` policy. `promptContext.strict`
+defaults to `true`, so the server rejects policies it cannot honor exactly unless you explicitly set `strict: false`.
+
+```typescript
+import {
+  BuiltinTool,
+  InstructionMode,
+  PromptBlockMode,
+  PromptContextPreset,
+  ToolPolicyMode,
+} from "@openai/codex-sdk/workflow";
+
+const agent = await ctx.createAgent({
+  promptContext: {
+    preset: PromptContextPreset.Workflow,
+    systemInstructions: { mode: InstructionMode.Set, text: "You are reviewing CI output." },
+    developer: { blocks: { skills: PromptBlockMode.Omit } },
+  },
+  toolPolicy: {
+    builtins: { mode: ToolPolicyMode.AllowOnly, tools: [BuiltinTool.ExecCommand] },
+  },
+});
+
+await agent.run("Check the failing job", {
+  promptContext: {
+    developer: {
+      instructions: { mode: InstructionMode.Set, text: "Focus on test failures only." },
+    },
+  },
+});
+```
+
 Resume a persisted Codex session by thread ID when the workflow should continue an existing conversation.
 
 ```typescript

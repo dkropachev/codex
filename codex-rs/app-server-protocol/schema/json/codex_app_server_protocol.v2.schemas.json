@@ -6047,6 +6047,128 @@
       "title": "DeprecationNoticeNotification",
       "type": "object"
     },
+    "DeveloperPromptBlocks": {
+      "additionalProperties": false,
+      "properties": {
+        "apps": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "collaborationMode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commitAttribution": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "memories": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "permissions": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "personality": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plugins": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "realtime": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "skills": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DeveloperPromptPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "blocks": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeveloperPromptBlocks"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InstructionPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "DeviceKeyAlgorithm": {
       "description": "Device-key algorithm reported at enrollment and signing boundaries.",
       "enum": [
@@ -8497,6 +8619,65 @@
         }
       ]
     },
+    "InstructionPolicy": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "inherit"
+              ],
+              "title": "InstructionPolicyInheritMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "InstructionPolicyInherit",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "omit"
+              ],
+              "title": "InstructionPolicyOmitMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "InstructionPolicyOmit",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "set"
+              ],
+              "title": "InstructionPolicySetMode",
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "text"
+          ],
+          "title": "InstructionPolicySet",
+          "type": "object"
+        }
+      ]
+    },
     "ItemCompletedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -9495,6 +9676,106 @@
         "failed"
       ],
       "type": "string"
+    },
+    "McpToolPolicy": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "inherit"
+              ],
+              "title": "McpToolPolicyInheritMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "McpToolPolicyInherit",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "none"
+              ],
+              "title": "McpToolPolicyNoneMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "McpToolPolicyNone",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "allowOnly"
+              ],
+              "title": "McpToolPolicyAllowOnlyMode",
+              "type": "string"
+            },
+            "servers": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "tools": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "McpToolPolicyAllowOnly",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "deny"
+              ],
+              "title": "McpToolPolicyDenyMode",
+              "type": "string"
+            },
+            "servers": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "tools": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "McpToolPolicyDeny",
+          "type": "object"
+        }
+      ]
     },
     "MemoryCitation": {
       "properties": {
@@ -11644,6 +11925,73 @@
         }
       },
       "type": "object"
+    },
+    "PromptBlockMode": {
+      "enum": [
+        "inherit",
+        "include",
+        "omit"
+      ],
+      "type": "string"
+    },
+    "PromptContextPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "developer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeveloperPromptPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "preset": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptContextPreset"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "strict": {
+          "default": true,
+          "type": "boolean"
+        },
+        "systemInstructions": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InstructionPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "userContext": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserContextPromptPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "PromptContextPreset": {
+      "enum": [
+        "current",
+        "workflow",
+        "minimal",
+        "isolated"
+      ],
+      "type": "string"
     },
     "RateLimitReachedType": {
       "enum": [
@@ -17778,6 +18126,145 @@
       ],
       "type": "object"
     },
+    "ToolPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "builtins": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolSetPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dynamic": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolSetPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mcp": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpToolPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "toolRouter": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolRouterPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ToolRouterPolicy": {
+      "enum": [
+        "inherit",
+        "off"
+      ],
+      "type": "string"
+    },
+    "ToolSetPolicy": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "inherit"
+              ],
+              "title": "ToolSetPolicyInheritMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "ToolSetPolicyInherit",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "none"
+              ],
+              "title": "ToolSetPolicyNoneMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "ToolSetPolicyNone",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "allowOnly"
+              ],
+              "title": "ToolSetPolicyAllowOnlyMode",
+              "type": "string"
+            },
+            "tools": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "mode",
+            "tools"
+          ],
+          "title": "ToolSetPolicyAllowOnly",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "deny"
+              ],
+              "title": "ToolSetPolicyDenyMode",
+              "type": "string"
+            },
+            "tools": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "mode",
+            "tools"
+          ],
+          "title": "ToolSetPolicyDeny",
+          "type": "object"
+        }
+      ]
+    },
     "ToolsV2": {
       "properties": {
         "view_image": {
@@ -18233,6 +18720,68 @@
         "turnId"
       ],
       "title": "TurnSteerResponse",
+      "type": "object"
+    },
+    "UserContextBlocks": {
+      "additionalProperties": false,
+      "properties": {
+        "agentsMd": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "environment": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subagents": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "UserContextPromptPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "blocks": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserContextBlocks"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InstructionPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
       "type": "object"
     },
     "UserInput": {

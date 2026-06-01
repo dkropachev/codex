@@ -3,11 +3,13 @@ use super::ApprovalsReviewer;
 use super::AskForApproval;
 use super::PermissionProfile;
 use super::PermissionProfileSelectionParams;
+use super::PromptContextPolicy;
 use super::SandboxMode;
 use super::SandboxPolicy;
 use super::ServiceTier;
 use super::Thread;
 use super::ThreadSource;
+use super::ToolPolicy;
 use super::Turn;
 use super::TurnEnvironmentParams;
 use super::shared::v2_enum_from_core;
@@ -129,6 +131,12 @@ pub struct ThreadStartParams {
     pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub developer_instructions: Option<String>,
+    #[experimental("thread/start.promptContext")]
+    #[ts(optional = nullable)]
+    pub prompt_context: Option<PromptContextPolicy>,
+    #[experimental("thread/start.toolPolicy")]
+    #[ts(optional = nullable)]
+    pub tool_policy: Option<ToolPolicy>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
     #[ts(optional = nullable)]
@@ -314,6 +322,12 @@ pub struct ThreadResumeParams {
     pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub developer_instructions: Option<String>,
+    #[experimental("thread/resume.promptContext")]
+    #[ts(optional = nullable)]
+    pub prompt_context: Option<PromptContextPolicy>,
+    #[experimental("thread/resume.toolPolicy")]
+    #[ts(optional = nullable)]
+    pub tool_policy: Option<ToolPolicy>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
     /// When true, return only thread metadata and live-resume state without

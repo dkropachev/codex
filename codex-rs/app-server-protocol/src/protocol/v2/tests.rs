@@ -3569,6 +3569,129 @@ fn thread_start_params_preserve_explicit_null_service_tier() {
 }
 
 #[test]
+fn prompt_context_and_tool_policy_use_camel_case_wire_shape() {
+    let params: ThreadStartParams = serde_json::from_value(json!({
+        "promptContext": {
+            "preset": "workflow",
+            "systemInstructions": { "mode": "set", "text": "system" },
+            "developer": {
+                "instructions": { "mode": "set", "text": "developer" },
+                "blocks": {
+                    "commitAttribution": "omit"
+                }
+            },
+            "userContext": {
+                "blocks": {
+                    "agentsMd": "include"
+                }
+            }
+        },
+        "toolPolicy": {
+            "builtins": { "mode": "allowOnly", "tools": ["exec_command"] },
+            "mcp": { "mode": "deny", "servers": ["memory"], "tools": [] },
+            "toolRouter": "off"
+        }
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(
+        params.prompt_context,
+        Some(PromptContextPolicy {
+            preset: Some(PromptContextPreset::Workflow),
+            system_instructions: Some(InstructionPolicy::Set {
+                text: "system".to_string()
+            }),
+            developer: Some(DeveloperPromptPolicy {
+                instructions: Some(InstructionPolicy::Set {
+                    text: "developer".to_string()
+                }),
+                blocks: Some(DeveloperPromptBlocks {
+                    commit_attribution: Some(PromptBlockMode::Omit),
+                    ..Default::default()
+                }),
+            }),
+            user_context: Some(UserContextPromptPolicy {
+                instructions: None,
+                blocks: Some(UserContextBlocks {
+                    agents_md: Some(PromptBlockMode::Include),
+                    ..Default::default()
+                }),
+            }),
+            strict: true,
+        })
+    );
+    assert_eq!(
+        params.tool_policy,
+        Some(ToolPolicy {
+            builtins: Some(ToolSetPolicy::AllowOnly {
+                tools: vec!["exec_command".to_string()],
+            }),
+            mcp: Some(McpToolPolicy::Deny {
+                servers: vec!["memory".to_string()],
+                tools: Vec::new(),
+            }),
+            dynamic: None,
+            tool_router: Some(ToolRouterPolicy::Off),
+        })
+    );
+
+    let serialized = serde_json::to_value(params).expect("params should serialize");
+    assert_eq!(
+        serialized["promptContext"]["systemInstructions"],
+        json!({ "mode": "set", "text": "system" })
+    );
+    assert_eq!(
+        serialized["toolPolicy"]["builtins"],
+        json!({ "mode": "allowOnly", "tools": ["exec_command"] })
+    );
+}
+
+#[test]
+fn prompt_context_strict_defaults_true_and_rejects_unknown_fields() {
+    let policy: PromptContextPolicy = serde_json::from_value(json!({
+        "developer": {
+            "blocks": {
+                "skills": "omit"
+            }
+        }
+    }))
+    .expect("promptContext should deserialize with missing strict");
+
+    assert_eq!(
+        policy,
+        PromptContextPolicy {
+            developer: Some(DeveloperPromptPolicy {
+                blocks: Some(DeveloperPromptBlocks {
+                    skills: Some(PromptBlockMode::Omit),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    );
+
+    serde_json::from_value::<PromptContextPolicy>(json!({
+        "developer": {
+            "blocks": {
+                "skills": "omit",
+                "unknownBlock": "include"
+            }
+        }
+    }))
+    .expect_err("unknown promptContext fields should be rejected");
+
+    serde_json::from_value::<ToolPolicy>(json!({
+        "builtins": {
+            "mode": "allowOnly",
+            "tools": ["exec_command"],
+            "unknown": true
+        }
+    }))
+    .expect_err("unknown toolPolicy fields should be rejected");
+}
+
+#[test]
 fn thread_lifecycle_responses_default_missing_optional_fields() {
     let response = json!({
         "thread": {
@@ -3649,6 +3772,8 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
         effort: None,
         summary: None,
         output_schema: None,
+        prompt_context: None,
+        tool_policy: None,
         collaboration_mode: None,
         personality: None,
     };

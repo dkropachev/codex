@@ -152,7 +152,11 @@ mod tests {
             agent_nickname: None,
             agent_role: Some(role.to_string()),
         });
-        turn.tool_policy = TurnToolPolicy::for_turn(&turn.session_source, &turn.cwd);
+        turn.tool_policy = TurnToolPolicy::for_turn(
+            &turn.session_source,
+            &turn.cwd,
+            crate::prompt_context::ToolPolicy::default(),
+        );
         turn.file_system_sandbox_policy = turn
             .tool_policy
             .apply_file_system_overlay(turn.file_system_sandbox_policy.clone(), &turn.cwd);

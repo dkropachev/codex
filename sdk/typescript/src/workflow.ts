@@ -74,6 +74,133 @@ export type WorkflowTool = WorkflowToolSpec & {
   handler: DynamicToolHandler;
 };
 
+export enum PromptContextPreset {
+  Current = "current",
+  Workflow = "workflow",
+  Minimal = "minimal",
+  Isolated = "isolated",
+}
+
+export enum PromptBlockMode {
+  Inherit = "inherit",
+  Include = "include",
+  Omit = "omit",
+}
+
+export enum InstructionMode {
+  Inherit = "inherit",
+  Omit = "omit",
+  Set = "set",
+  Update = "update",
+}
+
+export type InstructionUpdater = (current: string) => string | Promise<string>;
+
+export type SystemInstructionPolicy =
+  | { mode: InstructionMode.Inherit }
+  | { mode: InstructionMode.Set; text: string }
+  | { mode: InstructionMode.Update; update: InstructionUpdater };
+
+export type DeveloperInstructionPolicy =
+  | { mode: InstructionMode.Inherit }
+  | { mode: InstructionMode.Omit }
+  | { mode: InstructionMode.Set; text: string }
+  | { mode: InstructionMode.Update; update: InstructionUpdater };
+
+export type UserInstructionPolicy =
+  | { mode: InstructionMode.Inherit }
+  | { mode: InstructionMode.Omit }
+  | { mode: InstructionMode.Set; text: string }
+  | { mode: InstructionMode.Update; update: InstructionUpdater };
+
+export type DeveloperPromptBlocks = {
+  permissions?: PromptBlockMode;
+  collaborationMode?: PromptBlockMode;
+  memories?: PromptBlockMode;
+  apps?: PromptBlockMode;
+  skills?: PromptBlockMode;
+  plugins?: PromptBlockMode;
+  commitAttribution?: PromptBlockMode;
+  personality?: PromptBlockMode;
+  realtime?: PromptBlockMode;
+};
+
+export type UserContextBlocks = {
+  agentsMd?: PromptBlockMode;
+  environment?: PromptBlockMode;
+  subagents?: PromptBlockMode;
+};
+
+export type PromptContextPolicy = {
+  preset?: PromptContextPreset;
+  systemInstructions?: SystemInstructionPolicy;
+  developer?: {
+    instructions?: DeveloperInstructionPolicy;
+    blocks?: DeveloperPromptBlocks;
+  };
+  userContext?: {
+    instructions?: UserInstructionPolicy;
+    blocks?: UserContextBlocks;
+  };
+  /** Defaults to true; rejects policies the server cannot honor exactly. */
+  strict?: boolean;
+};
+
+export enum ToolPolicyMode {
+  Inherit = "inherit",
+  None = "none",
+  AllowOnly = "allowOnly",
+  Deny = "deny",
+}
+
+export enum ToolRouterPolicy {
+  Inherit = "inherit",
+  Off = "off",
+}
+
+export enum BuiltinTool {
+  ExecCommand = "exec_command",
+  WriteStdin = "write_stdin",
+  ApplyPatch = "apply_patch",
+  ViewImage = "view_image",
+  UpdatePlan = "update_plan",
+  RequestUserInput = "request_user_input",
+  SpawnAgent = "spawn_agent",
+  SendInput = "send_input",
+  WaitAgent = "wait_agent",
+  CloseAgent = "close_agent",
+  ListMcpResources = "list_mcp_resources",
+  ListMcpResourceTemplates = "list_mcp_resource_templates",
+  ReadMcpResource = "read_mcp_resource",
+}
+
+export type BuiltinToolPolicy =
+  | { mode: ToolPolicyMode.Inherit }
+  | { mode: ToolPolicyMode.None }
+  | { mode: ToolPolicyMode.AllowOnly; tools: BuiltinTool[] }
+  | { mode: ToolPolicyMode.Deny; tools: BuiltinTool[] };
+
+export type McpToolPolicy =
+  | { mode: ToolPolicyMode.Inherit }
+  | { mode: ToolPolicyMode.None }
+  | {
+      mode: ToolPolicyMode.AllowOnly | ToolPolicyMode.Deny;
+      servers?: string[];
+      tools?: string[];
+    };
+
+export type DynamicToolPolicy =
+  | { mode: ToolPolicyMode.Inherit }
+  | { mode: ToolPolicyMode.None }
+  | { mode: ToolPolicyMode.AllowOnly | ToolPolicyMode.Deny; tools: string[] };
+
+export type ToolPolicy = {
+  builtins?: BuiltinToolPolicy;
+  mcp?: McpToolPolicy;
+  dynamic?: DynamicToolPolicy;
+  toolRouter?: ToolRouterPolicy;
+};
+
 export type WorkflowConnection = "auto" | "require-existing" | "spawn" | { appServerUrl: string };
 
 export type WorkflowApprovalMode = "auto" | "inherit" | "delegate" | "decline";
@@ -140,6 +267,8 @@ export type AgentStartOptions = {
   ephemeral?: boolean;
   developerInstructions?: string;
   baseInstructions?: string;
+  promptContext?: PromptContextPolicy;
+  toolPolicy?: ToolPolicy;
 };
 
 export type AgentResumeOptions = {
@@ -151,11 +280,15 @@ export type AgentResumeOptions = {
   tools?: WorkflowTool[];
   developerInstructions?: string;
   baseInstructions?: string;
+  promptContext?: PromptContextPolicy;
+  toolPolicy?: ToolPolicy;
 };
 
 export type AgentRunOptions = {
   outputSchema?: unknown;
   signal?: AbortSignal;
+  promptContext?: Omit<PromptContextPolicy, "systemInstructions">;
+  toolPolicy?: ToolPolicy;
 };
 
 export type SpawnAgentOptions = AgentStartOptions & {
@@ -420,6 +553,17 @@ type AppServerThreadItem = {
   [key: string]: unknown;
 };
 
+type PromptInstructionState = {
+  systemInstructions?: string;
+  developerInstructions?: string;
+  userInstructions?: string;
+};
+
+type ResolvedPromptContext<T extends PromptContextPolicy | undefined> = {
+  policy: T;
+  state: PromptInstructionState;
+};
+
 type ThreadStartResponse = {
   thread: AppServerThread;
 };
@@ -430,6 +574,12 @@ type ThreadForkResponse = {
 
 type ThreadResumeResponse = {
   thread: AppServerThread;
+};
+
+type ThreadPromptContextReadResponse = {
+  systemInstructions: string;
+  developerInstructions: string;
+  userInstructions: string;
 };
 
 type TurnStartResponse = {
@@ -586,6 +736,13 @@ export class CodexWorkflow {
 
   async startAgent(options: AgentStartOptions = {}): Promise<AgentHandle> {
     this.registerTools(options.tools ?? []);
+    const needsServerPromptRead = promptContextUsesInstructionUpdate(options.promptContext);
+    const promptContext = needsServerPromptRead
+      ? undefined
+      : await resolvePromptContextPolicy(options.promptContext, {
+          systemInstructions: options.baseInstructions,
+          developerInstructions: options.developerInstructions,
+        });
     const response = await this.client.request<ThreadStartResponse>("thread/start", {
       model: options.model,
       modelProvider: options.modelProvider,
@@ -596,8 +753,13 @@ export class CodexWorkflow {
       ephemeral: options.ephemeral,
       developerInstructions: options.developerInstructions,
       baseInstructions: options.baseInstructions,
+      promptContext: promptContext?.policy,
+      toolPolicy: options.toolPolicy,
     });
-    return this.trackAgent(response.thread.id, options.tools ?? []);
+    const promptInstructionState = needsServerPromptRead
+      ? await this.applyPromptContextUpdateFromServer(response.thread.id, options.promptContext)
+      : (promptContext?.state ?? {});
+    return this.trackAgent(response.thread.id, options.tools ?? [], promptInstructionState);
   }
 
   async createAgent(options: AgentStartOptions = {}): Promise<AgentHandle> {
@@ -610,6 +772,13 @@ export class CodexWorkflow {
   ): Promise<AgentHandle> {
     const resumeOptions = Array.isArray(options) ? { tools: options } : options;
     this.registerTools(resumeOptions.tools ?? []);
+    const needsServerPromptRead = promptContextUsesInstructionUpdate(resumeOptions.promptContext);
+    const promptContext = needsServerPromptRead
+      ? undefined
+      : await resolvePromptContextPolicy(resumeOptions.promptContext, {
+          systemInstructions: resumeOptions.baseInstructions,
+          developerInstructions: resumeOptions.developerInstructions,
+        });
     const response = await this.client.request<ThreadResumeResponse>("thread/resume", {
       threadId,
       model: resumeOptions.model,
@@ -619,8 +788,13 @@ export class CodexWorkflow {
       sandbox: resumeOptions.sandboxMode ? sandboxModeToWire(resumeOptions.sandboxMode) : undefined,
       developerInstructions: resumeOptions.developerInstructions,
       baseInstructions: resumeOptions.baseInstructions,
+      promptContext: promptContext?.policy,
+      toolPolicy: resumeOptions.toolPolicy,
     });
-    return this.trackAgent(response.thread.id, resumeOptions.tools ?? []);
+    const promptInstructionState = needsServerPromptRead
+      ? await this.applyPromptContextUpdateFromServer(response.thread.id, resumeOptions.promptContext)
+      : (promptContext?.state ?? {});
+    return this.trackAgent(response.thread.id, resumeOptions.tools ?? [], promptInstructionState);
   }
 
   listAgents(): AgentHandle[] {
@@ -646,10 +820,24 @@ export class CodexWorkflow {
   }
 
   /** @internal */
-  trackAgent(threadId: string, tools: WorkflowTool[]): AgentHandle {
-    const agent = new AgentHandle(this, this.client, threadId, tools);
+  trackAgent(
+    threadId: string,
+    tools: WorkflowTool[],
+    promptInstructionState: PromptInstructionState = {},
+  ): AgentHandle {
+    const agent = new AgentHandle(this, this.client, threadId, tools, promptInstructionState);
     this.agents.set(threadId, agent);
     return agent;
+  }
+
+  private async applyPromptContextUpdateFromServer(
+    threadId: string,
+    policy: PromptContextPolicy | undefined,
+  ): Promise<PromptInstructionState> {
+    const currentState = await readPromptInstructionState(this.client, threadId);
+    const resolved = await resolvePromptContextPolicy(policy, currentState);
+    await updateThreadPromptContext(this.client, threadId, resolved.policy);
+    return resolved.state;
   }
 
   /** @internal */
@@ -737,6 +925,7 @@ export class AgentHandle {
     client: AppServerClient,
     readonly threadId: string,
     tools: WorkflowTool[] = [],
+    private promptInstructionState: PromptInstructionState = {},
   ) {
     this.workflow = workflow;
     this.client = client;
@@ -756,11 +945,21 @@ export class AgentHandle {
   ): Promise<WorkflowStreamedTurn> {
     const stream = createTurnEventStream(this.client, this.threadId, options.signal);
     try {
+      const currentState = promptContextUsesInstructionUpdate(options.promptContext)
+        ? await readPromptInstructionState(this.client, this.threadId)
+        : this.promptInstructionState;
+      const promptContext = await resolvePromptContextPolicy(
+        options.promptContext,
+        currentState,
+      );
       const response = await this.client.request<TurnStartResponse>("turn/start", {
         threadId: this.threadId,
         input: normalizeInput(input),
         outputSchema: options.outputSchema,
+        promptContext: promptContext.policy,
+        toolPolicy: options.toolPolicy,
       });
+      this.promptInstructionState = promptContext.state;
       stream.setTurnId(response.turn.id);
       return { events: stream.events };
     } catch (error) {
@@ -798,7 +997,11 @@ export class AgentHandle {
       sandbox: options.sandboxMode ? sandboxModeToWire(options.sandboxMode) : undefined,
       ephemeral: options.ephemeral,
     });
-    return this.workflow.trackAgent(response.thread.id, options.tools ?? this.tools);
+    return this.workflow.trackAgent(
+      response.thread.id,
+      options.tools ?? this.tools,
+      this.promptInstructionState,
+    );
   }
 
   async sendInput(
@@ -1367,6 +1570,110 @@ function toolKey(namespace: string | null | undefined, name: string): string {
 
 function sandboxModeToWire(mode: NonNullable<AgentStartOptions["sandboxMode"]>): string {
   return mode;
+}
+
+async function readPromptInstructionState(
+  client: AppServerClient,
+  threadId: string,
+): Promise<PromptInstructionState> {
+  const response = await client.request<ThreadPromptContextReadResponse>(
+    "thread/promptContext/read",
+    { threadId },
+  );
+  return {
+    systemInstructions: response.systemInstructions,
+    developerInstructions: response.developerInstructions,
+    userInstructions: response.userInstructions,
+  };
+}
+
+async function updateThreadPromptContext(
+  client: AppServerClient,
+  threadId: string,
+  promptContext: PromptContextPolicy | undefined,
+): Promise<void> {
+  await client.request("thread/promptContext/update", {
+    threadId,
+    promptContext,
+  });
+}
+
+function promptContextUsesInstructionUpdate(policy: PromptContextPolicy | undefined): boolean {
+  return (
+    instructionPolicyUsesUpdate(policy?.systemInstructions) ||
+    instructionPolicyUsesUpdate(policy?.developer?.instructions) ||
+    instructionPolicyUsesUpdate(policy?.userContext?.instructions)
+  );
+}
+
+function instructionPolicyUsesUpdate(
+  policy: SystemInstructionPolicy | DeveloperInstructionPolicy | UserInstructionPolicy | undefined,
+): boolean {
+  return policy?.mode === InstructionMode.Update;
+}
+
+async function resolvePromptContextPolicy<T extends PromptContextPolicy | undefined>(
+  policy: T,
+  currentState: PromptInstructionState,
+): Promise<ResolvedPromptContext<T>> {
+  if (policy === undefined) {
+    return { policy: undefined as T, state: { ...currentState } };
+  }
+  const resolved: PromptContextPolicy = { ...policy };
+  const state: PromptInstructionState = { ...currentState };
+  if (policy.systemInstructions) {
+    const { policy: instructionPolicy, text } = await resolveInstructionPolicy(
+      policy.systemInstructions,
+      state.systemInstructions ?? "",
+    );
+    resolved.systemInstructions = instructionPolicy;
+    if (text !== undefined) {
+      state.systemInstructions = text;
+    }
+  }
+  if (policy.developer?.instructions) {
+    const { policy: instructionPolicy, text } = await resolveInstructionPolicy(
+      policy.developer.instructions,
+      state.developerInstructions ?? "",
+    );
+    resolved.developer = {
+      ...policy.developer,
+      instructions: instructionPolicy,
+    };
+    if (text !== undefined) {
+      state.developerInstructions = text;
+    }
+  }
+  if (policy.userContext?.instructions) {
+    const { policy: instructionPolicy, text } = await resolveInstructionPolicy(
+      policy.userContext.instructions,
+      state.userInstructions ?? "",
+    );
+    resolved.userContext = {
+      ...policy.userContext,
+      instructions: instructionPolicy,
+    };
+    if (text !== undefined) {
+      state.userInstructions = text;
+    }
+  }
+  return { policy: resolved as T, state };
+}
+
+async function resolveInstructionPolicy<
+  T extends SystemInstructionPolicy | DeveloperInstructionPolicy | UserInstructionPolicy,
+>(policy: T, current: string): Promise<{ policy: T; text?: string }> {
+  if (policy.mode === InstructionMode.Set) {
+    return { policy, text: policy.text };
+  }
+  if (policy.mode === InstructionMode.Omit) {
+    return { policy, text: undefined };
+  }
+  if (policy.mode !== InstructionMode.Update) {
+    return { policy };
+  }
+  const text = await policy.update(current);
+  return { policy: { mode: InstructionMode.Set, text } as T, text };
 }
 
 function isInteractiveRequest(method: string): boolean {

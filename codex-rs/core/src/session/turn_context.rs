@@ -91,6 +91,7 @@ pub(crate) struct TurnContext {
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) implement_requested: bool,
     pub(crate) final_output_json_schema: Option<Value>,
+    pub(crate) prompt_context_policy: crate::prompt_context::PromptContextPolicy,
     pub(crate) codex_self_exe: Option<PathBuf>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
@@ -252,6 +253,7 @@ impl TurnContext {
             ghost_snapshot: self.ghost_snapshot.clone(),
             implement_requested: self.implement_requested,
             final_output_json_schema: self.final_output_json_schema.clone(),
+            prompt_context_policy: self.prompt_context_policy.clone(),
             codex_self_exe: self.codex_self_exe.clone(),
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
@@ -515,7 +517,11 @@ impl Session {
         ));
 
         let per_turn_config = Arc::new(per_turn_config);
-        let tool_policy = TurnToolPolicy::for_turn(&session_source, &cwd);
+        let tool_policy = TurnToolPolicy::for_turn(
+            &session_source,
+            &cwd,
+            session_configuration.tool_policy.clone(),
+        );
         let file_system_sandbox_policy = tool_policy.apply_file_system_overlay(
             session_configuration.file_system_sandbox_policy.clone(),
             &cwd,
@@ -569,6 +575,7 @@ impl Session {
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
             implement_requested,
             final_output_json_schema: None,
+            prompt_context_policy: session_configuration.prompt_context_policy.clone(),
             codex_self_exe: per_turn_config.codex_self_exe.clone(),
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),

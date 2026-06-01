@@ -146,8 +146,10 @@ Example with notification opt-out:
 
 ## API Overview
 
-- `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread. When the request includes a `cwd` and the resolved sandbox is `workspace-write` or full access, app-server also marks that project as trusted in the user `config.toml`. Pass `sessionStartSource: "clear"` when starting a replacement thread after clearing the current session so `SessionStart` hooks receive `source: "clear"` instead of the default `"startup"`. For permissions, prefer experimental `permissions` profile selection; the legacy `sandbox` shorthand is still accepted but cannot be combined with `permissions`. Experimental `environments` selects the sticky execution environments for turns on the thread; omit it to use the server default, pass `[]` to disable environments, or pass explicit environment ids with per-environment `cwd`.
-- `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it. Accepts the same permission override rules as `thread/start`.
+- `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread. When the request includes a `cwd` and the resolved sandbox is `workspace-write` or full access, app-server also marks that project as trusted in the user `config.toml`. Pass `sessionStartSource: "clear"` when starting a replacement thread after clearing the current session so `SessionStart` hooks receive `source: "clear"` instead of the default `"startup"`. For permissions, prefer experimental `permissions` profile selection; the legacy `sandbox` shorthand is still accepted but cannot be combined with `permissions`. Experimental `environments` selects the sticky execution environments for turns on the thread; omit it to use the server default, pass `[]` to disable environments, or pass explicit environment ids with per-environment `cwd`. Experimental `promptContext` controls which system/developer/user-context prompt blocks are included, and experimental `toolPolicy` controls which tools are exposed to the model. `promptContext.strict` defaults to `true`, so the server rejects prompt policies it cannot honor exactly; set it to `false` only when best-effort prompt shaping is acceptable.
+- `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it. Accepts the same permission, `promptContext`, and `toolPolicy` override rules as `thread/start`.
+- `thread/promptContext/read` — experimental helper for loaded threads. Returns the server-resolved current `systemInstructions`, `developerInstructions`, and `userInstructions` text after config, resume, and any sticky prompt policy have been applied.
+- `thread/promptContext/update` — experimental helper for loaded threads. Applies persistent `promptContext` and/or `toolPolicy` updates before subsequent turns. Unlike `turn/start.promptContext`, this method accepts `systemInstructions`.
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; if the source thread is currently mid-turn, the fork records the same interruption marker as `turn/interrupt` instead of inheriting an unmarked partial turn suffix. The returned `thread.forkedFromId` points at the source thread when known. Accepts `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread. Experimental clients can pass `excludeTurns: true` when they plan to page fork history via `thread/turns/list` instead of receiving the full turn array immediately. Accepts the same permission override rules as `thread/start`.
 - `thread/start`, `thread/resume`, and `thread/fork` responses include the legacy `sandbox` compatibility projection. Experimental clients can read response `permissionProfile` for the exact active runtime permissions and `activePermissionProfile` for the named or implicit built-in profile identity/provenance when known.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
@@ -176,7 +178,7 @@ Example with notification opt-out:
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
-- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. Prefer experimental `permissions` profile selection for permission overrides; the legacy `sandboxPolicy` field is still accepted but cannot be combined with `permissions`. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
+- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. Prefer experimental `permissions` profile selection for permission overrides; the legacy `sandboxPolicy` field is still accepted but cannot be combined with `permissions`. Experimental `promptContext` can override developer/user-context prompt blocks for this and subsequent turns; `systemInstructions` is only accepted on `thread/start`, `thread/resume`, and `thread/promptContext/update`, and `strict` defaults to `true`. Experimental `toolPolicy` can narrow tool visibility for this and subsequent turns. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 - `thread/inject_items` — append raw Responses API items to a loaded thread’s model-visible history without starting a user turn; returns `{}` on success.
 - `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. Review and manual compaction turns reject `turn/steer`.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
@@ -268,6 +270,29 @@ Start a fresh thread when you need a new Codex conversation.
     "personality": "friendly",
     "serviceName": "my_app_server_client", // optional metrics tag (`service_name`)
     "sessionStartSource": "startup", // optional: "startup" (default) or "clear"
+    // Experimental: prompt and tool visibility policy.
+    // strict defaults to true and rejects policies the server cannot honor exactly.
+    "promptContext": {
+        "preset": "workflow",
+        "systemInstructions": { "mode": "set", "text": "You are reviewing CI output." },
+        "developer": {
+            "blocks": {
+                "skills": "omit",
+                "plugins": "omit"
+            }
+        },
+        "userContext": {
+            "blocks": {
+                "environment": "include",
+                "agentsMd": "include"
+            }
+        }
+    },
+    "toolPolicy": {
+        "builtins": { "mode": "allowOnly", "tools": ["exec_command", "view_image"] },
+        "mcp": { "mode": "deny", "servers": ["memory"], "tools": [] },
+        "toolRouter": "off"
+    },
     // Experimental: requires opt-in
     "dynamicTools": [
         {
@@ -668,6 +693,20 @@ You can optionally specify config overrides on the new turn. If specified, these
     "effort": "medium",
     "summary": "concise",
     "personality": "friendly",
+    // Experimental: prompt and tool visibility policy applied to this and subsequent turns.
+    // strict defaults to true and rejects policies the server cannot honor exactly.
+    "promptContext": {
+        "developer": {
+            "instructions": { "mode": "set", "text": "Focus on test failures only." },
+            "blocks": { "permissions": "omit" }
+        },
+        "userContext": {
+            "blocks": { "environment": "omit" }
+        }
+    },
+    "toolPolicy": {
+        "builtins": { "mode": "none" }
+    },
     // Optional JSON Schema to constrain the final assistant message for this turn.
     "outputSchema": {
         "type": "object",

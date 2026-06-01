@@ -10,7 +10,13 @@ import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it } from "@jest/globals";
 
 import {
+  BuiltinTool,
   CodexWorkflow,
+  InstructionMode,
+  PromptBlockMode,
+  PromptContextPreset,
+  ToolPolicyMode,
+  ToolRouterPolicy,
   defineTool,
   defineWorkflow,
   runWorkflow,
@@ -36,6 +42,8 @@ class FakeAppServerProcess extends EventEmitter {
   signalCode: NodeJS.Signals | null = null;
   threadResumeParams: JsonMessage | null = null;
   threadStartParams: JsonMessage | null = null;
+  threadPromptContextReadRequests: JsonMessage[] = [];
+  threadPromptContextUpdateRequests: JsonMessage[] = [];
   turnStartParams: JsonMessage | null = null;
   toolResponse: JsonMessage | null = null;
   approvalResponse: JsonMessage | null = null;
@@ -53,6 +61,11 @@ class FakeAppServerProcess extends EventEmitter {
   private startCount = 0;
   private threadId = "thread-1";
   private turnId = "turn-1";
+  private promptInstructionState = {
+    systemInstructions: "server system prompt",
+    developerInstructions: "server developer prompt",
+    userInstructions: "server user prompt",
+  };
   private artifactState: JsonMessage | null = null;
   private artifactFile: JsonMessage | null = null;
   private artifactCacheEntry: JsonMessage | null = null;
@@ -109,6 +122,14 @@ class FakeAppServerProcess extends EventEmitter {
       this.startCount += 1;
       this.threadId = `thread-${this.startCount}`;
       this.threadStartParams = message.params as JsonMessage;
+      this.promptInstructionState = {
+        systemInstructions:
+          stringValue(this.threadStartParams.baseInstructions) ?? "server system prompt",
+        developerInstructions:
+          stringValue(this.threadStartParams.developerInstructions) ?? "server developer prompt",
+        userInstructions: "server user prompt",
+      };
+      this.applyPromptContext(this.threadStartParams.promptContext);
       this.write({ id: message.id, result: { thread: { id: this.threadId, turns: [] } } });
       if (this.sendApprovalRequestOnThreadStart) {
         setImmediate(() => {
@@ -132,7 +153,29 @@ class FakeAppServerProcess extends EventEmitter {
       this.threadId = message.params
         ? String((message.params as JsonMessage).threadId)
         : "resumed-thread";
+      this.promptInstructionState = {
+        systemInstructions:
+          stringValue(this.threadResumeParams.baseInstructions) ?? this.promptInstructionState.systemInstructions,
+        developerInstructions:
+          stringValue(this.threadResumeParams.developerInstructions) ??
+          this.promptInstructionState.developerInstructions,
+        userInstructions: this.promptInstructionState.userInstructions,
+      };
+      this.applyPromptContext(this.threadResumeParams.promptContext);
       this.write({ id: message.id, result: { thread: { id: this.threadId, turns: [] } } });
+      return;
+    }
+    if (message.method === "thread/promptContext/read") {
+      const params = message.params as JsonMessage;
+      this.threadPromptContextReadRequests.push(params);
+      this.write({ id: message.id, result: { ...this.promptInstructionState } });
+      return;
+    }
+    if (message.method === "thread/promptContext/update") {
+      const params = message.params as JsonMessage;
+      this.threadPromptContextUpdateRequests.push(params);
+      this.applyPromptContext(params.promptContext);
+      this.write({ id: message.id, result: {} });
       return;
     }
     if (message.method === "thread/fork") {
@@ -142,6 +185,7 @@ class FakeAppServerProcess extends EventEmitter {
     }
     if (message.method === "turn/start") {
       this.turnStartParams = message.params as JsonMessage;
+      this.applyPromptContext(this.turnStartParams.promptContext);
       this.write({
         id: message.id,
         result: { turn: { id: this.turnId, status: "inProgress", items: [] } },
@@ -427,6 +471,51 @@ class FakeAppServerProcess extends EventEmitter {
   private write(message: JsonMessage): void {
     this.stdout.write(`${JSON.stringify(message)}\n`);
   }
+
+  private applyPromptContext(promptContext: unknown): void {
+    if (!isJsonMessage(promptContext)) {
+      return;
+    }
+    const systemInstructions = instructionText(promptContext.systemInstructions);
+    if (systemInstructions !== undefined) {
+      this.promptInstructionState.systemInstructions = systemInstructions;
+    }
+    const developer = promptContext.developer;
+    if (isJsonMessage(developer)) {
+      const developerInstructions = instructionText(developer.instructions);
+      if (developerInstructions !== undefined) {
+        this.promptInstructionState.developerInstructions = developerInstructions;
+      }
+    }
+    const userContext = promptContext.userContext;
+    if (isJsonMessage(userContext)) {
+      const userInstructions = instructionText(userContext.instructions);
+      if (userInstructions !== undefined) {
+        this.promptInstructionState.userInstructions = userInstructions;
+      }
+    }
+  }
+}
+
+function isJsonMessage(value: unknown): value is JsonMessage {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function instructionText(policy: unknown): string | undefined {
+  if (!isJsonMessage(policy)) {
+    return undefined;
+  }
+  if (policy.mode === "set") {
+    return stringValue(policy.text) ?? "";
+  }
+  if (policy.mode === "omit") {
+    return "";
+  }
+  return undefined;
 }
 
 class FakeWebSocket extends EventEmitter {
@@ -742,6 +831,107 @@ describe("CodexWorkflow", () => {
     await agent.close();
     expect(workflow.listAgents()).toEqual([]);
 
+    await workflow.close();
+  });
+
+  it("passes prompt context and tool policy to thread and turn starts", async () => {
+    const fake = new FakeAppServerProcess();
+    spawnMock.mockReturnValue(fake as unknown as child_process.ChildProcess);
+
+    const workflow = await CodexWorkflow.start({ codexPathOverride: "codex" });
+    const tool = defineTool(
+      {
+        namespace: "js",
+        name: "lookup_weather",
+        description: "Looks up weather",
+        inputSchema: {
+          type: "object",
+          properties: { city: { type: "string" } },
+          required: ["city"],
+          additionalProperties: false,
+        },
+      },
+      () => "Weather: mild",
+    );
+
+    const agent = await workflow.startAgent({
+      tools: [tool],
+      baseInstructions: "base prompt",
+      developerInstructions: "existing ",
+      promptContext: {
+        preset: PromptContextPreset.Workflow,
+        systemInstructions: {
+          mode: InstructionMode.Update,
+          update: (current) => `${current} plus system`,
+        },
+        developer: {
+          instructions: {
+            mode: InstructionMode.Update,
+            update: (current) => `${current}developer prompt`,
+          },
+          blocks: { skills: PromptBlockMode.Omit },
+        },
+      },
+      toolPolicy: {
+        builtins: { mode: ToolPolicyMode.AllowOnly, tools: [BuiltinTool.ExecCommand] },
+        mcp: { mode: ToolPolicyMode.None },
+        toolRouter: ToolRouterPolicy.Off,
+      },
+    });
+
+    await agent.run("Use the weather tool", {
+      promptContext: {
+        developer: {
+          instructions: {
+            mode: InstructionMode.Update,
+            update: (current) => `${current} plus turn`,
+          },
+        },
+        userContext: {
+          blocks: { environment: PromptBlockMode.Omit },
+        },
+      },
+      toolPolicy: {
+        builtins: { mode: ToolPolicyMode.None },
+      },
+    });
+
+    expect(fake.threadStartParams?.promptContext).toBeUndefined();
+    expect(fake.threadPromptContextReadRequests).toEqual([
+      { threadId: "thread-1" },
+      { threadId: "thread-1" },
+    ]);
+    expect(fake.threadPromptContextUpdateRequests).toEqual([
+      {
+        threadId: "thread-1",
+        promptContext: {
+          preset: "workflow",
+          systemInstructions: { mode: "set", text: "base prompt plus system" },
+          developer: {
+            instructions: { mode: "set", text: "existing developer prompt" },
+            blocks: { skills: "omit" },
+          },
+        },
+      },
+    ]);
+    expect(fake.threadStartParams?.toolPolicy).toEqual({
+      builtins: { mode: "allowOnly", tools: ["exec_command"] },
+      mcp: { mode: "none" },
+      toolRouter: "off",
+    });
+    expect(fake.turnStartParams?.promptContext).toEqual({
+      developer: {
+        instructions: { mode: "set", text: "existing developer prompt plus turn" },
+      },
+      userContext: {
+        blocks: { environment: "omit" },
+      },
+    });
+    expect(fake.turnStartParams?.toolPolicy).toEqual({
+      builtins: { mode: "none" },
+    });
+
+    await agent.close();
     await workflow.close();
   });
 

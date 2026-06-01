@@ -180,6 +180,10 @@ use codex_app_server_protocol::ThreadMetadataUpdateResponse;
 use codex_app_server_protocol::ThreadModelRouterSessionConfigSetParams;
 use codex_app_server_protocol::ThreadModelRouterSessionConfigSetResponse;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
+use codex_app_server_protocol::ThreadPromptContextReadParams;
+use codex_app_server_protocol::ThreadPromptContextReadResponse;
+use codex_app_server_protocol::ThreadPromptContextUpdateParams;
+use codex_app_server_protocol::ThreadPromptContextUpdateResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -1039,6 +1043,14 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadRead { request_id, params } => {
                 self.thread_read(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadPromptContextRead { request_id, params } => {
+                self.thread_prompt_context_read(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadPromptContextUpdate { request_id, params } => {
+                self.thread_prompt_context_update(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadTurnsList { request_id, params } => {
@@ -2531,12 +2543,15 @@ impl CodexMessageProcessor {
             service_name,
             base_instructions,
             developer_instructions,
+            prompt_context,
+            tool_policy,
             dynamic_tools,
             mock_experimental_field: _mock_experimental_field,
             experimental_raw_events,
             personality,
             ephemeral,
             session_start_source,
+            thread_source: _thread_source,
             environments,
             persist_extended_history,
         } = params;
@@ -2579,6 +2594,33 @@ impl CodexMessageProcessor {
             developer_instructions,
             personality,
         );
+        if let Some(prompt_context) = prompt_context {
+            let prompt_context = match crate::prompt_policy::prompt_context_policy_to_core(
+                prompt_context,
+                true,
+            ) {
+                Ok(prompt_context) => prompt_context,
+                Err(message) => {
+                    self.send_invalid_request_error(request_id, message).await;
+                    return;
+                }
+            };
+            crate::prompt_policy::apply_system_instruction_override(
+                &mut typesafe_overrides,
+                &prompt_context,
+            );
+            typesafe_overrides.prompt_context_policy = Some(prompt_context);
+        }
+        if let Some(tool_policy) = tool_policy {
+            let tool_policy = match crate::prompt_policy::tool_policy_to_core(tool_policy) {
+                Ok(tool_policy) => tool_policy,
+                Err(message) => {
+                    self.send_invalid_request_error(request_id, message).await;
+                    return;
+                }
+            };
+            typesafe_overrides.tool_policy = Some(tool_policy);
+        }
         typesafe_overrides.ephemeral = ephemeral;
         let listener_task_context = ListenerTaskContext {
             thread_manager: Arc::clone(&self.thread_manager),
@@ -2809,6 +2851,34 @@ impl CodexMessageProcessor {
                 })
                 .collect()
         };
+        if let Err(message) = config.prompt_context_policy.validate_strict_for_config(&config) {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message,
+                data: None,
+            };
+            listener_task_context
+                .outgoing
+                .send_error(request_id, error)
+                .await;
+            return;
+        }
+        if let Err(message) = config
+            .tool_policy
+            .validate_static()
+            .and_then(|()| config.tool_policy.validate_dynamic_tools(&core_dynamic_tools))
+        {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message,
+                data: None,
+            };
+            listener_task_context
+                .outgoing
+                .send_error(request_id, error)
+                .await;
+            return;
+        }
         let core_dynamic_tool_count = core_dynamic_tools.len();
 
         match listener_task_context
@@ -4283,6 +4353,85 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    async fn thread_prompt_context_read(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadPromptContextReadParams,
+    ) {
+        let ThreadPromptContextReadParams { thread_id } = params;
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(value) => value,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let instructions = thread.prompt_instructions().await;
+        self.outgoing
+            .send_response(
+                request_id,
+                ThreadPromptContextReadResponse {
+                    system_instructions: instructions.system_instructions,
+                    developer_instructions: instructions.developer_instructions,
+                    user_instructions: instructions.user_instructions,
+                },
+            )
+            .await;
+    }
+
+    async fn thread_prompt_context_update(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadPromptContextUpdateParams,
+    ) {
+        let ThreadPromptContextUpdateParams {
+            thread_id,
+            prompt_context,
+            tool_policy,
+        } = params;
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(value) => value,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let prompt_context_policy = match prompt_context
+            .map(|policy| crate::prompt_policy::prompt_context_policy_to_core(policy, true))
+            .transpose()
+        {
+            Ok(policy) => policy,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, err).await;
+                return;
+            }
+        };
+        let tool_policy = match tool_policy
+            .map(crate::prompt_policy::tool_policy_to_core)
+            .transpose()
+        {
+            Ok(policy) => policy,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, err).await;
+                return;
+            }
+        };
+        if let Err(err) = thread
+            .update_prompt_and_tool_policies(prompt_context_policy, tool_policy)
+            .await
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!("invalid prompt context update: {err}"),
+            )
+                .await;
+            return;
+        }
+        self.outgoing
+            .send_response(request_id, ThreadPromptContextUpdateResponse {})
+            .await;
+    }
+
     /// Builds the API view for `thread/read` from persisted metadata plus optional live state.
     async fn read_thread_view(
         &self,
@@ -4694,6 +4843,8 @@ impl CodexMessageProcessor {
             config: mut request_overrides,
             base_instructions,
             developer_instructions,
+            prompt_context,
+            tool_policy,
             personality,
             exclude_turns,
             persist_extended_history,
@@ -4732,6 +4883,33 @@ impl CodexMessageProcessor {
             developer_instructions,
             personality,
         );
+        if let Some(prompt_context) = prompt_context {
+            let prompt_context = match crate::prompt_policy::prompt_context_policy_to_core(
+                prompt_context,
+                true,
+            ) {
+                Ok(prompt_context) => prompt_context,
+                Err(message) => {
+                    self.send_invalid_request_error(request_id, message).await;
+                    return;
+                }
+            };
+            crate::prompt_policy::apply_system_instruction_override(
+                &mut typesafe_overrides,
+                &prompt_context,
+            );
+            typesafe_overrides.prompt_context_policy = Some(prompt_context);
+        }
+        if let Some(tool_policy) = tool_policy {
+            let tool_policy = match crate::prompt_policy::tool_policy_to_core(tool_policy) {
+                Ok(tool_policy) => tool_policy,
+                Err(message) => {
+                    self.send_invalid_request_error(request_id, message).await;
+                    return;
+                }
+            };
+            typesafe_overrides.tool_policy = Some(tool_policy);
+        }
         self.load_and_apply_persisted_resume_metadata(
             &thread_history,
             &mut request_overrides,
@@ -7295,6 +7473,41 @@ impl CodexMessageProcessor {
                 .await;
             return;
         }
+        let prompt_context_policy = match params
+            .prompt_context
+            .map(|policy| crate::prompt_policy::prompt_context_policy_to_core(policy, false))
+            .transpose()
+        {
+            Ok(policy) => policy,
+            Err(message) => {
+                self.send_invalid_request_error(request_id, message).await;
+                return;
+            }
+        };
+        let tool_policy = match params
+            .tool_policy
+            .map(crate::prompt_policy::tool_policy_to_core)
+            .transpose()
+        {
+            Ok(policy) => policy,
+            Err(message) => {
+                self.send_invalid_request_error(request_id, message).await;
+                return;
+            }
+        };
+        if prompt_context_policy.is_some() || tool_policy.is_some() {
+            if let Err(err) = thread
+                .update_prompt_and_tool_policies(prompt_context_policy.clone(), tool_policy.clone())
+                .await
+            {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("invalid turn context override: {err}"),
+                )
+                .await;
+                return;
+            }
+        }
 
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params
@@ -7313,7 +7526,9 @@ impl CodexMessageProcessor {
             || params.effort.is_some()
             || params.summary.is_some()
             || collaboration_mode.is_some()
-            || params.personality.is_some();
+            || params.personality.is_some()
+            || prompt_context_policy.is_some()
+            || tool_policy.is_some();
         let has_any_overrides = has_persistent_overrides;
 
         if params.sandbox_policy.is_some() && params.permission_profile.is_some() {
@@ -7356,6 +7571,8 @@ impl CodexMessageProcessor {
                     service_tier,
                     collaboration_mode: collaboration_mode.clone(),
                     personality,
+                    prompt_context_policy: prompt_context_policy.clone(),
+                    tool_policy: tool_policy.clone(),
                 })
                 .await;
             if let Err(err) = result {

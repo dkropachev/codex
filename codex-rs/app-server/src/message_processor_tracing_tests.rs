@@ -670,6 +670,8 @@ fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
                         summary: None,
                         personality: None,
                         output_schema: None,
+                        prompt_context: None,
+                        tool_policy: None,
                         collaboration_mode: None,
                     },
                 },

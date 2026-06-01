@@ -382,6 +382,7 @@ async fn assert_model_tools(
             remembered_tool_selectors: Vec::new(),
             dynamic_tools: &[],
             workflow_tools: None,
+            tool_policy: Default::default(),
         },
     );
     let model_visible_specs = router.model_visible_specs();

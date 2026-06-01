@@ -23,7 +23,15 @@ fn build_environment_update_item(
     next: &TurnContext,
     shell: &Shell,
 ) -> Option<ResponseItem> {
-    if !next.config.include_environment_context {
+    let policy = next
+        .prompt_context_policy
+        .resolve(crate::prompt_context::PromptContextDefaults {
+            permissions: next.config.include_permissions_instructions,
+            apps: next.config.include_apps_instructions,
+            skills: next.config.include_skill_instructions,
+            environment: next.config.include_environment_context,
+        });
+    if !policy.environment {
         return None;
     }
 
@@ -44,7 +52,15 @@ fn build_permissions_update_item(
     next: &TurnContext,
     exec_policy: &Policy,
 ) -> Option<String> {
-    if !next.config.include_permissions_instructions {
+    let policy = next
+        .prompt_context_policy
+        .resolve(crate::prompt_context::PromptContextDefaults {
+            permissions: next.config.include_permissions_instructions,
+            apps: next.config.include_apps_instructions,
+            skills: next.config.include_skill_instructions,
+            environment: next.config.include_environment_context,
+        });
+    if !policy.permissions {
         return None;
     }
 

@@ -211,7 +211,11 @@ pub(super) async fn spawn_review_thread(
         parent_turn_context.windows_sandbox_level,
         parent_turn_context.network.is_some(),
     ));
-    let tool_policy = TurnToolPolicy::for_turn(&session_source, &parent_turn_context.cwd);
+    let tool_policy = TurnToolPolicy::for_turn(
+        &session_source,
+        &parent_turn_context.cwd,
+        parent_turn_context.tool_policy.visibility().clone(),
+    );
     let file_system_sandbox_policy = tool_policy.apply_file_system_overlay(
         parent_turn_context.file_system_sandbox_policy.clone(),
         &parent_turn_context.cwd,
@@ -256,6 +260,7 @@ pub(super) async fn spawn_review_thread(
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
         final_output_json_schema: None,
+        prompt_context_policy: parent_turn_context.prompt_context_policy.clone(),
         codex_self_exe: parent_turn_context.codex_self_exe.clone(),
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),

@@ -184,6 +184,9 @@ pub(super) async fn user_input_or_turn_inner(
                     implement_enabled: None,
                     implement_mode: None,
                     implement_max_cycles: None,
+                    base_instructions: None,
+                    prompt_context_policy: None,
+                    tool_policy: None,
                 },
                 None,
             )
@@ -238,6 +241,9 @@ pub(super) async fn user_input_or_turn_inner(
                     implement_enabled: None,
                     implement_mode: None,
                     implement_max_cycles: None,
+                    base_instructions: None,
+                    prompt_context_policy: None,
+                    tool_policy: None,
                 },
                 responsesapi_client_metadata,
             )

@@ -352,6 +352,22 @@ impl TurnRequestProcessor {
             self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)
         });
         let environment_selections = self.parse_environment_selections(params.environments)?;
+        let prompt_context_policy = params
+            .prompt_context
+            .map(|policy| crate::prompt_policy::prompt_context_policy_to_core(policy, false))
+            .transpose()
+            .map_err(invalid_request)?;
+        let tool_policy = params
+            .tool_policy
+            .map(crate::prompt_policy::tool_policy_to_core)
+            .transpose()
+            .map_err(invalid_request)?;
+        if prompt_context_policy.is_some() || tool_policy.is_some() {
+            thread
+                .update_prompt_and_tool_policies(prompt_context_policy.clone(), tool_policy.clone())
+                .await
+                .map_err(|err| invalid_request(format!("invalid turn context override: {err}")))?;
+        }
 
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params
@@ -371,7 +387,9 @@ impl TurnRequestProcessor {
             || params.effort.is_some()
             || params.summary.is_some()
             || collaboration_mode.is_some()
-            || params.personality.is_some();
+            || params.personality.is_some()
+            || prompt_context_policy.is_some()
+            || tool_policy.is_some();
 
         if params.sandbox_policy.is_some() && params.permissions.is_some() {
             return Err(invalid_request(
@@ -452,6 +470,8 @@ impl TurnRequestProcessor {
                     service_tier: service_tier.clone(),
                     collaboration_mode: collaboration_mode.clone(),
                     personality,
+                    prompt_context_policy: prompt_context_policy.clone(),
+                    tool_policy: tool_policy.clone(),
                 })
                 .await
                 .map_err(|err| invalid_request(format!("invalid turn context override: {err}")))?;

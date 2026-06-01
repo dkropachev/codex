@@ -94,6 +94,8 @@ pub struct CodexThreadTurnContextOverrides {
     pub service_tier: Option<Option<String>>,
     pub collaboration_mode: Option<CollaborationMode>,
     pub personality: Option<Personality>,
+    pub prompt_context_policy: Option<crate::prompt_context::PromptContextPolicy>,
+    pub tool_policy: Option<crate::prompt_context::ToolPolicy>,
 }
 
 pub struct CodexThread {
@@ -250,6 +252,8 @@ impl CodexThread {
             service_tier,
             collaboration_mode,
             personality,
+            prompt_context_policy,
+            tool_policy,
         } = overrides;
         let _ = active_permission_profile;
         let collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
@@ -275,9 +279,45 @@ impl CodexThread {
                 service_tier.and_then(|service_tier| ServiceTier::from_request_value(&service_tier))
             }),
             personality,
+            prompt_context_policy,
+            tool_policy,
             ..Default::default()
         };
         self.codex.session.validate_settings(&updates).await
+    }
+
+    /// Apply persistent turn context overrides outside the user input queue.
+    ///
+    /// Prefer queued `UserInputWithTurnContext` for standard runtime settings. This helper exists
+    /// for prompt/tool policies, which are currently API-only settings rather than protocol `Op`
+    /// fields.
+    pub async fn update_prompt_and_tool_policies(
+        &self,
+        prompt_context_policy: Option<crate::prompt_context::PromptContextPolicy>,
+        tool_policy: Option<crate::prompt_context::ToolPolicy>,
+    ) -> ConstraintResult<()> {
+        let base_instructions = prompt_context_policy.as_ref().and_then(|policy| {
+            if let Some(crate::prompt_context::InstructionPolicy::Set(text)) =
+                &policy.system_instructions
+            {
+                Some(text.clone())
+            } else {
+                None
+            }
+        });
+        self.codex
+            .session
+            .update_settings(SessionSettingsUpdate {
+                base_instructions,
+                prompt_context_policy,
+                tool_policy,
+                ..Default::default()
+            })
+            .await
+    }
+
+    pub async fn prompt_instructions(&self) -> crate::prompt_context::PromptInstructions {
+        self.codex.session.prompt_instructions().await
     }
 
     /// Use sparingly: this is intended to be removed soon.

@@ -623,6 +623,8 @@ impl Codex {
             app_server_client_version: None,
             session_source,
             dynamic_tools,
+            prompt_context_policy: config.prompt_context_policy.clone(),
+            tool_policy: config.tool_policy.clone(),
             persist_extended_history,
             inherited_shell_snapshot,
             user_shell_override,
@@ -1114,6 +1116,57 @@ impl Session {
         let state = self.state.lock().await;
         BaseInstructions {
             text: state.session_configuration.base_instructions.clone(),
+        }
+    }
+
+    pub(crate) async fn prompt_instructions(&self) -> crate::prompt_context::PromptInstructions {
+        let state = self.state.lock().await;
+        let session_configuration = &state.session_configuration;
+        let prompt_context_policy = session_configuration.prompt_context_policy.resolve(
+            crate::prompt_context::PromptContextDefaults {
+                permissions: session_configuration
+                    .original_config_do_not_use
+                    .include_permissions_instructions,
+                apps: session_configuration
+                    .original_config_do_not_use
+                    .include_apps_instructions,
+                skills: session_configuration
+                    .original_config_do_not_use
+                    .include_skill_instructions,
+                environment: session_configuration
+                    .original_config_do_not_use
+                    .include_environment_context,
+            },
+        );
+        let developer_instructions = if prompt_context_policy.developer_instructions {
+            match &prompt_context_policy.developer_instruction_policy {
+                crate::prompt_context::InstructionPolicy::Set(instructions) => instructions.clone(),
+                crate::prompt_context::InstructionPolicy::Inherit => session_configuration
+                    .developer_instructions
+                    .clone()
+                    .unwrap_or_default(),
+                crate::prompt_context::InstructionPolicy::Omit => String::new(),
+            }
+        } else {
+            String::new()
+        };
+        let user_instructions = if prompt_context_policy.agents_md {
+            match &prompt_context_policy.user_instruction_policy {
+                crate::prompt_context::InstructionPolicy::Set(instructions) => instructions.clone(),
+                crate::prompt_context::InstructionPolicy::Inherit => session_configuration
+                    .user_instructions
+                    .clone()
+                    .unwrap_or_default(),
+                crate::prompt_context::InstructionPolicy::Omit => String::new(),
+            }
+        } else {
+            String::new()
+        };
+
+        crate::prompt_context::PromptInstructions {
+            system_instructions: session_configuration.base_instructions.clone(),
+            developer_instructions,
+            user_instructions,
         }
     }
 
@@ -2587,6 +2640,14 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Vec<ResponseItem> {
+        let prompt_context_policy = turn_context.prompt_context_policy.resolve(
+            crate::prompt_context::PromptContextDefaults {
+                permissions: turn_context.config.include_permissions_instructions,
+                apps: turn_context.config.include_apps_instructions,
+                skills: turn_context.config.include_skill_instructions,
+                environment: turn_context.config.include_environment_context,
+            },
+        );
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
         let shell = self.user_shell();
@@ -2614,7 +2675,7 @@ impl Session {
         {
             developer_sections.push(model_switch_message);
         }
-        if turn_context.config.include_permissions_instructions {
+        if prompt_context_policy.permissions {
             developer_sections.push(
                 PermissionsInstructions::from_permission_profile(
                     &turn_context.permission_profile,
@@ -2636,14 +2697,28 @@ impl Session {
             crate::guardian::is_guardian_reviewer_source(&session_source);
         // Keep the guardian policy prompt out of the aggregated developer bundle so it
         // stays isolated as its own top-level developer message for guardian subagents.
-        if !separate_guardian_developer_message
-            && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
-            && !developer_instructions.is_empty()
-        {
-            developer_sections.push(developer_instructions.to_string());
+        if !separate_guardian_developer_message && prompt_context_policy.developer_instructions {
+            match &prompt_context_policy.developer_instruction_policy {
+                crate::prompt_context::InstructionPolicy::Set(developer_instructions)
+                    if !developer_instructions.is_empty() =>
+                {
+                    developer_sections.push(developer_instructions.clone());
+                }
+                crate::prompt_context::InstructionPolicy::Inherit => {
+                    if let Some(developer_instructions) =
+                        turn_context.developer_instructions.as_deref()
+                        && !developer_instructions.is_empty()
+                    {
+                        developer_sections.push(developer_instructions.to_string());
+                    }
+                }
+                crate::prompt_context::InstructionPolicy::Omit
+                | crate::prompt_context::InstructionPolicy::Set(_) => {}
+            }
         }
         // Add developer instructions for memories.
-        if turn_context.features.enabled(Feature::MemoryTool)
+        if prompt_context_policy.memories
+            && turn_context.features.enabled(Feature::MemoryTool)
             && turn_context.config.memories.use_memories
             && let Some(memory_prompt) =
                 build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
@@ -2651,19 +2726,24 @@ impl Session {
             developer_sections.push(memory_prompt);
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
-        if let Some(collab_instructions) =
-            CollaborationModeInstructions::from_collaboration_mode(&collaboration_mode)
+        if prompt_context_policy.collaboration_mode
+            && let Some(collab_instructions) =
+                CollaborationModeInstructions::from_collaboration_mode(&collaboration_mode)
         {
             developer_sections.push(collab_instructions.render());
         }
-        if let Some(realtime_update) = crate::context_manager::updates::build_initial_realtime_item(
-            reference_context_item.as_ref(),
-            previous_turn_settings.as_ref(),
-            turn_context,
-        ) {
+        if prompt_context_policy.realtime
+            && let Some(realtime_update) =
+                crate::context_manager::updates::build_initial_realtime_item(
+                    reference_context_item.as_ref(),
+                    previous_turn_settings.as_ref(),
+                    turn_context,
+                )
+        {
             developer_sections.push(realtime_update);
         }
-        if self.features.enabled(Feature::Personality)
+        if prompt_context_policy.personality
+            && self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality
         {
             let model_info = turn_context.model_info.clone();
@@ -2680,7 +2760,7 @@ impl Session {
                     .push(PersonalitySpecInstructions::new(personality_message).render());
             }
         }
-        if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
+        if prompt_context_policy.apps && turn_context.apps_enabled() {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
             let accessible_and_enabled_connectors =
                 connectors::list_accessible_and_enabled_connectors_from_manager(
@@ -2694,7 +2774,7 @@ impl Session {
                 developer_sections.push(apps_instructions.render());
             }
         }
-        if turn_context.config.include_skill_instructions {
+        if prompt_context_policy.skills {
             let available_skills = build_available_skills(
                 &turn_context.turn_skills.outcome,
                 default_skill_metadata_budget(turn_context.model_info.context_window),
@@ -2717,44 +2797,62 @@ impl Session {
                 developer_sections.push(skills_instructions.render());
             }
         }
-        let plugins_input = turn_context.config.plugins_config_input();
-        let loaded_plugins = self
-            .services
-            .plugins_manager
-            .plugins_for_config(&plugins_input)
-            .await;
-        if let Some(plugin_instructions) =
-            AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
-        {
-            developer_sections.push(plugin_instructions.render());
+        if prompt_context_policy.plugins {
+            let plugins_input = turn_context.config.plugins_config_input();
+            let loaded_plugins = self
+                .services
+                .plugins_manager
+                .plugins_for_config(&plugins_input)
+                .await;
+            if let Some(plugin_instructions) =
+                AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
+            {
+                developer_sections.push(plugin_instructions.render());
+            }
         }
-        if turn_context.features.enabled(Feature::CodexGitCommit)
+        if prompt_context_policy.commit_attribution
+            && turn_context.features.enabled(Feature::CodexGitCommit)
             && let Some(commit_message_instruction) = commit_message_trailer_instruction(
                 turn_context.config.commit_attribution.as_deref(),
             )
         {
             developer_sections.push(commit_message_instruction);
         }
-        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-            contextual_user_sections.push(
-                UserInstructions {
-                    text: user_instructions.to_string(),
-                    directory: turn_context.cwd.to_string_lossy().into_owned(),
+        if prompt_context_policy.agents_md {
+            let user_instructions = match &prompt_context_policy.user_instruction_policy {
+                crate::prompt_context::InstructionPolicy::Set(user_instructions)
+                    if !user_instructions.is_empty() =>
+                {
+                    Some(user_instructions.clone())
                 }
-                .render(),
-            );
-        }
-        if turn_context.config.include_environment_context {
-            let subagents = self
-                .services
-                .agent_control
-                .format_environment_context_subagents(self.conversation_id)
-                .await;
-            contextual_user_sections.push(
-                crate::context::EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
-                    .with_subagents(subagents)
+                crate::prompt_context::InstructionPolicy::Inherit => {
+                    turn_context.user_instructions.clone()
+                }
+                crate::prompt_context::InstructionPolicy::Omit
+                | crate::prompt_context::InstructionPolicy::Set(_) => None,
+            };
+            if let Some(user_instructions) = user_instructions {
+                contextual_user_sections.push(
+                    UserInstructions {
+                        text: user_instructions,
+                        directory: turn_context.cwd.to_string_lossy().into_owned(),
+                    }
                     .render(),
-            );
+                );
+            }
+        }
+        if prompt_context_policy.environment {
+            let mut environment_context =
+                crate::context::EnvironmentContext::from_turn_context(turn_context, shell.as_ref());
+            if prompt_context_policy.subagents {
+                let subagents = self
+                    .services
+                    .agent_control
+                    .format_environment_context_subagents(self.conversation_id)
+                    .await;
+                environment_context = environment_context.with_subagents(subagents);
+            }
+            contextual_user_sections.push(environment_context.render());
         }
 
         let mut items = Vec::with_capacity(3);
@@ -2771,6 +2869,7 @@ impl Session {
         // Emit the guardian policy prompt as a separate developer item so the guardian
         // subagent sees a distinct, easy-to-audit instruction block.
         if separate_guardian_developer_message
+            && prompt_context_policy.developer_instructions
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
             && !developer_instructions.is_empty()
             && let Some(guardian_developer_message) =

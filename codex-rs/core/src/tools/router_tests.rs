@@ -67,6 +67,7 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
             remembered_tool_selectors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
             workflow_tools: None,
+            tool_policy: Default::default(),
         },
     );
 
@@ -119,6 +120,7 @@ async fn tool_router_fanout_does_not_use_general_parallel_support() -> anyhow::R
             remembered_tool_selectors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
             workflow_tools: None,
+            tool_policy: Default::default(),
         },
     );
 
@@ -165,6 +167,7 @@ async fn tool_router_mode_without_deferred_tools_exposes_real_tools() -> anyhow:
             remembered_tool_selectors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
             workflow_tools: None,
+            tool_policy: Default::default(),
         },
     );
 
@@ -215,6 +218,7 @@ async fn tool_router_mode_with_deferred_tools_exposes_tool_search() -> anyhow::R
             remembered_tool_selectors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
             workflow_tools: None,
+            tool_policy: Default::default(),
         },
     );
 
@@ -266,6 +270,7 @@ async fn tool_router_mode_remembered_tools_do_not_change_visibility() -> anyhow:
             remembered_tool_selectors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
             workflow_tools: None,
+            tool_policy: Default::default(),
         },
     );
     let plain_tool_name = ["shell", "local_shell", "exec_command", "shell_command"]
@@ -298,6 +303,7 @@ async fn tool_router_mode_remembered_tools_do_not_change_visibility() -> anyhow:
             ],
             dynamic_tools: turn.dynamic_tools.as_slice(),
             workflow_tools: None,
+            tool_policy: Default::default(),
         },
     );
 
@@ -372,6 +378,7 @@ async fn tool_router_mode_keeps_deferred_tools_behind_tool_search() -> anyhow::R
             ],
             dynamic_tools: turn.dynamic_tools.as_slice(),
             workflow_tools: None,
+            tool_policy: Default::default(),
         },
     );
 
@@ -410,6 +417,7 @@ async fn tool_router_mode_omits_prompt_info_when_remembered_tools_change() -> an
             remembered_tool_selectors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
             workflow_tools: None,
+            tool_policy: Default::default(),
         },
     );
     let remembered_router = ToolRouter::from_config(
@@ -426,6 +434,7 @@ async fn tool_router_mode_omits_prompt_info_when_remembered_tools_change() -> an
             }],
             dynamic_tools: turn.dynamic_tools.as_slice(),
             workflow_tools: None,
+            tool_policy: Default::default(),
         },
     );
 
@@ -488,6 +497,7 @@ async fn published_workflow_tools_are_added_to_router_specs() -> anyhow::Result<
             remembered_tool_selectors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
             workflow_tools: Some(vec![published_tool]),
+            tool_policy: Default::default(),
         },
     );
 
@@ -554,6 +564,7 @@ async fn mcp_parallel_support_uses_exact_payload_server() -> anyhow::Result<()> 
             remembered_tool_selectors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
             workflow_tools: None,
+            tool_policy: Default::default(),
         },
     );
 

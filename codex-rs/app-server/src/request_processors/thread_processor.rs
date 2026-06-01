@@ -1,6 +1,10 @@
 use super::model_history_limits::validate_model_visible_response_items;
 use super::*;
 use codex_app_server_protocol::ServiceTier as ApiServiceTier;
+use codex_app_server_protocol::ThreadPromptContextReadParams;
+use codex_app_server_protocol::ThreadPromptContextReadResponse;
+use codex_app_server_protocol::ThreadPromptContextUpdateParams;
+use codex_app_server_protocol::ThreadPromptContextUpdateResponse;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -595,6 +599,24 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_prompt_context_read(
+        &self,
+        params: ThreadPromptContextReadParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_prompt_context_read_response_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_prompt_context_update(
+        &self,
+        params: ThreadPromptContextUpdateParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_prompt_context_update_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn thread_turns_list(
         &self,
         params: ThreadTurnsListParams,
@@ -819,6 +841,8 @@ impl ThreadRequestProcessor {
             service_name,
             base_instructions,
             developer_instructions,
+            prompt_context,
+            tool_policy,
             dynamic_tools,
             mock_experimental_field: _mock_experimental_field,
             experimental_raw_events,
@@ -856,6 +880,21 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
         );
+        if let Some(prompt_context) = prompt_context {
+            let prompt_context =
+                crate::prompt_policy::prompt_context_policy_to_core(prompt_context, true)
+                    .map_err(invalid_request)?;
+            crate::prompt_policy::apply_system_instruction_override(
+                &mut typesafe_overrides,
+                &prompt_context,
+            );
+            typesafe_overrides.prompt_context_policy = Some(prompt_context);
+        }
+        if let Some(tool_policy) = tool_policy {
+            typesafe_overrides.tool_policy = Some(
+                crate::prompt_policy::tool_policy_to_core(tool_policy).map_err(invalid_request)?,
+            );
+        }
         typesafe_overrides.ephemeral = ephemeral;
         let listener_task_context = ListenerTaskContext {
             thread_manager: Arc::clone(&self.thread_manager),
@@ -1067,6 +1106,19 @@ impl ThreadRequestProcessor {
                 })
                 .collect()
         };
+        config
+            .prompt_context_policy
+            .validate_strict_for_config(&config)
+            .map_err(invalid_request)?;
+        config
+            .tool_policy
+            .validate_static()
+            .and_then(|()| {
+                config
+                    .tool_policy
+                    .validate_dynamic_tools(&core_dynamic_tools)
+            })
+            .map_err(invalid_request)?;
         let core_dynamic_tool_count = core_dynamic_tools.len();
 
         let NewThread {
@@ -1984,6 +2036,47 @@ impl ThreadRequestProcessor {
         Ok(ThreadReadResponse { thread })
     }
 
+    async fn thread_prompt_context_read_response_inner(
+        &self,
+        params: ThreadPromptContextReadParams,
+    ) -> Result<ThreadPromptContextReadResponse, JSONRPCErrorError> {
+        let ThreadPromptContextReadParams { thread_id } = params;
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        let instructions = thread.prompt_instructions().await;
+
+        Ok(ThreadPromptContextReadResponse {
+            system_instructions: instructions.system_instructions,
+            developer_instructions: instructions.developer_instructions,
+            user_instructions: instructions.user_instructions,
+        })
+    }
+
+    async fn thread_prompt_context_update_inner(
+        &self,
+        params: ThreadPromptContextUpdateParams,
+    ) -> Result<ThreadPromptContextUpdateResponse, JSONRPCErrorError> {
+        let ThreadPromptContextUpdateParams {
+            thread_id,
+            prompt_context,
+            tool_policy,
+        } = params;
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        let prompt_context_policy = prompt_context
+            .map(|policy| crate::prompt_policy::prompt_context_policy_to_core(policy, true))
+            .transpose()
+            .map_err(invalid_request)?;
+        let tool_policy = tool_policy
+            .map(crate::prompt_policy::tool_policy_to_core)
+            .transpose()
+            .map_err(invalid_request)?;
+        thread
+            .update_prompt_and_tool_policies(prompt_context_policy, tool_policy)
+            .await
+            .map_err(|err| invalid_request(format!("invalid prompt context update: {err}")))?;
+
+        Ok(ThreadPromptContextUpdateResponse {})
+    }
+
     /// Builds the API view for `thread/read` from persisted metadata plus optional live state.
     async fn read_thread_view(
         &self,
@@ -2404,6 +2497,8 @@ impl ThreadRequestProcessor {
             config: mut request_overrides,
             base_instructions,
             developer_instructions,
+            prompt_context,
+            tool_policy,
             personality,
             exclude_turns,
             persist_extended_history: _persist_extended_history,
@@ -2440,6 +2535,21 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
         );
+        if let Some(prompt_context) = prompt_context {
+            let prompt_context =
+                crate::prompt_policy::prompt_context_policy_to_core(prompt_context, true)
+                    .map_err(invalid_request)?;
+            crate::prompt_policy::apply_system_instruction_override(
+                &mut typesafe_overrides,
+                &prompt_context,
+            );
+            typesafe_overrides.prompt_context_policy = Some(prompt_context);
+        }
+        if let Some(tool_policy) = tool_policy {
+            typesafe_overrides.tool_policy = Some(
+                crate::prompt_policy::tool_policy_to_core(tool_policy).map_err(invalid_request)?,
+            );
+        }
         self.load_and_apply_persisted_resume_metadata(
             &thread_history,
             &mut request_overrides,

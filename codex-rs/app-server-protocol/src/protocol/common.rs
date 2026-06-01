@@ -657,6 +657,16 @@ client_request_definitions! {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
     },
+    #[experimental("thread/promptContext/read")]
+    ThreadPromptContextRead => "thread/promptContext/read" {
+        params: v2::ThreadPromptContextReadParams,
+        response: v2::ThreadPromptContextReadResponse,
+    },
+    #[experimental("thread/promptContext/update")]
+    ThreadPromptContextUpdate => "thread/promptContext/update" {
+        params: v2::ThreadPromptContextUpdateParams,
+        response: v2::ThreadPromptContextUpdateResponse,
+    },
     ThreadTurnsList => "thread/turns/list" {
         params: v2::ThreadTurnsListParams,
         response: v2::ThreadTurnsListResponse,

@@ -1457,6 +1457,7 @@ pub(crate) async fn built_tools(
             remembered_tool_selectors,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
             workflow_tools,
+            tool_policy: turn_context.tool_policy.visibility().clone(),
         },
     )))
 }

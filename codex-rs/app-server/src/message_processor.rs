@@ -1094,6 +1094,16 @@ impl MessageProcessor {
             ClientRequest::ThreadRead { params, .. } => {
                 self.thread_processor.thread_read(params).await
             }
+            ClientRequest::ThreadPromptContextRead { params, .. } => {
+                self.thread_processor
+                    .thread_prompt_context_read(params)
+                    .await
+            }
+            ClientRequest::ThreadPromptContextUpdate { params, .. } => {
+                self.thread_processor
+                    .thread_prompt_context_update(params)
+                    .await
+            }
             ClientRequest::ThreadTurnsList { params, .. } => {
                 self.thread_processor.thread_turns_list(params).await
             }

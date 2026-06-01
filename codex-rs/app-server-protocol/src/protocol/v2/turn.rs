@@ -1,8 +1,10 @@
 use super::ApprovalsReviewer;
 use super::AskForApproval;
 use super::PermissionProfileSelectionParams;
+use super::PromptContextPolicy;
 use super::SandboxPolicy;
 use super::ServiceTier;
+use super::ToolPolicy;
 use super::Turn;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::config_types::CollaborationMode;
@@ -108,6 +110,14 @@ pub struct TurnStartParams {
     /// this turn.
     #[ts(optional = nullable)]
     pub output_schema: Option<JsonValue>,
+    /// Optional turn-scoped prompt context policy.
+    #[experimental("turn/start.promptContext")]
+    #[ts(optional = nullable)]
+    pub prompt_context: Option<PromptContextPolicy>,
+    /// Optional turn-scoped tool visibility policy.
+    #[experimental("turn/start.toolPolicy")]
+    #[ts(optional = nullable)]
+    pub tool_policy: Option<ToolPolicy>,
 
     /// EXPERIMENTAL - Set a pre-set collaboration mode.
     /// Takes precedence over model, reasoning_effort, and developer instructions if set.

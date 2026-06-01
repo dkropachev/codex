@@ -138,6 +138,128 @@
         }
       ]
     },
+    "DeveloperPromptBlocks": {
+      "additionalProperties": false,
+      "properties": {
+        "apps": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "collaborationMode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commitAttribution": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "memories": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "permissions": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "personality": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plugins": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "realtime": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "skills": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DeveloperPromptPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "blocks": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeveloperPromptBlocks"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InstructionPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "FunctionCallOutputBody": {
       "anyOf": [
         {
@@ -247,6 +369,65 @@
       ],
       "type": "string"
     },
+    "InstructionPolicy": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "inherit"
+              ],
+              "title": "InstructionPolicyInheritMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "InstructionPolicyInherit",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "omit"
+              ],
+              "title": "InstructionPolicyOmitMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "InstructionPolicyOmit",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "set"
+              ],
+              "title": "InstructionPolicySetMode",
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "text"
+          ],
+          "title": "InstructionPolicySet",
+          "type": "object"
+        }
+      ]
+    },
     "LocalShellAction": {
       "oneOf": [
         {
@@ -310,6 +491,106 @@
         "incomplete"
       ],
       "type": "string"
+    },
+    "McpToolPolicy": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "inherit"
+              ],
+              "title": "McpToolPolicyInheritMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "McpToolPolicyInherit",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "none"
+              ],
+              "title": "McpToolPolicyNoneMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "McpToolPolicyNone",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "allowOnly"
+              ],
+              "title": "McpToolPolicyAllowOnlyMode",
+              "type": "string"
+            },
+            "servers": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "tools": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "McpToolPolicyAllowOnly",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "deny"
+              ],
+              "title": "McpToolPolicyDenyMode",
+              "type": "string"
+            },
+            "servers": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "tools": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "McpToolPolicyDeny",
+          "type": "object"
+        }
+      ]
     },
     "MessagePhase": {
       "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
@@ -394,6 +675,73 @@
         "none",
         "friendly",
         "pragmatic"
+      ],
+      "type": "string"
+    },
+    "PromptBlockMode": {
+      "enum": [
+        "inherit",
+        "include",
+        "omit"
+      ],
+      "type": "string"
+    },
+    "PromptContextPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "developer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeveloperPromptPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "preset": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptContextPreset"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "strict": {
+          "default": true,
+          "type": "boolean"
+        },
+        "systemInstructions": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InstructionPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "userContext": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserContextPromptPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "PromptContextPreset": {
+      "enum": [
+        "current",
+        "workflow",
+        "minimal",
+        "isolated"
       ],
       "type": "string"
     },
@@ -1062,6 +1410,207 @@
         "danger-full-access"
       ],
       "type": "string"
+    },
+    "ToolPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "builtins": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolSetPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dynamic": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolSetPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mcp": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpToolPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "toolRouter": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolRouterPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ToolRouterPolicy": {
+      "enum": [
+        "inherit",
+        "off"
+      ],
+      "type": "string"
+    },
+    "ToolSetPolicy": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "inherit"
+              ],
+              "title": "ToolSetPolicyInheritMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "ToolSetPolicyInherit",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "none"
+              ],
+              "title": "ToolSetPolicyNoneMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "ToolSetPolicyNone",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "allowOnly"
+              ],
+              "title": "ToolSetPolicyAllowOnlyMode",
+              "type": "string"
+            },
+            "tools": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "mode",
+            "tools"
+          ],
+          "title": "ToolSetPolicyAllowOnly",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "deny"
+              ],
+              "title": "ToolSetPolicyDenyMode",
+              "type": "string"
+            },
+            "tools": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "mode",
+            "tools"
+          ],
+          "title": "ToolSetPolicyDeny",
+          "type": "object"
+        }
+      ]
+    },
+    "UserContextBlocks": {
+      "additionalProperties": false,
+      "properties": {
+        "agentsMd": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "environment": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subagents": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptBlockMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "UserContextPromptPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "blocks": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserContextBlocks"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InstructionPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     }
   },
   "description": "There are three ways to resume a thread: 1. By thread_id: load the thread from disk by thread_id and resume it. 2. By history: instantiate the thread from memory and resume it. 3. By path: load the thread from disk by path and resume it.\n\nThe precedence is: history > path > thread_id. If using history or path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",

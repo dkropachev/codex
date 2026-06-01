@@ -1910,6 +1910,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             service_tier: None,
             personality: None,
             output_schema: None,
+            prompt_context: None,
+            tool_policy: None,
             collaboration_mode: None,
         })
         .await?;
@@ -1946,6 +1948,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             service_tier: None,
             personality: None,
             output_schema: None,
+            prompt_context: None,
+            tool_policy: None,
             collaboration_mode: None,
         })
         .await?;

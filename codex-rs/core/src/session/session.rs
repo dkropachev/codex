@@ -85,6 +85,8 @@ pub(crate) struct SessionConfiguration {
     /// Source of the session (cli, vscode, exec, mcp, ...)
     pub(super) session_source: SessionSource,
     pub(super) dynamic_tools: Vec<DynamicToolSpec>,
+    pub(super) prompt_context_policy: crate::prompt_context::PromptContextPolicy,
+    pub(super) tool_policy: crate::prompt_context::ToolPolicy,
     pub(super) persist_extended_history: bool,
     pub(super) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(super) user_shell_override: Option<shell::Shell>,
@@ -253,7 +255,46 @@ impl SessionConfiguration {
         if let Some(implement_max_cycles) = updates.implement_max_cycles {
             next_configuration.implement_max_cycles = implement_max_cycles;
         }
+        if let Some(base_instructions) = updates.base_instructions.clone() {
+            next_configuration.base_instructions = base_instructions;
+        }
+        if let Some(prompt_context_policy) = updates.prompt_context_policy.clone() {
+            prompt_context_policy
+                .validate_strict_for_config(&next_configuration.original_config_do_not_use)
+                .map_err(|err| {
+                    prompt_policy_constraint_error(
+                        "prompt_context_policy",
+                        format!("{prompt_context_policy:?}"),
+                        err,
+                    )
+                })?;
+            next_configuration.prompt_context_policy = prompt_context_policy;
+        }
+        if let Some(tool_policy) = updates.tool_policy.clone() {
+            tool_policy
+                .validate_static()
+                .and_then(|()| {
+                    tool_policy.validate_dynamic_tools(&next_configuration.dynamic_tools)
+                })
+                .map_err(|err| {
+                    prompt_policy_constraint_error("tool_policy", format!("{tool_policy:?}"), err)
+                })?;
+            next_configuration.tool_policy = tool_policy;
+        }
         Ok(next_configuration)
+    }
+}
+
+fn prompt_policy_constraint_error(
+    field_name: &'static str,
+    candidate: String,
+    reason: String,
+) -> ConstraintError {
+    ConstraintError::InvalidValue {
+        field_name,
+        candidate,
+        allowed: reason,
+        requirement_source: codex_config::RequirementSource::Unknown,
     }
 }
 
@@ -280,6 +321,9 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) implement_enabled: Option<Option<bool>>,
     pub(crate) implement_mode: Option<Option<ImplementMode>>,
     pub(crate) implement_max_cycles: Option<Option<u8>>,
+    pub(crate) base_instructions: Option<String>,
+    pub(crate) prompt_context_policy: Option<crate::prompt_context::PromptContextPolicy>,
+    pub(crate) tool_policy: Option<crate::prompt_context::ToolPolicy>,
 }
 
 pub(crate) struct AppServerClientMetadata {

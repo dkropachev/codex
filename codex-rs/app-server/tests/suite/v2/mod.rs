@@ -38,6 +38,7 @@ mod plugin_read;
 mod plugin_share;
 mod plugin_uninstall;
 mod process_exec;
+mod prompt_context;
 mod rate_limits;
 mod realtime_conversation;
 #[cfg(debug_assertions)]
