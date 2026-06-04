@@ -12,6 +12,7 @@ const WORKFLOW_ARCHITECT_ROLE: &str = "workflow-architect";
 const WORKFLOW_CODER_ROLE: &str = "workflow-coder";
 const WORKFLOW_CODE_REVIEWER_ROLE: &str = "workflow-code-reviewer";
 const WORKFLOW_ARCH_REVIEWER_ROLE: &str = "workflow-arch-reviewer";
+const WORKFLOW_RESILIENCE_REVIEWER_ROLE: &str = "workflow-resilience-reviewer";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum WorkflowDesignPolicyRole {
@@ -83,9 +84,11 @@ fn workflow_design_policy(
     let role = match session_source.get_agent_role().as_deref() {
         Some(WORKFLOW_ARCHITECT_ROLE) => WorkflowDesignPolicyRole::Architect,
         Some(WORKFLOW_CODER_ROLE) => WorkflowDesignPolicyRole::Coder,
-        Some(WORKFLOW_CODE_REVIEWER_ROLE | WORKFLOW_ARCH_REVIEWER_ROLE) => {
-            WorkflowDesignPolicyRole::Reviewer
-        }
+        Some(
+            WORKFLOW_CODE_REVIEWER_ROLE
+            | WORKFLOW_ARCH_REVIEWER_ROLE
+            | WORKFLOW_RESILIENCE_REVIEWER_ROLE,
+        ) => WorkflowDesignPolicyRole::Reviewer,
         _ => return None,
     };
     let mut workflow_dir = None;
@@ -255,6 +258,27 @@ mod tests {
         assert_eq!(
             policy.workflow_design().map(|policy| policy.role),
             Some(WorkflowDesignPolicyRole::Coder)
+        );
+        assert!(!overlaid.can_write_path_with_cwd(design_md.as_path(), cwd.as_path()));
+    }
+
+    #[test]
+    fn workflow_resilience_reviewer_overlay_makes_design_md_read_only() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("workflow.yaml"), "id: example\n").unwrap();
+        let cwd = AbsolutePathBuf::try_from(tmp.path().to_path_buf()).unwrap();
+        let design_md = AbsolutePathBuf::try_from(tmp.path().join("DESIGN.md")).unwrap();
+
+        let policy = TurnToolPolicy::for_turn(
+            &workflow_session_source("workflow-resilience-reviewer"),
+            &cwd,
+            ToolPolicy::default(),
+        );
+        let overlaid = policy.apply_file_system_overlay(writable_root_policy(&cwd), &cwd);
+
+        assert_eq!(
+            policy.workflow_design().map(|policy| policy.role),
+            Some(WorkflowDesignPolicyRole::Reviewer)
         );
         assert!(!overlaid.can_write_path_with_cwd(design_md.as_path(), cwd.as_path()));
     }

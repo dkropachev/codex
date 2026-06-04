@@ -15,8 +15,9 @@ Review against these workflow rules:
 - `WF-010`: recovery coverage exists when recovery behavior exists.
 - `WF-011`: stability and correctness-preserving recovery are implemented correctly.
 - `WF-013`: coding is not complete until code review returns `0 findings`.
-- `WF-014`: coder and code reviewer must not edit `DESIGN.md`.
+- `WF-014`: coder and reviewers must not edit `DESIGN.md`.
 - `WF-015`: required design changes must be raised back through the architect flow.
+- `WF-016`: resilience review must reach `0 findings` before completion.
 
 Output contract:
 

@@ -207,6 +207,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rollback_restores_design_md_for_resilience_reviewer_role() {
+        let (turn, tmp) = workflow_turn("workflow-resilience-reviewer").await;
+        let snapshot = snapshot_design_md(&turn).unwrap();
+        std::fs::write(tmp.path().join("DESIGN.md"), "after\n").unwrap();
+
+        let err = rollback_design_md_if_modified(&turn, Some(&snapshot)).unwrap_err();
+
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("DESIGN.md")).unwrap(),
+            "before\n"
+        );
+        assert_eq!(
+            err.to_string(),
+            forbidden_design_md_message(DesignGuardRole::Reviewer)
+        );
+    }
+
+    #[tokio::test]
     async fn rollback_restores_design_md_for_coder_role() {
         let (turn, tmp) = workflow_turn("workflow-coder").await;
         let snapshot = snapshot_design_md(&turn).unwrap();

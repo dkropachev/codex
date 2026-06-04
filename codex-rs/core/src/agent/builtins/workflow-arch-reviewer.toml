@@ -16,6 +16,7 @@ Review against these workflow rules:
 - `WF-011`: stability and correctness-preserving recovery are designed clearly.
 - `WF-012`: the design must be review-clean before coding starts.
 - `WF-015`: post-coding design changes must flow through the architect review loop.
+- `WF-016`: resilience review must reach `0 findings` before completion.
 
 Check that `DESIGN.md` contains all required behavior:
 

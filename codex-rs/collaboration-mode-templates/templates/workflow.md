@@ -48,8 +48,9 @@ Workflow implementation rules are named and must be cited by reviewers:
 - `WF-011`: workflows must be as stable as possible and recover when correctness is preserved.
 - `WF-012`: architecture review must reach `0 findings` before coding starts.
 - `WF-013`: code review must reach `0 findings` before completion.
-- `WF-014`: coder and code reviewer must not edit `DESIGN.md`.
+- `WF-014`: coder and reviewers must not edit `DESIGN.md`.
 - `WF-015`: any post-design design change must flow through the architect review loop and be committed before coding resumes.
+- `WF-016`: resilience review must reach `0 findings` before completion.
 
 When implementing a workflow, use this staged agent process:
 
@@ -61,8 +62,10 @@ When implementing a workflow, use this staged agent process:
    After architecture review reaches `0 findings`, start a persistent `workflow-coder` agent to implement the workflow from the settled design.
 4. Code review stage:
    For each code review round, spawn a fresh `workflow-code-reviewer` agent. Do not reuse prior code reviewers. If it returns findings, send those findings back to the same persistent coder and iterate until the reviewer returns exactly `0 findings`.
-5. Design change requests during coding:
-   The coder and code reviewer must not edit `DESIGN.md`. If the coder needs a design change, it must return a `DESIGN.md request` explaining what should change and why. Forward that request to the persistent architect. The architect may reject it or accept it. If accepted, the architect updates `DESIGN.md`, reruns the fresh architecture review loop until `0 findings`, prepares a commit title and explanation for the final `DESIGN.md` change, and returns the settled design diff summary to be forwarded back to the coder before coding resumes.
+5. Resilience review stage:
+   After code review reaches `0 findings`, spawn a fresh `workflow-resilience-reviewer` agent. Do not reuse prior resilience reviewers. If it returns findings, send those findings back to the same persistent coder, then repeat the code review stage before rerunning resilience review so both review gates are clean on the same implementation. Iterate until the resilience reviewer returns exactly `0 findings`.
+6. Design change requests during coding:
+   The coder and reviewers must not edit `DESIGN.md`. If the coder needs a design change, it must return a `DESIGN.md request` explaining what should change and why. Forward that request to the persistent architect. The architect may reject it or accept it. If accepted, the architect updates `DESIGN.md`, reruns the fresh architecture review loop until `0 findings`, prepares a commit title and explanation for the final `DESIGN.md` change, and returns the settled design diff summary to be forwarded back to the coder before coding resumes.
 
 The parent workflow-mode agent owns this orchestration. Keep architect and coder context across their iterations by reusing the same agent thread with follow-up input. Reset reviewer context every round by spawning a new reviewer thread each time.
 

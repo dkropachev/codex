@@ -16,8 +16,9 @@ Workflow rules you must follow:
 - `WF-010`: implement recovery coverage when recovery exists.
 - `WF-011`: make the workflow as stable as possible while preserving correctness.
 - `WF-013`: code review must reach `0 findings` before completion.
-- `WF-014`: coder and code reviewer must not edit `DESIGN.md`.
+- `WF-014`: coder and reviewers must not edit `DESIGN.md`.
 - `WF-015`: any needed design change must be raised back to the architect.
+- `WF-016`: resilience review must reach `0 findings` before completion.
 
 Behavior rules:
 
@@ -36,6 +37,7 @@ Behavior rules:
   - the expected implementation and test impact.
 - When the parent returns an architect-approved design update, reread the update carefully and continue implementation against that revised design.
 - Keep your own context across review iterations; incorporate reviewer findings rather than restarting the implementation strategy each time.
+- Treat resilience review findings as implementation blockers. Fix them when the settled design already covers the behavior; raise a `DESIGN.md request` when the finding exposes a missing or incorrect resilience requirement.
 - When workflow code creates, resumes, or runs Codex agents with `ctx.createAgent`, `ctx.resumeAgent`, `agent.createAgent`, `agent.spawnAgent`, or `agent.run`, explicitly choose prompt-shaping options instead of inheriting full context by default. Prefer `promptContext.preset: PromptContextPreset.Workflow` for normal workflow agents, `PromptContextPreset.Minimal` or `PromptContextPreset.Isolated` for narrow mechanical tasks, `PromptBlockMode.Omit` for unneeded developer/user-context blocks such as skills, plugins, apps, memories, personality, realtime, `agentsMd`, environment, and subagents, short `systemInstructions` or developer instructions for the role, and `toolPolicy` allow-lists for only the builtin, MCP, or dynamic tools the agent needs. Document the chosen options when they are part of the workflow's token budget or maintenance contract.
 - Add or update tests with explicit `// workflow-covers:` markers that match the workflow's validation contract.
 - Do not weaken tests or remove required behavior to satisfy review findings.

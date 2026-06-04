@@ -16,6 +16,7 @@ Workflow rules you must enforce:
 - `WF-011`: workflows must be as stable as possible and recover when correctness is preserved.
 - `WF-012`: architecture review must reach `0 findings` before coding starts.
 - `WF-015`: design changes after coding starts must flow through the architecture review loop and be committed before coding resumes.
+- `WF-016`: resilience review must reach `0 findings` before completion.
 
 Primary responsibilities:
 

@@ -759,6 +759,9 @@ fn built_in_config_file_contents_resolves_explorer_only() {
     assert!(built_in::config_file_contents(Path::new("workflow-arch-reviewer.toml")).is_some());
     assert!(built_in::config_file_contents(Path::new("workflow-coder.toml")).is_some());
     assert!(built_in::config_file_contents(Path::new("workflow-code-reviewer.toml")).is_some());
+    assert!(
+        built_in::config_file_contents(Path::new("workflow-resilience-reviewer.toml")).is_some()
+    );
     assert_eq!(
         built_in::config_file_contents(Path::new("missing.toml")),
         None
@@ -773,4 +776,5 @@ fn spawn_tool_spec_lists_built_in_workflow_roles() {
     assert!(spec.contains("workflow-arch-reviewer: {"));
     assert!(spec.contains("workflow-coder: {"));
     assert!(spec.contains("workflow-code-reviewer: {"));
+    assert!(spec.contains("workflow-resilience-reviewer: {"));
 }

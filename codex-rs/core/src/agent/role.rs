@@ -445,6 +445,19 @@ Rules:
                         nickname_candidates: None,
                     }
                 ),
+                (
+                    "workflow-resilience-reviewer".to_string(),
+                    AgentRoleConfig {
+                        description: Some("Fresh-context reviewer for workflow runtime resilience, recovery, failure handling, and correctness-preserving fallback behavior. Returns findings only or exactly `0 findings`.".to_string()),
+                        config_file: Some(
+                            "workflow-resilience-reviewer.toml"
+                                .to_string()
+                                .parse()
+                                .unwrap_or_default(),
+                        ),
+                        nickname_candidates: None,
+                    }
+                ),
                 // Awaiter is temp removed
 //                 (
 //                     "awaiter".to_string(),
@@ -476,6 +489,8 @@ Rules:
         const WORKFLOW_ARCH_REVIEWER: &str = include_str!("builtins/workflow-arch-reviewer.toml");
         const WORKFLOW_CODER: &str = include_str!("builtins/workflow-coder.toml");
         const WORKFLOW_CODE_REVIEWER: &str = include_str!("builtins/workflow-code-reviewer.toml");
+        const WORKFLOW_RESILIENCE_REVIEWER: &str =
+            include_str!("builtins/workflow-resilience-reviewer.toml");
         match path.to_str()? {
             "explorer.toml" => Some(EXPLORER),
             "awaiter.toml" => Some(AWAITER),
@@ -483,6 +498,7 @@ Rules:
             "workflow-arch-reviewer.toml" => Some(WORKFLOW_ARCH_REVIEWER),
             "workflow-coder.toml" => Some(WORKFLOW_CODER),
             "workflow-code-reviewer.toml" => Some(WORKFLOW_CODE_REVIEWER),
+            "workflow-resilience-reviewer.toml" => Some(WORKFLOW_RESILIENCE_REVIEWER),
             _ => None,
         }
     }
