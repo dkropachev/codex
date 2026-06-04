@@ -621,6 +621,8 @@ impl AppServerSession {
                     summary,
                     personality,
                     output_schema,
+                    prompt_context: None,
+                    tool_policy: None,
                     collaboration_mode,
                 },
             })
