@@ -75,6 +75,7 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
   build:
+    if: ${{ github.repository == 'openai/codex' }}
     name: Build ${{ matrix.variant }} ${{ matrix.target }}
     needs: metadata
     runs-on: ${{ matrix.runner }}
@@ -297,6 +298,7 @@ jobs:
           path: dist/${{ matrix.target }}/*
 
   build-windows-source:
+    if: ${{ github.repository == 'openai/codex' }}
     name: Build ptrcomp-sandbox ${{ matrix.target }} from source
     needs: metadata
     runs-on: ${{ matrix.runner }}
