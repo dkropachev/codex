@@ -32,6 +32,7 @@ pub(crate) fn tool_policy_to_core(policy: api::ToolPolicy) -> Result<core::ToolP
         mcp: policy.mcp.map(mcp_tool_policy_to_core),
         dynamic: policy.dynamic.map(tool_set_policy_to_core),
         tool_router: policy.tool_router.map(tool_router_policy_to_core),
+        invocation: policy.invocation.map(tool_invocation_policy_to_core),
     };
     policy.validate_static()?;
     Ok(policy)
@@ -141,5 +142,53 @@ fn tool_router_policy_to_core(policy: api::ToolRouterPolicy) -> core::ToolRouter
     match policy {
         api::ToolRouterPolicy::Inherit => core::ToolRouterPolicy::Inherit,
         api::ToolRouterPolicy::Off => core::ToolRouterPolicy::Off,
+    }
+}
+
+fn tool_invocation_policy_to_core(policy: api::ToolInvocationPolicy) -> core::ToolInvocationPolicy {
+    core::ToolInvocationPolicy {
+        mode: tool_invocation_policy_mode_to_core(policy.mode),
+        rules: policy
+            .rules
+            .into_iter()
+            .map(tool_invocation_rule_to_core)
+            .collect(),
+    }
+}
+
+fn tool_invocation_policy_mode_to_core(
+    mode: api::ToolInvocationPolicyMode,
+) -> core::ToolInvocationPolicyMode {
+    match mode {
+        api::ToolInvocationPolicyMode::Default => core::ToolInvocationPolicyMode::Default,
+        api::ToolInvocationPolicyMode::Unrestricted => core::ToolInvocationPolicyMode::Unrestricted,
+        api::ToolInvocationPolicyMode::Deny => core::ToolInvocationPolicyMode::Deny,
+        api::ToolInvocationPolicyMode::AllowOnly => core::ToolInvocationPolicyMode::AllowOnly,
+    }
+}
+
+fn tool_invocation_rule_effect_to_core(
+    effect: api::ToolInvocationRuleEffect,
+) -> core::ToolInvocationRuleEffect {
+    match effect {
+        api::ToolInvocationRuleEffect::Deny => core::ToolInvocationRuleEffect::Deny,
+        api::ToolInvocationRuleEffect::Allow => core::ToolInvocationRuleEffect::Allow,
+    }
+}
+
+fn tool_invocation_rule_to_core(rule: api::ToolInvocationRule) -> core::ToolInvocationRule {
+    core::ToolInvocationRule {
+        id: rule.id,
+        effect: tool_invocation_rule_effect_to_core(rule.effect),
+        tools: rule.tools,
+        mcp: rule.mcp.map(|mcp| core::ToolInvocationMcpSelector {
+            server: mcp.server,
+            tool: mcp.tool,
+        }),
+        when: rule.when.map(|when| core::ToolInvocationRuleCondition {
+            json_path: when.json_path,
+            regex: when.regex,
+        }),
+        message: rule.message,
     }
 }

@@ -990,6 +990,7 @@ fn command_exec_params_default_optional_streaming_flags() {
             size: None,
             sandbox_policy: None,
             permission_profile: None,
+            tool_policy: None,
         }
     );
 }
@@ -1011,6 +1012,7 @@ fn command_exec_params_round_trips_disable_timeout() {
         size: None,
         sandbox_policy: None,
         permission_profile: None,
+        tool_policy: None,
     };
 
     let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -1026,6 +1028,7 @@ fn command_exec_params_round_trips_disable_timeout() {
             "size": null,
             "sandboxPolicy": null,
             "permissionProfile": null,
+            "toolPolicy": null,
             "outputBytesCap": null,
         })
     );
@@ -1143,6 +1146,7 @@ fn command_exec_params_round_trips_disable_output_cap() {
         size: None,
         sandbox_policy: None,
         permission_profile: None,
+        tool_policy: None,
     };
 
     let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -1160,6 +1164,7 @@ fn command_exec_params_round_trips_disable_output_cap() {
             "size": null,
             "sandboxPolicy": null,
             "permissionProfile": null,
+            "toolPolicy": null,
         })
     );
 
@@ -1189,6 +1194,7 @@ fn command_exec_params_round_trips_env_overrides_and_unsets() {
         size: None,
         sandbox_policy: None,
         permission_profile: None,
+        tool_policy: None,
     };
 
     let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -1208,6 +1214,7 @@ fn command_exec_params_round_trips_env_overrides_and_unsets() {
             "size": null,
             "sandboxPolicy": null,
             "permissionProfile": null,
+            "toolPolicy": null,
         })
     );
 
@@ -1278,6 +1285,7 @@ fn command_exec_params_round_trip_with_size() {
         }),
         sandbox_policy: None,
         permission_profile: None,
+        tool_policy: None,
     };
 
     let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -1297,6 +1305,7 @@ fn command_exec_params_round_trip_with_size() {
             },
             "sandboxPolicy": null,
             "permissionProfile": null,
+            "toolPolicy": null,
         })
     );
 
@@ -3589,7 +3598,20 @@ fn prompt_context_and_tool_policy_use_camel_case_wire_shape() {
         "toolPolicy": {
             "builtins": { "mode": "allowOnly", "tools": ["exec_command"] },
             "mcp": { "mode": "deny", "servers": ["memory"], "tools": [] },
-            "toolRouter": "off"
+            "toolRouter": "off",
+            "invocation": {
+                "mode": "allowOnly",
+                "rules": [{
+                    "id": "allow-status",
+                    "effect": "allow",
+                    "tools": ["exec_command"],
+                    "when": {
+                        "jsonPath": "$.cmd",
+                        "regex": "^git status$"
+                    },
+                    "message": "only git status"
+                }]
+            }
         }
     }))
     .expect("params should deserialize");
@@ -3632,6 +3654,20 @@ fn prompt_context_and_tool_policy_use_camel_case_wire_shape() {
             }),
             dynamic: None,
             tool_router: Some(ToolRouterPolicy::Off),
+            invocation: Some(ToolInvocationPolicy {
+                mode: ToolInvocationPolicyMode::AllowOnly,
+                rules: vec![ToolInvocationRule {
+                    id: Some("allow-status".to_string()),
+                    effect: ToolInvocationRuleEffect::Allow,
+                    tools: vec!["exec_command".to_string()],
+                    mcp: None,
+                    when: Some(ToolInvocationRuleCondition {
+                        json_path: Some("$.cmd".to_string()),
+                        regex: "^git status$".to_string(),
+                    }),
+                    message: Some("only git status".to_string()),
+                }],
+            }),
         })
     );
 
@@ -3643,6 +3679,10 @@ fn prompt_context_and_tool_policy_use_camel_case_wire_shape() {
     assert_eq!(
         serialized["toolPolicy"]["builtins"],
         json!({ "mode": "allowOnly", "tools": ["exec_command"] })
+    );
+    assert_eq!(
+        serialized["toolPolicy"]["invocation"]["rules"][0]["when"],
+        json!({ "jsonPath": "$.cmd", "regex": "^git status$" })
     );
 }
 

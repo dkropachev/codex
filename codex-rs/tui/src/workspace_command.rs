@@ -201,6 +201,7 @@ impl WorkspaceCommandExecutor for AppServerWorkspaceCommandRunner {
                         size: None,
                         sandbox_policy: None,
                         permission_profile: None,
+                        tool_policy: None,
                     },
                 })
                 .await

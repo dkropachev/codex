@@ -528,6 +528,131 @@
       ],
       "type": "string"
     },
+    "ToolInvocationMcpSelector": {
+      "additionalProperties": false,
+      "properties": {
+        "server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ToolInvocationPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolInvocationPolicyMode"
+            }
+          ],
+          "default": "default"
+        },
+        "rules": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ToolInvocationRule"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ToolInvocationPolicyMode": {
+      "enum": [
+        "default",
+        "unrestricted",
+        "deny",
+        "allowOnly"
+      ],
+      "type": "string"
+    },
+    "ToolInvocationRule": {
+      "additionalProperties": false,
+      "properties": {
+        "effect": {
+          "$ref": "#/definitions/ToolInvocationRuleEffect"
+        },
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mcp": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolInvocationMcpSelector"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tools": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "when": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolInvocationRuleCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "effect"
+      ],
+      "type": "object"
+    },
+    "ToolInvocationRuleCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "jsonPath": {
+          "description": "Optional JSON path selecting tool input to test. Omitted or empty means the whole raw tool input.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "regex": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "regex"
+      ],
+      "type": "object"
+    },
+    "ToolInvocationRuleEffect": {
+      "enum": [
+        "deny",
+        "allow"
+      ],
+      "type": "string"
+    },
     "ToolPolicy": {
       "additionalProperties": false,
       "properties": {
@@ -545,6 +670,16 @@
           "anyOf": [
             {
               "$ref": "#/definitions/ToolSetPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "invocation": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolInvocationPolicy"
             },
             {
               "type": "null"

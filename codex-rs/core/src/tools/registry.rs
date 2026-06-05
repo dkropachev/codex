@@ -9,6 +9,7 @@ use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::run_post_tool_use_hooks;
 use crate::hook_runtime::run_pre_tool_use_hooks;
 use crate::memory_usage::emit_metric_for_tool_read;
+use crate::prompt_context::ToolInvocationPolicyInput;
 use crate::sandbox_tags::permission_profile_policy_tag;
 use crate::sandbox_tags::permission_profile_sandbox_tag;
 use crate::session::turn_context::TurnContext;
@@ -480,6 +481,23 @@ impl ToolRegistry {
             return Err(err);
         }
 
+        if let Some(message) = invocation_policy_denial(&invocation, &display_name) {
+            otel.tool_result_with_tags(
+                &display_name,
+                &call_id_owned,
+                log_payload.as_ref(),
+                Duration::ZERO,
+                /*success*/ false,
+                &message,
+                &metric_tags,
+                mcp_server_ref,
+                mcp_server_origin_ref,
+            );
+            let err = FunctionCallError::RespondToModel(message);
+            dispatch_trace.record_failed(&err);
+            return Err(err);
+        }
+
         if matches!(
             invocation.source,
             ToolCallSource::Direct | ToolCallSource::Routed { .. }
@@ -677,6 +695,26 @@ impl ToolRegistry {
             }
         }
     }
+}
+
+fn invocation_policy_denial(invocation: &ToolInvocation, display_name: &str) -> Option<String> {
+    let raw_input = invocation.payload.policy_raw_input();
+    let json_input = invocation.payload.policy_json_input();
+    let (mcp_server, mcp_tool) = match &invocation.payload {
+        ToolPayload::Mcp { server, tool, .. } => (Some(server.as_str()), Some(tool.as_str())),
+        _ => (None, None),
+    };
+    invocation
+        .turn
+        .tool_policy
+        .visibility()
+        .deny_invocation(ToolInvocationPolicyInput {
+            tool_name: display_name,
+            mcp_server,
+            mcp_tool,
+            raw_input,
+            json_input: json_input.as_ref(),
+        })
 }
 
 pub struct ToolRegistryBuilder {

@@ -3,6 +3,9 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use regex_lite::Regex;
+use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -357,6 +360,7 @@ pub struct ToolPolicy {
     pub mcp: Option<McpToolPolicy>,
     pub dynamic: Option<ToolSetPolicy>,
     pub tool_router: Option<ToolRouterPolicy>,
+    pub invocation: Option<ToolInvocationPolicy>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -387,13 +391,74 @@ pub enum ToolRouterPolicy {
     Off,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolInvocationPolicy {
+    pub mode: ToolInvocationPolicyMode,
+    pub rules: Vec<ToolInvocationRule>,
+}
+
+impl Default for ToolInvocationPolicy {
+    fn default() -> Self {
+        Self {
+            mode: ToolInvocationPolicyMode::Default,
+            rules: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ToolInvocationPolicyMode {
+    #[default]
+    Default,
+    Unrestricted,
+    Deny,
+    AllowOnly,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolInvocationRuleEffect {
+    Deny,
+    Allow,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ToolInvocationMcpSelector {
+    pub server: Option<String>,
+    pub tool: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolInvocationRuleCondition {
+    pub json_path: Option<String>,
+    pub regex: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolInvocationRule {
+    pub id: Option<String>,
+    pub effect: ToolInvocationRuleEffect,
+    pub tools: Vec<String>,
+    pub mcp: Option<ToolInvocationMcpSelector>,
+    pub when: Option<ToolInvocationRuleCondition>,
+    pub message: Option<String>,
+}
+
+pub struct ToolInvocationPolicyInput<'a> {
+    pub tool_name: &'a str,
+    pub mcp_server: Option<&'a str>,
+    pub mcp_tool: Option<&'a str>,
+    pub raw_input: Cow<'a, str>,
+    pub json_input: Option<&'a Value>,
+}
+
 impl ToolPolicy {
     pub fn validate_static(&self) -> Result<(), String> {
         validate_named_tool_set(
             "toolPolicy.builtins",
             self.builtins.as_ref(),
             is_builtin_tool_name,
-        )
+        )?;
+        self.validate_invocation_policy()
     }
 
     pub fn validate_dynamic_tools(&self, dynamic_tools: &[DynamicToolSpec]) -> Result<(), String> {
@@ -486,6 +551,190 @@ impl ToolPolicy {
             })
             .collect()
     }
+
+    pub fn deny_invocation(&self, input: ToolInvocationPolicyInput<'_>) -> Option<String> {
+        let invocation = self.invocation.as_ref();
+        let mode = invocation
+            .map(|policy| policy.mode)
+            .unwrap_or(ToolInvocationPolicyMode::Default);
+        if mode == ToolInvocationPolicyMode::Unrestricted {
+            return None;
+        }
+
+        let mut rules = default_tool_invocation_rules();
+        if let Some(invocation) = invocation {
+            rules.extend(invocation.rules.iter().cloned());
+        }
+
+        for rule in rules
+            .iter()
+            .filter(|rule| rule.effect == ToolInvocationRuleEffect::Deny)
+        {
+            if rule.matches(&input) {
+                return Some(rule.denial_message());
+            }
+        }
+
+        if mode == ToolInvocationPolicyMode::AllowOnly
+            && !rules
+                .iter()
+                .filter(|rule| rule.effect == ToolInvocationRuleEffect::Allow)
+                .any(|rule| rule.matches(&input))
+        {
+            return Some(format!(
+                "tool invocation blocked by toolPolicy.invocation allowOnly: {}",
+                input.tool_name
+            ));
+        }
+
+        None
+    }
+
+    fn validate_invocation_policy(&self) -> Result<(), String> {
+        let Some(policy) = &self.invocation else {
+            return Ok(());
+        };
+        for (index, rule) in policy.rules.iter().enumerate() {
+            rule.validate(index)?;
+        }
+        Ok(())
+    }
+}
+
+impl ToolInvocationRule {
+    fn validate(&self, index: usize) -> Result<(), String> {
+        for tool in &self.tools {
+            if tool.trim().is_empty() {
+                return Err(format!(
+                    "toolPolicy.invocation.rules[{index}].tools contains an empty tool name"
+                ));
+            }
+        }
+
+        if let Some(mcp) = &self.mcp
+            && (mcp.server.as_deref().is_some_and(str::is_empty)
+                || mcp.tool.as_deref().is_some_and(str::is_empty))
+        {
+            return Err(format!(
+                "toolPolicy.invocation.rules[{index}].mcp contains an empty selector"
+            ));
+        }
+
+        let Some(condition) = &self.when else {
+            return Ok(());
+        };
+        validate_json_path(condition.json_path.as_deref()).map_err(|err| {
+            format!("toolPolicy.invocation.rules[{index}].when.jsonPath is invalid: {err}")
+        })?;
+        Regex::new(&condition.regex).map_err(|err| {
+            format!("toolPolicy.invocation.rules[{index}].when.regex is invalid: {err}")
+        })?;
+        Ok(())
+    }
+
+    fn matches(&self, input: &ToolInvocationPolicyInput<'_>) -> bool {
+        self.selector_matches(input) && self.condition_matches(input)
+    }
+
+    fn selector_matches(&self, input: &ToolInvocationPolicyInput<'_>) -> bool {
+        if !self.tools.is_empty() && !self.tools.iter().any(|tool| tool == input.tool_name) {
+            return false;
+        }
+
+        let Some(mcp) = &self.mcp else {
+            return true;
+        };
+        if !selector_part_matches(mcp.server.as_deref(), input.mcp_server) {
+            return false;
+        }
+        selector_part_matches(mcp.tool.as_deref(), input.mcp_tool)
+    }
+
+    fn condition_matches(&self, input: &ToolInvocationPolicyInput<'_>) -> bool {
+        let Some(condition) = &self.when else {
+            return true;
+        };
+        let Some(haystack) = condition.haystack(input) else {
+            return false;
+        };
+        Regex::new(&condition.regex).is_ok_and(|regex| regex.is_match(&haystack))
+    }
+
+    fn denial_message(&self) -> String {
+        self.message.clone().unwrap_or_else(|| match &self.id {
+            Some(id) => format!("tool invocation blocked by toolPolicy.invocation rule {id}"),
+            None => "tool invocation blocked by toolPolicy.invocation".to_string(),
+        })
+    }
+}
+
+impl ToolInvocationRuleCondition {
+    fn haystack<'a>(&self, input: &'a ToolInvocationPolicyInput<'a>) -> Option<Cow<'a, str>> {
+        let json_path = self.json_path.as_deref().unwrap_or_default();
+        if json_path.is_empty() {
+            return Some(Cow::Borrowed(input.raw_input.as_ref()));
+        }
+
+        let json_input = input.json_input?;
+        let value = select_json_path(json_input, json_path)?;
+        match value {
+            Value::String(text) => Some(Cow::Borrowed(text.as_str())),
+            value => serde_json::to_string(value).ok().map(Cow::Owned),
+        }
+    }
+}
+
+fn default_tool_invocation_rules() -> Vec<ToolInvocationRule> {
+    vec![ToolInvocationRule {
+        id: Some("no-unbounded-agents-md-scan".to_string()),
+        effect: ToolInvocationRuleEffect::Deny,
+        tools: Vec::new(),
+        mcp: None,
+        when: Some(ToolInvocationRuleCondition {
+            json_path: None,
+            regex: r#"\bfind\b.*([[:space:]"',\[]|^)(/|/tmp)([[:space:]"',\]]|$).*AGENTS\.md"#
+                .to_string(),
+        }),
+        message: Some(
+            "Blocked unbounded AGENTS.md discovery scan. Search from the repo/worktree root instead of / or /tmp."
+                .to_string(),
+        ),
+    }]
+}
+
+fn selector_part_matches(expected: Option<&str>, actual: Option<&str>) -> bool {
+    match expected {
+        Some(expected) => actual == Some(expected),
+        None => true,
+    }
+}
+
+fn validate_json_path(json_path: Option<&str>) -> Result<(), String> {
+    let Some(json_path) = json_path else {
+        return Ok(());
+    };
+    if json_path.is_empty() || json_path == "$" {
+        return Ok(());
+    }
+    let Some(rest) = json_path.strip_prefix("$.") else {
+        return Err("expected empty string, $, or $.field[.field...]".to_string());
+    };
+    if rest.is_empty() || rest.split('.').any(str::is_empty) {
+        return Err("expected non-empty field names".to_string());
+    }
+    Ok(())
+}
+
+fn select_json_path<'a>(value: &'a Value, json_path: &str) -> Option<&'a Value> {
+    if json_path == "$" {
+        return Some(value);
+    }
+    let rest = json_path.strip_prefix("$.")?;
+    let mut selected = value;
+    for part in rest.split('.') {
+        selected = selected.get(part)?;
+    }
+    Some(selected)
 }
 
 fn filter_tool_set<T>(
@@ -803,5 +1052,131 @@ mod tests {
         );
 
         assert_eq!(filtered, vec![("allowed", "allowed.read")]);
+    }
+
+    #[test]
+    fn invocation_policy_default_blocks_unbounded_agents_md_scan() {
+        let policy = ToolPolicy::default();
+        let raw_input = r#"{"cmd":"find /tmp / -name AGENTS.md -print"}"#;
+
+        let denial = policy.deny_invocation(ToolInvocationPolicyInput {
+            tool_name: "exec_command",
+            mcp_server: None,
+            mcp_tool: None,
+            raw_input: Cow::Borrowed(raw_input),
+            json_input: None,
+        });
+
+        assert_eq!(
+            denial,
+            Some(
+                "Blocked unbounded AGENTS.md discovery scan. Search from the repo/worktree root instead of / or /tmp."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn invocation_policy_unrestricted_skips_default_rules() {
+        let policy = ToolPolicy {
+            invocation: Some(ToolInvocationPolicy {
+                mode: ToolInvocationPolicyMode::Unrestricted,
+                rules: Vec::new(),
+            }),
+            ..Default::default()
+        };
+        let raw_input = r#"{"cmd":"find /tmp / -name AGENTS.md -print"}"#;
+
+        let denial = policy.deny_invocation(ToolInvocationPolicyInput {
+            tool_name: "exec_command",
+            mcp_server: None,
+            mcp_tool: None,
+            raw_input: Cow::Borrowed(raw_input),
+            json_input: None,
+        });
+
+        assert_eq!(denial, None);
+    }
+
+    #[test]
+    fn invocation_policy_matches_json_path_rule() {
+        let policy = ToolPolicy {
+            invocation: Some(ToolInvocationPolicy {
+                mode: ToolInvocationPolicyMode::Default,
+                rules: vec![ToolInvocationRule {
+                    id: Some("no-rm".to_string()),
+                    effect: ToolInvocationRuleEffect::Deny,
+                    tools: vec!["exec_command".to_string()],
+                    mcp: None,
+                    when: Some(ToolInvocationRuleCondition {
+                        json_path: Some("$.cmd".to_string()),
+                        regex: r"^rm -rf\b".to_string(),
+                    }),
+                    message: Some("rm is not allowed".to_string()),
+                }],
+            }),
+            ..Default::default()
+        };
+        let json_input = serde_json::json!({ "cmd": "rm -rf target" });
+        let raw_input = json_input.to_string();
+
+        let denial = policy.deny_invocation(ToolInvocationPolicyInput {
+            tool_name: "exec_command",
+            mcp_server: None,
+            mcp_tool: None,
+            raw_input: Cow::Borrowed(&raw_input),
+            json_input: Some(&json_input),
+        });
+
+        assert_eq!(denial, Some("rm is not allowed".to_string()));
+    }
+
+    #[test]
+    fn invocation_policy_allow_only_requires_allow_match() {
+        let policy = ToolPolicy {
+            invocation: Some(ToolInvocationPolicy {
+                mode: ToolInvocationPolicyMode::AllowOnly,
+                rules: vec![ToolInvocationRule {
+                    id: Some("git-status".to_string()),
+                    effect: ToolInvocationRuleEffect::Allow,
+                    tools: vec!["exec_command".to_string()],
+                    mcp: None,
+                    when: Some(ToolInvocationRuleCondition {
+                        json_path: Some("$.cmd".to_string()),
+                        regex: r"^git status$".to_string(),
+                    }),
+                    message: None,
+                }],
+            }),
+            ..Default::default()
+        };
+        let allowed_json = serde_json::json!({ "cmd": "git status" });
+        let allowed_raw = allowed_json.to_string();
+        let denied_json = serde_json::json!({ "cmd": "git diff" });
+        let denied_raw = denied_json.to_string();
+
+        assert_eq!(
+            policy.deny_invocation(ToolInvocationPolicyInput {
+                tool_name: "exec_command",
+                mcp_server: None,
+                mcp_tool: None,
+                raw_input: Cow::Borrowed(&allowed_raw),
+                json_input: Some(&allowed_json),
+            }),
+            None
+        );
+        assert_eq!(
+            policy.deny_invocation(ToolInvocationPolicyInput {
+                tool_name: "exec_command",
+                mcp_server: None,
+                mcp_tool: None,
+                raw_input: Cow::Borrowed(&denied_raw),
+                json_input: Some(&denied_json),
+            }),
+            Some(
+                "tool invocation blocked by toolPolicy.invocation allowOnly: exec_command"
+                    .to_string()
+            )
+        );
     }
 }

@@ -434,6 +434,9 @@ pub struct ThreadForkParams {
     pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub developer_instructions: Option<String>,
+    #[experimental("thread/fork.toolPolicy")]
+    #[ts(optional = nullable)]
+    pub tool_policy: Option<ToolPolicy>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
     /// Optional client-supplied analytics source classification for this forked thread.

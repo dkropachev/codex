@@ -1,5 +1,6 @@
 use super::PermissionProfile;
 use super::SandboxPolicy;
+use super::ToolPolicy;
 use codex_experimental_api_macros::ExperimentalApi;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -107,6 +108,12 @@ pub struct CommandExecParams {
     #[experimental("command/exec.permissionProfile")]
     #[ts(optional = nullable)]
     pub permission_profile: Option<PermissionProfile>,
+    /// Optional tool invocation policy for this standalone command. Omitted
+    /// uses the server's configured policy; `invocation.mode="unrestricted"`
+    /// explicitly opts out of default invocation restrictions for this request.
+    #[experimental("command/exec.toolPolicy")]
+    #[ts(optional = nullable)]
+    pub tool_policy: Option<ToolPolicy>,
 }
 
 /// Final buffered result for `command/exec`.

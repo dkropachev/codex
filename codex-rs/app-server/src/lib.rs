@@ -91,6 +91,7 @@ mod request_serialization;
 mod server_request_error;
 mod thread_state;
 mod thread_status;
+mod tool_invocation_policy;
 mod transport;
 
 pub use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;

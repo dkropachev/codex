@@ -64,6 +64,106 @@
         }
       ]
     },
+    "McpToolPolicy": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "inherit"
+              ],
+              "title": "McpToolPolicyInheritMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "McpToolPolicyInherit",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "none"
+              ],
+              "title": "McpToolPolicyNoneMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "McpToolPolicyNone",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "allowOnly"
+              ],
+              "title": "McpToolPolicyAllowOnlyMode",
+              "type": "string"
+            },
+            "servers": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "tools": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "McpToolPolicyAllowOnly",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "deny"
+              ],
+              "title": "McpToolPolicyDenyMode",
+              "type": "string"
+            },
+            "servers": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "tools": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "McpToolPolicyDeny",
+          "type": "object"
+        }
+      ]
+    },
     "PermissionProfileModificationParams": {
       "oneOf": [
         {
@@ -138,6 +238,280 @@
         "memory_consolidation"
       ],
       "type": "string"
+    },
+    "ToolInvocationMcpSelector": {
+      "additionalProperties": false,
+      "properties": {
+        "server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ToolInvocationPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolInvocationPolicyMode"
+            }
+          ],
+          "default": "default"
+        },
+        "rules": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ToolInvocationRule"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ToolInvocationPolicyMode": {
+      "enum": [
+        "default",
+        "unrestricted",
+        "deny",
+        "allowOnly"
+      ],
+      "type": "string"
+    },
+    "ToolInvocationRule": {
+      "additionalProperties": false,
+      "properties": {
+        "effect": {
+          "$ref": "#/definitions/ToolInvocationRuleEffect"
+        },
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mcp": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolInvocationMcpSelector"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tools": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "when": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolInvocationRuleCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "effect"
+      ],
+      "type": "object"
+    },
+    "ToolInvocationRuleCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "jsonPath": {
+          "description": "Optional JSON path selecting tool input to test. Omitted or empty means the whole raw tool input.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "regex": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "regex"
+      ],
+      "type": "object"
+    },
+    "ToolInvocationRuleEffect": {
+      "enum": [
+        "deny",
+        "allow"
+      ],
+      "type": "string"
+    },
+    "ToolPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "builtins": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolSetPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dynamic": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolSetPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "invocation": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolInvocationPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mcp": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpToolPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "toolRouter": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolRouterPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ToolRouterPolicy": {
+      "enum": [
+        "inherit",
+        "off"
+      ],
+      "type": "string"
+    },
+    "ToolSetPolicy": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "inherit"
+              ],
+              "title": "ToolSetPolicyInheritMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "ToolSetPolicyInherit",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "none"
+              ],
+              "title": "ToolSetPolicyNoneMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "ToolSetPolicyNone",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "allowOnly"
+              ],
+              "title": "ToolSetPolicyAllowOnlyMode",
+              "type": "string"
+            },
+            "tools": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "mode",
+            "tools"
+          ],
+          "title": "ToolSetPolicyAllowOnly",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "deny"
+              ],
+              "title": "ToolSetPolicyDenyMode",
+              "type": "string"
+            },
+            "tools": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "mode",
+            "tools"
+          ],
+          "title": "ToolSetPolicyDeny",
+          "type": "object"
+        }
+      ]
     }
   },
   "description": "There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",

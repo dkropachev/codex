@@ -2190,6 +2190,7 @@ impl CodexMessageProcessor {
             size,
             sandbox_policy,
             permission_profile,
+            tool_policy,
         } = params;
         if sandbox_policy.is_some() && permission_profile.is_some() {
             self.send_invalid_request_error(
@@ -2228,6 +2229,23 @@ impl CodexMessageProcessor {
                 data: None,
             };
             self.outgoing.send_error(request, error).await;
+            return;
+        }
+
+        let effective_tool_policy = match tool_policy {
+            Some(tool_policy) => match crate::prompt_policy::tool_policy_to_core(tool_policy) {
+                Ok(tool_policy) => tool_policy,
+                Err(message) => {
+                    self.send_invalid_request_error(request_id, message).await;
+                    return;
+                }
+            },
+            None => self.config.tool_policy.clone(),
+        };
+        if let Some(message) =
+            crate::tool_invocation_policy::command_exec_denial(&effective_tool_policy, &command)
+        {
+            self.send_invalid_request_error(request_id, message).await;
             return;
         }
 
@@ -5517,7 +5535,9 @@ impl CodexMessageProcessor {
             config: cli_overrides,
             base_instructions,
             developer_instructions,
+            tool_policy,
             ephemeral,
+            thread_source: _,
             exclude_turns,
             persist_extended_history,
         } = params;
@@ -5592,6 +5612,16 @@ impl CodexMessageProcessor {
             developer_instructions,
             /*personality*/ None,
         );
+        if let Some(tool_policy) = tool_policy {
+            let tool_policy = match crate::prompt_policy::tool_policy_to_core(tool_policy) {
+                Ok(tool_policy) => tool_policy,
+                Err(message) => {
+                    self.send_invalid_request_error(request_id, message).await;
+                    return;
+                }
+            };
+            typesafe_overrides.tool_policy = Some(tool_policy);
+        }
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let config = match self

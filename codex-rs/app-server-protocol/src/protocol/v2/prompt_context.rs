@@ -155,6 +155,7 @@ pub struct ToolPolicy {
     pub mcp: Option<McpToolPolicy>,
     pub dynamic: Option<ToolSetPolicy>,
     pub tool_router: Option<ToolRouterPolicy>,
+    pub invocation: Option<ToolInvocationPolicy>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -201,4 +202,73 @@ pub enum McpToolPolicy {
 pub enum ToolRouterPolicy {
     Inherit,
     Off,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct ToolInvocationPolicy {
+    #[serde(default)]
+    pub mode: ToolInvocationPolicyMode,
+    #[serde(default)]
+    pub rules: Vec<ToolInvocationRule>,
+}
+
+impl Default for ToolInvocationPolicy {
+    fn default() -> Self {
+        Self {
+            mode: ToolInvocationPolicyMode::Default,
+            rules: Vec::new(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ToolInvocationPolicyMode {
+    #[default]
+    Default,
+    Unrestricted,
+    Deny,
+    AllowOnly,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ToolInvocationRuleEffect {
+    Deny,
+    Allow,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct ToolInvocationMcpSelector {
+    pub server: Option<String>,
+    pub tool: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct ToolInvocationRuleCondition {
+    /// Optional JSON path selecting tool input to test. Omitted or empty means
+    /// the whole raw tool input.
+    pub json_path: Option<String>,
+    pub regex: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct ToolInvocationRule {
+    pub id: Option<String>,
+    pub effect: ToolInvocationRuleEffect,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    pub mcp: Option<ToolInvocationMcpSelector>,
+    pub when: Option<ToolInvocationRuleCondition>,
+    pub message: Option<String>,
 }

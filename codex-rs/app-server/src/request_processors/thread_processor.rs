@@ -3116,6 +3116,7 @@ impl ThreadRequestProcessor {
             config: cli_overrides,
             base_instructions,
             developer_instructions,
+            tool_policy,
             ephemeral,
             thread_source: _,
             exclude_turns,
@@ -3182,6 +3183,11 @@ impl ThreadRequestProcessor {
             developer_instructions,
             /*personality*/ None,
         );
+        if let Some(tool_policy) = tool_policy {
+            typesafe_overrides.tool_policy = Some(
+                crate::prompt_policy::tool_policy_to_core(tool_policy).map_err(invalid_request)?,
+            );
+        }
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let config = self

@@ -108,6 +108,7 @@ impl CommandExecRequestProcessor {
             size,
             sandbox_policy,
             permission_profile,
+            tool_policy,
         } = params;
         if sandbox_policy.is_some() && permission_profile.is_some() {
             return Err(invalid_request(
@@ -129,6 +130,18 @@ impl CommandExecRequestProcessor {
             return Err(invalid_params(
                 "command/exec cannot set both timeoutMs and disableTimeout",
             ));
+        }
+
+        let effective_tool_policy = match tool_policy {
+            Some(tool_policy) => {
+                crate::prompt_policy::tool_policy_to_core(tool_policy).map_err(invalid_request)?
+            }
+            None => self.config.tool_policy.clone(),
+        };
+        if let Some(message) =
+            crate::tool_invocation_policy::command_exec_denial(&effective_tool_policy, &command)
+        {
+            return Err(invalid_request(message));
         }
 
         let cwd = cwd.map_or_else(|| self.config.cwd.clone(), |cwd| self.config.cwd.join(cwd));

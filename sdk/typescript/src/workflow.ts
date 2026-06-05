@@ -158,6 +158,43 @@ export enum ToolRouterPolicy {
   Off = "off",
 }
 
+export enum ToolInvocationPolicyMode {
+  Default = "default",
+  Unrestricted = "unrestricted",
+  Deny = "deny",
+  AllowOnly = "allowOnly",
+}
+
+export enum ToolInvocationRuleEffect {
+  Deny = "deny",
+  Allow = "allow",
+}
+
+export type ToolInvocationMcpSelector = {
+  server?: string | null;
+  tool?: string | null;
+};
+
+export type ToolInvocationRuleCondition = {
+  /** Defaults to ""; empty means the whole raw tool input. */
+  jsonPath?: string | null;
+  regex: string;
+};
+
+export type ToolInvocationRule = {
+  id?: string | null;
+  effect: ToolInvocationRuleEffect;
+  tools?: string[];
+  mcp?: ToolInvocationMcpSelector | null;
+  when?: ToolInvocationRuleCondition | null;
+  message?: string | null;
+};
+
+export type ToolInvocationPolicy = {
+  mode?: ToolInvocationPolicyMode;
+  rules?: ToolInvocationRule[];
+};
+
 export enum BuiltinTool {
   ExecCommand = "exec_command",
   WriteStdin = "write_stdin",
@@ -199,6 +236,24 @@ export type ToolPolicy = {
   mcp?: McpToolPolicy;
   dynamic?: DynamicToolPolicy;
   toolRouter?: ToolRouterPolicy;
+  invocation?: ToolInvocationPolicy;
+};
+
+export type WorkflowExecOptions = {
+  processId?: string;
+  tty?: boolean;
+  streamStdin?: boolean;
+  streamStdoutStderr?: boolean;
+  outputBytesCap?: number | null;
+  disableOutputCap?: boolean;
+  disableTimeout?: boolean;
+  timeoutMs?: number | null;
+  cwd?: string | null;
+  env?: Record<string, string | null> | null;
+  size?: { rows: number; cols: number } | null;
+  sandboxPolicy?: unknown;
+  permissionProfile?: unknown;
+  toolPolicy?: ToolPolicy;
 };
 
 export type WorkflowConnection = "auto" | "require-existing" | "spawn" | { appServerUrl: string };
@@ -1037,6 +1092,7 @@ export class AgentHandle {
       approvalPolicy: options.approvalPolicy,
       sandbox: options.sandboxMode ? sandboxModeToWire(options.sandboxMode) : undefined,
       ephemeral: options.ephemeral,
+      toolPolicy: options.toolPolicy,
     });
     return this.workflow.trackAgent(
       response.thread.id,
@@ -1208,7 +1264,7 @@ export class WorkflowCommandApi {
 export class WorkflowTools {
   constructor(private client: AppServerClient) {}
 
-  exec(command: string[], options: Record<string, unknown> = {}) {
+  exec(command: string[], options: WorkflowExecOptions = {}) {
     return this.client.request("command/exec", { command, ...options });
   }
 }

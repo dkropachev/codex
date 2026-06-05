@@ -42,6 +42,52 @@ use super::connection_handling_websocket::send_request;
 use super::connection_handling_websocket::spawn_websocket_server;
 
 #[tokio::test]
+async fn command_exec_rejects_default_blocked_invocation() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                "find".to_string(),
+                "/tmp".to_string(),
+                "/".to_string(),
+                "-name".to_string(),
+                "AGENTS.md".to_string(),
+                "-print".to_string(),
+            ],
+            process_id: Some("blocked-agents-scan".to_string()),
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: None,
+            permission_profile: None,
+            tool_policy: None,
+        })
+        .await?;
+
+    let error = mcp
+        .read_stream_until_error_message(RequestId::Integer(command_request_id))
+        .await?;
+    assert_eq!(
+        error.error.message,
+        "Blocked unbounded AGENTS.md discovery scan. Search from the repo/worktree root instead of / or /tmp."
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn command_exec_without_streams_can_be_terminated() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
@@ -66,6 +112,7 @@ async fn command_exec_without_streams_can_be_terminated() -> Result<()> {
             size: None,
             sandbox_policy: None,
             permission_profile: None,
+            tool_policy: None,
         })
         .await?;
     let terminate_request_id = mcp
@@ -119,6 +166,7 @@ async fn command_exec_without_process_id_keeps_buffered_compatibility() -> Resul
             size: None,
             sandbox_policy: None,
             permission_profile: None,
+            tool_policy: None,
         })
         .await?;
 
@@ -178,6 +226,7 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
             size: None,
             sandbox_policy: None,
             permission_profile: None,
+            tool_policy: None,
         })
         .await?;
 
@@ -225,6 +274,7 @@ async fn command_exec_accepts_permission_profile() -> Result<()> {
             size: None,
             sandbox_policy: None,
             permission_profile: Some(root_read_only_permission_profile()),
+            tool_policy: None,
         })
         .await?;
 
@@ -289,6 +339,7 @@ async fn command_exec_permission_profile_project_roots_use_command_cwd() -> Resu
             size: None,
             sandbox_policy: None,
             permission_profile: Some(permission_profile),
+            tool_policy: None,
         })
         .await?;
 
@@ -336,6 +387,7 @@ async fn command_exec_rejects_sandbox_policy_with_permission_profile() -> Result
             size: None,
             sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
             permission_profile: Some(root_read_only_permission_profile()),
+            tool_policy: None,
         })
         .await?;
 
@@ -374,6 +426,7 @@ async fn command_exec_rejects_disable_timeout_with_timeout_ms() -> Result<()> {
             size: None,
             sandbox_policy: None,
             permission_profile: None,
+            tool_policy: None,
         })
         .await?;
 
@@ -412,6 +465,7 @@ async fn command_exec_rejects_disable_output_cap_with_output_bytes_cap() -> Resu
             size: None,
             sandbox_policy: None,
             permission_profile: None,
+            tool_policy: None,
         })
         .await?;
 
@@ -450,6 +504,7 @@ async fn command_exec_rejects_negative_timeout_ms() -> Result<()> {
             size: None,
             sandbox_policy: None,
             permission_profile: None,
+            tool_policy: None,
         })
         .await?;
 
@@ -488,6 +543,7 @@ async fn command_exec_without_process_id_rejects_streaming() -> Result<()> {
             size: None,
             sandbox_policy: None,
             permission_profile: None,
+            tool_policy: None,
         })
         .await?;
 
@@ -530,6 +586,7 @@ async fn command_exec_non_streaming_respects_output_cap() -> Result<()> {
             size: None,
             sandbox_policy: None,
             permission_profile: None,
+            tool_policy: None,
         })
         .await?;
 
@@ -578,6 +635,7 @@ async fn command_exec_streaming_does_not_buffer_output() -> Result<()> {
             size: None,
             sandbox_policy: None,
             permission_profile: None,
+            tool_policy: None,
         })
         .await?;
 
@@ -642,6 +700,7 @@ async fn command_exec_pipe_streams_output_and_accepts_write() -> Result<()> {
             size: None,
             sandbox_policy: None,
             permission_profile: None,
+            tool_policy: None,
         })
         .await?;
 
@@ -718,6 +777,7 @@ async fn command_exec_tty_implies_streaming_and_reports_pty_output() -> Result<(
             size: None,
             sandbox_policy: None,
             permission_profile: None,
+            tool_policy: None,
         })
         .await?;
 
@@ -792,6 +852,7 @@ async fn command_exec_tty_supports_initial_size_and_resize() -> Result<()> {
             }),
             sandbox_policy: None,
             permission_profile: None,
+            tool_policy: None,
         })
         .await?;
 

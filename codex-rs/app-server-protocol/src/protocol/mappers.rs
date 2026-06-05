@@ -19,6 +19,7 @@ impl From<v1::ExecOneOffCommandParams> for v2::CommandExecParams {
             size: None,
             sandbox_policy: value.sandbox_policy.map(std::convert::Into::into),
             permission_profile: None,
+            tool_policy: None,
         }
     }
 }

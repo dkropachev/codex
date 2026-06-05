@@ -146,11 +146,11 @@ Example with notification opt-out:
 
 ## API Overview
 
-- `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread. When the request includes a `cwd` and the resolved sandbox is `workspace-write` or full access, app-server also marks that project as trusted in the user `config.toml`. Pass `sessionStartSource: "clear"` when starting a replacement thread after clearing the current session so `SessionStart` hooks receive `source: "clear"` instead of the default `"startup"`. For permissions, prefer experimental `permissions` profile selection; the legacy `sandbox` shorthand is still accepted but cannot be combined with `permissions`. Experimental `environments` selects the sticky execution environments for turns on the thread; omit it to use the server default, pass `[]` to disable environments, or pass explicit environment ids with per-environment `cwd`. Experimental `promptContext` controls which system/developer/user-context prompt blocks are included, and experimental `toolPolicy` controls which tools are exposed to the model. `promptContext.strict` defaults to `true`, so the server rejects prompt policies it cannot honor exactly; set it to `false` only when best-effort prompt shaping is acceptable.
+- `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread. When the request includes a `cwd` and the resolved sandbox is `workspace-write` or full access, app-server also marks that project as trusted in the user `config.toml`. Pass `sessionStartSource: "clear"` when starting a replacement thread after clearing the current session so `SessionStart` hooks receive `source: "clear"` instead of the default `"startup"`. For permissions, prefer experimental `permissions` profile selection; the legacy `sandbox` shorthand is still accepted but cannot be combined with `permissions`. Experimental `environments` selects the sticky execution environments for turns on the thread; omit it to use the server default, pass `[]` to disable environments, or pass explicit environment ids with per-environment `cwd`. Experimental `promptContext` controls which system/developer/user-context prompt blocks are included, and experimental `toolPolicy` controls which tools are exposed to the model and can reject matching tool invocations before handlers run. `promptContext.strict` defaults to `true`, so the server rejects prompt policies it cannot honor exactly; set it to `false` only when best-effort prompt shaping is acceptable.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it. Accepts the same permission, `promptContext`, and `toolPolicy` override rules as `thread/start`.
 - `thread/promptContext/read` — experimental helper for loaded threads. Returns the server-resolved current `systemInstructions`, `developerInstructions`, and `userInstructions` text after config, resume, and any sticky prompt policy have been applied.
 - `thread/promptContext/update` — experimental helper for loaded threads. Applies persistent `promptContext` and/or `toolPolicy` updates before subsequent turns. Unlike `turn/start.promptContext`, this method accepts `systemInstructions`.
-- `thread/fork` — fork an existing thread into a new thread id by copying the stored history; if the source thread is currently mid-turn, the fork records the same interruption marker as `turn/interrupt` instead of inheriting an unmarked partial turn suffix. The returned `thread.forkedFromId` points at the source thread when known. Accepts `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread. Experimental clients can pass `excludeTurns: true` when they plan to page fork history via `thread/turns/list` instead of receiving the full turn array immediately. Accepts the same permission override rules as `thread/start`.
+- `thread/fork` — fork an existing thread into a new thread id by copying the stored history; if the source thread is currently mid-turn, the fork records the same interruption marker as `turn/interrupt` instead of inheriting an unmarked partial turn suffix. The returned `thread.forkedFromId` points at the source thread when known. Accepts `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread. Experimental clients can pass `excludeTurns: true` when they plan to page fork history via `thread/turns/list` instead of receiving the full turn array immediately. Accepts the same permission override rules as `thread/start` plus experimental `toolPolicy`.
 - `thread/start`, `thread/resume`, and `thread/fork` responses include the legacy `sandbox` compatibility projection. Experimental clients can read response `permissionProfile` for the exact active runtime permissions and `activePermissionProfile` for the named or implicit built-in profile identity/provenance when known.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
@@ -178,7 +178,7 @@ Example with notification opt-out:
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
-- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. Prefer experimental `permissions` profile selection for permission overrides; the legacy `sandboxPolicy` field is still accepted but cannot be combined with `permissions`. Experimental `promptContext` can override developer/user-context prompt blocks for this and subsequent turns; `systemInstructions` is only accepted on `thread/start`, `thread/resume`, and `thread/promptContext/update`, and `strict` defaults to `true`. Experimental `toolPolicy` can narrow tool visibility for this and subsequent turns. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
+- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. Prefer experimental `permissions` profile selection for permission overrides; the legacy `sandboxPolicy` field is still accepted but cannot be combined with `permissions`. Experimental `promptContext` can override developer/user-context prompt blocks for this and subsequent turns; `systemInstructions` is only accepted on `thread/start`, `thread/resume`, and `thread/promptContext/update`, and `strict` defaults to `true`. Experimental `toolPolicy` can narrow tool visibility and reject matching invocations for this and subsequent turns. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 - `thread/inject_items` — append raw Responses API items to a loaded thread’s model-visible history without starting a user turn; returns `{}` on success.
 - `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. Review and manual compaction turns reject `turn/steer`.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
@@ -187,7 +187,7 @@ Example with notification opt-out:
 - `thread/realtime/appendText` — append text input to the active realtime session (experimental); returns `{}`.
 - `thread/realtime/stop` — stop the active realtime session for the thread (experimental); returns `{}`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
-- `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
+- `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation). Optional `toolPolicy` can override invocation policy for this standalone command.
 - `command/exec/write` — write base64-decoded stdin bytes to a running `command/exec` session or close stdin; returns `{}`.
 - `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.
 - `command/exec/terminate` — terminate a running `command/exec` session by `processId`; returns `{}`.
@@ -291,7 +291,20 @@ Start a fresh thread when you need a new Codex conversation.
     "toolPolicy": {
         "builtins": { "mode": "allowOnly", "tools": ["exec_command", "view_image"] },
         "mcp": { "mode": "deny", "servers": ["memory"], "tools": [] },
-        "toolRouter": "off"
+        "toolRouter": "off",
+        "invocation": {
+            "mode": "default",
+            "rules": [{
+                "id": "no-root-agents-scan",
+                "effect": "deny",
+                "tools": ["exec_command"],
+                "when": {
+                    "jsonPath": "$.cmd",
+                    "regex": "\\bfind\\b.*(/|/tmp).*AGENTS\\.md"
+                },
+                "message": "Search AGENTS.md only inside the repo/worktree."
+            }]
+        }
     },
     // Experimental: requires opt-in
     "dynamicTools": [
@@ -705,7 +718,8 @@ You can optionally specify config overrides on the new turn. If specified, these
         }
     },
     "toolPolicy": {
-        "builtins": { "mode": "none" }
+        "builtins": { "mode": "none" },
+        "invocation": { "mode": "unrestricted" }
     },
     // Optional JSON Schema to constrain the final assistant message for this turn.
     "outputSchema": {
@@ -998,6 +1012,8 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
 
 Notes:
 
+- `toolPolicy.invocation` is evaluated before tool handlers run. `mode: "default"` applies built-in default deny rules plus supplied rules; `mode: "unrestricted"` skips default and supplied invocation rules; `mode: "allowOnly"` denies selected invocations unless an `effect: "allow"` rule matches. `mode: "deny"` is equivalent to default deny-rule evaluation.
+- Invocation rules select by `tools` and/or `mcp`. A rule without `when` matches every selected invocation. In `when`, omitted `jsonPath` defaults to `""`, which matches the whole raw tool input. Non-empty `jsonPath` supports `$` and `$.field[.field...]`; `regex` is validated by the server before the policy is accepted.
 - Empty `command` arrays are rejected.
 - Prefer `permissionProfile` for command permission overrides. The legacy `sandboxPolicy` field accepts the same shape used by `turn/start` (e.g., `dangerFullAccess`, `readOnly`, `workspaceWrite` with flags, `externalSandbox` with `networkAccess` `restricted|enabled`), but cannot be combined with `permissionProfile`.
 - `env` merges into the environment produced by the server's shell environment policy. Matching names are overridden; unspecified variables are left intact.

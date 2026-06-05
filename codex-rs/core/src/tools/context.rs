@@ -139,6 +139,50 @@ impl ToolPayload {
             ToolPayload::Mcp { raw_arguments, .. } => Cow::Borrowed(raw_arguments),
         }
     }
+
+    pub(crate) fn policy_raw_input(&self) -> Cow<'_, str> {
+        match self {
+            ToolPayload::Function { arguments } => Cow::Borrowed(arguments),
+            ToolPayload::ToolSearch { arguments } => {
+                serde_json::to_string(arguments).map_or_else(|_| Cow::Borrowed(""), Cow::Owned)
+            }
+            ToolPayload::Custom { input } => Cow::Borrowed(input),
+            ToolPayload::LocalShell { params } => Cow::Owned(
+                json!({
+                    "command": &params.command,
+                    "workdir": &params.workdir,
+                    "timeout_ms": params.timeout_ms,
+                    "sandbox_permissions": &params.sandbox_permissions,
+                    "prefix_rule": &params.prefix_rule,
+                    "additional_permissions": &params.additional_permissions,
+                    "justification": &params.justification,
+                })
+                .to_string(),
+            ),
+            ToolPayload::Mcp { raw_arguments, .. } => Cow::Borrowed(raw_arguments),
+        }
+    }
+
+    pub(crate) fn policy_json_input(&self) -> Option<JsonValue> {
+        match self {
+            ToolPayload::Function { arguments }
+            | ToolPayload::Mcp {
+                raw_arguments: arguments,
+                ..
+            } => serde_json::from_str(arguments).ok(),
+            ToolPayload::ToolSearch { arguments } => serde_json::to_value(arguments).ok(),
+            ToolPayload::Custom { .. } => None,
+            ToolPayload::LocalShell { params } => Some(json!({
+                "command": &params.command,
+                "workdir": &params.workdir,
+                "timeout_ms": params.timeout_ms,
+                "sandbox_permissions": &params.sandbox_permissions,
+                "prefix_rule": &params.prefix_rule,
+                "additional_permissions": &params.additional_permissions,
+                "justification": &params.justification,
+            })),
+        }
+    }
 }
 
 pub trait ToolOutput: Send {
