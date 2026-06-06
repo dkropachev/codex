@@ -1547,6 +1547,7 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 
 - **API key (`apiKey`)**: Caller supplies an OpenAI API key via `account/login/start` with `type: "apiKey"`. The API key is saved and used for API requests.
 - **ChatGPT managed (`chatgpt`)** (recommended): Codex owns the ChatGPT OAuth flow and refresh tokens. Start via `account/login/start` with `type: "chatgpt"` for the browser flow or `type: "chatgptDeviceCode"` for device code; Codex persists tokens to disk and refreshes them automatically.
+- **ChatGPT account pool (`chatgptPool`)**: When `[account_pool]` is enabled, `account/read` reports the configured pool, active member, and per-member usage/error fields. Pool members are ChatGPT managed accounts stored under `CODEX_HOME/accounts/<account-id>/auth.json`.
 
 ### API Overview
 

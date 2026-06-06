@@ -6,6 +6,56 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AccountPoolDefinitionToml": {
+      "additionalProperties": false,
+      "properties": {
+        "accounts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "policy": {
+          "$ref": "#/definitions/AccountPoolPolicyToml"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accounts",
+        "policy",
+        "provider"
+      ],
+      "type": "object"
+    },
+    "AccountPoolPolicyToml": {
+      "enum": [
+        "drain",
+        "load_balance"
+      ],
+      "type": "string"
+    },
+    "AccountPoolToml": {
+      "additionalProperties": false,
+      "properties": {
+        "default_pool": {
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "pools": {
+          "additionalProperties": {
+            "$ref": "#/definitions/AccountPoolDefinitionToml"
+          },
+          "default": {},
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "AgentRoleToml": {
       "additionalProperties": false,
       "properties": {
@@ -2394,6 +2444,15 @@
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
   "properties": {
+    "account_pool": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AccountPoolToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional logical pools of ChatGPT accounts."
+    },
     "agents": {
       "allOf": [
         {

@@ -66,6 +66,28 @@ Codex stores the SQLite-backed state DB under `sqlite_home` (config key) or the
 `CODEX_SQLITE_HOME` environment variable. When unset, WorkspaceWrite sandbox
 sessions default to a temp directory; other modes default to `CODEX_HOME`.
 
+## ChatGPT Account Pools
+
+`[account_pool]` lets Codex route ChatGPT requests across named accounts stored
+under `~/.codex/accounts/<account-id>/auth.json`. Set `default_pool` to the pool
+Codex should use. Each pool defines the OpenAI `provider`, an ordered `accounts`
+list, and a `policy`:
+
+- `drain` uses the first available account until it is unavailable or exhausted,
+  then moves to the next account.
+- `load_balance` prefers the account with the most fresh remaining usage.
+
+```toml
+[account_pool]
+enabled = true
+default_pool = "codex-pro"
+
+[account_pool.pools.codex-pro]
+provider = "openai"
+accounts = ["work-pro", "personal-pro"]
+policy = "drain"
+```
+
 ## Custom CA Certificates
 
 Codex can trust a custom root CA bundle for outbound HTTPS and secure websocket

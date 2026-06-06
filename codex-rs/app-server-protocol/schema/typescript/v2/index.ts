@@ -2,6 +2,7 @@
 
 export type { Account } from "./Account";
 export type { AccountLoginCompletedNotification } from "./AccountLoginCompletedNotification";
+export type { AccountPoolMember } from "./AccountPoolMember";
 export type { AccountRateLimitsUpdatedNotification } from "./AccountRateLimitsUpdatedNotification";
 export type { AccountUpdatedNotification } from "./AccountUpdatedNotification";
 export type { AddCreditsNudgeCreditType } from "./AddCreditsNudgeCreditType";
