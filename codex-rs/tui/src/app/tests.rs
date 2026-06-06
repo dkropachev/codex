@@ -3259,7 +3259,7 @@ async fn side_thread_snapshot_skips_session_header_preamble() {
 async fn side_thread_ignores_global_mcp_startup_notifications() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     while app_event_rx.try_recv().is_ok() {}
-    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
         .await
         .expect("embedded app server");
     let parent_thread_id = ThreadId::new();
@@ -3271,7 +3271,7 @@ async fn side_thread_ignores_global_mcp_startup_notifications() {
     app.sync_side_thread_ui();
 
     app.handle_app_server_event(
-        &app_server,
+        &mut app_server,
         codex_app_server_client::AppServerEvent::ServerNotification(
             ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
                 name: "sentry".to_string(),

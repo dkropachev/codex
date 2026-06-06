@@ -565,13 +565,47 @@ impl HistoryCell for StatusHistoryCell {
 
         let account_value = self.account.as_ref().map(|account| match account {
             StatusAccountDisplay::ChatGpt { email, plan } => match (email, plan) {
-                (Some(email), Some(plan)) => format!("{email} ({plan})"),
-                (Some(email), None) => email.clone(),
-                (None, Some(plan)) => plan.clone(),
-                (None, None) => "ChatGPT".to_string(),
+                (Some(email), Some(plan)) => (format!("{email} ({plan})"), None),
+                (Some(email), None) => (email.clone(), None),
+                (None, Some(plan)) => (plan.clone(), None),
+                (None, None) => ("ChatGPT".to_string(), None),
             },
+            StatusAccountDisplay::ChatGptPool {
+                pool_id,
+                active_member,
+                member_count,
+                unavailable_count,
+            } => {
+                let active_details = active_member
+                    .as_ref()
+                    .map(|member| {
+                        let mut parts = vec![member.id.clone()];
+                        if let Some(email) = member.email.as_ref() {
+                            parts.push(email.clone());
+                        }
+                        if let Some(plan) = member.plan.as_ref() {
+                            parts.push(plan.clone());
+                        }
+                        format!("active: {}", parts.join(" / "))
+                    })
+                    .unwrap_or_else(|| "active: no active member".to_string());
+                let member_label = if *member_count == 1 {
+                    "member"
+                } else {
+                    "members"
+                };
+                (
+                    format!(
+                        "{pool_id} pool ({member_count} {member_label}, {unavailable_count} unavailable)"
+                    ),
+                    Some(active_details),
+                )
+            }
             StatusAccountDisplay::ApiKey => {
-                "API key configured (run codex login to use ChatGPT)".to_string()
+                (
+                    "API key configured (run codex login to use ChatGPT)".to_string(),
+                    None,
+                )
             }
         });
 
@@ -655,8 +689,11 @@ impl HistoryCell for StatusHistoryCell {
         lines.push(formatter.line("Permissions", vec![Span::from(self.permissions.clone())]));
         lines.push(formatter.line("Agents.md", vec![Span::from(agents_summary)]));
 
-        if let Some(account_value) = account_value {
+        if let Some((account_value, account_details)) = account_value {
             lines.push(formatter.line("Account", vec![Span::from(account_value)]));
+            if let Some(account_details) = account_details {
+                lines.push(formatter.continuation(vec![Span::from(account_details)]));
+            }
         }
 
         if let Some(thread_name) = thread_name {
@@ -676,7 +713,10 @@ impl HistoryCell for StatusHistoryCell {
 
         lines.push(Line::from(Vec::<Span<'static>>::new()));
         // Hide token usage only for ChatGPT subscribers
-        if !matches!(self.account, Some(StatusAccountDisplay::ChatGpt { .. })) {
+        if !matches!(
+            self.account,
+            Some(StatusAccountDisplay::ChatGpt { .. } | StatusAccountDisplay::ChatGptPool { .. })
+        ) {
             lines.push(formatter.line("Token usage", self.token_usage_spans()));
         }
 

@@ -47,6 +47,9 @@ pub use super::account_pool::AccountPoolBucket;
 pub use super::account_pool::AccountPoolManager;
 pub use super::account_pool::AccountPoolMemberStatus;
 pub use super::account_pool::AccountPoolStatus;
+pub use super::account_pool::AccountPoolUsageRefreshPoolReport;
+pub use super::account_pool::AccountPoolUsageRefreshProblem;
+pub use super::account_pool::AccountPoolUsageRefreshReport;
 
 /// Authentication mechanism used by the current user.
 #[derive(Debug, Clone)]
@@ -1634,6 +1637,14 @@ impl AuthManager {
         if let Some(pool) = self.account_pool.as_ref() {
             pool.refresh_usage(pool_id).await;
         }
+    }
+
+    pub async fn refresh_account_pool_usage_report(
+        &self,
+        pool_id: Option<&str>,
+    ) -> Option<AccountPoolUsageRefreshReport> {
+        let pool = self.account_pool.as_ref()?;
+        Some(pool.refresh_usage_with_report(pool_id).await)
     }
 
     fn set_next_account_pool_bucket(&self, bucket: AccountPoolBucket) {

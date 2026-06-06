@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::Path;
@@ -7,6 +6,7 @@ use tokio::task::JoinSet;
 
 use codex_backend_client::Client as BackendClient;
 use codex_config::config_toml::AccountPoolDefinitionToml;
+use codex_config::config_toml::AccountPoolPolicyToml;
 use codex_core::config::Config;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -29,11 +29,21 @@ struct AccountUsageTarget {
     codex_home: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+struct AccountUsageSection {
+    summary: Option<String>,
+    targets: Vec<AccountUsageTarget>,
+}
+
 pub(crate) async fn run_account_limits(
     cli_config_overrides: CliConfigOverrides,
 ) -> anyhow::Result<()> {
     let config = load_config(cli_config_overrides).await?;
-    let targets = account_usage_targets(&config);
+    let sections = account_usage_sections(&config);
+    let targets = sections
+        .iter()
+        .flat_map(|section| section.targets.iter().cloned())
+        .collect::<Vec<_>>();
     if targets.is_empty() {
         println!("No accounts found");
         return Ok(());
@@ -51,11 +61,27 @@ pub(crate) async fn run_account_limits(
         reports[index] = report;
     }
 
-    for (index, report) in reports.iter().enumerate() {
-        if index > 0 {
+    let mut report_index = 0;
+    let mut wrote_section = false;
+    for section in &sections {
+        if section.targets.is_empty() {
+            continue;
+        }
+        if wrote_section {
             println!();
         }
-        print!("{report}");
+        if let Some(summary) = section.summary.as_ref() {
+            println!("{summary}");
+            println!();
+        }
+        for target_index in 0..section.targets.len() {
+            if target_index > 0 {
+                println!();
+            }
+            print!("{}", reports[report_index]);
+            report_index += 1;
+        }
+        wrote_section = true;
     }
 
     Ok(())
@@ -68,35 +94,65 @@ async fn load_config(cli_config_overrides: CliConfigOverrides) -> anyhow::Result
     Ok(Config::load_with_cli_overrides(cli_overrides).await?)
 }
 
-fn account_usage_targets(config: &Config) -> Vec<AccountUsageTarget> {
-    let mut targets = Vec::new();
+fn account_usage_sections(config: &Config) -> Vec<AccountUsageSection> {
+    let mut sections = Vec::new();
     let mut seen = BTreeSet::new();
     if account_has_auth(&config.codex_home) {
         seen.insert(config.codex_home.to_path_buf());
-        targets.push(AccountUsageTarget {
-            id: "default".to_string(),
-            source: AccountUsageSource::Default,
-            codex_home: config.codex_home.to_path_buf(),
+        sections.push(AccountUsageSection {
+            summary: None,
+            targets: vec![AccountUsageTarget {
+                id: "default".to_string(),
+                source: AccountUsageSource::Default,
+                codex_home: config.codex_home.to_path_buf(),
+            }],
         });
     }
 
-    let pool_members = pool_members_by_account(config);
-    for (account_id, pool_id) in &pool_members {
-        let codex_home = account_codex_home(&config.codex_home, account_id);
-        if seen.insert(codex_home.clone()) {
-            targets.push(AccountUsageTarget {
-                id: account_id.clone(),
-                source: AccountUsageSource::PoolMember {
-                    pool_id: pool_id.clone(),
-                },
-                codex_home,
+    let mut pool_member_ids = BTreeSet::new();
+    if let Some(account_pool) = config.account_pool.as_ref().filter(|pool| pool.enabled) {
+        let effective_default_pool = account_pool
+            .default_pool
+            .clone()
+            .or_else(|| account_pool.pools.keys().next().cloned());
+        for (pool_id, definition) in &account_pool.pools {
+            let mut targets = Vec::new();
+            let mut missing_count = 0;
+            let mut invalid_count = 0;
+            for account_id in &definition.accounts {
+                pool_member_ids.insert(account_id.clone());
+                let codex_home = account_codex_home(&config.codex_home, account_id);
+                match credential_status(config, &codex_home, /*require_chatgpt*/ true) {
+                    AccountCredentialStatus::Missing => missing_count += 1,
+                    AccountCredentialStatus::Invalid => invalid_count += 1,
+                    AccountCredentialStatus::LoggedIn => {}
+                }
+                if seen.insert(codex_home.clone()) {
+                    targets.push(AccountUsageTarget {
+                        id: account_id.clone(),
+                        source: AccountUsageSource::PoolMember {
+                            pool_id: pool_id.clone(),
+                        },
+                        codex_home,
+                    });
+                }
+            }
+            sections.push(AccountUsageSection {
+                summary: Some(pool_summary(
+                    pool_id,
+                    definition,
+                    effective_default_pool.as_deref() == Some(pool_id.as_str()),
+                    missing_count,
+                    invalid_count,
+                )),
+                targets,
             });
         }
     }
 
     let accounts_dir = config.codex_home.join("accounts");
     let Ok(entries) = std::fs::read_dir(accounts_dir) else {
-        return targets;
+        return sections;
     };
     let mut account_dirs = entries
         .flatten()
@@ -111,34 +167,97 @@ fn account_usage_targets(config: &Config) -> Vec<AccountUsageTarget> {
         let Some(account_id) = codex_home.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        targets.push(AccountUsageTarget {
-            id: account_id.to_string(),
-            source: AccountUsageSource::Named,
-            codex_home,
+        if pool_member_ids.contains(account_id) {
+            continue;
+        }
+        sections.push(AccountUsageSection {
+            summary: None,
+            targets: vec![AccountUsageTarget {
+                id: account_id.to_string(),
+                source: AccountUsageSource::Named,
+                codex_home,
+            }],
         });
     }
 
-    targets
+    sections
 }
 
-fn pool_members_by_account(config: &Config) -> BTreeMap<String, String> {
-    config
-        .account_pool
-        .as_ref()
-        .filter(|account_pool| account_pool.enabled)
-        .map(|account_pool| {
-            account_pool
-                .pools
-                .iter()
-                .flat_map(|(pool_id, AccountPoolDefinitionToml { accounts, .. })| {
-                    accounts
-                        .iter()
-                        .map(|account_id| (account_id.clone(), pool_id.clone()))
-                        .collect::<Vec<_>>()
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AccountCredentialStatus {
+    LoggedIn,
+    Missing,
+    Invalid,
+}
+
+fn credential_status(
+    config: &Config,
+    codex_home: &Path,
+    require_chatgpt: bool,
+) -> AccountCredentialStatus {
+    match CodexAuth::from_auth_storage(codex_home, config.cli_auth_credentials_store_mode) {
+        Ok(Some(auth)) if !require_chatgpt || auth.is_chatgpt_auth() => {
+            AccountCredentialStatus::LoggedIn
+        }
+        Ok(Some(_)) | Err(_) => AccountCredentialStatus::Invalid,
+        Ok(None) => {
+            if codex_home.join("auth.json").exists() {
+                AccountCredentialStatus::Invalid
+            } else {
+                AccountCredentialStatus::Missing
+            }
+        }
+    }
+}
+
+fn pool_summary(
+    pool_id: &str,
+    definition: &AccountPoolDefinitionToml,
+    is_default: bool,
+    missing_count: usize,
+    invalid_count: usize,
+) -> String {
+    let default = if is_default { "default pool, " } else { "" };
+    let mut summary = format!(
+        "{pool_id} ({default}{}): {} {}",
+        policy_name(definition.policy),
+        definition.accounts.len(),
+        if definition.accounts.len() == 1 {
+            "member"
+        } else {
+            "members"
+        }
+    );
+    if missing_count > 0 {
+        let _ = write!(
+            summary,
+            ", {missing_count} missing {}",
+            if missing_count == 1 {
+                "credential"
+            } else {
+                "credentials"
+            }
+        );
+    }
+    if invalid_count > 0 {
+        let _ = write!(
+            summary,
+            ", {invalid_count} invalid {}",
+            if invalid_count == 1 {
+                "credential"
+            } else {
+                "credentials"
+            }
+        );
+    }
+    summary
+}
+
+fn policy_name(policy: AccountPoolPolicyToml) -> &'static str {
+    match policy {
+        AccountPoolPolicyToml::Drain => "drain",
+        AccountPoolPolicyToml::LoadBalance => "load_balance",
+    }
 }
 
 fn account_has_auth(codex_home: &Path) -> bool {
@@ -152,6 +271,20 @@ fn account_codex_home(codex_home: &Path, account_id: &str) -> PathBuf {
 async fn render_account_usage(config: &Config, target: &AccountUsageTarget) -> String {
     let mut output = String::new();
     write_account_header(&mut output, target);
+    let require_chatgpt = matches!(target.source, AccountUsageSource::PoolMember { .. });
+    match credential_status(config, &target.codex_home, require_chatgpt) {
+        AccountCredentialStatus::LoggedIn => {}
+        AccountCredentialStatus::Missing => {
+            output.push_str("  credentials: missing\n");
+            output.push_str("  limits: unavailable\n");
+            return output;
+        }
+        AccountCredentialStatus::Invalid => {
+            output.push_str("  credentials: invalid\n");
+            output.push_str("  limits: unavailable\n");
+            return output;
+        }
+    }
     let manager = AuthManager::new(
         target.codex_home.clone(),
         /*enable_codex_api_key_env*/ false,
@@ -159,7 +292,7 @@ async fn render_account_usage(config: &Config, target: &AccountUsageTarget) -> S
         Some(config.chatgpt_base_url.clone()),
     );
     let Some(auth) = manager.auth().await else {
-        output.push_str("  credentials: empty\n");
+        output.push_str("  credentials: missing\n");
         output.push_str("  limits: unavailable\n");
         return output;
     };

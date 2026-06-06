@@ -77,6 +77,13 @@ list, and a `policy`:
   then moves to the next account.
 - `load_balance` prefers the account with the most fresh remaining usage.
 
+Quickstart:
+
+```shell
+codex login --account work-pro
+codex login --account personal-pro
+```
+
 ```toml
 [account_pool]
 enabled = true
@@ -86,6 +93,14 @@ default_pool = "codex-pro"
 provider = "openai"
 accounts = ["work-pro", "personal-pro"]
 policy = "drain"
+```
+
+Then inspect and refresh the pool:
+
+```shell
+codex account list
+codex account limits
+codex account refresh --pool codex-pro
 ```
 
 ## Custom CA Certificates

@@ -38,6 +38,26 @@ pub struct AccountPoolMemberStatus {
     pub last_error: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountPoolUsageRefreshReport {
+    pub pools: Vec<AccountPoolUsageRefreshPoolReport>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountPoolUsageRefreshPoolReport {
+    pub pool_id: String,
+    pub member_count: usize,
+    pub refreshed_count: usize,
+    pub usable_credentials_count: usize,
+    pub problems: Vec<AccountPoolUsageRefreshProblem>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountPoolUsageRefreshProblem {
+    pub account_id: String,
+    pub message: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AccountPoolBucket {
     Regular,
@@ -177,18 +197,28 @@ impl AccountPoolManager {
     }
 
     pub async fn refresh_usage(&self, pool_id: Option<&str>) {
+        let _ = self.refresh_usage_with_report(pool_id).await;
+    }
+
+    pub async fn refresh_usage_with_report(
+        &self,
+        pool_id: Option<&str>,
+    ) -> AccountPoolUsageRefreshReport {
+        let mut reports = Vec::new();
         match pool_id {
             Some(pool_id) => {
                 if let Some(pool) = self.pools.get(pool_id) {
-                    pool.refresh_usage().await;
+                    reports.push(pool.refresh_usage().await);
                 }
             }
             None => {
                 for pool in self.pools.values() {
-                    pool.refresh_usage().await;
+                    reports.push(pool.refresh_usage().await);
                 }
             }
         }
+        reports.sort_by(|left, right| left.pool_id.cmp(&right.pool_id));
+        AccountPoolUsageRefreshReport { pools: reports }
     }
 
     pub fn set_usage_for_testing(
@@ -268,7 +298,7 @@ impl AccountPool {
         self.refresh_usage().await;
     }
 
-    async fn refresh_usage(&self) {
+    async fn refresh_usage(&self) -> AccountPoolUsageRefreshPoolReport {
         let Some(base_url) = self.chatgpt_base_url.as_deref() else {
             for member in &self.members {
                 self.set_last_error(
@@ -276,7 +306,20 @@ impl AccountPool {
                     "cannot refresh usage without ChatGPT base URL".to_string(),
                 );
             }
-            return;
+            return AccountPoolUsageRefreshPoolReport {
+                pool_id: self.pool_id.clone(),
+                member_count: self.members.len(),
+                refreshed_count: 0,
+                usable_credentials_count: 0,
+                problems: self
+                    .members
+                    .iter()
+                    .map(|member| AccountPoolUsageRefreshProblem {
+                        account_id: member.account_id.clone(),
+                        message: "cannot refresh usage without ChatGPT base URL".to_string(),
+                    })
+                    .collect(),
+            };
         };
 
         let mut handles = Vec::with_capacity(self.members.len());
@@ -288,6 +331,7 @@ impl AccountPool {
             )));
         }
 
+        let mut outcomes = HashMap::new();
         for handle in handles {
             let result = match handle.await {
                 Ok(result) => result,
@@ -305,9 +349,49 @@ impl AccountPool {
                         Instant::now(),
                     );
                     self.clear_last_error(&regular_remaining.account_id);
+                    outcomes.insert(
+                        regular_remaining.account_id.clone(),
+                        MemberRefreshOutcome::Refreshed,
+                    );
                 }
-                Err(err) => self.set_last_error(&err.account_id, err.message),
+                Err(err) => {
+                    self.set_last_error(&err.account_id, err.message.clone());
+                    outcomes.insert(err.account_id, MemberRefreshOutcome::Problem(err.kind));
+                }
             }
+        }
+
+        let mut refreshed_count = 0;
+        let mut usable_credentials_count = 0;
+        let mut problems = Vec::new();
+        for member in &self.members {
+            match outcomes.get(&member.account_id) {
+                Some(MemberRefreshOutcome::Refreshed) => {
+                    refreshed_count += 1;
+                    usable_credentials_count += 1;
+                }
+                Some(MemberRefreshOutcome::Problem(kind)) => {
+                    if kind.has_usable_credentials() {
+                        usable_credentials_count += 1;
+                    }
+                    problems.push(AccountPoolUsageRefreshProblem {
+                        account_id: member.account_id.clone(),
+                        message: kind.message().to_string(),
+                    });
+                }
+                None => problems.push(AccountPoolUsageRefreshProblem {
+                    account_id: member.account_id.clone(),
+                    message: "usage refresh did not complete".to_string(),
+                }),
+            }
+        }
+
+        AccountPoolUsageRefreshPoolReport {
+            pool_id: self.pool_id.clone(),
+            member_count: self.members.len(),
+            refreshed_count,
+            usable_credentials_count,
+            problems,
         }
     }
 
@@ -463,7 +547,44 @@ struct MemberRemaining {
 #[derive(Debug, PartialEq, Eq)]
 struct MemberRefreshError {
     account_id: String,
+    kind: MemberRefreshErrorKind,
     message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MemberRefreshOutcome {
+    Refreshed,
+    Problem(MemberRefreshErrorKind),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MemberRefreshErrorKind {
+    MissingCredentials,
+    InvalidCredentials,
+    UsageRefreshFailed {
+        message: String,
+        has_usable_credentials: bool,
+    },
+}
+
+impl MemberRefreshErrorKind {
+    fn message(&self) -> &str {
+        match self {
+            Self::MissingCredentials => "missing credentials",
+            Self::InvalidCredentials => "invalid credentials",
+            Self::UsageRefreshFailed { message, .. } => message,
+        }
+    }
+
+    fn has_usable_credentials(&self) -> bool {
+        match self {
+            Self::MissingCredentials | Self::InvalidCredentials => false,
+            Self::UsageRefreshFailed {
+                has_usable_credentials,
+                ..
+            } => *has_usable_credentials,
+        }
+    }
 }
 
 async fn refresh_member_usage(
@@ -475,8 +596,16 @@ async fn refresh_member_usage(
         .await
         .ok_or_else(|| MemberRefreshError {
             account_id: account_id.clone(),
+            kind: MemberRefreshErrorKind::MissingCredentials,
             message: "missing credentials".to_string(),
         })?;
+    if !auth.is_chatgpt_auth() {
+        return Err(MemberRefreshError {
+            account_id,
+            kind: MemberRefreshErrorKind::InvalidCredentials,
+            message: "invalid credentials".to_string(),
+        });
+    }
     match fetch_usage_remaining(&base_url, &auth).await {
         Ok((regular_remaining, spark_remaining)) => Ok((
             MemberRemaining {
@@ -485,19 +614,47 @@ async fn refresh_member_usage(
             },
             spark_remaining,
         )),
-        Err(message) => Err(MemberRefreshError {
+        Err(failure) => Err(MemberRefreshError {
             account_id,
-            message,
+            kind: MemberRefreshErrorKind::UsageRefreshFailed {
+                message: failure.message.clone(),
+                has_usable_credentials: failure.has_usable_credentials,
+            },
+            message: failure.message,
         }),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UsageRefreshFailure {
+    message: String,
+    has_usable_credentials: bool,
+}
+
+impl UsageRefreshFailure {
+    fn with_usable_credentials(message: String) -> Self {
+        Self {
+            message,
+            has_usable_credentials: true,
+        }
+    }
+
+    fn auth_rejected(message: String) -> Self {
+        Self {
+            message,
+            has_usable_credentials: false,
+        }
     }
 }
 
 async fn fetch_usage_remaining(
     base_url: &str,
     auth: &CodexAuth,
-) -> Result<(Option<u64>, Option<u64>), String> {
+) -> Result<(Option<u64>, Option<u64>), UsageRefreshFailure> {
     if !auth.uses_codex_backend() {
-        return Err("chatgpt authentication required to refresh usage".to_string());
+        return Err(UsageRefreshFailure::auth_rejected(
+            "chatgpt authentication required to refresh usage".to_string(),
+        ));
     }
 
     let mut base_url = base_url.trim_end_matches('/').to_string();
@@ -513,9 +670,9 @@ async fn fetch_usage_remaining(
         "api/codex/usage"
     };
     let url = format!("{base_url}/{path}");
-    let token = auth
-        .get_token()
-        .map_err(|err| format!("failed to read auth token: {err}"))?;
+    let token = auth.get_token().map_err(|err| {
+        UsageRefreshFailure::auth_rejected(format!("failed to read auth token: {err}"))
+    })?;
     let mut request = reqwest::Client::new()
         .get(&url)
         .header(reqwest::header::USER_AGENT, "codex-cli")
@@ -527,19 +684,26 @@ async fn fetch_usage_remaining(
         request = request.header("X-OpenAI-Fedramp", "true");
     }
 
-    let response = request
-        .send()
-        .await
-        .map_err(|err| format!("failed to fetch codex usage: {err}"))?;
+    let response = request.send().await.map_err(|err| {
+        UsageRefreshFailure::with_usable_credentials(format!("failed to fetch codex usage: {err}"))
+    })?;
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(format!(
-            "failed to fetch codex usage: {status}; body={body}"
-        ));
+        let message = format!("failed to fetch codex usage: {status}; body={body}");
+        if matches!(
+            status,
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) {
+            return Err(UsageRefreshFailure::auth_rejected(message));
+        }
+        return Err(UsageRefreshFailure::with_usable_credentials(message));
     }
-    let payload: Value = serde_json::from_str(&body)
-        .map_err(|err| format!("failed to decode codex usage response: {err}"))?;
+    let payload: Value = serde_json::from_str(&body).map_err(|err| {
+        UsageRefreshFailure::with_usable_credentials(format!(
+            "failed to decode codex usage response: {err}"
+        ))
+    })?;
     let regular_remaining = remaining_from_rate_limit(payload.get("rate_limit"));
     let spark_remaining = payload
         .get("additional_rate_limits")

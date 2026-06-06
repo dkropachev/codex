@@ -10,7 +10,6 @@
 use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
-use codex_login::AuthManager;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
 use codex_login::ServerOptions;
@@ -133,7 +132,7 @@ pub async fn login_with_chatgpt(
     server.block_until_done().await
 }
 
-fn account_codex_home(codex_home: &Path, account_id: Option<&str>) -> PathBuf {
+pub(crate) fn account_codex_home(codex_home: &Path, account_id: Option<&str>) -> PathBuf {
     match account_id {
         Some(account_id) => {
             if !is_safe_account_id(account_id) {
@@ -476,111 +475,7 @@ async fn logout_all_accounts(config: &Config) -> std::io::Result<bool> {
     Ok(removed)
 }
 
-pub async fn run_list_accounts(cli_config_overrides: CliConfigOverrides, json: bool) -> ! {
-    let config = load_config_or_exit(cli_config_overrides).await;
-    let pool_member_ids = config
-        .account_pool
-        .as_ref()
-        .map(|pool| {
-            pool.pools
-                .values()
-                .flat_map(|pool| pool.accounts.iter().cloned())
-                .collect::<std::collections::HashSet<_>>()
-        })
-        .unwrap_or_default();
-    let mut accounts = Vec::new();
-    if CodexAuth::from_auth_storage(&config.codex_home, config.cli_auth_credentials_store_mode)
-        .ok()
-        .flatten()
-        .is_some()
-    {
-        accounts.push(serde_json::json!({"id": "default", "type": "account"}));
-    }
-    if let Some(account_pool) = config.account_pool.as_ref() {
-        for pool_id in account_pool.pools.keys() {
-            accounts.push(serde_json::json!({"id": pool_id, "type": "pool"}));
-        }
-    }
-    if let Ok(entries) = std::fs::read_dir(config.codex_home.join("accounts")) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.join("auth.json").exists() {
-                continue;
-            }
-            let Some(account_id) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if pool_member_ids.contains(account_id) {
-                continue;
-            }
-            accounts.push(serde_json::json!({"id": account_id, "type": "account"}));
-        }
-    }
-    if json {
-        match serde_json::to_string_pretty(&serde_json::json!({ "accounts": accounts })) {
-            Ok(payload) => println!("{payload}"),
-            Err(err) => {
-                eprintln!("Error serializing account list: {err}");
-                std::process::exit(1);
-            }
-        }
-    } else if accounts.is_empty() {
-        println!("No accounts found");
-    } else {
-        for account in accounts {
-            let id = account
-                .get("id")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            let kind = account
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            println!("{id}\t{kind}");
-        }
-    }
-    std::process::exit(0);
-}
-
-pub async fn run_login_with_account_refresh(
-    cli_config_overrides: CliConfigOverrides,
-    account_id: Option<String>,
-    pool_id: Option<String>,
-) -> ! {
-    let config = load_config_or_exit(cli_config_overrides).await;
-    if let Some(account_id) = account_id {
-        let manager = AuthManager::new(
-            account_codex_home(&config.codex_home, Some(&account_id)),
-            /*enable_codex_api_key_env*/ false,
-            config.cli_auth_credentials_store_mode,
-            Some(config.chatgpt_base_url.clone()),
-        );
-        if manager.auth().await.is_some() {
-            eprintln!("Refreshed account {account_id}");
-            std::process::exit(0);
-        }
-        eprintln!("Account {account_id} is not logged in");
-        std::process::exit(1);
-    }
-
-    if let Some(pool_id) = pool_id.as_deref() {
-        let pool_exists = config
-            .account_pool
-            .as_ref()
-            .is_some_and(|account_pool| account_pool.pools.contains_key(pool_id));
-        if !pool_exists {
-            eprintln!("Account pool {pool_id} not found");
-            std::process::exit(1);
-        }
-    }
-
-    let manager = AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
-    manager.refresh_account_pool_usage(pool_id.as_deref()).await;
-    eprintln!("Refreshed account pool usage");
-    std::process::exit(0);
-}
-
-async fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config {
+pub(crate) async fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config {
     let cli_overrides = match cli_config_overrides.parse_overrides() {
         Ok(v) => v,
         Err(e) => {

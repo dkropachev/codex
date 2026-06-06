@@ -383,6 +383,7 @@ struct LoginCommand {
     )]
     api_key: Option<String>,
 
+    /// Use the browserless ChatGPT device-code login flow.
     #[arg(long = "device-auth")]
     use_device_code: bool,
 
@@ -446,15 +447,18 @@ enum AccountSubcommand {
 
 #[derive(Debug, Parser)]
 struct AccountListCommand {
+    /// Print account and pool details as JSON.
     #[arg(long = "json")]
     json: bool,
 }
 
 #[derive(Debug, Parser)]
 struct AccountRefreshCommand {
+    /// Refresh a named account ID. Omit to refresh configured pools or the default account.
     #[arg(value_name = "ID", conflicts_with = "pool")]
     id: Option<String>,
 
+    /// Refresh all members of the specified account pool.
     #[arg(long = "pool", value_name = "POOL_ID")]
     pool: Option<String>,
 }
