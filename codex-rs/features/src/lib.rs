@@ -145,8 +145,6 @@ pub enum Feature {
     EnableMcpApps,
     /// Use the new path for the host-owned apps MCP server.
     AppsMcpPathOverride,
-    /// Removed compatibility flag retained as a no-op now that tool_search is always enabled.
-    ToolSearch,
     /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
     ToolSearchAlwaysDeferMcpTools,
     /// Expose MCP model-visible namespaces without the legacy `mcp__` prefix.
@@ -181,6 +179,8 @@ pub enum Feature {
     ExternalMigration,
     /// Allow the model to invoke the built-in image generation tool.
     ImageGeneration,
+    /// Enable tool-router backed discovery and routing surfaces.
+    ToolRouter,
     /// Replace hosted image generation with the standalone image-generation extension.
     ImageGenExt,
     /// Allow prompting and installing missing MCP dependencies.
@@ -653,6 +653,7 @@ impl FeaturesToml {
         for key in legacy::legacy_feature_keys() {
             entries.remove(key);
         }
+        entries.remove("tool_search");
         for spec in FEATURES {
             let enabled = features.enabled(spec.id);
             if spec.id == Feature::CodeMode {
@@ -991,12 +992,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ToolSearch,
-        key: "tool_search",
-        stage: Stage::Removed,
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::ToolSearchAlwaysDeferMcpTools,
         key: "tool_search_always_defer_mcp_tools",
         stage: Stage::UnderDevelopment,
@@ -1083,6 +1078,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "image_generation",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ToolRouter,
+        key: "tool_router",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ImageGenExt,

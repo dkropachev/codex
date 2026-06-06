@@ -118,7 +118,7 @@ fn tool_search_output_has_namespace_child(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn search_tool_enabled_by_default_adds_tool_search() -> Result<()> {
+async fn tool_router_enabled_adds_tool_search() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -170,6 +170,57 @@ async fn search_tool_enabled_by_default_adds_tool_search() -> Result<()> {
                 "additionalProperties": false,
             }
         })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_router_disabled_exposes_searchable_app_tools_directly() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder =
+        configured_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
+            config
+                .features
+                .disable(Feature::ToolRouter)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_approval_and_permission_profile(
+        "list tools",
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let body = mock.single_request().body_json();
+    let tools = tool_names(&body);
+    assert!(!tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME));
+    assert!(tools.iter().any(|name| name == SEARCH_CALENDAR_NAMESPACE));
+    assert!(
+        namespace_child_tool(
+            &body,
+            SEARCH_CALENDAR_NAMESPACE,
+            SEARCH_CALENDAR_CREATE_TOOL
+        )
+        .is_some()
+    );
+    assert!(
+        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_some()
     );
 
     Ok(())
@@ -785,7 +836,13 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
     )
     .await;
 
-    let mut builder = test_codex().with_config(configure_search_capable_model);
+    let mut builder = test_codex().with_config(|config| {
+        configure_search_capable_model(config);
+        config
+            .features
+            .enable(Feature::ToolRouter)
+            .expect("test config should allow feature update");
+    });
     let test = builder.build(&server).await?;
     test.submit_turn_with_approval_and_permission_profile(
         "Find the spawn agent tool",
@@ -922,7 +979,13 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
         defer_loading: true,
     };
 
-    let mut builder = test_codex().with_config(configure_search_capable_model);
+    let mut builder = test_codex().with_config(|config| {
+        configure_search_capable_model(config);
+        config
+            .features
+            .enable(Feature::ToolRouter)
+            .expect("test config should allow feature update");
+    });
     let base_test = builder.build(&server).await?;
     let new_thread = base_test
         .thread_manager
@@ -1551,7 +1614,13 @@ async fn tool_search_matches_dynamic_tools_by_name_description_namespace_and_sch
         defer_loading: true,
     };
 
-    let mut builder = test_codex().with_config(configure_search_capable_model);
+    let mut builder = test_codex().with_config(|config| {
+        configure_search_capable_model(config);
+        config
+            .features
+            .enable(Feature::ToolRouter)
+            .expect("test config should allow feature update");
+    });
     let base_test = builder.build(&server).await?;
     let new_thread = base_test
         .thread_manager
