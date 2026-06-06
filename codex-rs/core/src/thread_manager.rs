@@ -865,10 +865,35 @@ impl ThreadManager {
     where
         S: Into<ForkSnapshot>,
     {
+        self.fork_thread_from_history_with_source(
+            snapshot,
+            config,
+            history,
+            self.state.session_source.clone(),
+            persist_extended_history,
+            parent_trace,
+        )
+        .await
+    }
+
+    /// Fork an existing thread from already-loaded store history using an explicit source.
+    pub async fn fork_thread_from_history_with_source<S>(
+        &self,
+        snapshot: S,
+        config: Config,
+        history: InitialHistory,
+        session_source: SessionSource,
+        persist_extended_history: bool,
+        parent_trace: Option<W3cTraceContext>,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
         self.fork_thread_with_initial_history(
             snapshot.into(),
             config,
             history,
+            session_source,
             persist_extended_history,
             parent_trace,
         )
@@ -880,6 +905,7 @@ impl ThreadManager {
         snapshot: ForkSnapshot,
         config: Config,
         history: InitialHistory,
+        session_source: SessionSource,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
@@ -890,15 +916,18 @@ impl ThreadManager {
             self.state.environment_manager.as_ref(),
             &config.cwd,
         );
-        Box::pin(self.state.spawn_thread(
+        Box::pin(self.state.spawn_thread_with_source(
             config,
             thread_store,
             history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
+            session_source,
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
+            /*inherited_shell_snapshot*/ None,
+            /*inherited_exec_policy*/ None,
             parent_trace,
             environments,
             /*user_shell_override*/ None,

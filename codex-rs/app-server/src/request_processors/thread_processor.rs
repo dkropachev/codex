@@ -366,6 +366,7 @@ impl ThreadRequestProcessor {
         params: ThreadStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        session_source: Option<codex_protocol::protocol::SessionSource>,
         request_context: RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_start_inner(
@@ -373,6 +374,7 @@ impl ThreadRequestProcessor {
             params,
             app_server_client_name,
             app_server_client_version,
+            session_source,
             request_context,
         )
         .await
@@ -412,12 +414,14 @@ impl ThreadRequestProcessor {
         params: ThreadForkParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        session_source: Option<codex_protocol::protocol::SessionSource>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_fork_inner(
             request_id,
             params,
             app_server_client_name,
             app_server_client_version,
+            session_source,
         )
         .await
         .map(|()| None)
@@ -826,6 +830,7 @@ impl ThreadRequestProcessor {
         params: ThreadStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        session_source: Option<codex_protocol::protocol::SessionSource>,
         request_context: RequestContext,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadStartParams {
@@ -922,6 +927,7 @@ impl ThreadRequestProcessor {
                 dynamic_tools,
                 requested_service_tier,
                 session_start_source,
+                session_source,
                 thread_source.map(Into::into),
                 environment_selections,
                 service_name,
@@ -1007,6 +1013,7 @@ impl ThreadRequestProcessor {
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
         requested_service_tier: Option<String>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
+        session_source: Option<codex_protocol::protocol::SessionSource>,
         thread_source: Option<codex_protocol::protocol::ThreadSource>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
         service_name: Option<String>,
@@ -1136,7 +1143,7 @@ impl ThreadRequestProcessor {
                     codex_app_server_protocol::ThreadStartSource::Startup => InitialHistory::New,
                     codex_app_server_protocol::ThreadStartSource::Clear => InitialHistory::Cleared,
                 },
-                session_source: None,
+                session_source,
                 thread_source,
                 dynamic_tools: core_dynamic_tools,
                 persist_extended_history: false,
@@ -3101,6 +3108,7 @@ impl ThreadRequestProcessor {
         params: ThreadForkParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        session_source: Option<codex_protocol::protocol::SessionSource>,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadForkParams {
             thread_id,
@@ -3206,7 +3214,7 @@ impl ThreadRequestProcessor {
             ..
         } = self
             .thread_manager
-            .fork_thread_from_history(
+            .fork_thread_from_history_with_source(
                 ForkSnapshot::Interrupted,
                 config,
                 InitialHistory::Resumed(ResumedHistory {
@@ -3214,6 +3222,7 @@ impl ThreadRequestProcessor {
                     history: history_items.clone(),
                     rollout_path: source_thread.rollout_path.clone(),
                 }),
+                session_source.unwrap_or_else(|| self.thread_manager.session_source()),
                 /*persist_extended_history*/ false,
                 self.request_trace_context(&request_id).await,
             )

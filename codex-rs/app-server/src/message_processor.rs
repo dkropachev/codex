@@ -77,6 +77,7 @@ use codex_login::auth::ExternalAuthTokens;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::StateDbHandle;
 use codex_state::log_db::LogDbLayer;
@@ -187,6 +188,7 @@ pub(crate) struct MessageProcessor {
 #[derive(Debug)]
 pub(crate) struct ConnectionSessionState {
     origin: ConnectionOrigin,
+    workflow_session: bool,
     pub(crate) rpc_gate: Arc<ConnectionRpcGate>,
     initialized: OnceLock<InitializedConnectionSessionState>,
 }
@@ -199,6 +201,15 @@ pub(crate) struct InitializedConnectionSessionState {
     pub(crate) client_version: String,
 }
 
+struct InitializedRequestContext {
+    connection_request_id: ConnectionRequestId,
+    request_context: RequestContext,
+    app_server_client_name: Option<String>,
+    client_version: Option<String>,
+    device_key_requests_allowed: bool,
+    session_source_override: Option<SessionSource>,
+}
+
 impl Default for ConnectionSessionState {
     fn default() -> Self {
         Self::new(ConnectionOrigin::WebSocket)
@@ -209,9 +220,22 @@ impl ConnectionSessionState {
     pub(crate) fn new(origin: ConnectionOrigin) -> Self {
         Self {
             origin,
+            workflow_session: false,
             rpc_gate: Arc::new(ConnectionRpcGate::new()),
             initialized: OnceLock::new(),
         }
+    }
+
+    pub(crate) fn new_workflow(origin: ConnectionOrigin) -> Self {
+        Self {
+            workflow_session: true,
+            ..Self::new(origin)
+        }
+    }
+
+    pub(crate) fn session_source_override(&self) -> Option<SessionSource> {
+        self.workflow_session
+            .then(|| SessionSource::SubAgent(SubAgentSource::Other("workflow".to_string())))
     }
 
     pub(crate) fn initialized(&self) -> bool {
@@ -812,23 +836,25 @@ impl MessageProcessor {
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
         let device_key_requests_allowed = session.allows_device_key_requests();
+        let session_source_override = session.session_source_override();
         let error_request_id = connection_request_id.clone();
+        let span = request_context.span();
+        let initialized_context = InitializedRequestContext {
+            connection_request_id,
+            request_context,
+            app_server_client_name,
+            client_version,
+            device_key_requests_allowed,
+            session_source_override,
+        };
         let rpc_gate = Arc::clone(&session.rpc_gate);
         let processor = Arc::clone(self);
-        let span = request_context.span();
         let request = QueuedInitializedRequest::new(
             rpc_gate,
             async move {
                 let processor_for_request = Arc::clone(&processor);
                 let result = processor_for_request
-                    .handle_initialized_client_request(
-                        connection_request_id,
-                        codex_request,
-                        request_context,
-                        app_server_client_name,
-                        client_version,
-                        device_key_requests_allowed,
-                    )
+                    .handle_initialized_client_request(codex_request, initialized_context)
                     .await;
                 if let Err(error) = result {
                     processor.outgoing.send_error(error_request_id, error).await;
@@ -852,13 +878,17 @@ impl MessageProcessor {
 
     async fn handle_initialized_client_request(
         self: Arc<Self>,
-        connection_request_id: ConnectionRequestId,
         codex_request: ClientRequest,
-        request_context: RequestContext,
-        app_server_client_name: Option<String>,
-        client_version: Option<String>,
-        device_key_requests_allowed: bool,
+        initialized_context: InitializedRequestContext,
     ) -> Result<(), JSONRPCErrorError> {
+        let InitializedRequestContext {
+            connection_request_id,
+            request_context,
+            app_server_client_name,
+            client_version,
+            device_key_requests_allowed,
+            session_source_override,
+        } = initialized_context;
         let connection_id = connection_request_id.connection_id;
         let request_id = ConnectionRequestId {
             connection_id,
@@ -986,6 +1016,7 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
+                        session_source_override.clone(),
                         request_context,
                     )
                     .await
@@ -1012,6 +1043,7 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
+                        session_source_override.clone(),
                     )
                     .await
             }

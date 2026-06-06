@@ -48,6 +48,20 @@ impl ConnectionState {
             session: Arc::new(ConnectionSessionState::new(origin)),
         }
     }
+
+    pub(crate) fn new_workflow(
+        origin: ConnectionOrigin,
+        outbound_initialized: Arc<AtomicBool>,
+        outbound_experimental_api_enabled: Arc<AtomicBool>,
+        outbound_opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
+    ) -> Self {
+        Self {
+            outbound_initialized,
+            outbound_experimental_api_enabled,
+            outbound_opted_out_notification_methods,
+            session: Arc::new(ConnectionSessionState::new_workflow(origin)),
+        }
+    }
 }
 
 pub(crate) struct OutboundConnectionState {

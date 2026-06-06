@@ -3788,6 +3788,30 @@ mod tests {
     }
 
     #[test]
+    fn exec_resume_accepts_include_non_interactive() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "exec",
+            "resume",
+            "--last",
+            "--include-non-interactive",
+            "2+2",
+        ])
+        .expect("parse should succeed");
+
+        let Some(Subcommand::Exec(exec)) = cli.subcommand else {
+            panic!("expected exec subcommand");
+        };
+        let Some(codex_exec::Command::Resume(args)) = exec.command else {
+            panic!("expected exec resume");
+        };
+
+        assert!(args.last);
+        assert!(args.include_non_interactive);
+        assert_eq!(args.prompt.as_deref(), Some("2+2"));
+    }
+
+    #[test]
     fn exec_resume_accepts_output_last_message_flag_after_subcommand() {
         let cli = MultitoolCli::try_parse_from([
             "codex",

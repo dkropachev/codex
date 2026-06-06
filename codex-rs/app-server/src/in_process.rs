@@ -644,7 +644,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                                 }
                                 workflow_connection_states.insert(
                                     connection_id,
-                                    ConnectionState::new(
+                                    ConnectionState::new_workflow(
                                         origin,
                                         outbound_initialized,
                                         outbound_experimental_api_enabled,
@@ -1038,6 +1038,7 @@ mod tests {
     use codex_app_server_protocol::RemoteControlClientConnectionAudience;
     use codex_app_server_protocol::RemoteControlClientEnrollmentAudience;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
+    use codex_app_server_protocol::ThreadForkResponse;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_app_server_protocol::Turn;
@@ -1045,10 +1046,20 @@ mod tests {
     use codex_app_server_protocol::TurnItemsView;
     use codex_app_server_protocol::TurnStatus;
     use codex_core::config::ConfigBuilder;
+    use codex_protocol::ThreadId;
+    use codex_protocol::protocol::SubAgentSource;
+    use futures::SinkExt;
+    use futures::StreamExt;
     use pretty_assertions::assert_eq;
     use std::future::Future;
     use std::path::Path;
+    use std::path::PathBuf;
     use tempfile::TempDir;
+    use tokio::net::UnixStream;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
+    use tokio_tungstenite::WebSocketStream;
+    use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
 
     fn run_async_test_on_large_stack<F, Fut>(test: F)
     where
@@ -1173,66 +1184,215 @@ mod tests {
         assert!(file_name.ends_with(".sock"));
     }
 
+    async fn connect_initialized_workflow_socket(
+        client: &InProcessClientHandle,
+    ) -> WebSocketStream<UnixStream> {
+        let app_server_url = client
+            .workflow_app_server_url
+            .as_ref()
+            .expect("workflow app-server URL should be exposed");
+        let socket_path = app_server_url
+            .strip_prefix("unix://")
+            .expect("workflow app-server URL should use unix transport")
+            .to_string();
+
+        let stream = UnixStream::connect(socket_path)
+            .await
+            .expect("workflow socket should accept connection");
+        let (mut websocket, upgrade_response) =
+            tokio_tungstenite::client_async("ws://localhost/rpc", stream)
+                .await
+                .expect("websocket upgrade should work");
+        assert_eq!(upgrade_response.status().as_u16(), 101);
+
+        let response = send_workflow_socket_request(
+            &mut websocket,
+            1,
+            "initialize",
+            serde_json::json!({
+                "clientInfo": {
+                    "name": "codex-workflow-socket-test",
+                    "title": null,
+                    "version": "0.0.0"
+                },
+                "capabilities": {
+                    "experimentalApi": true
+                }
+            }),
+        )
+        .await;
+        assert_eq!(response["id"], 1);
+        assert!(response["result"]["codexHome"].is_string());
+        websocket
+            .send(WebSocketMessage::Text(
+                serde_json::json!({ "method": "initialized" })
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("initialized notification should send");
+
+        websocket
+    }
+
+    async fn send_workflow_socket_request(
+        websocket: &mut WebSocketStream<UnixStream>,
+        id: i64,
+        method: &str,
+        params: serde_json::Value,
+    ) -> serde_json::Value {
+        let request = serde_json::json!({
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+        websocket
+            .send(WebSocketMessage::Text(request.to_string().into()))
+            .await
+            .expect("workflow socket request should send");
+
+        loop {
+            let message = timeout(Duration::from_secs(1), websocket.next())
+                .await
+                .expect("workflow socket response should arrive")
+                .expect("workflow socket should stay open")
+                .expect("workflow socket response should be readable");
+            let WebSocketMessage::Text(text) = message else {
+                continue;
+            };
+            let response: serde_json::Value =
+                serde_json::from_str(&text).expect("workflow socket response should be JSON");
+            if response.get("id").and_then(serde_json::Value::as_i64) == Some(id) {
+                return response;
+            }
+        }
+    }
+
+    fn create_workflow_fork_source_rollout(codex_home: &Path) -> (String, PathBuf) {
+        let uuid = Uuid::new_v4();
+        let source_thread_id = uuid.to_string();
+        let thread_id = ThreadId::from_string(source_thread_id.as_str())
+            .expect("generated uuid should be a thread id");
+        let filename_ts = "2026-06-05T12-00-00";
+        let meta_ts = "2026-06-05T12:00:00Z";
+        let dir = codex_home.join("sessions/2026/06/05");
+        std::fs::create_dir_all(dir.as_path()).expect("sessions dir should be created");
+        let path = dir.join(format!("rollout-{filename_ts}-{source_thread_id}.jsonl"));
+        let meta = codex_protocol::protocol::SessionMeta {
+            id: thread_id,
+            timestamp: meta_ts.to_string(),
+            cwd: codex_home.to_path_buf(),
+            originator: "codex-test".to_string(),
+            cli_version: "0.0.0-test".to_string(),
+            source: SessionSource::Cli,
+            model_provider: Some("openai".to_string()),
+            ..Default::default()
+        };
+        let session_meta =
+            serde_json::to_value(codex_protocol::protocol::SessionMetaLine { meta, git: None })
+                .expect("session meta should serialize");
+        let preview = "workflow fork source";
+        let lines = [
+            serde_json::json!({
+                "timestamp": meta_ts,
+                "type": "session_meta",
+                "payload": session_meta
+            })
+            .to_string(),
+            serde_json::json!({
+                "timestamp": meta_ts,
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": preview,
+                    "kind": "plain"
+                }
+            })
+            .to_string(),
+        ];
+        std::fs::write(path.as_path(), lines.join("\n") + "\n")
+            .expect("source rollout should be written");
+        (source_thread_id, path)
+    }
+
     #[test]
     fn exposed_workflow_app_server_socket_initializes_websocket_client() {
         run_async_test_on_large_stack(|| async {
-            use futures::SinkExt;
-            use futures::StreamExt;
-            use tokio::time::Duration;
-            use tokio::time::timeout;
-            use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
-
             let client = start_test_client_with_workflow_socket(SessionSource::Cli).await;
-            let app_server_url = client
-                .workflow_app_server_url
+            let _websocket = connect_initialized_workflow_socket(&client).await;
+
+            client
+                .shutdown()
+                .await
+                .expect("in-process runtime should shutdown cleanly");
+        });
+    }
+
+    #[test]
+    fn workflow_socket_thread_start_uses_workflow_subagent_source() {
+        run_async_test_on_large_stack(|| async {
+            let client = start_test_client_with_workflow_socket(SessionSource::Cli).await;
+            let mut websocket = connect_initialized_workflow_socket(&client).await;
+
+            let response = send_workflow_socket_request(
+                &mut websocket,
+                2,
+                "thread/start",
+                serde_json::json!({ "ephemeral": true }),
+            )
+            .await;
+            let parsed: ThreadStartResponse = serde_json::from_value(response["result"].clone())
+                .expect("thread/start response should parse");
+
+            assert_eq!(
+                parsed.thread.source,
+                ApiSessionSource::SubAgent(SubAgentSource::Other("workflow".to_string()))
+            );
+
+            client
+                .shutdown()
+                .await
+                .expect("in-process runtime should shutdown cleanly");
+        });
+    }
+
+    #[test]
+    fn workflow_socket_thread_fork_uses_workflow_subagent_source() {
+        run_async_test_on_large_stack(|| async {
+            let client = start_test_client_with_workflow_socket(SessionSource::Cli).await;
+            let codex_home = client
+                ._test_codex_home
                 .as_ref()
-                .expect("workflow app-server URL should be exposed");
-            let socket_path = app_server_url
-                .strip_prefix("unix://")
-                .expect("workflow app-server URL should use unix transport")
-                .to_string();
+                .expect("test client should retain codex home");
+            let (source_thread_id, source_path) =
+                create_workflow_fork_source_rollout(codex_home.path());
 
-            let stream = tokio::net::UnixStream::connect(socket_path)
-                .await
-                .expect("workflow socket should accept connection");
-            let (mut websocket, upgrade_response) =
-                tokio_tungstenite::client_async("ws://localhost/rpc", stream)
-                    .await
-                    .expect("websocket upgrade should work");
-            assert_eq!(upgrade_response.status().as_u16(), 101);
+            let mut websocket = connect_initialized_workflow_socket(&client).await;
+            let response = send_workflow_socket_request(
+                &mut websocket,
+                3,
+                "thread/fork",
+                serde_json::json!({
+                    "threadId": source_thread_id.as_str(),
+                    "path": source_path
+                }),
+            )
+            .await;
+            assert!(
+                response.get("error").is_none(),
+                "thread/fork failed: {response}"
+            );
+            let parsed: ThreadForkResponse = serde_json::from_value(response["result"].clone())
+                .expect("thread/fork response should parse");
 
-            let request = serde_json::json!({
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "clientInfo": {
-                        "name": "codex-workflow-socket-test",
-                        "title": null,
-                        "version": "0.0.0"
-                    },
-                    "capabilities": {
-                        "experimentalApi": true
-                    }
-                }
-            });
-            websocket
-                .send(WebSocketMessage::Text(request.to_string().into()))
-                .await
-                .expect("initialize request should send");
-
-            let message = timeout(Duration::from_secs(1), websocket.next())
-                .await
-                .expect("initialize response should arrive")
-                .expect("workflow socket should stay open")
-                .expect("initialize response should be readable");
-            let response = match message {
-                WebSocketMessage::Text(text) => serde_json::from_str::<serde_json::Value>(&text)
-                    .expect("initialize response should be valid JSON"),
-                other => panic!("expected text response, got {other:?}"),
-            };
-
-            assert_eq!(response["id"], 1);
-            assert!(response["result"]["codexHome"].is_string());
+            assert_eq!(
+                parsed.thread.source,
+                ApiSessionSource::SubAgent(SubAgentSource::Other("workflow".to_string()))
+            );
+            assert_eq!(
+                parsed.thread.forked_from_id.as_deref(),
+                Some(source_thread_id.as_str())
+            );
 
             client
                 .shutdown()

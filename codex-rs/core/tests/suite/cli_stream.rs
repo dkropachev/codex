@@ -443,7 +443,8 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg(&repo_root)
         .arg(&prompt2)
         .arg("resume")
-        .arg("--last");
+        .arg("--last")
+        .arg("--include-non-interactive");
     cmd2.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture);
@@ -467,7 +468,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     // Resume should write to the existing log file.
     assert_eq!(
         resumed_path, path,
-        "resume should create a new session file"
+        "resume should append to the existing session file"
     );
 
     let resumed_content = std::fs::read_to_string(&resumed_path)?;

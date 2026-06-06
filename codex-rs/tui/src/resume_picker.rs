@@ -76,6 +76,21 @@ const FOOTER_HINT_GAP: usize = 3;
 const PICKER_CHROME_HEIGHT: u16 = 8;
 const PICKER_LIST_HORIZONTAL_INSET: u16 = 4;
 
+pub(crate) fn resume_source_kinds(include_non_interactive: bool) -> Option<Vec<ThreadSourceKind>> {
+    include_non_interactive.then_some(vec![
+        ThreadSourceKind::Cli,
+        ThreadSourceKind::VsCode,
+        ThreadSourceKind::Exec,
+        ThreadSourceKind::AppServer,
+        ThreadSourceKind::SubAgent,
+        ThreadSourceKind::SubAgentReview,
+        ThreadSourceKind::SubAgentCompact,
+        ThreadSourceKind::SubAgentThreadSpawn,
+        ThreadSourceKind::SubAgentOther,
+        ThreadSourceKind::Unknown,
+    ])
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionTarget {
     pub path: Option<PathBuf>,
@@ -1836,8 +1851,7 @@ fn thread_list_params(
             ProviderFilter::Any => None,
             ProviderFilter::MatchDefault(default_provider) => Some(vec![default_provider]),
         },
-        source_kinds: (!include_non_interactive)
-            .then_some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
+        source_kinds: resume_source_kinds(include_non_interactive),
         archived: Some(false),
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().into_owned())),
         use_state_db_only: false,
@@ -3555,10 +3569,7 @@ mod tests {
 
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
         assert_eq!(params.model_providers, None);
-        assert_eq!(
-            params.source_kinds,
-            Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode])
-        );
+        assert_eq!(params.source_kinds, None);
         assert_eq!(
             params.cwd,
             Some(ThreadListCwdFilter::One(String::from("repo/on/server")))
@@ -3577,7 +3588,10 @@ mod tests {
 
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
         assert_eq!(params.model_providers, None);
-        assert_eq!(params.source_kinds, None);
+        assert_eq!(
+            params.source_kinds,
+            resume_source_kinds(/*include_non_interactive*/ true)
+        );
     }
 
     #[test]

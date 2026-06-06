@@ -33,7 +33,6 @@ use codex_app_server_protocol::Thread as AppServerThread;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
-use codex_app_server_protocol::ThreadSourceKind;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
 use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLoadError;
@@ -548,6 +547,7 @@ fn session_target_from_app_server_thread(
 async fn lookup_session_target_by_name_with_app_server(
     app_server: &mut AppServerSession,
     name: &str,
+    include_non_interactive: bool,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     let mut cursor = None;
     loop {
@@ -558,7 +558,7 @@ async fn lookup_session_target_by_name_with_app_server(
                 sort_key: Some(AppServerThreadSortKey::UpdatedAt),
                 sort_direction: None,
                 model_providers: None,
-                source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
+                source_kinds: resume_picker::resume_source_kinds(include_non_interactive),
                 archived: Some(false),
                 cwd: None,
                 use_state_db_only: false,
@@ -582,6 +582,7 @@ async fn lookup_session_target_by_name_with_app_server(
 async fn lookup_session_target_with_app_server(
     app_server: &mut AppServerSession,
     id_or_name: &str,
+    include_non_interactive: bool,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     if Uuid::parse_str(id_or_name).is_ok() {
         let thread_id = match ThreadId::from_string(id_or_name) {
@@ -611,7 +612,8 @@ async fn lookup_session_target_with_app_server(
         };
     }
 
-    lookup_session_target_by_name_with_app_server(app_server, id_or_name).await
+    lookup_session_target_by_name_with_app_server(app_server, id_or_name, include_non_interactive)
+        .await
 }
 
 async fn lookup_latest_session_target_with_app_server(
@@ -650,8 +652,7 @@ fn latest_session_lookup_params(
         } else {
             Some(vec![config.model_provider_id.clone()])
         },
-        source_kinds: (!include_non_interactive)
-            .then_some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
+        source_kinds: resume_picker::resume_source_kinds(include_non_interactive),
         archived: Some(false),
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().to_string())),
         use_state_db_only: false,
@@ -1273,7 +1274,13 @@ async fn run_ratatui_app(
             let Some(startup_app_server) = app_server.as_mut() else {
                 unreachable!("app server should be initialized for --fork <id>");
             };
-            match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
+            match lookup_session_target_with_app_server(
+                startup_app_server,
+                id_str,
+                /*include_non_interactive*/ false,
+            )
+            .await?
+            {
                 Some(target_session) => resume_picker::SessionSelection::Fork(target_session),
                 None => {
                     shutdown_app_server_if_present(app_server.take()).await;
@@ -1330,7 +1337,13 @@ async fn run_ratatui_app(
         let Some(startup_app_server) = app_server.as_mut() else {
             unreachable!("app server should be initialized for --resume <id>");
         };
-        match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
+        match lookup_session_target_with_app_server(
+            startup_app_server,
+            id_str,
+            cli.resume_include_non_interactive,
+        )
+        .await?
+        {
             Some(target_session) => resume_picker::SessionSelection::Resume(target_session),
             None => {
                 shutdown_app_server_if_present(app_server.take()).await;
@@ -1954,10 +1967,7 @@ mod tests {
             assert_eq!(params.limit, Some(1));
             assert_eq!(params.sort_key, Some(AppServerThreadSortKey::UpdatedAt));
             assert_eq!(params.model_providers, None);
-            assert_eq!(
-                params.source_kinds,
-                Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode])
-            );
+            assert_eq!(params.source_kinds, None);
             assert_eq!(params.archived, Some(false));
             assert_eq!(
                 params.cwd,
@@ -2001,10 +2011,7 @@ mod tests {
             assert_eq!(params.limit, Some(1));
             assert_eq!(params.sort_key, Some(AppServerThreadSortKey::UpdatedAt));
             assert_eq!(params.model_providers, None);
-            assert_eq!(
-                params.source_kinds,
-                Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode])
-            );
+            assert_eq!(params.source_kinds, None);
             assert_eq!(params.archived, Some(false));
             assert_eq!(params.cwd, None);
             assert!(!params.use_state_db_only);
@@ -2133,10 +2140,7 @@ mod tests {
             assert_eq!(params.limit, Some(100));
             assert_eq!(params.sort_key, Some(AppServerThreadSortKey::UpdatedAt));
             assert_eq!(params.model_providers, None);
-            assert_eq!(
-                params.source_kinds,
-                Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode])
-            );
+            assert_eq!(params.source_kinds, None);
             assert_eq!(params.archived, Some(false));
             assert_eq!(params.cwd, None);
             assert!(!params.use_state_db_only);
@@ -2714,9 +2718,12 @@ mod tests {
                 )
                 .await?,
             );
-            let target =
-                lookup_session_target_by_name_with_app_server(&mut app_server, "saved-session")
-                    .await?;
+            let target = lookup_session_target_by_name_with_app_server(
+                &mut app_server,
+                "saved-session",
+                /*include_non_interactive*/ false,
+            )
+            .await?;
             let target = target.expect("name lookup should find the saved thread");
             assert_eq!(target.path, Some(rollout_path));
             assert_eq!(target.thread_id, thread_id);

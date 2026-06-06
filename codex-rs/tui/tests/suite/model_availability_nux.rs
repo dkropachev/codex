@@ -101,6 +101,7 @@ trust_level = "trusted"
     let args = vec![
         "resume".to_string(),
         "--last".to_string(),
+        "--include-non-interactive".to_string(),
         "--no-alt-screen".to_string(),
         "-C".to_string(),
         repo_root.display().to_string(),

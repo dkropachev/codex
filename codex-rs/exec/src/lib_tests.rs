@@ -222,6 +222,7 @@ async fn resume_lookup_model_providers_filters_only_last_lookup() {
         session_id: None,
         last: true,
         all: false,
+        include_non_interactive: false,
         images: vec![],
         prompt: None,
     };
@@ -229,6 +230,7 @@ async fn resume_lookup_model_providers_filters_only_last_lookup() {
         session_id: Some("named-session".to_string()),
         last: false,
         all: false,
+        include_non_interactive: false,
         images: vec![],
         prompt: None,
     };
@@ -238,6 +240,34 @@ async fn resume_lookup_model_providers_filters_only_last_lookup() {
         Some(vec!["test-provider".to_string()])
     );
     assert_eq!(resume_lookup_model_providers(&config, &named_args), None);
+}
+
+#[test]
+fn resume_source_kind_filter_defaults_to_interactive_only() {
+    assert_eq!(
+        resume_thread_source_kinds(/*include_non_interactive*/ false),
+        None
+    );
+    assert!(
+        resume_thread_source_kinds(/*include_non_interactive*/ true)
+            .expect("include non-interactive should set an explicit source filter")
+            .contains(&ThreadSourceKind::SubAgentOther)
+    );
+}
+
+#[test]
+fn resume_state_db_sources_default_to_interactive_only() {
+    assert_eq!(
+        resume_state_db_allowed_sources(/*include_non_interactive*/ false),
+        INTERACTIVE_SESSION_SOURCES
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        resume_state_db_allowed_sources(/*include_non_interactive*/ true),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
