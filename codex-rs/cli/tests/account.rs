@@ -27,6 +27,8 @@ use tempfile::TempDir;
 fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
     let mut cmd = assert_cmd::Command::new(codex_utils_cargo_bin::cargo_bin("codex")?);
     cmd.env("CODEX_HOME", codex_home);
+    cmd.env("NO_PROXY", "127.0.0.1,localhost");
+    cmd.env("no_proxy", "127.0.0.1,localhost");
     Ok(cmd)
 }
 
@@ -736,7 +738,7 @@ fn start_http_server(
     let requests: Arc<Mutex<Vec<TestHttpRequest>>> = Arc::new(Mutex::new(Vec::new()));
     let thread_requests = Arc::clone(&requests);
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(/*secs*/ 30);
         let mut handled = 0usize;
         loop {
             if handled >= expected_requests {
