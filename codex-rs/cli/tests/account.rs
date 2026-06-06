@@ -399,7 +399,7 @@ fn account_refresh_pool_reports_partial_success() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = start_http_server(/*expected_requests*/ 1, |_request| {
         TestHttpResponse::json(
-            200,
+            /*status_code*/ 200,
             r#"{"rate_limit":{"primary_window":{"used_percent":25.0}}}"#,
         )
     })?;
@@ -436,10 +436,10 @@ fn account_refresh_pool_reports_blocked_member_and_succeeds_when_another_member_
     let codex_home = TempDir::new()?;
     let server = start_http_server(/*expected_requests*/ 2, |request| {
         if request.header("ChatGPT-Account-ID").as_deref() == Some("personal-pro") {
-            TestHttpResponse::text(403, "account blocked")
+            TestHttpResponse::text(/*status_code*/ 403, "account blocked")
         } else {
             TestHttpResponse::json(
-                200,
+                /*status_code*/ 200,
                 r#"{"rate_limit":{"primary_window":{"used_percent":25.0}}}"#,
             )
         }
@@ -479,10 +479,9 @@ fn account_refresh_pool_reports_blocked_member_and_succeeds_when_another_member_
 #[test]
 fn account_refresh_pool_fails_when_all_members_are_blocked() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let server = start_http_server(
-        /*expected_requests*/ 1,
-        |_request| TestHttpResponse::text(403, "account blocked"),
-    )?;
+    let server = start_http_server(/*expected_requests*/ 1, |_request| {
+        TestHttpResponse::text(/*status_code*/ 403, "account blocked")
+    })?;
     write_config(
         codex_home.path(),
         &format!(
@@ -524,9 +523,12 @@ fn account_refresh_pool_fails_when_stale_credentials_cannot_refresh() -> Result<
     let codex_home = TempDir::new()?;
     let server = start_http_server(/*expected_requests*/ 2, |request| {
         if request.path == "/oauth/token" {
-            TestHttpResponse::json(401, r#"{"error":{"code":"refresh_token_expired"}}"#)
+            TestHttpResponse::json(
+                /*status_code*/ 401,
+                r#"{"error":{"code":"refresh_token_expired"}}"#,
+            )
         } else {
-            TestHttpResponse::text(401, "token expired")
+            TestHttpResponse::text(/*status_code*/ 401, "token expired")
         }
     })?;
     write_config(
@@ -580,9 +582,12 @@ fn account_refresh_named_account_fails_when_stale_credentials_cannot_refresh() -
     let codex_home = TempDir::new()?;
     let server = start_http_server(/*expected_requests*/ 1, |request| {
         if request.path == "/oauth/token" {
-            TestHttpResponse::json(401, r#"{"error":{"code":"refresh_token_expired"}}"#)
+            TestHttpResponse::json(
+                /*status_code*/ 401,
+                r#"{"error":{"code":"refresh_token_expired"}}"#,
+            )
         } else {
-            TestHttpResponse::text(500, "unexpected request")
+            TestHttpResponse::text(/*status_code*/ 500, "unexpected request")
         }
     })?;
     write_config(codex_home.path(), "")?;

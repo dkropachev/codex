@@ -39,7 +39,7 @@ pub async fn run_login_with_account_refresh(
         .filter(|account_pool| account_pool.enabled)
         .is_some_and(|account_pool| !account_pool.pools.is_empty())
     {
-        refresh_account_pools(&config, None).await;
+        refresh_account_pools(&config, /*pool_id*/ None).await;
     }
 
     refresh_single_account(&config, "default").await;

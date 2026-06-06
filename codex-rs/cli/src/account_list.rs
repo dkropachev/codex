@@ -67,12 +67,13 @@ pub async fn run_list_accounts(cli_config_overrides: CliConfigOverrides, json_ou
 }
 
 fn collect_accounts(config: &Config) -> ListedAccounts {
-    let default_account = credential_for_account_home(&config.codex_home, config, false)
-        .filter(|credential| credential.status != CredentialStatus::Missing)
-        .map(|credential| ListedAccount {
-            id: "default".to_string(),
-            credential,
-        });
+    let default_account =
+        credential_for_account_home(&config.codex_home, config, /*require_chatgpt*/ false)
+            .filter(|credential| credential.status != CredentialStatus::Missing)
+            .map(|credential| ListedAccount {
+                id: "default".to_string(),
+                credential,
+            });
 
     let effective_default_pool = effective_default_pool(config);
     let pools = config
@@ -101,12 +102,15 @@ fn collect_accounts(config: &Config) -> ListedAccounts {
             let account_home = account_codex_home(&config.codex_home, &account_id);
             ListedAccount {
                 id: account_id,
-                credential: credential_for_account_home(&account_home, config, false).unwrap_or(
-                    AccountCredential {
-                        status: CredentialStatus::Missing,
-                        auth_mode: None,
-                    },
-                ),
+                credential: credential_for_account_home(
+                    &account_home,
+                    config,
+                    /*require_chatgpt*/ false,
+                )
+                .unwrap_or(AccountCredential {
+                    status: CredentialStatus::Missing,
+                    auth_mode: None,
+                }),
             }
         })
         .collect();
@@ -131,12 +135,15 @@ fn listed_pool(
             let account_home = account_codex_home(&config.codex_home, account_id);
             ListedAccount {
                 id: account_id.clone(),
-                credential: credential_for_account_home(&account_home, config, true).unwrap_or(
-                    AccountCredential {
-                        status: CredentialStatus::Missing,
-                        auth_mode: None,
-                    },
-                ),
+                credential: credential_for_account_home(
+                    &account_home,
+                    config,
+                    /*require_chatgpt*/ true,
+                )
+                .unwrap_or(AccountCredential {
+                    status: CredentialStatus::Missing,
+                    auth_mode: None,
+                }),
             }
         })
         .collect();
