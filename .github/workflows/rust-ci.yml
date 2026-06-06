@@ -136,7 +136,7 @@ jobs:
 
   argument_comment_lint_prebuilt:
     name: Argument comment lint - ${{ matrix.name }}
-    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    runs-on: ${{ github.repository == 'openai/codex' && (matrix.runs_on || matrix.runner) || 'ubuntu-24.04' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     needs: changed
     strategy:
@@ -161,8 +161,15 @@ jobs:
         shell: bash
         env:
           ARGUMENT_COMMENT_LINT: ${{ needs.changed.outputs.argument_comment_lint }}
+          MATRIX_NAME: ${{ matrix.name }}
           WORKFLOWS: ${{ needs.changed.outputs.workflows }}
         run: |
+          if [[ "${GITHUB_REPOSITORY:-}" != "openai/codex" && "$MATRIX_NAME" != "Linux" ]]; then
+            echo "Skipping $MATRIX_NAME argument-comment-lint on fork repository."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           if [[ "$ARGUMENT_COMMENT_LINT" == "true" || "$WORKFLOWS" == "true" ]]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
