@@ -199,6 +199,10 @@ pub struct ConfigToml {
     #[serde(default, deserialize_with = "deserialize_model_providers")]
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
+    /// Optional logical pools of ChatGPT accounts.
+    #[serde(default, deserialize_with = "deserialize_account_pool")]
+    pub account_pool: Option<AccountPoolToml>,
+
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: Option<usize>,
 
@@ -435,6 +439,33 @@ pub enum ThreadStoreToml {
 pub struct AutoReviewToml {
     /// Additional policy instructions inserted into the guardian prompt.
     pub policy: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AccountPoolToml {
+    #[serde(default)]
+    pub enabled: bool,
+
+    pub default_pool: Option<String>,
+
+    #[serde(default)]
+    pub pools: BTreeMap<String, AccountPoolDefinitionToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AccountPoolDefinitionToml {
+    pub provider: String,
+    pub policy: AccountPoolPolicyToml,
+    pub accounts: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountPoolPolicyToml {
+    Drain,
+    LoadBalance,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -874,6 +905,69 @@ where
     Ok(model_providers)
 }
 
+pub fn validate_account_pool(account_pool: &AccountPoolToml) -> Result<(), String> {
+    if !account_pool.enabled {
+        return Ok(());
+    }
+
+    if account_pool.pools.is_empty() {
+        return Err("account_pool: enabled account pool must define at least one pool".to_string());
+    }
+
+    if let Some(default_pool) = account_pool.default_pool.as_deref()
+        && !account_pool.pools.contains_key(default_pool)
+    {
+        return Err(format!(
+            "account_pool.default_pool `{default_pool}` does not reference a configured pool"
+        ));
+    }
+
+    for (pool_id, pool) in &account_pool.pools {
+        if pool.provider != OPENAI_PROVIDER_ID {
+            return Err(format!(
+                "account_pool.pools.{pool_id}: provider must be `{OPENAI_PROVIDER_ID}`"
+            ));
+        }
+        if pool.accounts.is_empty() {
+            return Err(format!(
+                "account_pool.pools.{pool_id}: accounts must contain at least one account id"
+            ));
+        }
+        for account_id in &pool.accounts {
+            if account_id.trim().is_empty() {
+                return Err(format!(
+                    "account_pool.pools.{pool_id}: account ids must not be empty"
+                ));
+            }
+            if !is_safe_account_id(account_id) {
+                return Err(format!(
+                    "account_pool.pools.{pool_id}: account id `{account_id}` must not contain path separators or parent directory components"
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn is_safe_account_id(account_id: &str) -> bool {
+    account_id != "."
+        && account_id != ".."
+        && !account_id.contains('/')
+        && !account_id.contains('\\')
+}
+
+fn deserialize_account_pool<'de, D>(deserializer: D) -> Result<Option<AccountPoolToml>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let account_pool = Option::<AccountPoolToml>::deserialize(deserializer)?;
+    if let Some(account_pool) = account_pool.as_ref() {
+        validate_account_pool(account_pool).map_err(serde::de::Error::custom)?;
+    }
+    Ok(account_pool)
+}
+
 pub fn validate_oss_provider(provider: &str) -> std::io::Result<()> {
     match provider {
         LMSTUDIO_OSS_PROVIDER_ID | OLLAMA_OSS_PROVIDER_ID => Ok(()),
@@ -887,5 +981,101 @@ pub fn validate_oss_provider(provider: &str) -> std::io::Result<()> {
                 "Invalid OSS provider '{provider}'. Must be one of: {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID}"
             ),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn parses_account_pool_config() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            [account_pool]
+            enabled = true
+            default_pool = "codex-pro"
+
+            [account_pool.pools.codex-pro]
+            provider = "openai"
+            policy = "load_balance"
+            accounts = ["work-pro", "personal-pro"]
+            "#,
+        )
+        .expect("config should parse");
+
+        let account_pool = config.account_pool.expect("account pool");
+        assert_eq!(account_pool.enabled, true);
+        assert_eq!(account_pool.default_pool.as_deref(), Some("codex-pro"));
+        assert_eq!(
+            account_pool.pools.get("codex-pro").expect("pool").policy,
+            AccountPoolPolicyToml::LoadBalance
+        );
+    }
+
+    #[test]
+    fn rejects_account_pool_default_that_does_not_exist() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+            [account_pool]
+            enabled = true
+            default_pool = "missing"
+
+            [account_pool.pools.codex-pro]
+            provider = "openai"
+            policy = "drain"
+            accounts = ["work-pro"]
+            "#,
+        )
+        .expect_err("missing default pool should be rejected");
+
+        assert!(err.to_string().contains("account_pool.default_pool"));
+    }
+
+    #[test]
+    fn rejects_non_openai_account_pool_provider() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+            [account_pool]
+            enabled = true
+            default_pool = "codex-pro"
+
+            [account_pool.pools.codex-pro]
+            provider = "openrouter"
+            policy = "drain"
+            accounts = ["work-pro"]
+            "#,
+        )
+        .expect_err("non-openai provider should be rejected");
+
+        assert!(err.to_string().contains("provider must be `openai`"));
+    }
+
+    #[test]
+    fn rejects_unsafe_account_pool_account_ids() {
+        for account_id in ["", " ", ".", "..", "../work", "team/work", "team\\work"] {
+            let toml_account_id = account_id.replace('\\', "\\\\");
+            let config = format!(
+                r#"
+                [account_pool]
+                enabled = true
+
+                [account_pool.pools.codex-pro]
+                provider = "openai"
+                policy = "drain"
+                accounts = ["{toml_account_id}"]
+                "#
+            );
+            let err = toml::from_str::<ConfigToml>(&config)
+                .expect_err("unsafe account id should be rejected");
+            let message = err.to_string();
+            assert!(
+                message.contains("account ids must not be empty")
+                    || message.contains("path separators"),
+                "{message}"
+            );
+        }
     }
 }

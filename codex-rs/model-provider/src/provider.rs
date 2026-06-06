@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
+use codex_login::AccountPoolBucket;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -12,6 +13,7 @@ use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
+use codex_protocol::account::ProviderAccountPoolMember;
 use codex_protocol::openai_models::ModelsResponse;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
@@ -70,20 +72,44 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the current provider-scoped auth value, if one is configured.
     async fn auth(&self) -> Option<CodexAuth>;
 
+    /// Returns auth for a specific model request.
+    ///
+    /// Implementations can use the model name to select a more precise account-pool bucket while
+    /// preserving provider-scoped auth behavior for non-pooled providers.
+    async fn auth_for_model(&self, model: Option<&str>) -> Option<CodexAuth> {
+        let _ = model;
+        self.auth().await
+    }
+
     /// Returns the current app-visible account state for this provider.
     fn account_state(&self) -> ProviderAccountResult;
 
     /// Returns provider configuration adapted for the API client.
     async fn api_provider(&self) -> codex_protocol::error::Result<Provider> {
         let auth = self.auth().await;
-        self.info()
-            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))
+        self.api_provider_for_auth(auth.as_ref()).await
     }
 
     /// Returns the auth provider used to attach request credentials.
     async fn api_auth(&self) -> codex_protocol::error::Result<SharedAuthProvider> {
         let auth = self.auth().await;
-        resolve_provider_auth(auth.as_ref(), self.info())
+        self.api_auth_for_auth(auth.as_ref()).await
+    }
+
+    /// Returns provider configuration adapted for an already-selected auth snapshot.
+    async fn api_provider_for_auth(
+        &self,
+        auth: Option<&CodexAuth>,
+    ) -> codex_protocol::error::Result<Provider> {
+        self.info().to_api_provider(auth.map(CodexAuth::auth_mode))
+    }
+
+    /// Returns request auth headers for an already-selected auth snapshot.
+    async fn api_auth_for_auth(
+        &self,
+        auth: Option<&CodexAuth>,
+    ) -> codex_protocol::error::Result<SharedAuthProvider> {
+        resolve_provider_auth(auth, self.info())
     }
 
     /// Creates the model manager implementation appropriate for this provider.
@@ -144,28 +170,67 @@ impl ModelProvider for ConfiguredModelProvider {
         }
     }
 
+    async fn auth_for_model(&self, model: Option<&str>) -> Option<CodexAuth> {
+        match self.auth_manager.as_ref() {
+            Some(auth_manager) if model.is_some_and(uses_spark_account_pool_bucket) => {
+                auth_manager
+                    .auth_for_account_pool_bucket(AccountPoolBucket::Spark)
+                    .await
+            }
+            Some(auth_manager) => auth_manager.auth().await,
+            None => None,
+        }
+    }
+
     fn account_state(&self) -> ProviderAccountResult {
         let account = if self.info.requires_openai_auth {
-            self.auth_manager
-                .as_ref()
-                .and_then(|auth_manager| auth_manager.auth_cached())
-                .map(|auth| match &auth {
-                    CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
-                    CodexAuth::Chatgpt(_)
-                    | CodexAuth::ChatgptAuthTokens(_)
-                    | CodexAuth::AgentIdentity(_) => {
-                        let email = auth.get_account_email();
-                        let plan_type = auth.account_plan_type();
+            match self.auth_manager.as_ref() {
+                Some(auth_manager) => {
+                    if let Some(pool) = auth_manager.account_pool_status() {
+                        Some(ProviderAccount::ChatgptPool {
+                            id: pool.pool_id,
+                            active_account_id: pool.active_account_id,
+                            members: pool
+                                .members
+                                .into_iter()
+                                .map(|member| ProviderAccountPoolMember {
+                                    id: member.account_id,
+                                    email: member.email,
+                                    plan_type: member.plan_type,
+                                    active: member.active,
+                                    unavailable_reason: member.unavailable_reason,
+                                    regular_remaining: member.regular_remaining,
+                                    spark_remaining: member.spark_remaining,
+                                    last_error: member.last_error,
+                                })
+                                .collect(),
+                        })
+                    } else {
+                        auth_manager
+                            .auth_cached()
+                            .map(|auth| match &auth {
+                                CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
+                                CodexAuth::Chatgpt(_)
+                                | CodexAuth::ChatgptAuthTokens(_)
+                                | CodexAuth::AgentIdentity(_) => {
+                                    let email = auth.get_account_email();
+                                    let plan_type = auth.account_plan_type();
 
-                        match (email, plan_type) {
-                            (Some(email), Some(plan_type)) => {
-                                Ok(ProviderAccount::Chatgpt { email, plan_type })
-                            }
-                            _ => Err(ProviderAccountError::MissingChatgptAccountDetails),
-                        }
+                                    match (email, plan_type) {
+                                        (Some(email), Some(plan_type)) => {
+                                            Ok(ProviderAccount::Chatgpt { email, plan_type })
+                                        }
+                                        _ => {
+                                            Err(ProviderAccountError::MissingChatgptAccountDetails)
+                                        }
+                                    }
+                                }
+                            })
+                            .transpose()?
                     }
-                })
-                .transpose()?
+                }
+                None => None,
+            }
         } else {
             None
         };
@@ -202,6 +267,10 @@ impl ModelProvider for ConfiguredModelProvider {
             }
         }
     }
+}
+
+fn uses_spark_account_pool_bucket(model: &str) -> bool {
+    model.to_ascii_lowercase().contains("spark")
 }
 
 #[cfg(test)]

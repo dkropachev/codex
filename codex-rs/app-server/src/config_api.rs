@@ -810,6 +810,7 @@ mod tests {
         let reloader = Arc::new(RecordingUserConfigReloader::default());
         let analytics_config = Arc::new(
             codex_core::config::ConfigBuilder::default()
+                .codex_home(codex_home.path().to_path_buf())
                 .build()
                 .await
                 .expect("load analytics config"),

@@ -730,12 +730,12 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     async fn build_test_config() -> Config {
-        match ConfigBuilder::default().build().await {
-            Ok(config) => config,
-            Err(_) => Config::load_default_with_cli_overrides(Vec::new())
-                .await
-                .expect("default config should load"),
-        }
+        let codex_home = tempfile::TempDir::new().expect("create temp dir").keep();
+        ConfigBuilder::default()
+            .codex_home(codex_home)
+            .build()
+            .await
+            .expect("test config should load")
     }
 
     async fn start_test_client_with_capacity(

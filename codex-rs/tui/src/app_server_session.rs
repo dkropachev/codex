@@ -4,6 +4,7 @@ use crate::legacy_core::append_message_history_entry;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::message_history_metadata;
 use crate::status::StatusAccountDisplay;
+use crate::status::StatusAccountPoolMemberDisplay;
 use crate::status::plan_type_display_name;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
@@ -139,6 +140,16 @@ pub(crate) struct AppServerBootstrap {
     pub(crate) available_models: Vec<ModelPreset>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct AccountUiState {
+    pub(crate) account_email: Option<String>,
+    pub(crate) auth_mode: Option<TelemetryAuthMode>,
+    pub(crate) status_account_display: Option<StatusAccountDisplay>,
+    pub(crate) plan_type: Option<codex_protocol::account::PlanType>,
+    pub(crate) feedback_audience: FeedbackAudience,
+    pub(crate) has_chatgpt_account: bool,
+}
+
 pub(crate) struct AppServerSession {
     client: AppServerClient,
     next_request_id: i64,
@@ -246,54 +257,16 @@ impl AppServerSession {
             .or_else(|| available_models.first().map(|model| model.model.clone()))
             .wrap_err("model/list returned no models for TUI bootstrap")?;
 
-        let (
-            account_email,
-            auth_mode,
-            status_account_display,
-            plan_type,
-            feedback_audience,
-            has_chatgpt_account,
-        ) = match account.account {
-            Some(Account::ApiKey {}) => (
-                None,
-                Some(TelemetryAuthMode::ApiKey),
-                Some(StatusAccountDisplay::ApiKey),
-                None,
-                FeedbackAudience::External,
-                false,
-            ),
-            Some(Account::Chatgpt { email, plan_type }) => {
-                let feedback_audience = if email.ends_with("@openai.com") {
-                    FeedbackAudience::OpenAiEmployee
-                } else {
-                    FeedbackAudience::External
-                };
-                (
-                    Some(email.clone()),
-                    Some(TelemetryAuthMode::Chatgpt),
-                    Some(StatusAccountDisplay::ChatGpt {
-                        email: Some(email),
-                        plan: Some(plan_type_display_name(plan_type)),
-                    }),
-                    Some(plan_type),
-                    feedback_audience,
-                    true,
-                )
-            }
-            Some(Account::AmazonBedrock {}) => {
-                (None, None, None, None, FeedbackAudience::External, false)
-            }
-            None => (None, None, None, None, FeedbackAudience::External, false),
-        };
+        let account_ui = account_ui_state_from_response(&account);
         Ok(AppServerBootstrap {
-            account_email,
-            auth_mode,
-            status_account_display,
-            plan_type,
+            account_email: account_ui.account_email,
+            auth_mode: account_ui.auth_mode,
+            status_account_display: account_ui.status_account_display,
+            plan_type: account_ui.plan_type,
             requires_openai_auth: account.requires_openai_auth,
             default_model,
-            feedback_audience,
-            has_chatgpt_account,
+            feedback_audience: account_ui.feedback_audience,
+            has_chatgpt_account: account_ui.has_chatgpt_account,
             available_models,
         })
     }
@@ -313,6 +286,11 @@ impl AppServerSession {
             })
             .await
             .wrap_err("account/read failed during TUI bootstrap")
+    }
+
+    pub(crate) async fn read_account_ui_state(&mut self) -> Result<AccountUiState> {
+        let account = self.read_account().await?;
+        Ok(account_ui_state_from_response(&account))
     }
 
     pub(crate) async fn external_agent_config_detect(
@@ -1026,6 +1004,112 @@ pub(crate) fn status_account_display_from_auth_mode(
             plan: plan_type.map(plan_type_display_name),
         }),
         None => None,
+    }
+}
+
+pub(crate) fn account_ui_state_from_response(account: &GetAccountResponse) -> AccountUiState {
+    match account.account.as_ref() {
+        Some(Account::ApiKey {}) => AccountUiState {
+            account_email: None,
+            auth_mode: Some(TelemetryAuthMode::ApiKey),
+            status_account_display: Some(StatusAccountDisplay::ApiKey),
+            plan_type: None,
+            feedback_audience: FeedbackAudience::External,
+            has_chatgpt_account: false,
+        },
+        Some(Account::Chatgpt { email, plan_type }) => {
+            let feedback_audience = feedback_audience_for_email(Some(email.as_str()));
+            AccountUiState {
+                account_email: Some(email.clone()),
+                auth_mode: Some(TelemetryAuthMode::Chatgpt),
+                status_account_display: Some(StatusAccountDisplay::ChatGpt {
+                    email: Some(email.clone()),
+                    plan: Some(plan_type_display_name(*plan_type)),
+                }),
+                plan_type: Some(*plan_type),
+                feedback_audience,
+                has_chatgpt_account: true,
+            }
+        }
+        Some(Account::ChatgptPool {
+            id,
+            active_account_id,
+            members,
+        }) => {
+            let active_member = members.iter().find(|member| member.active).or_else(|| {
+                active_account_id
+                    .as_ref()
+                    .and_then(|account_id| members.iter().find(|member| member.id == *account_id))
+            });
+            let fallback_member = active_member.or_else(|| {
+                members
+                    .iter()
+                    .find(|member| member.unavailable_reason.is_none())
+                    .or_else(|| members.first())
+            });
+            let account_email = fallback_member.and_then(|member| member.email.clone());
+            let plan_type = fallback_member.and_then(|member| member.plan_type);
+            let feedback_audience = feedback_audience_for_email(account_email.as_deref());
+            let unavailable_count = members
+                .iter()
+                .filter(|member| member.unavailable_reason.is_some())
+                .count();
+            AccountUiState {
+                account_email,
+                auth_mode: Some(TelemetryAuthMode::Chatgpt),
+                status_account_display: Some(StatusAccountDisplay::ChatGptPool {
+                    pool_id: id.clone(),
+                    active_member: active_member.map(|member| StatusAccountPoolMemberDisplay {
+                        id: member.id.clone(),
+                        email: member.email.clone(),
+                        plan: member.plan_type.map(plan_type_display_name),
+                    }),
+                    member_count: members.len(),
+                    unavailable_count,
+                }),
+                plan_type,
+                feedback_audience,
+                has_chatgpt_account: true,
+            }
+        }
+        Some(Account::AmazonBedrock {}) | None => AccountUiState {
+            account_email: None,
+            auth_mode: None,
+            status_account_display: None,
+            plan_type: None,
+            feedback_audience: FeedbackAudience::External,
+            has_chatgpt_account: false,
+        },
+    }
+}
+
+pub(crate) fn account_ui_state_from_auth_mode(
+    auth_mode: Option<AuthMode>,
+    plan_type: Option<codex_protocol::account::PlanType>,
+) -> AccountUiState {
+    AccountUiState {
+        account_email: None,
+        auth_mode: auth_mode.map(|auth_mode| match auth_mode {
+            AuthMode::ApiKey => TelemetryAuthMode::ApiKey,
+            AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens | AuthMode::AgentIdentity => {
+                TelemetryAuthMode::Chatgpt
+            }
+        }),
+        status_account_display: status_account_display_from_auth_mode(auth_mode, plan_type),
+        plan_type,
+        feedback_audience: FeedbackAudience::External,
+        has_chatgpt_account: matches!(
+            auth_mode,
+            Some(AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens)
+        ),
+    }
+}
+
+fn feedback_audience_for_email(email: Option<&str>) -> FeedbackAudience {
+    if email.is_some_and(|email| email.ends_with("@openai.com")) {
+        FeedbackAudience::OpenAiEmployee
+    } else {
+        FeedbackAudience::External
     }
 }
 
@@ -1844,5 +1928,63 @@ mod tests {
                 plan: Some(ref plan),
             }) if plan == "Business"
         ));
+    }
+
+    #[test]
+    fn account_ui_state_from_response_preserves_chatgpt_pool_details() {
+        let response = GetAccountResponse {
+            account: Some(Account::ChatgptPool {
+                id: "codex-pro".to_string(),
+                active_account_id: Some("work-pro".to_string()),
+                members: vec![
+                    codex_app_server_protocol::AccountPoolMember {
+                        id: "work-pro".to_string(),
+                        email: Some("work@example.com".to_string()),
+                        plan_type: Some(codex_protocol::account::PlanType::Pro),
+                        active: true,
+                        unavailable_reason: None,
+                        regular_remaining: Some(80),
+                        spark_remaining: Some(50),
+                        last_error: None,
+                    },
+                    codex_app_server_protocol::AccountPoolMember {
+                        id: "personal-pro".to_string(),
+                        email: None,
+                        plan_type: None,
+                        active: false,
+                        unavailable_reason: Some("missing credentials".to_string()),
+                        regular_remaining: None,
+                        spark_remaining: None,
+                        last_error: Some("missing credentials".to_string()),
+                    },
+                ],
+            }),
+            requires_openai_auth: true,
+        };
+
+        let account_ui = account_ui_state_from_response(&response);
+
+        assert_eq!(
+            account_ui.account_email.as_deref(),
+            Some("work@example.com")
+        );
+        assert_eq!(
+            account_ui.status_account_display,
+            Some(StatusAccountDisplay::ChatGptPool {
+                pool_id: "codex-pro".to_string(),
+                active_member: Some(StatusAccountPoolMemberDisplay {
+                    id: "work-pro".to_string(),
+                    email: Some("work@example.com".to_string()),
+                    plan: Some("Pro".to_string()),
+                }),
+                member_count: 2,
+                unavailable_count: 1,
+            })
+        );
+        assert_eq!(
+            account_ui.plan_type,
+            Some(codex_protocol::account::PlanType::Pro)
+        );
+        assert_eq!(account_ui.has_chatgpt_account, true);
     }
 }

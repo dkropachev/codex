@@ -9,6 +9,7 @@ use app_test_support::encode_id_token;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_models_cache;
 use codex_app_server_protocol::Account;
+use codex_app_server_protocol::AccountPoolMember;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
@@ -35,6 +36,7 @@ use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use serial_test::serial;
+use std::fs;
 use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -57,6 +59,7 @@ struct CreateConfigTomlParams {
     base_url: Option<String>,
     model_provider_id: Option<String>,
     extra_provider_config: Option<String>,
+    account_pool_config: Option<String>,
 }
 
 fn create_config_toml(codex_home: &Path, params: CreateConfigTomlParams) -> std::io::Result<()> {
@@ -96,6 +99,7 @@ stream_max_retries = 0
     } else {
         params.extra_provider_config.unwrap_or_default()
     };
+    let account_pool_config = params.account_pool_config.unwrap_or_default();
     let contents = format!(
         r#"
 model = "mock-model"
@@ -110,6 +114,7 @@ model_provider = "{model_provider_id}"
 shell_snapshot = false
 
 {provider_section}
+{account_pool_config}
 "#
     );
     std::fs::write(config_toml, contents)
@@ -1636,6 +1641,200 @@ async fn get_account_with_chatgpt() -> Result<()> {
         account: Some(Account::Chatgpt {
             email: "user@example.com".to_string(),
             plan_type: AccountPlanType::Pro,
+        }),
+        requires_openai_auth: true,
+    };
+    assert_eq!(received, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_account_with_chatgpt_pool() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            account_pool_config: Some(
+                r#"
+[account_pool]
+enabled = true
+default_pool = "codex-pro"
+
+[account_pool.pools.codex-pro]
+provider = "openai"
+policy = "drain"
+accounts = ["work-pro", "personal-pro"]
+"#
+                .to_string(),
+            ),
+            ..Default::default()
+        },
+    )?;
+
+    let work_home = codex_home.path().join("accounts/work-pro");
+    fs::create_dir_all(&work_home)?;
+    write_chatgpt_auth(
+        &work_home,
+        ChatGptAuthFixture::new("access-work")
+            .account_id("work-pro")
+            .chatgpt_account_id("work-pro")
+            .email("work@example.com")
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let personal_home = codex_home.path().join("accounts/personal-pro");
+    fs::create_dir_all(&personal_home)?;
+    write_chatgpt_auth(
+        &personal_home,
+        ChatGptAuthFixture::new("access-personal")
+            .account_id("personal-pro")
+            .chatgpt_account_id("personal-pro")
+            .email("personal@example.com")
+            .plan_type("plus"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountResponse = to_response(resp)?;
+
+    let expected = GetAccountResponse {
+        account: Some(Account::ChatgptPool {
+            id: "codex-pro".to_string(),
+            active_account_id: Some("work-pro".to_string()),
+            members: vec![
+                AccountPoolMember {
+                    id: "work-pro".to_string(),
+                    email: Some("work@example.com".to_string()),
+                    plan_type: Some(AccountPlanType::Pro),
+                    active: true,
+                    unavailable_reason: None,
+                    regular_remaining: None,
+                    spark_remaining: None,
+                    last_error: None,
+                },
+                AccountPoolMember {
+                    id: "personal-pro".to_string(),
+                    email: Some("personal@example.com".to_string()),
+                    plan_type: Some(AccountPlanType::Plus),
+                    active: false,
+                    unavailable_reason: None,
+                    regular_remaining: None,
+                    spark_remaining: None,
+                    last_error: None,
+                },
+            ],
+        }),
+        requires_openai_auth: true,
+    };
+    assert_eq!(received, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_account_with_chatgpt_pool_reports_unavailable_members() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            account_pool_config: Some(
+                r#"
+[account_pool]
+enabled = true
+default_pool = "codex-pro"
+
+[account_pool.pools.codex-pro]
+provider = "openai"
+policy = "drain"
+accounts = ["work-pro", "api-key-pro", "missing-pro"]
+"#
+                .to_string(),
+            ),
+            ..Default::default()
+        },
+    )?;
+
+    let work_home = codex_home.path().join("accounts/work-pro");
+    fs::create_dir_all(&work_home)?;
+    write_chatgpt_auth(
+        &work_home,
+        ChatGptAuthFixture::new("access-work")
+            .account_id("work-pro")
+            .chatgpt_account_id("work-pro")
+            .email("work@example.com")
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let api_key_home = codex_home.path().join("accounts/api-key-pro");
+    fs::create_dir_all(&api_key_home)?;
+    login_with_api_key(&api_key_home, "sk-test-key", AuthCredentialsStoreMode::File)?;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountResponse = to_response(resp)?;
+
+    let expected = GetAccountResponse {
+        account: Some(Account::ChatgptPool {
+            id: "codex-pro".to_string(),
+            active_account_id: Some("work-pro".to_string()),
+            members: vec![
+                AccountPoolMember {
+                    id: "work-pro".to_string(),
+                    email: Some("work@example.com".to_string()),
+                    plan_type: Some(AccountPlanType::Pro),
+                    active: true,
+                    unavailable_reason: None,
+                    regular_remaining: None,
+                    spark_remaining: None,
+                    last_error: None,
+                },
+                AccountPoolMember {
+                    id: "api-key-pro".to_string(),
+                    email: None,
+                    plan_type: None,
+                    active: false,
+                    unavailable_reason: Some(
+                        "account pool members must use ChatGPT auth".to_string(),
+                    ),
+                    regular_remaining: None,
+                    spark_remaining: None,
+                    last_error: None,
+                },
+                AccountPoolMember {
+                    id: "missing-pro".to_string(),
+                    email: None,
+                    plan_type: None,
+                    active: false,
+                    unavailable_reason: Some("missing credentials".to_string()),
+                    regular_remaining: None,
+                    spark_remaining: None,
+                    last_error: None,
+                },
+            ],
         }),
         requires_openai_auth: true,
     };

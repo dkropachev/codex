@@ -15,12 +15,11 @@ use super::App;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
+use crate::app_server_session::account_ui_state_from_auth_mode;
 use crate::app_server_session::app_server_rate_limit_snapshot_to_core;
-use crate::app_server_session::status_account_display_from_auth_mode;
 #[cfg(test)]
 use crate::exec_command::split_command_string;
 use codex_app_server_client::AppServerEvent;
-use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
@@ -124,7 +123,7 @@ impl App {
 
     pub(super) async fn handle_app_server_event(
         &mut self,
-        app_server_client: &AppServerSession,
+        app_server_client: &mut AppServerSession,
         event: AppServerEvent,
     ) {
         match event {
@@ -154,7 +153,7 @@ impl App {
 
     async fn handle_server_notification_event(
         &mut self,
-        app_server_client: &AppServerSession,
+        app_server_client: &mut AppServerSession,
         notification: ServerNotification,
     ) {
         match &notification {
@@ -176,16 +175,21 @@ impl App {
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {
+                let fallback =
+                    account_ui_state_from_auth_mode(notification.auth_mode, notification.plan_type);
+                let account_ui = match app_server_client.read_account_ui_state().await {
+                    Ok(account_ui) => account_ui,
+                    Err(err) => {
+                        tracing::warn!(
+                            "failed to refresh account state after account/updated: {err}"
+                        );
+                        fallback
+                    }
+                };
                 self.chat_widget.update_account_state(
-                    status_account_display_from_auth_mode(
-                        notification.auth_mode,
-                        notification.plan_type,
-                    ),
-                    notification.plan_type,
-                    matches!(
-                        notification.auth_mode,
-                        Some(AuthMode::Chatgpt) | Some(AuthMode::ChatgptAuthTokens)
-                    ),
+                    account_ui.status_account_display,
+                    account_ui.plan_type,
+                    account_ui.has_chatgpt_account,
                 );
                 return;
             }
