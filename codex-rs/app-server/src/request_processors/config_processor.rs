@@ -51,6 +51,7 @@ const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "mentions_v2",
     "remote_control",
     "remote_plugin",
+    "tool_router",
     "tool_suggest",
 ];
 

@@ -670,7 +670,7 @@
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
-            "tool_search": {
+            "tool_router": {
               "type": "boolean"
             },
             "tool_search_always_defer_mcp_tools": {
@@ -5237,7 +5237,7 @@
         "tool_call_mcp_elicitation": {
           "type": "boolean"
         },
-        "tool_search": {
+        "tool_router": {
           "type": "boolean"
         },
         "tool_search_always_defer_mcp_tools": {

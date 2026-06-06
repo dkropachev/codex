@@ -179,13 +179,6 @@ fn network_proxy_is_experimental_and_disabled_by_default() {
 }
 
 #[test]
-fn tool_search_is_removed_and_disabled_by_default() {
-    assert_eq!(Feature::ToolSearch.stage(), Stage::Removed);
-    assert_eq!(Feature::ToolSearch.default_enabled(), false);
-    assert_eq!(feature_for_key("tool_search"), Some(Feature::ToolSearch));
-}
-
-#[test]
 fn browser_controls_are_stable_and_enabled_by_default() {
     assert_eq!(Feature::InAppBrowser.stage(), Stage::Stable);
     assert_eq!(Feature::InAppBrowser.default_enabled(), true);
@@ -226,6 +219,18 @@ fn use_linux_sandbox_bwrap_is_a_removed_feature_key() {
 fn image_generation_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ImageGeneration.stage(), Stage::Stable);
     assert_eq!(Feature::ImageGeneration.default_enabled(), true);
+}
+
+#[test]
+fn tool_router_is_under_development_and_disabled_by_default() {
+    assert_eq!(Feature::ToolRouter.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::ToolRouter.default_enabled(), false);
+    assert_eq!(feature_for_key("tool_router"), Some(Feature::ToolRouter));
+}
+
+#[test]
+fn tool_search_feature_key_is_retired() {
+    assert_eq!(feature_for_key("tool_search"), None);
 }
 
 #[test]
@@ -631,13 +636,14 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
             proxy_url: Some("http://127.0.0.1:43128".to_string()),
             ..Default::default()
         })),
-        entries: BTreeMap::new(),
+        entries: BTreeMap::from([("tool_search".to_string(), false)]),
         ..Default::default()
     };
 
     features_toml.materialize_resolved_enabled(&features);
 
     let entries = features_toml.entries();
+    assert_eq!(entries.get("tool_search"), None);
     for spec in crate::FEATURES {
         assert_eq!(
             entries.get(spec.key),
