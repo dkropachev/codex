@@ -199,6 +199,7 @@ mod handlers;
 mod inject;
 mod input_queue;
 mod mcp;
+mod model_router_turn;
 mod multi_agents;
 mod review;
 mod rollout_reconstruction;

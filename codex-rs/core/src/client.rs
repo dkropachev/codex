@@ -372,6 +372,41 @@ impl ModelClient {
         self
     }
 
+    pub(crate) fn provider_info(&self) -> &ModelProviderInfo {
+        self.state.provider.info()
+    }
+
+    pub(crate) fn with_provider_info(
+        &self,
+        provider_info: ModelProviderInfo,
+        auth_manager: Option<Arc<AuthManager>>,
+    ) -> Self {
+        let client = Self::new(
+            auth_manager,
+            self.state.session_id,
+            self.state.thread_id,
+            self.state.installation_id.clone(),
+            provider_info,
+            self.state.session_source.clone(),
+            self.state.parent_thread_id,
+            self.state.model_verbosity,
+            self.state.enable_request_compression,
+            self.state.include_timing_metrics,
+            self.state.beta_features_header.clone(),
+            self.state.attestation_provider.clone(),
+        )
+        .with_prompt_cache_key_override(self.prompt_cache_key_override.clone());
+        client.state.window_generation.store(
+            self.state.window_generation.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        client.state.disable_websockets.store(
+            self.state.disable_websockets.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        client
+    }
+
     fn prompt_cache_key(&self) -> String {
         self.prompt_cache_key_override
             .clone()
@@ -986,7 +1021,7 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
-    fn reset_websocket_session(&mut self) {
+    pub(crate) fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.last_request = None;
         self.websocket_session.last_response_rx = None;
