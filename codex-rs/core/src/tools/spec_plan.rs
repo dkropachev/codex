@@ -284,6 +284,7 @@ fn hosted_model_tool_specs(context: &CoreToolPlanContext<'_>) -> Vec<ToolSpec> {
 
 pub(crate) fn search_tool_enabled(turn_context: &TurnContext) -> bool {
     turn_context.model_info.supports_search_tool
+        && turn_context.features.get().enabled(Feature::ToolRouter)
 }
 
 pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {

@@ -142,6 +142,10 @@ fn configure_apps(config: &mut Config, apps_base_url: &str) {
 pub fn configure_search_capable_apps(config: &mut Config, apps_base_url: &str) {
     configure_apps(config, apps_base_url);
     configure_search_capable_model(config);
+    config
+        .features
+        .enable(Feature::ToolRouter)
+        .expect("test config should allow feature update");
 }
 
 pub fn apps_enabled_builder(apps_base_url: impl Into<String>) -> TestCodexBuilder {

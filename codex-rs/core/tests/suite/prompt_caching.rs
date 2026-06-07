@@ -136,6 +136,10 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
                 .features
                 .enable(Feature::CollaborationModes)
                 .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::ToolRouter)
+                .expect("test config should allow feature update");
         })
         .build(&server)
         .await?;
