@@ -149,6 +149,10 @@ pub enum WorkflowValidationFinding {
         path: PathBuf,
         field: String,
     },
+    LegacyWorkflowApiMetadata {
+        path: PathBuf,
+        field: String,
+    },
     CodeOutsideSrc {
         paths: Vec<PathBuf>,
     },
@@ -343,6 +347,11 @@ impl WorkflowValidationFinding {
                     path.display()
                 )
             }
+            Self::LegacyWorkflowApiMetadata { field, .. } => {
+                format!(
+                    "workflow.yaml field `{field}` is no longer supported; define the workflow contract in src/workflow.ts"
+                )
+            }
             Self::CodeOutsideSrc { paths } => {
                 format!(
                     "workflow source exists outside src/: {}",
@@ -449,6 +458,7 @@ impl WorkflowValidationFinding {
             | Self::ScaffoldEchoSource { .. }
             | Self::PlaceholderWorkflowTest { .. }
             | Self::RawDevelopFlagsInMetadata { .. }
+            | Self::LegacyWorkflowApiMetadata { .. }
             | Self::ValidationCommandFailed { .. }
             | Self::AmbiguousWorkflowOutputSchema { .. }
             | Self::WorkflowApiContractExtractionFailed { .. }
@@ -519,6 +529,7 @@ impl WorkflowValidationFinding {
             | Self::ScaffoldEchoSource { path }
             | Self::PlaceholderWorkflowTest { path, .. }
             | Self::RawDevelopFlagsInMetadata { path, .. }
+            | Self::LegacyWorkflowApiMetadata { path, .. }
             | Self::RuntimeStateGitignoreMissing { path, .. }
             | Self::AmbiguousWorkflowOutputSchema { path, .. }
             | Self::WorkflowApiContractExtractionFailed { path, .. } => path.clone(),

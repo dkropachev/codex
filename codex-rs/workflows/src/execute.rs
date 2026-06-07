@@ -517,7 +517,13 @@ async fn run(
     let normalized_id = normalize_workflow_id(id)?;
     let workflow = resolve_workflow_for_context(&ctx, &normalized_id)?;
     ensure_workflow_can_run(&workflow)?;
-    let input = read_input(input, input_fields)?;
+    let contract =
+        crate::api_contract::read_published_workflow_api_contract(ctx.codex_home, &workflow)?;
+    let input = read_input(
+        input,
+        input_fields,
+        contract.as_ref().map(|contract| &contract.input_schema),
+    )?;
     let standalone_runtime_event_handler = if ctx.runtime_event_handler.is_none() {
         standalone_cli_runtime_event_handler(ctx.progress)
     } else {
@@ -1058,13 +1064,13 @@ fn write_scaffold_files(
     fs::write(
         path.join("README.md"),
         format!(
-            "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nPrefer `ctx.status({{ workflowName, workflowStatus, threads? }})` while the workflow is running so the TUI can render `Workflow <workflowName>: <workflowStatus>` with optional `-> <threadName>: <threadStatus>` rows when more than one thread is active. `ctx.progress(message, data?)` remains available as a legacy shorthand for single-string status updates. Export a named default async function for the execution entrypoint and keep the return value as the canonical JSON result. Use `WorkflowOutput.toTuiMarkdown(result)` for the markdown view when the workflow has a user-facing result.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json`, reflected in `workflow.yaml` dependencies metadata, and resolved from this directory's `node_modules`. Remove unused runtime dependencies instead of carrying transitive tooling by default.\n\n## Validation\n\nRun `codex workflow validate {id}` after changes and keep build/test commands, package scripts, `tsconfig.json`, dependency metadata, contract smoke output, docs, and coverage markers aligned with the workflow implementation.\n\n## Maintenance\n\nKeep `README.md`, `DESIGN.md`, `workflow.yaml`, `package.json`, and the test coverage markers in sync when workflow behavior changes. The architect owns `DESIGN.md`; coder-side implementation changes that need design changes should raise a `DESIGN.md request` before coding continues. Update both docs together when the workflow contract changes. Keep generated or persistent runtime files under ignored `state/` or `artifacts/` paths.\n"
+            "# {title}\n\n{description}\n\n## Usage\n\n```sh\n/{command_label}\n# or\ncodex {command_label}\n```\n\n## Workflow Runtime\n\nPrefer `ctx.status({{ workflowName, workflowStatus, threads? }})` while the workflow is running so the TUI can render `Workflow <workflowName>: <workflowStatus>` with optional `-> <threadName>: <threadStatus>` rows when more than one thread is active. `ctx.progress(message, data?)` remains available as a legacy shorthand for single-string status updates. Export `WorkflowInput`, `WorkflowOutput`, and a default `defineWorkflow<Input, Output>({{ run, complete?, format? }})` contract from `src/workflow.ts`; keep the run return value as the canonical JSON result. Use the workflow `format` hook for the markdown view when the workflow has a user-facing result.\n\n## Dependencies\n\nDo not rely on globally installed third-party packages. Built-in platform modules are fine, but every external package the workflow imports must be declared in this workflow's local `package.json`, reflected in `workflow.yaml` dependencies metadata, and resolved from this directory's `node_modules`. Remove unused runtime dependencies instead of carrying transitive tooling by default.\n\n## Validation\n\nRun `codex workflow validate {id}` after changes and keep build/test commands, package scripts, `tsconfig.json`, dependency metadata, contract smoke output, docs, and coverage markers aligned with the workflow implementation. Keep API schemas, field docs, enum values, completion, and formatting in TypeScript instead of `workflow.yaml`.\n\n## Maintenance\n\nKeep `README.md`, `DESIGN.md`, `workflow.yaml`, `package.json`, and the test coverage markers in sync when workflow behavior changes. The architect owns `DESIGN.md`; coder-side implementation changes that need design changes should raise a `DESIGN.md request` before coding continues. Update both docs together when the workflow contract changes. Keep generated or persistent runtime files under ignored `state/` or `artifacts/` paths.\n"
         ),
     )?;
     fs::write(
         path.join("DESIGN.md"),
         format!(
-            "# {title} Design\n\n## Overview\n\nThis workflow is a local TypeScript package driven by Bun's TypeScript runtime and validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `src/workflow.ts` owns the named default async function, the typed workflow contract, autocomplete, and the optional markdown formatter.\n- `src/tests/` carries the coverage contract for positive, load, autocomplete, negative, and recovery paths.\n- `package.json`, `tsconfig.json`, and `workflow.yaml` define one local execution environment: package scripts, package dependencies, workflow dependency metadata, validation commands, contract smoke, and coverage expectations must agree.\n- `state/` holds persistent runtime data; `artifacts/` holds generated run artifacts. Both are ignored except for `state/.gitkeep`.\n\n## Data Flow\n\n1. A registered workflow command loads the workflow from the local package through Bun.\n2. The workflow validates input, emits progress, and returns the canonical JSON result.\n3. `WorkflowOutput.toTuiMarkdown(result)` provides the markdown view for the TUI and workflow-to-workflow callers.\n4. `codex workflow validate {id}` runs the local validation commands, checks docs/layout/package/dependency/coverage markers, smoke-tests the output contract when configured, and publishes the contract only after validation passes.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors. When the workflow cannot satisfy its output contract, fail with a specific error before returning partial data.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.ts`: positive path, progress, JSON result, and markdown companion coverage.\n- `src/tests/workflow.load.test.ts`: loadability smoke.\n- `src/tests/workflow.autocomplete.test.ts`: registry and command-completion readiness smoke.\n- `src/tests/workflow.negative.test.ts`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.ts`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep dependency usage local and remove unused runtime dependencies. Keep `// workflow-covers:` markers aligned with `validation.coverage`, including load and autocomplete. Use the architect/coder workflow cycle: the architect owns this DESIGN.md, implementation follows the settled design, and coder-side design changes are raised as DESIGN.md requests. Keep runtime state and generated artifacts out of git.\n"
+            "# {title} Design\n\n## Overview\n\nThis workflow is a local TypeScript package driven by Bun's TypeScript runtime and validated through `codex workflow validate {id}`.\n\n## Architecture\n\n- `src/workflow.ts` owns the default `defineWorkflow<Input, Output>({{ run, complete?, format? }})` contract, exported `WorkflowInput` and `WorkflowOutput` types, autocomplete, and formatting.\n- `src/tests/` carries the coverage contract for positive, load, autocomplete, negative, and recovery paths.\n- `package.json`, `tsconfig.json`, and `workflow.yaml` define one local execution environment: package scripts, package dependencies, workflow dependency metadata, validation commands, contract smoke, and coverage expectations must agree.\n- `state/` holds persistent runtime data; `artifacts/` holds generated run artifacts. Both are ignored except for `state/.gitkeep`.\n\n## Data Flow\n\n1. A registered workflow command loads the workflow from the local package through Bun.\n2. The workflow validates structured input, emits progress, and returns the canonical JSON result.\n3. If present, the workflow formatter provides the markdown view for the TUI and workflow-to-workflow callers.\n4. `codex workflow validate {id}` runs the local validation commands, checks docs/layout/package/dependency/coverage markers, smoke-tests the output contract when configured, and publishes the contract only after validation passes.\n\n## Failure Handling\n\nValidate inputs early. Surface actionable failures instead of generic exit-only errors. When the workflow cannot satisfy its output contract, fail with a specific error before returning partial data.\n\n## Recovery Behavior\n\nPrefer recovery when correctness is preserved. Do not hide corruption or return misleading success. Set `validation.coverage.recovery` to `true` only when recovery exists and is tested.\n\n## Test Matrix\n\n- `src/tests/workflow.positive.test.ts`: positive path, progress, JSON result, and markdown companion coverage.\n- `src/tests/workflow.load.test.ts`: loadability smoke.\n- `src/tests/workflow.autocomplete.test.ts`: registry and command-completion readiness smoke.\n- `src/tests/workflow.negative.test.ts`: failure path and failure UX.\n- `src/tests/workflow.recovery.test.ts`: optional, only when recovery behavior exists.\n\n## Maintenance Notes\n\nKeep dependency usage local and remove unused runtime dependencies. Keep `// workflow-covers:` markers aligned with `validation.coverage`, including load and autocomplete. Use the architect/coder workflow cycle: the architect owns this DESIGN.md, implementation follows the settled design, and coder-side design changes are raised as DESIGN.md requests. Keep runtime state and generated artifacts out of git.\n"
         ),
     )?;
     fs::write(
@@ -1356,32 +1362,21 @@ fn append_readme_note(path: &Path, heading: &str, instruction: &str) -> Result<(
 fn read_input(
     input: Option<WorkflowInputSource>,
     input_fields: BTreeMap<String, String>,
+    input_schema: Option<&JsonValue>,
 ) -> Result<String> {
     let input = match input {
-        Some(WorkflowInputSource::Inline(input)) => input,
+        Some(WorkflowInputSource::Inline(input)) => Some(input),
         Some(WorkflowInputSource::File(path)) => fs::read_to_string(&path)
+            .map(Some)
             .with_context(|| format!("failed to read workflow input {}", path.display()))?,
-        None => "{}".to_string(),
+        None => None,
     };
-    if input_fields.is_empty() {
-        return Ok(input);
-    }
-
-    let mut value: JsonValue = serde_json::from_str(&input)
-        .with_context(|| "workflow input must be valid JSON when merging CLI input flags")?;
-    let Some(object) = value.as_object_mut() else {
-        return Err(anyhow!(
-            "workflow input must be a JSON object when merging CLI input flags"
-        ));
-    };
-    for (key, raw_value) in input_fields {
-        object.insert(key, parse_input_field_value(&raw_value));
-    }
-    serde_json::to_string(&value).map_err(Into::into)
-}
-
-fn parse_input_field_value(raw_value: &str) -> JsonValue {
-    serde_json::from_str(raw_value).unwrap_or_else(|_| JsonValue::String(raw_value.to_string()))
+    crate::input_adapter::normalize_workflow_input_string(
+        input.as_deref(),
+        input_fields,
+        input_schema,
+    )
+    .map_err(Into::into)
 }
 
 fn stage_existing_workflow(
@@ -1826,14 +1821,6 @@ mod tests {
             &workflow_dir.join(WORKFLOW_YAML),
             &crate::spec::WorkflowSpec {
                 id: "review/fix".to_string(),
-                api: json!({
-                    "inputSchema": { "type": "object", "additionalProperties": true },
-                    "outputSchema": {
-                        "type": "object",
-                        "properties": { "ok": { "type": "boolean" } },
-                        "additionalProperties": true
-                    }
-                }),
                 dependencies: json!({
                     "runtime": [],
                     "development": ["@types/node", "typescript"],
@@ -2627,6 +2614,7 @@ mod tests {
                 ("scope".to_string(), "repo".to_string()),
                 ("workingDirectory".to_string(), "/tmp/repo".to_string()),
             ]),
+            /*input_schema*/ None,
         )
         .unwrap();
 
@@ -2650,6 +2638,7 @@ mod tests {
                 ("count".to_string(), "2".to_string()),
                 ("scope".to_string(), "review".to_string()),
             ]),
+            /*input_schema*/ None,
         )
         .unwrap();
 
@@ -2667,12 +2656,13 @@ mod tests {
         let err = read_input(
             Some(WorkflowInputSource::Inline("[]".to_string())),
             BTreeMap::from([("scope".to_string(), "repo".to_string())]),
+            /*input_schema*/ None,
         )
         .expect_err("non-object workflow input should be rejected when merging flags");
 
         assert_eq!(
             err.to_string(),
-            "workflow input must be a JSON object when merging CLI input flags"
+            "workflow input must be a JSON object when merging input flags"
         );
     }
 
@@ -2685,6 +2675,7 @@ mod tests {
         let input = read_input(
             Some(WorkflowInputSource::File(input_path)),
             BTreeMap::from([("reviewMode".to_string(), "initial".to_string())]),
+            /*input_schema*/ None,
         )
         .unwrap();
 

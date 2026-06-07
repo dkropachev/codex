@@ -165,6 +165,7 @@ pub(crate) fn validate_workflow_dir(
     findings.extend(validate_low_level_artifact_api_usage(workflow_dir));
     findings.extend(validate_unfinished_scaffold(workflow_dir, spec.as_ref()));
     if let Some(spec) = spec.as_ref() {
+        findings.extend(validate_ts_first_contract_metadata(spec));
         findings.extend(validate_validation_commands(spec));
         findings.extend(validate_coverage_metadata(workflow_dir, spec));
         findings.extend(validate_contract_smoke_metadata(spec));
@@ -325,6 +326,25 @@ fn validate_unfinished_scaffold(
     findings.extend(validate_raw_develop_flags(workflow_dir, spec));
     findings.extend(validate_scaffold_source(workflow_dir));
     findings.extend(validate_placeholder_tests(workflow_dir));
+    findings
+}
+
+fn validate_ts_first_contract_metadata(
+    spec: &crate::spec::WorkflowSpec,
+) -> Vec<WorkflowValidationFinding> {
+    let mut findings = Vec::new();
+    if !spec.api.is_null() {
+        findings.push(WorkflowValidationFinding::LegacyWorkflowApiMetadata {
+            path: PathBuf::from(WORKFLOW_YAML),
+            field: "api".to_string(),
+        });
+    }
+    if spec.usage.get("options").is_some() {
+        findings.push(WorkflowValidationFinding::LegacyWorkflowApiMetadata {
+            path: PathBuf::from(WORKFLOW_YAML),
+            field: "usage.options".to_string(),
+        });
+    }
     findings
 }
 
@@ -880,6 +900,7 @@ mod tests {
     use super::validate_workflow_dir;
     use crate::registry::WorkflowValidationStatus;
     use crate::spec::WorkflowSpec;
+    use crate::spec::WorkflowToolSpec;
     use crate::spec::read_workflow_spec;
     use crate::spec::write_workflow_spec;
     use crate::validation_finding::finding_messages;
@@ -1018,7 +1039,7 @@ test("workflow exposes complete", async () => {
     progress() {},
     status() {},
     reportToUserMarkdown() {},
-  } as never, { argv: [], text: "" });
+  } as never, { input: {}, prefix: "", mode: "field" });
 
   assert.equal(Array.isArray(suggestions), true);
 });
@@ -1091,6 +1112,34 @@ test("workflow rejects invalid input", async () => {
     }
 
     #[test]
+    fn validate_workflow_dir_rejects_legacy_yaml_api_metadata() {
+        let root = TempDir::new().unwrap();
+        let workflow_dir = create_valid_workflow_dir(&root, "example");
+        let spec_path = workflow_dir.join(crate::spec::WORKFLOW_YAML);
+        let mut spec = read_workflow_spec(&spec_path).unwrap();
+        spec.api = json!({
+            "inputSchema": { "type": "object" },
+            "outputSchema": { "type": "object" }
+        });
+        spec.usage = json!({
+            "options": ["--review-id <string>"]
+        });
+        write_workflow_spec(&spec_path, &spec).unwrap();
+
+        let validation = validate_workflow_dir(root.path(), &workflow_dir, "example");
+
+        assert_eq!(validation.status, WorkflowValidationStatus::Invalid);
+        assert!(finding_messages(&validation.findings).contains(
+            &"workflow.yaml field `api` is no longer supported; define the workflow contract in src/workflow.ts"
+                .to_string()
+        ));
+        assert!(finding_messages(&validation.findings).contains(
+            &"workflow.yaml field `usage.options` is no longer supported; define the workflow contract in src/workflow.ts"
+                .to_string()
+        ));
+    }
+
+    #[test]
     fn validate_workflow_dir_ignores_untracked_runtime_state_layout_files() {
         let root = TempDir::new().unwrap();
         let workflow_dir = create_valid_workflow_dir(&root, "example");
@@ -1155,9 +1204,11 @@ test("workflow rejects invalid input", async () => {
             &workflow_dir.join(crate::spec::WORKFLOW_YAML),
             &WorkflowSpec {
                 id: "example".to_string(),
-                api: json!({
-                    "inputSchema": { "type": "object", "additionalProperties": true },
-                    "outputSchema": { "type": "object" }
+                tool: Some(WorkflowToolSpec {
+                    description: "Run the workflow".to_string(),
+                    input_schema: json!({ "type": "object", "additionalProperties": true }),
+                    output_schema: json!({ "type": "object" }),
+                    register_on: Vec::new(),
                 }),
                 validation: json!({
                     "commands": ["bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk", "bun test src/tests"],
@@ -1185,7 +1236,7 @@ test("workflow rejects invalid input", async () => {
                 .iter()
                 .any(|message| {
                     message.contains(
-                        "workflow output schema at api.outputSchema must declare properties or additionalProperties explicitly",
+                        "workflow output schema at tool.outputSchema must declare properties or additionalProperties explicitly",
                     )
                 })
         );
@@ -1203,9 +1254,11 @@ test("workflow rejects invalid input", async () => {
                     "runtime": ["@openai/codex-sdk"],
                     "development": ["@types/node", "typescript"],
                 }),
-                api: json!({
-                    "inputSchema": { "type": "object", "additionalProperties": true },
-                    "outputSchema": { "type": "object", "additionalProperties": true }
+                tool: Some(WorkflowToolSpec {
+                    description: "Run the workflow".to_string(),
+                    input_schema: json!({ "type": "object", "additionalProperties": true }),
+                    output_schema: json!({ "type": "object", "additionalProperties": true }),
+                    register_on: Vec::new(),
                 }),
                 validation: json!({
                     "commands": ["bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk", "bun test src/tests"],

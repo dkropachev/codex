@@ -1,21 +1,21 @@
 ---
 source: tui/src/bottom_pane/command_popup.rs
-assertion_line: 893
 expression: "render_popup(&popup, 54)"
 ---
 Buffer {
-    area: Rect { x: 0, y: 0, width: 54, height: 10 },
+    area: Rect { x: 0, y: 0, width: 54, height: 11 },
     content: [
         "  /code-review                        Code Review     ",
-        "    --reportId 1034 --format summary  Focused summary ",
+        "    --report-id 1034 --format summar… Focused summary ",
         "                                      output that     ",
         "                                      wraps across    ",
         "                                      multiple        ",
         "                                      terminal columns",
-        "    --reportId 1035 --format full     Expanded report ",
+        "    --report-id 1035 --format full    Expanded report ",
         "                                      output with a   ",
         "                                      longer          ",
         "                                      explanatory     ",
+        "                                      description     ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
@@ -41,5 +41,7 @@ Buffer {
         x: 44, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 38, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
         x: 49, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 38, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 49, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]
 }

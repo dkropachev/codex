@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use serde::Serialize;
 use thiserror::Error;
 
 use crate::registry::WorkflowSummary;
@@ -74,15 +73,6 @@ pub enum WorkflowDevelopLocation {
 pub enum WorkflowInputSource {
     Inline(String),
     File(PathBuf),
-}
-
-/// JSON input payload passed to a workflow when it is launched through a
-/// registered slash or CLI command alias.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkflowCommandInput {
-    pub argv: Vec<String>,
-    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,13 +181,6 @@ pub fn parse_workflow_command_with_workflows(
             parse_registered_workflow_command(args, &name, workflows)
         }
         Err(err) => Err(err),
-    }
-}
-
-pub fn workflow_command_input(argv: &[String]) -> WorkflowCommandInput {
-    WorkflowCommandInput {
-        argv: argv.to_vec(),
-        text: argv.join(" "),
     }
 }
 
@@ -312,44 +295,17 @@ fn parse_registered_workflow_command(
         ));
     };
     let alias_args = args.get(1..).unwrap_or(&[]);
-    let legacy_input = workflow_command_input_json(alias_args)?;
-    if alias_args.iter().any(|arg| arg.starts_with("--")) {
-        let allowed_fields = command_input_fields_from_hints(&workflow.command_option_hints);
-        let parsed_input = parse_input_args(
-            alias_args,
-            "workflow alias",
-            (!allowed_fields.is_empty()).then_some(&allowed_fields),
-        );
-        let (input, input_fields) = match parsed_input {
-            Ok((input, input_fields)) => (input.or(Some(legacy_input)), input_fields),
-            Err(WorkflowCommandParseError::UnexpectedArgument(_))
-                if !allowed_fields.is_empty()
-                    && alias_args_are_hint_prefixes(alias_args, &allowed_fields) =>
-            {
-                (Some(legacy_input), BTreeMap::new())
-            }
-            Err(err) => return Err(err),
-        };
-        return Ok(WorkflowCommand::Run {
-            id: workflow.id.clone(),
-            input,
-            input_fields,
-        });
-    }
-
+    let allowed_fields = command_input_fields_from_hints(&workflow.command_option_hints);
+    let (input, input_fields) = parse_input_args(
+        alias_args,
+        "workflow alias",
+        (!allowed_fields.is_empty()).then_some(&allowed_fields),
+    )?;
     Ok(WorkflowCommand::Run {
         id: workflow.id.clone(),
-        input: Some(legacy_input),
-        input_fields: BTreeMap::new(),
+        input,
+        input_fields,
     })
-}
-
-fn workflow_command_input_json(
-    argv: &[String],
-) -> Result<WorkflowInputSource, WorkflowCommandParseError> {
-    serde_json::to_string(&workflow_command_input(argv))
-        .map(WorkflowInputSource::Inline)
-        .map_err(|_| WorkflowCommandParseError::InvalidCommandLine)
 }
 
 fn parse_run(args: &[String]) -> Result<WorkflowCommand, WorkflowCommandParseError> {
@@ -430,21 +386,7 @@ fn parse_workflow_input_source(value: &str) -> WorkflowInputSource {
 }
 
 fn normalize_input_field_name(flag: &str) -> String {
-    let mut name = String::with_capacity(flag.len());
-    let mut uppercase_next = false;
-    for ch in flag.chars() {
-        if ch == '-' {
-            uppercase_next = true;
-            continue;
-        }
-        if uppercase_next {
-            name.extend(ch.to_uppercase());
-            uppercase_next = false;
-        } else {
-            name.push(ch);
-        }
-    }
-    name
+    crate::input_adapter::normalize_input_field_name(flag)
 }
 
 fn command_input_fields_from_hints(
@@ -461,21 +403,6 @@ fn command_input_fields_from_hints(
                 .map(normalize_input_field_name)
         })
         .collect()
-}
-
-fn alias_args_are_hint_prefixes(args: &[String], allowed_fields: &BTreeSet<String>) -> bool {
-    args.iter().all(|arg| {
-        let Some((field, _value)) = parse_long_flag_argument(arg) else {
-            return true;
-        };
-        if field == "input" {
-            return false;
-        }
-        let normalized_field = normalize_input_field_name(field);
-        allowed_fields
-            .iter()
-            .any(|allowed_field| allowed_field.starts_with(&normalized_field))
-    })
 }
 
 fn parse_config(args: &[String]) -> Result<WorkflowCommand, WorkflowCommandParseError> {
@@ -687,32 +614,24 @@ mod tests {
             command,
             WorkflowCommand::Run {
                 id: "reports/jira-summary".to_string(),
-                input: Some(WorkflowInputSource::Inline(
-                    r#"{"argv":["--project","COD"],"text":"--project COD"}"#.to_string(),
-                )),
+                input: None,
                 input_fields: BTreeMap::from([("project".to_string(), "COD".to_string())]),
             }
         );
     }
 
     #[test]
-    fn parses_registered_workflow_alias_positional_args_as_legacy_input() {
+    fn registered_workflow_alias_rejects_positional_args() {
         let workflows = vec![workflow_summary(Some("jira-summary"))];
-        let command = parse_workflow_command_with_workflows(
+        let err = parse_workflow_command_with_workflows(
             &["jira-summary".to_string(), "current sprint".to_string()],
             &workflows,
         )
-        .unwrap();
+        .expect_err("positional workflow args should fail");
 
         assert_eq!(
-            command,
-            WorkflowCommand::Run {
-                id: "reports/jira-summary".to_string(),
-                input: Some(WorkflowInputSource::Inline(
-                    r#"{"argv":["current sprint"],"text":"current sprint"}"#.to_string(),
-                )),
-                input_fields: BTreeMap::new(),
-            }
+            err,
+            WorkflowCommandParseError::UnexpectedArgument("current sprint".to_string())
         );
     }
 
@@ -752,9 +671,7 @@ mod tests {
             command,
             WorkflowCommand::Run {
                 id: "reports/jira-summary".to_string(),
-                input: Some(WorkflowInputSource::Inline(
-                    r#"{"argv":["--base-ref","HEAD","--include-untracked","--max-files","20"],"text":"--base-ref HEAD --include-untracked --max-files 20"}"#.to_string(),
-                )),
+                input: None,
                 input_fields: BTreeMap::from([
                     ("baseRef".to_string(), "HEAD".to_string()),
                     ("includeUntracked".to_string(), "true".to_string()),
@@ -790,7 +707,7 @@ mod tests {
     }
 
     #[test]
-    fn registered_workflow_alias_keeps_hint_prefixes_as_legacy_input() {
+    fn registered_workflow_alias_rejects_incomplete_hint_prefixes() {
         let workflows = vec![workflow_summary_with_hints(
             Some("code-review"),
             vec![WorkflowCommandOptionHint {
@@ -798,21 +715,15 @@ mod tests {
                 description: None,
             }],
         )];
-        let command = parse_workflow_command_with_workflows(
+        let err = parse_workflow_command_with_workflows(
             &["code-review".to_string(), "--a".to_string()],
             &workflows,
         )
-        .unwrap();
+        .expect_err("incomplete hinted alias flag should fail");
 
         assert_eq!(
-            command,
-            WorkflowCommand::Run {
-                id: "reports/jira-summary".to_string(),
-                input: Some(WorkflowInputSource::Inline(
-                    r#"{"argv":["--a"],"text":"--a"}"#.to_string(),
-                )),
-                input_fields: BTreeMap::new(),
-            }
+            err,
+            WorkflowCommandParseError::UnexpectedArgument("--a".to_string())
         );
     }
 

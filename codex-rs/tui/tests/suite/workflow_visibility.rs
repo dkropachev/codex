@@ -169,6 +169,7 @@ async fn run_workflow_visibility_session(
     required_snippets: Vec<String>,
     forbidden_snippets: Vec<String>,
 ) -> Result<()> {
+    let _workflow_e2e_guard = super::workflow_test_support::workflow_e2e_lock().await;
     let mut env = HashMap::new();
     env.insert("CODEX_HOME".to_string(), codex_home.display().to_string());
     env.insert(
@@ -217,12 +218,13 @@ async fn run_workflow_visibility_session(
     let workflow_writer = writer_tx.clone();
 
     let workflow_status_prefix = format!("Workflow {command}:");
-    let workflow_command = format!("/{command}");
+    let workflow_command = format!("/workflow {command}");
     let mut saw_required = vec![false; required_snippets.len()];
     let mut answered_cursor_query = false;
     let mut sent_workflow_command = false;
     let mut sent_interrupts = false;
     let mut scheduled_workflow_command = false;
+    let mut scheduled_workflow_submit = false;
 
     let exit_code_result = timeout(Duration::from_secs(/*secs*/ 90), async {
         loop {
@@ -242,8 +244,6 @@ async fn run_workflow_visibility_session(
                             tokio::spawn(async move {
                                 sleep(Duration::from_secs(/*secs*/ 1)).await;
                                 let _ = workflow_writer.send(workflow_command.into_bytes()).await;
-                                sleep(Duration::from_secs(/*secs*/ 1)).await;
-                                let _ = workflow_writer.send(b"\r".to_vec()).await;
                             });
                         }
 
@@ -255,6 +255,14 @@ async fn run_workflow_visibility_session(
                         sent_workflow_command |= output_text.contains(&workflow_command)
                             || screen.contains(&workflow_command)
                             || screen.contains(&workflow_status_prefix);
+                        if sent_workflow_command && !scheduled_workflow_submit {
+                            scheduled_workflow_submit = true;
+                            let workflow_writer = workflow_writer.clone();
+                            tokio::spawn(async move {
+                                sleep(Duration::from_millis(/*millis*/ 200)).await;
+                                let _ = workflow_writer.send(b"\r".to_vec()).await;
+                            });
+                        }
 
                         for (seen, snippet) in saw_required.iter_mut().zip(required_snippets.iter()) {
                             *seen |= output_text.contains(snippet) || screen.contains(snippet);
@@ -348,6 +356,7 @@ async fn run_workflow_active_interrupt_session(
     required_snippets: Vec<String>,
     forbidden_snippets: Vec<String>,
 ) -> Result<()> {
+    let _workflow_e2e_guard = super::workflow_test_support::workflow_e2e_lock().await;
     let mut env = HashMap::new();
     env.insert("CODEX_HOME".to_string(), codex_home.display().to_string());
     env.insert(
@@ -397,7 +406,7 @@ async fn run_workflow_active_interrupt_session(
 
     let workflow_status_prefix = format!("Workflow {command}:");
     let workflow_cancel_snippet = format!("Workflow canceled: {command}");
-    let workflow_command = format!("/{command}");
+    let workflow_command = format!("/workflow {command}");
     let mut saw_required = vec![false; required_snippets.len()];
     let mut saw_workflow_canceled = false;
     let mut answered_cursor_query = false;
@@ -405,6 +414,7 @@ async fn run_workflow_active_interrupt_session(
     let mut sent_interrupts = false;
     let mut sent_exit_keys = false;
     let mut scheduled_workflow_command = false;
+    let mut scheduled_workflow_submit = false;
 
     let exit_code_result = timeout(Duration::from_secs(/*secs*/ 45), async {
         loop {
@@ -424,8 +434,6 @@ async fn run_workflow_active_interrupt_session(
                             tokio::spawn(async move {
                                 sleep(Duration::from_secs(/*secs*/ 1)).await;
                                 let _ = workflow_writer.send(workflow_command.into_bytes()).await;
-                                sleep(Duration::from_secs(/*secs*/ 1)).await;
-                                let _ = workflow_writer.send(b"\r".to_vec()).await;
                             });
                         }
 
@@ -437,6 +445,14 @@ async fn run_workflow_active_interrupt_session(
                         sent_workflow_command |= output_text.contains(&workflow_command)
                             || screen.contains(&workflow_command)
                             || screen.contains(&workflow_status_prefix);
+                        if sent_workflow_command && !scheduled_workflow_submit {
+                            scheduled_workflow_submit = true;
+                            let workflow_writer = workflow_writer.clone();
+                            tokio::spawn(async move {
+                                sleep(Duration::from_millis(/*millis*/ 200)).await;
+                                let _ = workflow_writer.send(b"\r".to_vec()).await;
+                            });
+                        }
                         saw_workflow_canceled |= output_text.contains(&workflow_cancel_snippet)
                             || screen.contains(&workflow_cancel_snippet);
 

@@ -124,7 +124,12 @@ const workflowDir = path.dirname(workflowPath);
 const tmpWorkflowDir = path.join(tmpDir, path.basename(workflowDir));
 fs.cpSync(workflowDir, tmpWorkflowDir, {{ recursive: true }});
 const tmpPath = path.join(tmpWorkflowDir, path.basename(workflowPath) + '.mjs');
-fs.copyFileSync(workflowPath, tmpPath);
+const source = fs.readFileSync(workflowPath, 'utf8')
+  .replace(/export interface \w+ \{{[\s\S]*?\}}\n\n/g, '')
+  .replace(/: unknown/g, '')
+  .replace(/: WorkflowInput/g, '')
+  .replace(/\): Promise<WorkflowOutput>/g, ')');
+fs.writeFileSync(tmpPath, source);
 args[workflowPathIndex + 1] = tmpPath;
 const result = spawnSync(process.execPath, [runner, ...args], {{ stdio: 'inherit' }});
 process.exit(result.status ?? 1);
@@ -172,19 +177,20 @@ fn write_input_workflow(workflow_dir: &Path) -> Result<()> {
 command: patch-impact
 title: Patch Impact
 userDescription: Echo workflow alias input.
-api:
-  inputSchema:
-    type: object
-    properties:
-      baseRef:
-        type: string
-      includeUntracked:
-        type: boolean
-      maxFiles:
-        type: integer
 "#,
-        r#"const workflow = {
-  async run(_ctx, input) {
+        r#"export interface WorkflowInput {
+  baseRef?: string;
+  includeUntracked?: boolean;
+  maxFiles?: number;
+}
+
+export interface WorkflowOutput {
+  ok: boolean;
+  input: WorkflowInput;
+}
+
+const workflow = {
+  async run(_ctx: unknown, input: WorkflowInput): Promise<WorkflowOutput> {
     return { ok: true, input: { ...input } };
   },
 };
@@ -302,11 +308,9 @@ fn workflow_alias_flags_are_mapped_to_json_input() -> Result<()> {
     let expected = serde_json::json!({
         "ok": true,
         "input": {
-            "argv": ["--base-ref", "HEAD", "--include-untracked", "--max-files", "20"],
             "baseRef": "HEAD",
             "includeUntracked": true,
             "maxFiles": 20,
-            "text": "--base-ref HEAD --include-untracked --max-files 20",
         },
     });
     assert_eq!(run_alias(&root_args)?, expected);

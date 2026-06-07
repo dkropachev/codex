@@ -746,6 +746,7 @@ mod tests {
                     "additionalProperties": false
                 }),
             )]),
+            hooks: Default::default(),
         }
     }
 

@@ -16,6 +16,7 @@ use serde_json::Value as JsonValue;
 use serde_json::json;
 use thiserror::Error;
 
+use crate::api_contract::extract_workflow_source_contract_from_typescript;
 use crate::api_contract::read_published_workflow_api_contract;
 use crate::command_completion::WorkflowCommandOptionHint;
 use crate::command_completion::command_option_hints_from_input_schema;
@@ -395,10 +396,18 @@ pub(crate) fn summarize_workflow(
         validation: validation.clone(),
         repair_mode: repair_mode.clone(),
     };
-    let command_option_hints = read_published_workflow_api_contract(codex_home, &published_summary)
+    let input_schema = read_published_workflow_api_contract(codex_home, &published_summary)
         .ok()
         .flatten()
-        .map(|contract| command_option_hints_from_input_schema(Some(&contract.input_schema)))
+        .map(|contract| contract.input_schema)
+        .or_else(|| {
+            extract_workflow_source_contract_from_typescript(workflow_dir)
+                .ok()
+                .map(|contract| contract.input_schema)
+        });
+    let command_option_hints = input_schema
+        .as_ref()
+        .map(|input_schema| command_option_hints_from_input_schema(Some(input_schema)))
         .filter(|hints| !hints.is_empty())
         .unwrap_or_else(|| command_option_hints_from_spec(&spec));
     Some(WorkflowSummary {

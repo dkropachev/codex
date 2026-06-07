@@ -624,24 +624,13 @@ fn workflow_run_input(
         return Ok(None);
     };
 
-    let mut input: serde_json::Value = serde_json::from_str(&raw_input)
-        .map_err(|err| format!("workflow input must be valid JSON: {err}"))?;
-    if !input_fields.is_empty() {
-        let Some(object) = input.as_object_mut() else {
-            return Err(
-                "workflow input must be a JSON object when merging input flags".to_string(),
-            );
-        };
-        for (key, raw_value) in input_fields {
-            object.insert(key, parse_input_field_value(&raw_value));
-        }
-    }
-    Ok(Some(input))
-}
-
-fn parse_input_field_value(raw_value: &str) -> serde_json::Value {
-    serde_json::from_str(raw_value)
-        .unwrap_or_else(|_| serde_json::Value::String(raw_value.to_string()))
+    codex_workflows::normalize_workflow_input_json(
+        Some(&raw_input),
+        input_fields,
+        /*input_schema*/ None,
+    )
+    .map(Some)
+    .map_err(|err| err.to_string())
 }
 
 fn api_workflow_summary_to_core(

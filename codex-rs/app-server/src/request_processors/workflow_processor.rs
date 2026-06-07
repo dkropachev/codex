@@ -733,6 +733,9 @@ pub(crate) fn validation_finding_to_api(
         codex_workflows::WorkflowValidationFinding::RawDevelopFlagsInMetadata { path, field } => {
             WorkflowValidationFindingInfo::RawDevelopFlagsInMetadata { path, field }
         }
+        codex_workflows::WorkflowValidationFinding::LegacyWorkflowApiMetadata { path, field } => {
+            WorkflowValidationFindingInfo::LegacyWorkflowApiMetadata { path, field }
+        }
         codex_workflows::WorkflowValidationFinding::CodeOutsideSrc { paths } => {
             WorkflowValidationFindingInfo::CodeOutsideSrc { paths }
         }
@@ -953,6 +956,9 @@ fn validation_finding_from_api(
         }
         WorkflowValidationFindingInfo::RawDevelopFlagsInMetadata { path, field } => {
             codex_workflows::WorkflowValidationFinding::RawDevelopFlagsInMetadata { path, field }
+        }
+        WorkflowValidationFindingInfo::LegacyWorkflowApiMetadata { path, field } => {
+            codex_workflows::WorkflowValidationFinding::LegacyWorkflowApiMetadata { path, field }
         }
         WorkflowValidationFindingInfo::CodeOutsideSrc { paths } => {
             codex_workflows::WorkflowValidationFinding::CodeOutsideSrc { paths }

@@ -1028,6 +1028,30 @@
         },
         {
           "properties": {
+            "field": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "legacyWorkflowApiMetadata"
+              ],
+              "title": "LegacyWorkflowApiMetadataWorkflowValidationFindingInfoType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "field",
+            "path",
+            "type"
+          ],
+          "title": "LegacyWorkflowApiMetadataWorkflowValidationFindingInfo",
+          "type": "object"
+        },
+        {
+          "properties": {
             "paths": {
               "items": {
                 "type": "string"

@@ -125,6 +125,159 @@ function schemaFromDefaultExportFunction(declaration) {
     callableName: declaration.name.text,
     inputSchema: schemaForType(inputType),
     outputSchema,
+    hooks: {
+      complete: hasModuleCompleteHook(),
+    },
+  };
+}
+
+function findDefaultExportExpression(sourceFile) {
+  for (const statement of sourceFile.statements) {
+    if (ts.isExportAssignment(statement)) {
+      return statement.expression;
+    }
+  }
+  return null;
+}
+
+function hasModuleCompleteHook() {
+  const symbol = moduleExports.get("complete");
+  if (!symbol || !symbol.valueDeclaration) {
+    return false;
+  }
+  const completeType = checker.getTypeOfSymbolAtLocation(symbol, symbol.valueDeclaration);
+  return typeHasCallSignature(completeType);
+}
+
+function typeHasCallSignature(type) {
+  if (type.getCallSignatures().length > 0) {
+    return true;
+  }
+  if (type.isUnion()) {
+    return type.types
+      .filter((member) =>
+        (member.flags & ts.TypeFlags.Null) === 0
+        && (member.flags & ts.TypeFlags.Undefined) === 0)
+      .some(typeHasCallSignature);
+  }
+  return false;
+}
+
+function hasWorkflowCompleteHook(workflowType) {
+  const complete = workflowType.getProperty("complete");
+  if (!complete) {
+    return false;
+  }
+  const declaration = complete.valueDeclaration ?? complete.declarations?.[0];
+  if (!declaration) {
+    return false;
+  }
+  const completeType = checker.getTypeOfSymbolAtLocation(complete, declaration);
+  return typeHasCallSignature(completeType);
+}
+
+function stringLiteralPropertyFromObjectLiteral(expression, name) {
+  if (!ts.isObjectLiteralExpression(expression)) {
+    return null;
+  }
+  for (const property of expression.properties) {
+    if (!ts.isPropertyAssignment(property)) {
+      continue;
+    }
+    const propertyName = ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)
+      ? property.name.text
+      : null;
+    if (propertyName === name && ts.isStringLiteral(property.initializer)) {
+      return property.initializer.text;
+    }
+  }
+  return null;
+}
+
+function workflowObjectExpression(expression) {
+  if (ts.isCallExpression(expression) && expression.arguments.length > 0) {
+    return expression.arguments[0];
+  }
+  return expression;
+}
+
+function objectLiteralHasCallableProperty(expression, name) {
+  if (!ts.isObjectLiteralExpression(expression)) {
+    return false;
+  }
+  for (const property of expression.properties) {
+    const propertyName = ts.isMethodDeclaration(property) || ts.isPropertyAssignment(property)
+      ? (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name) ? property.name.text : null)
+      : null;
+    if (propertyName !== name) {
+      continue;
+    }
+    if (ts.isMethodDeclaration(property)) {
+      return true;
+    }
+    if (ts.isPropertyAssignment(property)) {
+      const propertyType = checker.getTypeAtLocation(property.initializer);
+      return typeHasCallSignature(propertyType);
+    }
+  }
+  return false;
+}
+
+function callableNameFromWorkflowExpression(expression, workflowType) {
+  const objectExpression = workflowObjectExpression(expression);
+  const literal = stringLiteralPropertyFromObjectLiteral(objectExpression, "callableName");
+  if (literal) {
+    return literal;
+  }
+
+  const property = workflowType.getProperty("callableName");
+  if (!property) {
+    return null;
+  }
+  const declaration = property.valueDeclaration ?? property.declarations?.[0];
+  if (!declaration) {
+    return null;
+  }
+  const propertyType = checker.getTypeOfSymbolAtLocation(property, declaration);
+  return propertyType.isStringLiteral() ? propertyType.value : null;
+}
+
+function schemaFromWorkflowExpression(expression) {
+  const objectExpression = workflowObjectExpression(expression);
+  const workflowType = checker.getTypeAtLocation(expression);
+  const run = workflowType.getProperty("run");
+  if (!run) {
+    return null;
+  }
+  const runDeclaration = run.valueDeclaration ?? run.declarations?.[0];
+  if (!runDeclaration) {
+    throw new Error("failed to inspect workflow run(ctx, input)");
+  }
+  const runType = checker.getTypeOfSymbolAtLocation(run, runDeclaration);
+  const signatures = runType.getCallSignatures();
+  if (signatures.length === 0) {
+    unsupportedType(runType, "workflow run(ctx, input) must be callable");
+  }
+  const signature = signatures[0];
+  if (signature.parameters.length < 2) {
+    throw new Error("workflow run(ctx, input) must accept ctx and input parameters");
+  }
+
+  const inputSymbol = signature.parameters[1];
+  const inputDeclaration = inputSymbol.valueDeclaration ?? inputSymbol.declarations?.[0];
+  const inputType = checker.getTypeOfSymbolAtLocation(inputSymbol, inputDeclaration ?? runDeclaration);
+  const awaitedReturnType = checker.getAwaitedType(signature.getReturnType()) ?? signature.getReturnType();
+  const outputSchema = schemaForType(awaitedReturnType);
+  validateWorkflowOutputFormatter(outputSchema);
+  return {
+    callableName: callableNameFromWorkflowExpression(expression, workflowType),
+    inputSchema: schemaForType(inputType),
+    outputSchema,
+    hooks: {
+      complete: objectLiteralHasCallableProperty(objectExpression, "complete")
+        || hasWorkflowCompleteHook(workflowType)
+        || hasModuleCompleteHook(),
+    },
   };
 }
 
@@ -167,6 +320,11 @@ function validateWorkflowOutputFormatter(outputSchema) {
 function unsupportedType(type, reason) {
   const label = checker.typeToString(type);
   throw new Error(`${reason}: ${label}`);
+}
+
+function symbolDescription(symbol) {
+  const description = ts.displayPartsToString(symbol.getDocumentationComment(checker)).trim();
+  return description.length > 0 ? description : undefined;
 }
 
 function schemaForType(type, stack = new Set()) {
@@ -281,7 +439,12 @@ function schemaForType(type, stack = new Set()) {
         }
 
         const propertyType = checker.getTypeOfSymbolAtLocation(property, declaration);
-        schemaProperties[property.name] = schemaForType(propertyType, stack);
+        const propertySchema = schemaForType(propertyType, stack);
+        const description = symbolDescription(property);
+        if (description) {
+          propertySchema.description = description;
+        }
+        schemaProperties[property.name] = propertySchema;
         if ((property.flags & ts.SymbolFlags.Optional) === 0) {
           required.push(property.name);
         }
@@ -370,7 +533,9 @@ rejectAnonymousDefaultExportFunctions(sourceFile);
 const defaultExportDeclaration = findNamedDefaultExportFunction(sourceFile);
 const defaultExportContract = defaultExportDeclaration
   ? schemaFromDefaultExportFunction(defaultExportDeclaration)
-  : null;
+  : (findDefaultExportExpression(sourceFile)
+    ? schemaFromWorkflowExpression(findDefaultExportExpression(sourceFile))
+    : null);
 
 const legacyInputSchema = exportedTypeSchema("WorkflowInput");
 const legacyOutputSchema = exportedTypeSchema("WorkflowOutput");
@@ -389,6 +554,7 @@ process.stdout.write(
     inputSchema,
     outputSchema,
     formatSchemas: formatSchemas(Boolean(defaultExportContract)),
+    hooks: defaultExportContract?.hooks ?? { complete: hasModuleCompleteHook() },
   }),
 );
 "#;
@@ -402,6 +568,8 @@ pub struct WorkflowSourceContract {
     pub output_schema: JsonValue,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub format_schemas: BTreeMap<String, JsonValue>,
+    #[serde(default, skip_serializing_if = "WorkflowContractHooks::is_empty")]
+    pub hooks: WorkflowContractHooks,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -413,6 +581,21 @@ pub struct WorkflowApiContract {
     pub output_schema: JsonValue,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub format_schemas: BTreeMap<String, JsonValue>,
+    #[serde(default, skip_serializing_if = "WorkflowContractHooks::is_empty")]
+    pub hooks: WorkflowContractHooks,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowContractHooks {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub complete: bool,
+}
+
+impl WorkflowContractHooks {
+    fn is_empty(&self) -> bool {
+        !self.complete
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -438,6 +621,8 @@ struct ExtractedWorkflowApiContract {
     output_schema: JsonValue,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     format_schemas: BTreeMap<String, JsonValue>,
+    #[serde(default, skip_serializing_if = "WorkflowContractHooks::is_empty")]
+    hooks: WorkflowContractHooks,
 }
 
 impl From<ExtractedWorkflowApiContract> for WorkflowSourceContract {
@@ -447,6 +632,7 @@ impl From<ExtractedWorkflowApiContract> for WorkflowSourceContract {
             input_schema: value.input_schema,
             output_schema: value.output_schema,
             format_schemas: value.format_schemas,
+            hooks: value.hooks,
         }
     }
 }
@@ -457,6 +643,7 @@ impl From<WorkflowSourceContract> for WorkflowApiContract {
             input_schema: value.input_schema,
             output_schema: value.output_schema,
             format_schemas: value.format_schemas,
+            hooks: value.hooks,
         }
     }
 }
@@ -506,6 +693,7 @@ pub(crate) fn read_published_workflow_source_contract(
             input_schema: record.contract.input_schema,
             output_schema: record.contract.output_schema,
             format_schemas: record.contract.format_schemas,
+            hooks: record.contract.hooks,
         }
     })))
 }
@@ -740,6 +928,7 @@ pub(crate) fn workflow_api_contract_from_spec_api(api: &JsonValue) -> Option<Wor
                     .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default(),
+        hooks: WorkflowContractHooks::default(),
     })
 }
 
@@ -950,6 +1139,7 @@ mod tests {
                 "tui.markdown.v1".to_string(),
                 json!({ "type": "object", "properties": { "markdown": { "type": "string" } } }),
             )]),
+            hooks: Default::default(),
         };
         let contract = WorkflowApiContract::from(source_contract.clone());
 
@@ -1031,6 +1221,88 @@ export default async function codeReview(_ctx: unknown, input: WorkflowInput): P
                 })
             )])
         );
+        assert!(!contract.hooks.complete);
+    }
+
+    #[test]
+    fn extract_workflow_source_contract_from_typescript_extracts_define_workflow_contract_and_hooks()
+     {
+        let workflow_dir = TempDir::new().expect("workflow dir");
+        if !write_workflow_source(
+            workflow_dir.path(),
+            r#"
+	type WorkflowContext = unknown;
+	type WorkflowCompletionRequest<Input> = {
+	  input: Partial<Input>;
+	  activeField?: keyof Input & string;
+	  prefix: string;
+	  mode: "field" | "value";
+	};
+	type WorkflowCompletionSuggestion<Input> =
+	  | { type: "field"; field: keyof Input & string }
+	  | { type: "value"; value: string };
+	type DefinedWorkflow<Input, Output> = {
+	  callableName?: string;
+	  run(ctx: WorkflowContext, input: Input): Promise<Output>;
+	  complete?(ctx: WorkflowContext, request: WorkflowCompletionRequest<Input>): Promise<WorkflowCompletionSuggestion<Input>[]>;
+	};
+	declare function defineWorkflow<Input, Output>(workflow: DefinedWorkflow<Input, Output>): DefinedWorkflow<Input, Output>;
+
+	export type WorkflowInput = {
+	  /** Review identifier */
+	  reviewId: string;
+	  /** Review areas to include */
+	  allowedAreas?: string[];
+	  /** Output format */
+	  format: "json" | "markdown";
+	};
+
+	export type WorkflowOutput = {
+	  status: string;
+	};
+
+	export default defineWorkflow<WorkflowInput, WorkflowOutput>({
+	  callableName: "reviewCode",
+	  async run(_ctx, input) {
+	    return { status: input.reviewId };
+	  },
+	  async complete(_ctx, request) {
+	    return request.mode === "field"
+	      ? [{ type: "field", field: "reviewId" }]
+	      : [{ type: "value", value: "review-1" }];
+	  },
+	});
+	"#,
+        ) {
+            return;
+        }
+
+        let contract = extract_workflow_source_contract_from_typescript(workflow_dir.path())
+            .expect("workflow source contract");
+
+        assert_eq!(contract.callable_name.as_deref(), Some("reviewCode"));
+        assert_eq!(
+            contract.input_schema,
+            json!({
+                "type": "object",
+                "properties": {
+                    "reviewId": { "type": "string", "description": "Review identifier" },
+                    "allowedAreas": {
+                        "type": ["array", "null"],
+                        "items": { "type": "string" },
+                        "description": "Review areas to include"
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["json", "markdown"],
+                        "description": "Output format"
+                    }
+                },
+                "required": ["reviewId", "format"],
+                "additionalProperties": false
+            })
+        );
+        assert!(contract.hooks.complete);
     }
 
     #[test]

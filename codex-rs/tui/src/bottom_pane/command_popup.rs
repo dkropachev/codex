@@ -740,24 +740,6 @@ mod tests {
 command: code-review
 title: Code Review
 userDescription: Review an existing submission.
-api:
-  inputSchema:
-    type: object
-    required:
-      - reviewId
-    properties:
-      reviewId:
-        type: string
-        description: Review identifier
-      format:
-        type: string
-        enum:
-          - summary
-          - full
-        description: Output format
-      includeComments:
-        type: boolean
-        description: Include comment bodies
 "#,
         )
         .expect("workflow spec");
@@ -975,34 +957,34 @@ api:
             "code-review",
             vec![
                 WorkflowCommandCompletionSuggestion {
-                    display: "--reportId 1034 --format summary".to_string(),
-                    insert_text: "--reportId 1034 --format summary".to_string(),
+                    display: "--report-id 1034 --format summary".to_string(),
+                    insert_text: "--report-id 1034 --format summary".to_string(),
                     description: Some("Focused summary output".to_string()),
                 },
                 WorkflowCommandCompletionSuggestion {
-                    display: "--reportId 1035 --format full".to_string(),
-                    insert_text: "--reportId 1035 --format full".to_string(),
+                    display: "--report-id 1035 --format full".to_string(),
+                    insert_text: "--report-id 1035 --format full".to_string(),
                     description: Some("Expanded report output".to_string()),
                 },
             ],
             /*error*/ None,
             /*pending*/ false,
         );
-        popup.on_composer_text_change("/code-review --reportId ".to_string());
+        popup.on_composer_text_change("/code-review --report-id ".to_string());
 
         let filtered = popup.filtered_items();
         assert!(filtered.iter().any(|item| {
             matches!(
                 item,
                 CommandItem::WorkflowSuggestion { suggestion, .. }
-                    if suggestion.insert_text == "--reportId 1034 --format summary"
+                    if suggestion.insert_text == "--report-id 1034 --format summary"
             )
         }));
         assert!(filtered.iter().any(|item| {
             matches!(
                 item,
                 CommandItem::WorkflowSuggestion { suggestion, .. }
-                    if suggestion.insert_text == "--reportId 1035 --format full"
+                    if suggestion.insert_text == "--report-id 1035 --format full"
             )
         }));
 
@@ -1039,16 +1021,16 @@ api:
             "code-review",
             vec![
                 WorkflowCommandCompletionSuggestion {
-                    display: "--reportId 1034 --format summary".to_string(),
-                    insert_text: "--reportId 1034 --format summary".to_string(),
+                    display: "--report-id 1034 --format summary".to_string(),
+                    insert_text: "--report-id 1034 --format summary".to_string(),
                     description: Some(
                         "Focused summary output that wraps across multiple terminal columns"
                             .to_string(),
                     ),
                 },
                 WorkflowCommandCompletionSuggestion {
-                    display: "--reportId 1035 --format full".to_string(),
-                    insert_text: "--reportId 1035 --format full".to_string(),
+                    display: "--report-id 1035 --format full".to_string(),
+                    insert_text: "--report-id 1035 --format full".to_string(),
                     description: Some(
                         "Expanded report output with a longer explanatory description".to_string(),
                     ),
@@ -1057,7 +1039,7 @@ api:
             /*error*/ None,
             /*pending*/ false,
         );
-        popup.on_composer_text_change("/code-review --reportId ".to_string());
+        popup.on_composer_text_change("/code-review --report-id ".to_string());
         popup.move_down();
 
         insta::assert_snapshot!(
@@ -1114,24 +1096,6 @@ api:
             "command: code-review\n",
             "title: Code Review\n",
             "userDescription: Review an existing submission.\n",
-            "api:\n",
-            "  inputSchema:\n",
-            "    type: object\n",
-            "    required:\n",
-            "      - reviewId\n",
-            "    properties:\n",
-            "      reviewId:\n",
-            "        type: string\n",
-            "        description: Review identifier\n",
-            "      format:\n",
-            "        type: string\n",
-            "        enum:\n",
-            "          - summary\n",
-            "          - full\n",
-            "        description: Output format\n",
-            "      includeComments:\n",
-            "        type: boolean\n",
-            "        description: Include comment bodies\n",
             "dependencies:\n",
             "  runtime:\n",
             "    - '@openai/codex-sdk'\n",
@@ -1163,23 +1127,7 @@ api:
                 .into_iter()
                 .next()
                 .expect("workflow discovery result");
-        assert_eq!(
-            workflow.command_option_hints,
-            vec![
-                codex_workflows::WorkflowCommandOptionHint {
-                    display: "--review-id <string>".to_string(),
-                    description: Some("required · Review identifier".to_string()),
-                },
-                codex_workflows::WorkflowCommandOptionHint {
-                    display: "--format <summary|full>".to_string(),
-                    description: Some("Output format".to_string()),
-                },
-                codex_workflows::WorkflowCommandOptionHint {
-                    display: "--include-comments".to_string(),
-                    description: Some("Include comment bodies".to_string()),
-                },
-            ]
-        );
+        assert!(workflow.command_option_hints.is_empty());
 
         let mut popup = CommandPopup::new(CommandPopupFlags {
             workflows_enabled: true,
@@ -1188,13 +1136,6 @@ api:
         popup.set_workflows(Some(std::slice::from_ref(&workflow)));
         popup.on_composer_text_change("/code-review".to_string());
 
-        assert!(popup.filtered_items().iter().any(|item| {
-            matches!(
-                item,
-                CommandItem::WorkflowOption(option)
-                    if option.display == "--review-id <string>"
-            )
-        }));
         assert_eq!(
             popup.selected_item(),
             Some(CommandItem::Workflow(Box::new(

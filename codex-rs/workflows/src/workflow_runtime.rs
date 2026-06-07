@@ -252,7 +252,62 @@ function createRuntimeContext() {
   };
 }
 
+function workflowFlagName(fieldName) {
+  return `--${String(fieldName).replace(/_/g, "-").replace(/[A-Z]/g, (ch) => `-${ch.toLowerCase()}`)}`;
+}
+
+function normalizeStructuredCompletionSuggestion(value, request) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const replacementPrefix = stringValue(request?.replacementPrefix) ?? "";
+  if (value.type === "field" || value.kind === "field") {
+    const field = stringValue(value.field);
+    if (!field) {
+      throw new Error("workflow field completion entries require field");
+    }
+    const flag = workflowFlagName(field);
+    return {
+      display: stringValue(value.display) ?? flag,
+      insertText: stringValue(value.insertText) ?? `${replacementPrefix}${flag} `,
+      description: stringValue(value.description),
+    };
+  }
+
+  if (value.type === "value" || value.kind === "value") {
+    const completionValue = scalarValue(value.value);
+    if (!completionValue) {
+      throw new Error("workflow value completion entries require value");
+    }
+    return {
+      display: stringValue(value.display) ?? completionValue,
+      insertText: stringValue(value.insertText) ?? `${replacementPrefix}${completionValue}`,
+      description: stringValue(value.description),
+    };
+  }
+
+  if (value.type === "patch" || value.kind === "patch") {
+    const insertText = stringValue(value.insertText) ?? stringValue(value.text);
+    if (!insertText) {
+      throw new Error("workflow patch completion entries require insertText or text");
+    }
+    return {
+      display: stringValue(value.display) ?? insertText,
+      insertText: `${replacementPrefix}${insertText}`,
+      description: stringValue(value.description),
+    };
+  }
+
+  return null;
+}
+
 function normalizeCompletionSuggestion(value) {
+  const structured = normalizeStructuredCompletionSuggestion(value, input);
+  if (structured) {
+    return structured;
+  }
+
   if (typeof value === "string" && value.trim().length > 0) {
     return {
       display: value.trim(),
@@ -356,7 +411,7 @@ pub async fn complete_workflow(
     workflow_dir: &Path,
     working_directory: &Path,
     workflow_path: &Path,
-    input: &crate::command::WorkflowCommandInput,
+    input: &crate::WorkflowCommandInput,
 ) -> Result<Vec<crate::command_completion::WorkflowCommandCompletionSuggestion>> {
     let runtime = crate::execute::WorkflowRuntimeContext::default();
     let input =
@@ -777,6 +832,7 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::WorkflowCommandInput;
+    use crate::WorkflowCompletionMode;
 
     use super::WORKFLOW_RUNNER_SOURCE;
     use super::WORKFLOW_RUNTIME_EVENT_PREFIX;
@@ -806,14 +862,14 @@ mod tests {
             &workflow_path,
             r#"const workflow = {
   async complete(_ctx, input) {
-    if (input.text === "--workflow-id") {
+    if (input.mode === "value" && input.activeField === "workflowId") {
       return [
         {
-          display: "--workflow-id workflow-123",
-          insertText: "--workflow-id workflow-123",
+          type: "value",
+          value: "workflow-123",
           description: "Pending workflow",
         },
-        "--format summary",
+        { type: "field", field: "format", description: "Output format" },
       ];
     }
     return [];
@@ -832,8 +888,11 @@ export default workflow;
             &workflow_dir,
             &workflow_path,
             &WorkflowCommandInput {
-                argv: vec!["--workflow-id".to_string()],
-                text: "--workflow-id".to_string(),
+                input: serde_json::json!({}),
+                active_field: Some("workflowId".to_string()),
+                prefix: String::new(),
+                mode: WorkflowCompletionMode::Value,
+                replacement_prefix: "--workflow-id ".to_string(),
             },
         )
         .await
@@ -843,14 +902,14 @@ export default workflow;
             suggestions,
             vec![
                 crate::WorkflowCommandCompletionSuggestion {
-                    display: "--workflow-id workflow-123".to_string(),
+                    display: "workflow-123".to_string(),
                     insert_text: "--workflow-id workflow-123".to_string(),
                     description: Some("Pending workflow".to_string()),
                 },
                 crate::WorkflowCommandCompletionSuggestion {
-                    display: "--format summary".to_string(),
-                    insert_text: "--format summary".to_string(),
-                    description: None,
+                    display: "--format".to_string(),
+                    insert_text: "--workflow-id --format ".to_string(),
+                    description: Some("Output format".to_string()),
                 },
             ]
         );
@@ -879,8 +938,11 @@ export default workflow;
             &workflow_dir,
             &workflow_path,
             &WorkflowCommandInput {
-                argv: Vec::new(),
-                text: String::new(),
+                input: serde_json::json!({}),
+                active_field: None,
+                prefix: String::new(),
+                mode: WorkflowCompletionMode::Field,
+                replacement_prefix: String::new(),
             },
         )
         .await
@@ -917,8 +979,11 @@ export default workflow;
             &workspace_cwd,
             &workflow_path,
             &WorkflowCommandInput {
-                argv: Vec::new(),
-                text: String::new(),
+                input: serde_json::json!({}),
+                active_field: None,
+                prefix: String::new(),
+                mode: WorkflowCompletionMode::Field,
+                replacement_prefix: String::new(),
             },
         )
         .await

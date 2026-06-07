@@ -239,6 +239,7 @@ pub(crate) fn resolved_workflow_source_contract(
                     input_schema: contract.input_schema,
                     output_schema: contract.output_schema,
                     format_schemas: contract.format_schemas,
+                    hooks: contract.hooks,
                 });
             }
             return Err(err);
@@ -269,10 +270,11 @@ pub(crate) fn resolved_workflow_source_contract(
                 input_schema: contract.input_schema,
                 output_schema: contract.output_schema,
                 format_schemas: contract.format_schemas,
+                hooks: contract.hooks,
             })
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "workflow must export WorkflowInput and WorkflowOutput from src/workflow.ts or define api.inputSchema/api.outputSchema in workflow.yaml"
+                    "workflow must export WorkflowInput and WorkflowOutput from src/workflow.ts"
                 )
             });
     }
@@ -475,6 +477,7 @@ mod tests {
                         "additionalProperties": false
                     }),
                 )]),
+                hooks: Default::default(),
             }
         );
     }
@@ -582,6 +585,7 @@ export default async function sharedReview(_ctx: unknown, input: WorkflowInput):
                     "additionalProperties": false
                 }),
             )]),
+            hooks: Default::default(),
         };
         let current_contract = WorkflowSourceContract {
             callable_name: Some("oldReview".to_string()),

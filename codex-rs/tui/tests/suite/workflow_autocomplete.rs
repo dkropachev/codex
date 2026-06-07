@@ -137,11 +137,12 @@ async fn slash_workflow_exact_command_shows_option_hints() -> Result<()> {
             popup_snippets: &[
                 "/code-review",
                 "Code Review",
-                "--review-id <string>",
-                "required",
-                "Review identifier",
+                "--all-comments",
+                "Include all comment bodies",
                 "--format <summary|full>",
                 "Output format",
+                "--report-id <string>",
+                "Report identifier",
             ],
             ordered_popup_snippets: &[],
             run_snippets: &[],
@@ -212,16 +213,16 @@ async fn slash_workflow_autocomplete_completes_dynamic_argument_prefix_and_runs_
         codex_home.path(),
         workspace.path(),
         WorkflowAutocompleteScenario {
-            typed_prefix: "/code-review --reportId ",
+            typed_prefix: "/code-review --report-id ",
             completion_text: Some("1034"),
             popup_snippets: &[
-                "--reportId 1034",
+                "--report-id 1034",
                 "Primary report",
-                "--reportId 1035",
+                "--report-id 1035",
                 "Fallback report",
             ],
             ordered_popup_snippets: &[],
-            run_snippets: &["Input argv: --reportId 1034", "Workflow Result"],
+            run_snippets: &["Input argv: --report-id 1034", "Workflow Result"],
             post_key_snippets: &[],
             forbidden_snippets: &[],
             popup_keys: &[WorkflowAutocompletePopupKey::Enter],
@@ -253,11 +254,12 @@ async fn slash_workflow_static_option_tab_does_not_commit_placeholder() -> Resul
             completion_text: None,
             popup_snippets: &["--assignee <string>", "Reviewer assignment"],
             ordered_popup_snippets: &[],
-            run_snippets: &["Input text: --a", "Input argv: --a", "Workflow Result"],
-            post_key_snippets: &[],
+            run_snippets: &[],
+            post_key_snippets: &["unexpected argument '--a'"],
             forbidden_snippets: &[
                 "Input text: --assignee <string>",
                 "Input argv: --assignee <string>",
+                "Workflow Result",
             ],
             popup_keys: &[
                 WorkflowAutocompletePopupKey::Tab,
@@ -326,17 +328,17 @@ async fn slash_workflow_autocomplete_tab_completes_unique_dynamic_value_prefix()
         codex_home.path(),
         workspace.path(),
         WorkflowAutocompleteScenario {
-            typed_prefix: "/code-review --reportId 103",
+            typed_prefix: "/code-review --report-id 103",
             completion_text: None,
-            popup_snippets: &["--reportId 1034"],
+            popup_snippets: &["--report-id 1034"],
             ordered_popup_snippets: &[],
             run_snippets: &[
-                "Input text: --reportId 1034",
-                "Input argv: --reportId 1034",
+                "Input text: --report-id 1034",
+                "Input argv: --report-id 1034",
                 "Workflow Result",
             ],
             post_key_snippets: &[],
-            forbidden_snippets: &["Input text: --reportId 103\n"],
+            forbidden_snippets: &["Input text: --report-id 103\n"],
             popup_keys: &[
                 WorkflowAutocompletePopupKey::Tab,
                 WorkflowAutocompletePopupKey::Enter,
@@ -366,13 +368,13 @@ async fn slash_workflow_autocomplete_commits_unique_dynamic_preview_and_runs_wor
         codex_home.path(),
         workspace.path(),
         WorkflowAutocompleteScenario {
-            typed_prefix: "/code-review --reportId 1034",
+            typed_prefix: "/code-review --report-id 1034",
             completion_text: None,
             popup_snippets: &["--format summary"],
             ordered_popup_snippets: &[],
             run_snippets: &[
-                "Input text: --reportId 1034 --format summary",
-                "Input argv: --reportId 1034 --format summary",
+                "Input text: --report-id 1034 --format summary",
+                "Input argv: --report-id 1034 --format summary",
                 "Workflow Result",
             ],
             post_key_snippets: &[],
@@ -406,19 +408,19 @@ async fn slash_workflow_exact_command_with_args_enter_runs_workflow_without_comm
         codex_home.path(),
         workspace.path(),
         WorkflowAutocompleteScenario {
-            typed_prefix: "/code-review --reportId 1034",
+            typed_prefix: "/code-review --report-id 1034",
             completion_text: None,
             popup_snippets: &["--format summary"],
             ordered_popup_snippets: &[],
             run_snippets: &[
-                "Input text: --reportId 1034",
-                "Input argv: --reportId 1034",
+                "Input text: --report-id 1034",
+                "Input argv: --report-id 1034",
                 "Workflow Result",
             ],
             post_key_snippets: &[],
             forbidden_snippets: &[
-                "Input text: --reportId 1034 --format summary",
-                "Input argv: --reportId 1034 --format summary",
+                "Input text: --report-id 1034 --format summary",
+                "Input argv: --report-id 1034 --format summary",
             ],
             popup_keys: &[WorkflowAutocompletePopupKey::Enter],
         },
@@ -568,6 +570,7 @@ pub(super) async fn run_workflow_autocomplete_session(
     workspace: &Path,
     scenario: WorkflowAutocompleteScenario<'_>,
 ) -> Result<()> {
+    let _workflow_e2e_guard = super::workflow_test_support::workflow_e2e_lock().await;
     let mut env = HashMap::new();
     env.insert("CODEX_HOME".to_string(), codex_home.display().to_string());
     env.insert(
@@ -712,14 +715,7 @@ pub(super) async fn run_workflow_autocomplete_session(
                                 && !sent_interrupts
                             {
                                 sent_interrupts = true;
-                                let interrupt_writer = writer_tx.clone();
-                                tokio::spawn(async move {
-                                    sleep(Duration::from_millis(500)).await;
-                                    for _ in 0..4 {
-                                        let _ = interrupt_writer.send(vec![3]).await;
-                                        sleep(Duration::from_millis(150)).await;
-                                    }
-                                });
+                                session.terminate();
                             }
                         } else if scheduled_completion
                             && saw_popup.iter().all(|seen| *seen)
@@ -856,17 +852,34 @@ fn write_autocomplete_workflow(workflow_dir: &Path) -> Result<()> {
         "reports/jira-summary",
         "summary",
         "Jira Summary",
-        r##"const workflow = {
-  async run(ctx) {
+        r##"interface WorkflowContext {
+  status(status: { workflowName: string; workflowStatus: string }): void;
+  reportToUserMarkdown(markdown: string): void;
+}
+
+export interface WorkflowInput {}
+
+export interface WorkflowOutput {
+  workflowStatus: string;
+}
+
+interface DefinedWorkflow<Input, Output> {
+  run(ctx: WorkflowContext, input: Input): Promise<Output>;
+}
+
+function defineWorkflow<Input, Output>(workflow: DefinedWorkflow<Input, Output>): DefinedWorkflow<Input, Output> {
+  return workflow;
+}
+
+export default defineWorkflow<WorkflowInput, WorkflowOutput>({
+  async run(ctx, _input) {
     ctx.status({ workflowName: "summary", workflowStatus: "reviewing" });
     await new Promise((resolve) => setTimeout(resolve, 250));
     ctx.reportToUserMarkdown("# Workflow Result\n\nAutocomplete integration test.\n");
     await new Promise((resolve) => setTimeout(resolve, 250));
     return { workflowStatus: "done" };
   },
-};
-
-export default workflow;
+});
 "##,
     )
 }
@@ -880,17 +893,34 @@ pub(super) fn write_report_workflow(
     result: &str,
 ) -> Result<()> {
     let workflow_source = format!(
-        r##"const workflow = {{
-  async run(ctx) {{
+        r##"interface WorkflowContext {{
+  status(status: {{ workflowName: string; workflowStatus: string }}): void;
+  reportToUserMarkdown(markdown: string): void;
+}}
+
+export interface WorkflowInput {{}}
+
+export interface WorkflowOutput {{
+  workflowStatus: string;
+}}
+
+interface DefinedWorkflow<Input, Output> {{
+  run(ctx: WorkflowContext, input: Input): Promise<Output>;
+}}
+
+function defineWorkflow<Input, Output>(workflow: DefinedWorkflow<Input, Output>): DefinedWorkflow<Input, Output> {{
+  return workflow;
+}}
+
+export default defineWorkflow<WorkflowInput, WorkflowOutput>({{
+  async run(ctx, _input) {{
     ctx.status({{ workflowName: "{command}", workflowStatus: "{status}" }});
     await new Promise((resolve) => setTimeout(resolve, 250));
     ctx.reportToUserMarkdown("# Workflow Result\n\n{result}\n");
     await new Promise((resolve) => setTimeout(resolve, 250));
     return {{ workflowStatus: "done" }};
   }},
-}};
-
-export default workflow;
+}});
 "##
     );
     write_workflow_fixture(workflow_dir, id, command, title, &workflow_source)
@@ -902,12 +932,100 @@ pub(super) fn write_review_workflow(workflow_dir: &Path) -> Result<()> {
         "code-review",
         "code-review",
         "Code Review",
-        r##"const workflow = {
+        r##"interface WorkflowContext {
+  status(status: { workflowName: string; workflowStatus: string }): void;
+  reportToUserMarkdown(markdown: string): void;
+}
+
+export interface WorkflowInput {
+  /** Review identifier */
+  reviewId?: string;
+  /** Reviewer assignment */
+  assignee?: string;
+  /** Archive the reviewed branch */
+  archive?: boolean;
+  /** Apply patch */
+  applyPatch?: boolean;
+  /** Include all comment bodies */
+  allComments?: boolean;
+  /** Report identifier */
+  reportId?: string;
+  /** Output format */
+  format?: "summary" | "full";
+  /** Include comment bodies */
+  includeComments?: boolean;
+}
+
+export interface WorkflowOutput {
+  workflowStatus: string;
+}
+
+type WorkflowCompletionMode = "field" | "value";
+
+interface WorkflowCompletionRequest<Input> {
+  input: Partial<Input>;
+  activeField?: string;
+  prefix: string;
+  mode: WorkflowCompletionMode;
+  replacementPrefix?: string;
+}
+
+type WorkflowCompletionSuggestion<Input> =
+  | { type: "field"; field: string; display?: string; insertText?: string; description?: string }
+  | { type: "value"; value: string | number | boolean; display?: string; insertText?: string; description?: string }
+  | { type: "patch"; insertText: string; display?: string; description?: string };
+
+interface DefinedWorkflow<Input, Output> {
+  run(ctx: WorkflowContext, input: Input): Promise<Output>;
+  complete?(
+    ctx: WorkflowContext,
+    request: WorkflowCompletionRequest<Input>,
+  ): Promise<WorkflowCompletionSuggestion<Input>[]>;
+}
+
+function defineWorkflow<Input, Output>(workflow: DefinedWorkflow<Input, Output>): DefinedWorkflow<Input, Output> {
+  return workflow;
+}
+
+function fullValueSuggestion<Input>(
+  request: WorkflowCompletionRequest<Input>,
+  value: string,
+  description: string,
+): WorkflowCompletionSuggestion<Input> {
+  const display = `${request.replacementPrefix ?? ""}${value}`;
+  return { type: "value", value, display, description };
+}
+
+function argvFromInput(input: WorkflowInput): string[] {
+  const argv: string[] = [];
+  const push = (flag: string, value: string | boolean | undefined) => {
+    if (value === undefined || value === false) {
+      return;
+    }
+    argv.push(flag);
+    if (value !== true) {
+      argv.push(String(value));
+    }
+  };
+
+  push("--review-id", input.reviewId);
+  push("--report-id", input.reportId);
+  push("--format", input.format);
+  push("--assignee", input.assignee);
+  push("--archive", input.archive);
+  push("--apply-patch", input.applyPatch);
+  push("--all-comments", input.allComments);
+  push("--include-comments", input.includeComments);
+  return argv;
+}
+
+export default defineWorkflow<WorkflowInput, WorkflowOutput>({
   async complete(_ctx, request) {
-    if (request.text === "--slow") {
+    if (request.mode === "field" && request.prefix === "slow") {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       return [
         {
+          type: "patch",
           display: "--slow stale",
           insertText: "--slow stale",
           description: "Stale report",
@@ -915,54 +1033,40 @@ pub(super) fn write_review_workflow(workflow_dir: &Path) -> Result<()> {
       ];
     }
 
-    if (request.text === "--slow fast") {
+    if (request.activeField === "slow" && request.prefix === "fast") {
       return [
         {
+          type: "value",
+          value: "fast --format fresh",
           display: "--slow fast --format fresh",
-          insertText: "--slow fast --format fresh",
           description: "Fresh report",
         },
       ];
     }
 
-    if (request.text === "--reportId 103") {
+    if (request.activeField === "reportId" && request.prefix === "103") {
       return [
-        {
-          display: "--reportId 1034",
-          insertText: "--reportId 1034",
-          description: "Primary report",
-        },
+        fullValueSuggestion(request, "1034", "Primary report"),
       ];
     }
 
-    if (request.text === "--reportId 1034") {
+    if (request.activeField === "reportId" && request.prefix === "1034") {
       return [
-        {
-          display: "--reportId 1034 --format summary",
-          insertText: "--reportId 1034 --format summary",
-          description: "Focused summary output",
-        },
+        fullValueSuggestion(request, "1034 --format summary", "Focused summary output"),
       ];
     }
 
-    if (request.text === "--reportId") {
+    if (request.activeField === "reportId" && request.prefix === "") {
       return [
-        {
-          display: "--reportId 1034",
-          insertText: "--reportId 1034",
-          description: "Primary report",
-        },
-        {
-          display: "--reportId 1035",
-          insertText: "--reportId 1035",
-          description: "Fallback report",
-        },
+        fullValueSuggestion(request, "1034", "Primary report"),
+        fullValueSuggestion(request, "1035", "Fallback report"),
       ];
     }
 
-    if (Array.isArray(request.argv) && request.argv.length === 0) {
+    if (request.mode === "field" && request.prefix === "") {
       return [
         {
+          type: "patch",
           display: "--review-id review-123",
           insertText: "--review-id review-123",
           description: "Pending review",
@@ -975,53 +1079,18 @@ pub(super) fn write_review_workflow(workflow_dir: &Path) -> Result<()> {
   async run(ctx, input) {
     ctx.status({ workflowName: "code-review", workflowStatus: "reviewing" });
     await new Promise((resolve) => setTimeout(resolve, 250));
-    const argvArray = Array.isArray(input?.argv) ? input.argv : [];
+    const argvArray = argvFromInput(input ?? {});
     const argv = argvArray.join(" ");
     const argvJson = JSON.stringify(argvArray);
-    const text = typeof input?.text === "string" ? input.text : "";
+    const text = argv;
     ctx.reportToUserMarkdown(
-      `# Workflow Result\n\nInput text: ${text}\nInput argv: ${argv}\nInput argv json: ${argvJson}\n\nCode review complete.\n`,
+      `# Workflow Result\n\nInput text: ${text}\nInput argv: ${argv}\nInput argv json: ${argvJson}\nInput json: ${JSON.stringify(input ?? {})}\n\nCode review complete.\n`,
     );
     await new Promise((resolve) => setTimeout(resolve, 250));
     return { workflowStatus: "done" };
   },
-};
-
-export default workflow;
+});
 "##,
-        r#"api:
-  inputSchema:
-    type: object
-    required:
-      - reviewId
-    properties:
-      reviewId:
-        type: string
-        description: Review identifier
-      assignee:
-        type: string
-        description: Reviewer assignment
-      archive:
-        type: boolean
-        description: Archive the reviewed branch
-      applyPatch:
-        type: boolean
-        description: Apply patch
-      allComments:
-        type: boolean
-        description: Include all comment bodies
-      reportId:
-        type: string
-        description: Report identifier
-      format:
-        type: string
-        enum:
-          - summary
-          - full
-        description: Output format
-      includeComments:
-        type: boolean
-        description: Include comment bodies
-"#,
+        "",
     )
 }

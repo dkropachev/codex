@@ -124,7 +124,22 @@ fn repair_workflow_command_normalizes_ambiguous_output_schemas() {
         Some(WorkflowToolSpec {
             description: "Run broken/schema".to_string(),
             input_schema: json!({ "type": "object", "additionalProperties": true }),
-            output_schema: json!({ "type": ["object", "null"] }),
+            output_schema: json!({
+                "type": "object",
+                "properties": {
+                    "nested": { "type": "object" },
+                    "choice": {
+                        "oneOf": [
+                            { "type": "object" },
+                            { "type": "string" }
+                        ]
+                    },
+                    "items": {
+                        "type": "array",
+                        "items": { "type": "object" }
+                    }
+                }
+            }),
             ..Default::default()
         }),
     );
@@ -142,20 +157,18 @@ fn repair_workflow_command_normalizes_ambiguous_output_schemas() {
     );
 
     let spec = read_workflow_spec(&workflow_dir.join("workflow.yaml")).unwrap();
+    assert_eq!(spec.api, JsonValue::Null);
+    let tool = spec.tool.unwrap();
     assert_eq!(
-        spec.api["outputSchema"]["properties"]["nested"]["additionalProperties"],
+        tool.output_schema["properties"]["nested"]["additionalProperties"],
         true
     );
     assert_eq!(
-        spec.api["outputSchema"]["properties"]["choice"]["oneOf"][0]["additionalProperties"],
+        tool.output_schema["properties"]["choice"]["oneOf"][0]["additionalProperties"],
         true
     );
     assert_eq!(
-        spec.api["outputSchema"]["properties"]["items"]["items"]["additionalProperties"],
-        true
-    );
-    assert_eq!(
-        spec.tool.unwrap().output_schema["additionalProperties"],
+        tool.output_schema["properties"]["items"]["items"]["additionalProperties"],
         true
     );
 }

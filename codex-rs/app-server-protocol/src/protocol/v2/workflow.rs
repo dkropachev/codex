@@ -169,6 +169,10 @@ pub enum WorkflowValidationFindingInfo {
         path: PathBuf,
         field: String,
     },
+    LegacyWorkflowApiMetadata {
+        path: PathBuf,
+        field: String,
+    },
     CodeOutsideSrc {
         paths: Vec<PathBuf>,
     },

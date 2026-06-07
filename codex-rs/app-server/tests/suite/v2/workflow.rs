@@ -938,14 +938,9 @@ async fn workflow_repair_repairs_missing_design_and_schema_e2e() -> Result<()> {
     assert!(workflow_dir.join("DESIGN.md").is_file());
 
     let spec = codex_workflows::read_workflow_spec(&workflow_dir.join("workflow.yaml"))?;
-    assert_eq!(
-        spec.api["outputSchema"]["properties"]["nested"]["additionalProperties"],
-        true
-    );
-    assert_eq!(
-        spec.tool.unwrap().output_schema["additionalProperties"],
-        true
-    );
+    assert!(spec.api.is_null());
+    let tool = spec.tool.expect("tool registration metadata is retained");
+    assert_eq!(tool.output_schema["additionalProperties"], true);
 
     Ok(())
 }

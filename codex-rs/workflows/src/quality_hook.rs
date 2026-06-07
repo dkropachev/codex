@@ -256,7 +256,7 @@ fn render_findings(failures: &[WorkflowQualityFailure], include_guidance: bool) 
     if include_guidance {
         lines.push(String::new());
         lines.push(
-            "Fix these findings in the current workflow development cycle before treating the workflow as complete. Keep README.md, package.json, tsconfig.json, workflow.yaml, tests, and dependency metadata aligned with the settled DESIGN.md."
+            "Fix these findings in the current workflow development cycle before treating the workflow as complete. Keep src/workflow.ts as the TypeScript API contract source of truth, and keep README.md, package.json, tsconfig.json, workflow.yaml, tests, contract smoke, and dependency metadata aligned with the settled DESIGN.md."
                 .to_string(),
         );
         lines.push(
@@ -361,7 +361,7 @@ mod tests {
         fs::create_dir_all(workflow_dir.join(".git")).expect("create git dir");
         fs::write(
             workflow_dir.join("workflow.yaml"),
-            "id: review/fix\napi:\n  inputSchema:\n    type: object\n  outputSchema:\n    type: object\n    additionalProperties: true\ndependencies:\n  runtime: []\n  development:\n    - '@types/node'\n    - typescript\nvalidation:\n  commands:\n    - bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk\n    - bun test src/tests\n  contractSmoke:\n    input: {}\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
+            "id: review/fix\ndependencies:\n  runtime: []\n  development:\n    - '@types/node'\n    - typescript\nvalidation:\n  commands:\n    - bun build src/workflow.ts --target=bun --outdir artifacts/build --external @openai/codex-sdk\n    - bun test src/tests\n  contractSmoke:\n    input: {}\n  coverage:\n    positive: true\n    negative: true\n    progress: true\n    finalResult: true\n    failureUx: true\n    load: true\n    autocomplete: true\n    recovery: false\n",
         )
         .expect("write workflow spec");
 

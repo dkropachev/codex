@@ -64,13 +64,14 @@
 //! pasted content and text elements are preserved when extracting args.
 //! Workflow aliases use the same shared parser as the CLI and `/workflow` command engine, so the
 //! popup selection path and the CLI path stay aligned when a workflow advertises `command`.
-//! When the typed alias is exact, the popup can append dimmed option hints cached from
-//! `workflow.yaml` plus live workflow-provided suggestions from an optional `complete(ctx, input)`
-//! hook. Static option hints are display-only and never become accepted text. Live completion
-//! requests are debounced, stale requests for the same command are cancelled, and runtime errors
-//! are surfaced in the popup. If exactly one live workflow completion remains after filtering by
-//! the typed argument prefix, the composer renders the untyped suffix inline in dimmed text and
-//! `Tab` accepts it as literal input before submission while preserving any multiline draft tail.
+//! When the typed alias is exact, the popup can append dimmed option hints extracted from the
+//! workflow's validated TypeScript input schema plus live suggestions from an optional
+//! `complete(ctx, request)` hook. Static option hints are display-only and never become accepted
+//! text. Live completion requests carry structured partial input, active field, prefix, and mode;
+//! they are debounced, stale requests for the same command are cancelled, and runtime errors are
+//! surfaced in the popup. If exactly one live workflow completion remains after filtering by the
+//! typed argument prefix, the composer renders the untyped suffix inline in dimmed text and `Tab`
+//! accepts it as literal input before submission while preserving any multiline draft tail.
 //!
 //! # Large Paste Placeholders
 //!
@@ -491,6 +492,10 @@ struct WorkflowCommandCompletionCacheEntry {
     error: Option<String>,
 }
 
+fn workflow_command_completion_cache_text(input: &WorkflowCommandInput) -> String {
+    serde_json::to_string(input).unwrap_or_default()
+}
+
 /// Popup state – at most one can be visible at any time.
 enum ActivePopup {
     None,
@@ -709,7 +714,7 @@ impl ChatComposer {
     ) {
         let cache_key = WorkflowCommandCompletionCacheKey {
             command,
-            text: input.text,
+            text: workflow_command_completion_cache_text(&input),
         };
         self.pending_workflow_command_completion_requests
             .remove(&cache_key);
@@ -4103,7 +4108,7 @@ impl ChatComposer {
 
         let cache_key = WorkflowCommandCompletionCacheKey {
             command: command.to_string(),
-            text: input.text.clone(),
+            text: workflow_command_completion_cache_text(&input),
         };
 
         self.pending_workflow_command_completion_requests
@@ -4128,14 +4133,10 @@ impl ChatComposer {
     }
 
     fn workflow_command_completion_input(rest_after_name: &str) -> WorkflowCommandInput {
-        let text = rest_after_name.trim().to_string();
-        let argv = if text.is_empty() {
-            Vec::new()
-        } else {
-            shlex::split(&text)
-                .unwrap_or_else(|| text.split_whitespace().map(ToString::to_string).collect())
-        };
-        WorkflowCommandInput { argv, text }
+        codex_workflows::workflow_completion_request_from_text(
+            rest_after_name,
+            /*input_schema*/ None,
+        )
     }
 
     fn workflow_completion_candidates(
@@ -4152,7 +4153,7 @@ impl ChatComposer {
             .workflow_command_completion_cache
             .get(&WorkflowCommandCompletionCacheKey {
                 command: command.to_string(),
-                text: input.text.clone(),
+                text: workflow_command_completion_cache_text(input),
             })
             .map(|entry| {
                 entry
@@ -4395,7 +4396,7 @@ impl ChatComposer {
                 {
                     let cache_key = WorkflowCommandCompletionCacheKey {
                         command: command.clone(),
-                        text: input.text.clone(),
+                        text: workflow_command_completion_cache_text(input),
                     };
                     let cached = self.workflow_command_completion_cache.get(&cache_key);
                     popup.set_workflow_completion(
@@ -4448,7 +4449,7 @@ impl ChatComposer {
                     {
                         let cache_key = WorkflowCommandCompletionCacheKey {
                             command: command.clone(),
-                            text: input.text.clone(),
+                            text: workflow_command_completion_cache_text(input),
                         };
                         let cached = self.workflow_command_completion_cache.get(&cache_key);
                         command_popup.set_workflow_completion(
@@ -8561,25 +8562,25 @@ mod tests {
                     ),
                 ]));
                 composer.set_text_content(
-                    "/code-review --reportId 1034".to_string(),
+                    "/code-review --report-id 1034".to_string(),
                     Vec::new(),
                     Vec::new(),
                 );
                 composer.move_cursor_to_end();
                 composer.on_workflow_command_completion_result(
                     "code-review".to_string(),
-                    codex_workflows::WorkflowCommandInput {
-                        argv: vec!["--reportId".to_string(), "1034".to_string()],
-                        text: "--reportId 1034".to_string(),
-                    },
+                    codex_workflows::workflow_completion_request_from_text(
+                        "--report-id 1034",
+                        /*input_schema*/ None,
+                    ),
                     Ok(vec![codex_workflows::WorkflowCommandCompletionSuggestion {
-                        display: "--reportId 1034 --format summary".to_string(),
-                        insert_text: "--reportId 1034 --format summary".to_string(),
+                        display: "--report-id 1034 --format summary".to_string(),
+                        insert_text: "--report-id 1034 --format summary".to_string(),
                         description: Some("Focused summary output".to_string()),
                     }]),
                 );
 
-                assert_eq!(composer.current_text(), "/code-review --reportId 1034");
+                assert_eq!(composer.current_text(), "/code-review --report-id 1034");
                 assert!(!composer.popup_active());
             },
         );
@@ -8603,7 +8604,7 @@ mod tests {
             "code-review",
             Vec::new(),
         )]));
-        let original_text = "/code-review --reportId 1034\nreview @file".to_string();
+        let original_text = "/code-review --report-id 1034\nreview @file".to_string();
         let element_start = original_text.find("@file").expect("tail element");
         let element_end = element_start + "@file".len();
         composer.set_text_content(
@@ -8616,23 +8617,23 @@ mod tests {
         );
         composer
             .textarea
-            .set_cursor("/code-review --reportId 1034".len());
+            .set_cursor("/code-review --report-id 1034".len());
         composer.on_workflow_command_completion_result(
             "code-review".to_string(),
-            codex_workflows::WorkflowCommandInput {
-                argv: vec!["--reportId".to_string(), "1034".to_string()],
-                text: "--reportId 1034".to_string(),
-            },
+            codex_workflows::workflow_completion_request_from_text(
+                "--report-id 1034",
+                /*input_schema*/ None,
+            ),
             Ok(vec![codex_workflows::WorkflowCommandCompletionSuggestion {
-                display: "--reportId 1034 --format summary".to_string(),
-                insert_text: "--reportId 1034 --format summary".to_string(),
+                display: "--report-id 1034 --format summary".to_string(),
+                insert_text: "--report-id 1034 --format summary".to_string(),
                 description: Some("Focused summary output".to_string()),
             }]),
         );
 
         let result = composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(result.0, InputResult::None);
-        let expected_text = "/code-review --reportId 1034 --format summary \nreview @file";
+        let expected_text = "/code-review --report-id 1034 --format summary \nreview @file";
         assert_eq!(composer.current_text(), expected_text);
         let expected_start = expected_text.find("@file").expect("shifted tail element");
         assert_eq!(
@@ -8667,25 +8668,25 @@ mod tests {
                     ),
                 ]));
                 composer.set_text_content(
-                    "/code-review --reportId 1034".to_string(),
+                    "/code-review --report-id 1034".to_string(),
                     Vec::new(),
                     Vec::new(),
                 );
                 composer.move_cursor_to_end();
                 composer.on_workflow_command_completion_result(
                     "code-review".to_string(),
-                    codex_workflows::WorkflowCommandInput {
-                        argv: vec!["--reportId".to_string(), "1034".to_string()],
-                        text: "--reportId 1034".to_string(),
-                    },
+                    codex_workflows::workflow_completion_request_from_text(
+                        "--report-id 1034",
+                        /*input_schema*/ None,
+                    ),
                     Ok(vec![codex_workflows::WorkflowCommandCompletionSuggestion {
-                        display: "--reportId 1034 --format summary".to_string(),
-                        insert_text: "--reportId 1034 --format summary".to_string(),
+                        display: "--report-id 1034 --format summary".to_string(),
+                        insert_text: "--report-id 1034 --format summary".to_string(),
                         description: Some("Focused summary output that wraps cleanly".to_string()),
                     }]),
                 );
 
-                assert_eq!(composer.current_text(), "/code-review --reportId 1034");
+                assert_eq!(composer.current_text(), "/code-review --report-id 1034");
                 assert!(!composer.popup_active());
             },
         );
@@ -8708,25 +8709,25 @@ mod tests {
                     ),
                 ]));
                 composer.set_text_content(
-                    "/code-review --reportId 1034".to_string(),
+                    "/code-review --report-id 1034".to_string(),
                     Vec::new(),
                     Vec::new(),
                 );
                 composer.move_cursor_to_end();
                 composer.on_workflow_command_completion_result(
                     "code-review".to_string(),
-                    codex_workflows::WorkflowCommandInput {
-                        argv: vec!["--reportId".to_string(), "1034".to_string()],
-                        text: "--reportId 1034".to_string(),
-                    },
+                    codex_workflows::workflow_completion_request_from_text(
+                        "--report-id 1034",
+                        /*input_schema*/ None,
+                    ),
                     Ok(vec![codex_workflows::WorkflowCommandCompletionSuggestion {
-                        display: "--reportId 1034 --format summary".to_string(),
-                        insert_text: "--reportId 1034 --format summary".to_string(),
+                        display: "--report-id 1034 --format summary".to_string(),
+                        insert_text: "--report-id 1034 --format summary".to_string(),
                         description: Some("Focused summary output".to_string()),
                     }]),
                 );
 
-                assert_eq!(composer.current_text(), "/code-review --reportId 1034");
+                assert_eq!(composer.current_text(), "/code-review --report-id 1034");
                 assert!(!composer.popup_active());
 
                 let result =
@@ -8734,7 +8735,7 @@ mod tests {
                 assert_eq!(result.0, InputResult::None);
                 assert_eq!(
                     composer.current_text(),
-                    "/code-review --reportId 1034 --format summary "
+                    "/code-review --report-id 1034 --format summary "
                 );
                 assert!(!composer.popup_active());
             },

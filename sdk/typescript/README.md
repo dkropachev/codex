@@ -59,7 +59,15 @@ const lookupIssue = defineTool(
 );
 
 const workflow = defineWorkflow<{ issueId: string }, string>({
-  name: "fix-issue",
+  id: "fix-issue",
+  title: "Fix issue",
+  callableName: "fixIssue",
+  complete(_ctx, request) {
+    if (request.mode === "field") {
+      return [{ type: "field", field: "issueId", description: "Issue id" }];
+    }
+    return [];
+  },
   async run(ctx, input) {
     ctx.progress("Looking up issue", { issueId: input.issueId });
     const agent = await ctx.createAgent({ tools: [lookupIssue] });
@@ -78,6 +86,12 @@ const summary = await runWorkflow(workflow, {
 
 console.log(summary);
 ```
+
+`src/workflow.ts` is the workflow contract that Codex validates and publishes. Export `WorkflowInput`
+and `WorkflowOutput`, default-export `defineWorkflow<Input, Output>({ id?, title?, callableName?, run, complete?, format? })`,
+and put field descriptions or enum constraints in TypeScript/JSDoc instead of `workflow.yaml` API metadata.
+The optional `complete(ctx, request)` hook receives structured partial input, the active field, the typed prefix, and a
+`field` or `value` mode. Throw `WorkflowInputError` for actionable field-level validation failures.
 
 `connection: "auto"` connects to `appServerUrl`, `CODEX_APP_SERVER_URL`, or `CODEX_WORKFLOW_APP_SERVER_URL` when one is
 available, including `unix://` app-server control sockets. Otherwise it starts `codex app-server --listen stdio://` and shuts it down when the workflow finishes. Use

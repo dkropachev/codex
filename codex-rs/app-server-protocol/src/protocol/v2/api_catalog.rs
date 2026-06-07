@@ -179,7 +179,7 @@ pub fn workflow_runtime_api_catalog() -> ApiCatalogWorkflowRuntime {
                 "defineWorkflow",
                 ApiCatalogSymbolKind::Function,
                 "defineWorkflow<Input, Output>(workflow: DefinedWorkflow<Input, Output>): DefinedWorkflow<Input, Output>",
-                "Legacy object-style workflow helper retained for compatibility. New workflows should export a named default async function, optional complete(...) autocomplete hook, and optional WorkflowOutput.toTuiMarkdown(result) companion.",
+                "Define the canonical TypeScript workflow contract, including typed input/output, optional complete(ctx, request) autocomplete, and optional format hooks.",
             ),
             symbol(
                 "runWorkflow",

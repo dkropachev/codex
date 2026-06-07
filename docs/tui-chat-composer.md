@@ -15,10 +15,11 @@ and `codex-rs/tui/src/bottom_pane/paste_burst.rs`.
 
 - Workflows can register `workflow.yaml.command`.
 - The alias appears in the slash popup as `/<cmd>` when workflows are enabled.
-- When the alias is an exact match, the popup can append dimmed option hints from
-  `workflow.yaml` (`usage.options`, then `api.inputSchema`) and live suggestions from an optional
-  workflow `complete(ctx, input)` hook. It filters both by the typed argument prefix, but static
-  option hints are display-only and are never accepted by `Tab`.
+- When the alias is an exact match, the popup can append dimmed option hints extracted from the
+  workflow's last validated TypeScript input schema and live suggestions from an optional workflow
+  `complete(ctx, request)` hook. The request carries structured partial input, active field,
+  typed prefix, and field/value mode. The popup filters suggestions by the typed argument prefix,
+  but static option hints are display-only and are never accepted by `Tab`.
 - Live completion requests are debounced and stale requests for the same command are cancelled.
   Runtime failures are cached for the active prefix and rendered in the popup instead of silently
   disappearing.

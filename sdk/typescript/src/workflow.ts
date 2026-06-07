@@ -406,6 +406,40 @@ export class WorkflowTurnError extends Error {
   }
 }
 
+export type WorkflowErrorOptions = {
+  code?: string;
+  message: string;
+  field?: string;
+  details?: unknown;
+  hint?: string;
+};
+
+export class WorkflowError extends Error {
+  readonly name: string = "WorkflowError";
+  readonly code: string;
+  readonly field?: string;
+  readonly details?: unknown;
+  readonly hint?: string;
+
+  constructor(options: WorkflowErrorOptions) {
+    super(options.message);
+    this.code = options.code ?? "workflow_error";
+    this.field = options.field;
+    this.details = options.details;
+    this.hint = options.hint;
+    Object.setPrototypeOf(this, WorkflowError.prototype);
+  }
+}
+
+export class WorkflowInputError extends WorkflowError {
+  readonly name: string = "WorkflowInputError";
+
+  constructor(options: WorkflowErrorOptions) {
+    super({ ...options, code: options.code ?? "invalid_input" });
+    Object.setPrototypeOf(this, WorkflowInputError.prototype);
+  }
+}
+
 export type WorkflowProgressEvent = {
   message: string;
   data?: unknown;
@@ -594,9 +628,61 @@ export type WorkflowRunOptions<Input = unknown> = WorkflowOptions & {
   onResult?: (result: unknown) => void;
 };
 
+export type WorkflowCompletionMode = "field" | "value";
+
+export type WorkflowCompletionRequest<Input = unknown> = {
+  input: Partial<Input>;
+  activeField?: keyof Input & string;
+  prefix: string;
+  mode: WorkflowCompletionMode;
+  replacementPrefix?: string;
+};
+
+export type WorkflowCompletionSuggestion<Input = unknown> =
+  | {
+      type: "field";
+      field: keyof Input & string;
+      display?: string;
+      insertText?: string;
+      description?: string;
+    }
+  | {
+      type: "value";
+      field?: keyof Input & string;
+      value: string | number | boolean;
+      display?: string;
+      insertText?: string;
+      description?: string;
+    }
+  | {
+      type: "patch";
+      text: string;
+      display?: string;
+      insertText?: string;
+      description?: string;
+    }
+  | {
+      display: string;
+      insertText?: string;
+      description?: string;
+    };
+
+export type WorkflowFormatRequest = {
+  format: string;
+};
+
 export type DefinedWorkflow<Input = unknown, Output = unknown> = {
+  id?: string;
+  title?: string;
+  callableName?: string;
+  /** @deprecated Use title for display metadata. */
   name?: string;
   run(context: WorkflowContext, input: Input): Output | Promise<Output>;
+  complete?(
+    context: WorkflowContext,
+    request: WorkflowCompletionRequest<Input>,
+  ): WorkflowCompletionSuggestion<Input>[] | Promise<WorkflowCompletionSuggestion<Input>[]>;
+  format?(result: Output, request: WorkflowFormatRequest): unknown | Promise<unknown>;
 };
 
 export type WorkflowContext = {

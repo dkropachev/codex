@@ -29,7 +29,7 @@ Notable TUI subfeatures:
 - `/debug-config` shows merged config, requirement sources, and config provenance.
 - `/codex` switches the current thread into Codex config mode, and `/codex <request>` submits a request in that mode.
 - `/workflow` supports workflow mode, workflow commands, and workflow aliases registered from `workflow.yaml.command`.
-- Workflow aliases can show option hints from `usage.options` or `api.inputSchema`, can surface live suggestions from `complete(ctx, input)`, and accept the inline preview with `Tab`.
+- Workflow aliases show option hints from the last validated TypeScript workflow input contract, surface live field/value suggestions from structured `complete(ctx, request)` hooks, and accept the inline preview with `Tab`.
 - `/raw` toggles raw scrollback mode for copy-friendly terminal selection.
 - `/diff` shows the git diff, including untracked files.
 - `/goal` sets or views the goal for a long-running task.
@@ -102,8 +102,8 @@ Workflow subfeatures:
 - Exact alias matches can show inline option hints and live completion suggestions.
 - Workflow execution can be staged in session-specific `.workflow-staging/sessions/<session-id>` trees.
 - `/workflow done` publishes staged changes back to the live workflow.
-- `/workflow validate <id>` checks docs, layout, coverage markers, local packages, loadability, autocomplete readiness, and validation commands/tests.
-- `/workflow repair <id>` reports applied fixes, blocked findings, unsupported findings, validation results, and stop reasons.
+- `/workflow validate <id>` checks docs, layout, coverage markers, local packages, loadability, autocomplete readiness, TypeScript contract extraction/publication, contract smoke output, generated client compatibility, and validation commands/tests.
+- `/workflow repair <id>` applies deterministic fixes before any AI fallback, reruns validation after repair cycles, and reports applied fixes, blocked findings, unsupported findings, validation results, and stop reasons.
 
 ## Plugins
 

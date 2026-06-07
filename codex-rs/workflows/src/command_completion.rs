@@ -22,76 +22,15 @@ pub struct WorkflowCommandCompletionSuggestion {
 }
 
 pub(crate) fn command_option_hints_from_spec(
-    spec: &WorkflowSpec,
+    _spec: &WorkflowSpec,
 ) -> Vec<WorkflowCommandOptionHint> {
-    let usage_hints = usage_option_hints(&spec.usage);
-    if !usage_hints.is_empty() {
-        return usage_hints;
-    }
-
-    command_option_hints_from_input_schema(spec.api.get("inputSchema"))
+    Vec::new()
 }
 
 pub(crate) fn command_option_hints_from_input_schema(
     schema: Option<&JsonValue>,
 ) -> Vec<WorkflowCommandOptionHint> {
     input_schema_option_hints(schema)
-}
-
-fn usage_option_hints(usage: &JsonValue) -> Vec<WorkflowCommandOptionHint> {
-    let Some(options) = usage.get("options").and_then(JsonValue::as_array) else {
-        return Vec::new();
-    };
-
-    options
-        .iter()
-        .filter_map(|option| match option {
-            JsonValue::String(display) if !display.trim().is_empty() => {
-                Some(WorkflowCommandOptionHint {
-                    display: display.trim().to_string(),
-                    description: None,
-                })
-            }
-            JsonValue::Object(object) => {
-                let flag = object
-                    .get("flag")
-                    .or_else(|| object.get("name"))
-                    .and_then(JsonValue::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty());
-                let display = object
-                    .get("display")
-                    .and_then(JsonValue::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToString::to_string)
-                    .or_else(|| {
-                        flag.map(|flag| {
-                            let value_hint = object
-                                .get("valueHint")
-                                .and_then(JsonValue::as_str)
-                                .map(str::trim)
-                                .filter(|value| !value.is_empty())
-                                .map(ToString::to_string);
-                            match value_hint {
-                                Some(value_hint) => format!("{flag} {value_hint}"),
-                                None => flag.to_string(),
-                            }
-                        })
-                    })?;
-                Some(WorkflowCommandOptionHint {
-                    display,
-                    description: object
-                        .get("description")
-                        .and_then(JsonValue::as_str)
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .map(ToString::to_string),
-                })
-            }
-            _ => None,
-        })
-        .collect()
 }
 
 fn input_schema_option_hints(schema: Option<&JsonValue>) -> Vec<WorkflowCommandOptionHint> {
@@ -120,14 +59,17 @@ fn input_schema_option_hints(schema: Option<&JsonValue>) -> Vec<WorkflowCommandO
             .contains(left)
             .cmp(&required.contains(right))
             .reverse()
-            .then_with(|| workflow_flag_name(left).cmp(&workflow_flag_name(right)))
+            .then_with(|| {
+                crate::input_adapter::workflow_flag_name(left)
+                    .cmp(&crate::input_adapter::workflow_flag_name(right))
+            })
     });
 
     names
         .into_iter()
         .filter_map(|name| {
             let property = properties.get(&name)?;
-            let flag = workflow_flag_name(&name);
+            let flag = crate::input_adapter::workflow_flag_name(&name);
             let value_hint = json_schema_value_hint(property);
             let display = match value_hint {
                 Some(value_hint) => format!("{flag} {value_hint}"),
@@ -155,7 +97,7 @@ fn input_schema_option_hints(schema: Option<&JsonValue>) -> Vec<WorkflowCommandO
         .collect()
 }
 
-fn json_schema_value_hint(schema: &JsonValue) -> Option<String> {
+pub(crate) fn json_schema_value_hint(schema: &JsonValue) -> Option<String> {
     if let Some(enum_values) = schema.get("enum").and_then(JsonValue::as_array) {
         let values = enum_values
             .iter()
@@ -171,12 +113,16 @@ fn json_schema_value_hint(schema: &JsonValue) -> Option<String> {
         "string" => Some("<string>".to_string()),
         "integer" => Some("<integer>".to_string()),
         "number" => Some("<number>".to_string()),
-        "array" | "object" => Some("<json>".to_string()),
+        "array" => match schema.get("items").and_then(schema_type_name).as_deref() {
+            Some("string") => Some("<string[]>".to_string()),
+            _ => Some("<json>".to_string()),
+        },
+        "object" => Some("<json>".to_string()),
         _ => Some("<value>".to_string()),
     }
 }
 
-fn schema_type_name(schema: &JsonValue) -> Option<String> {
+pub(crate) fn schema_type_name(schema: &JsonValue) -> Option<String> {
     if let Some(type_name) = schema.get("type").and_then(JsonValue::as_str) {
         return Some(type_name.to_string());
     }
@@ -198,34 +144,18 @@ fn schema_enum_value_text(value: &JsonValue) -> Option<String> {
     }
 }
 
-fn workflow_flag_name(field_name: &str) -> String {
-    let mut flag = String::from("--");
-    for (idx, ch) in field_name.chars().enumerate() {
-        match ch {
-            '_' => flag.push('-'),
-            ch if ch.is_ascii_uppercase() => {
-                if idx > 0 {
-                    flag.push('-');
-                }
-                flag.push(ch.to_ascii_lowercase());
-            }
-            ch => flag.push(ch),
-        }
-    }
-    flag
-}
-
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
     use super::WorkflowCommandOptionHint;
+    use super::command_option_hints_from_input_schema;
     use super::command_option_hints_from_spec;
     use crate::spec::WorkflowSpec;
 
     #[test]
-    fn usage_options_override_schema_hints() {
+    fn workflow_yaml_usage_options_are_ignored_for_schema_hints() {
         let spec = WorkflowSpec {
             usage: json!({
                 "options": [
@@ -240,19 +170,7 @@ mod tests {
             ..WorkflowSpec::default()
         };
 
-        assert_eq!(
-            command_option_hints_from_spec(&spec),
-            vec![
-                WorkflowCommandOptionHint {
-                    display: "--workflow-id <id>".to_string(),
-                    description: None,
-                },
-                WorkflowCommandOptionHint {
-                    display: "--format <summary|full>".to_string(),
-                    description: Some("Output format".to_string()),
-                },
-            ]
-        );
+        assert_eq!(command_option_hints_from_spec(&spec), Vec::new());
     }
 
     #[test]
@@ -283,7 +201,7 @@ mod tests {
         };
 
         assert_eq!(
-            command_option_hints_from_spec(&spec),
+            command_option_hints_from_input_schema(spec.api.get("inputSchema")),
             vec![
                 WorkflowCommandOptionHint {
                     display: "--workflow-id <string>".to_string(),

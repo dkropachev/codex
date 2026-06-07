@@ -1,8 +1,12 @@
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Mutex as StdMutex;
+use std::sync::OnceLock;
 
 use anyhow::Result;
+use tokio::sync::Semaphore;
+use tokio::sync::SemaphorePermit;
 
 fn test_node_path() -> Result<PathBuf> {
     std::env::var_os("PATH")
@@ -61,6 +65,7 @@ pub(super) fn write_workflow_fixture_with_metadata(
     std::fs::create_dir_all(workflow_dir.join("src/tests"))?;
     std::fs::create_dir_all(workflow_dir.join("state"))?;
     std::fs::create_dir_all(workflow_dir.join("node_modules/.bin"))?;
+    write_typescript_shim(workflow_dir)?;
     std::fs::create_dir_all(workflow_dir.join(".git"))?;
     std::fs::write(
         workflow_dir.join(".gitignore"),
@@ -141,7 +146,22 @@ const workflowDir = path.dirname(workflowPath);
 const tmpWorkflowDir = path.join(tmpDir, path.basename(workflowDir));
 fs.cpSync(workflowDir, tmpWorkflowDir, {{ recursive: true }});
 const tmpPath = path.join(tmpWorkflowDir, path.basename(workflowPath) + '.mjs');
-fs.copyFileSync(workflowPath, tmpPath);
+const source = fs.readFileSync(workflowPath, 'utf8');
+let output = source;
+try {{
+  const ts = require('typescript');
+  output = ts.transpileModule(source, {{
+    compilerOptions: {{
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.ES2022,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+      esModuleInterop: true,
+    }},
+  }}).outputText;
+}} catch (_error) {{
+  output = source;
+}}
+fs.writeFileSync(tmpPath, output);
 args[workflowPathIndex + 1] = tmpPath;
 const result = spawnSync(process.execPath, [runner, ...args], {{ stdio: 'inherit' }});
 process.exit(result.status ?? 1);
@@ -157,7 +177,57 @@ process.exit(result.status ?? 1);
     Ok(())
 }
 
+pub(super) async fn workflow_e2e_lock() -> SemaphorePermit<'static> {
+    static WORKFLOW_E2E_LOCK: OnceLock<Semaphore> = OnceLock::new();
+
+    match WORKFLOW_E2E_LOCK
+        .get_or_init(|| Semaphore::new(1))
+        .acquire()
+        .await
+    {
+        Ok(permit) => permit,
+        Err(error) => panic!("workflow e2e semaphore closed: {error}"),
+    }
+}
+
+fn write_typescript_shim(workflow_dir: &Path) -> Result<()> {
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let typescript_library = repo_root.join("node_modules/typescript/lib/typescript.js");
+    if !typescript_library.is_file() {
+        return Ok(());
+    }
+
+    let typescript_dir = workflow_dir.join("node_modules/typescript");
+    std::fs::create_dir_all(&typescript_dir)?;
+    std::fs::write(
+        typescript_dir.join("index.js"),
+        format!(
+            "module.exports = require({:?});\n",
+            typescript_library.to_string_lossy()
+        ),
+    )?;
+    std::fs::write(
+        typescript_dir.join("package.json"),
+        "{\n  \"name\": \"typescript\",\n  \"private\": true,\n  \"main\": \"./index.js\"\n}\n",
+    )?;
+    Ok(())
+}
+
 pub(super) fn ensure_codex_binary(repo_root: &Path) -> Result<PathBuf> {
+    static CODEX_BINARY: OnceLock<PathBuf> = OnceLock::new();
+    static CODEX_BINARY_BUILD: StdMutex<()> = StdMutex::new(());
+
+    if let Some(path) = CODEX_BINARY.get() {
+        return Ok(path.clone());
+    }
+
+    let _guard = CODEX_BINARY_BUILD
+        .lock()
+        .map_err(|err| anyhow::anyhow!("codex binary build mutex poisoned: {err}"))?;
+    if let Some(path) = CODEX_BINARY.get() {
+        return Ok(path.clone());
+    }
+
     match Command::new("cargo")
         .arg("build")
         .arg("-p")
@@ -176,5 +246,7 @@ pub(super) fn ensure_codex_binary(repo_root: &Path) -> Result<PathBuf> {
         Err(err) => return Err(err.into()),
     }
 
-    codex_utils_cargo_bin::cargo_bin("codex").map_err(Into::into)
+    let path = codex_utils_cargo_bin::cargo_bin("codex")?;
+    let _ = CODEX_BINARY.set(path.clone());
+    Ok(path)
 }
