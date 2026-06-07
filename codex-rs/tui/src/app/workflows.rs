@@ -766,6 +766,7 @@ async fn read_workflow_child_stderr(
                         },
                     });
                 }
+                Ok(WorkflowRuntimeEvent::FinalMarkdown { .. }) => {}
                 Err(err) => push_stderr_line(
                     &mut raw_stderr,
                     format!("failed to decode workflow runtime event `{payload}`: {err}"),

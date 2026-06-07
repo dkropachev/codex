@@ -43,7 +43,18 @@ where
         let mut source_contracts = published_source_contracts(codex_home, &visible_workflows)?;
         source_contracts.insert(workflow.path.clone(), source_contract.clone());
         generate_workflow_client_modules(&visible_workflows, &source_contracts)?;
-        publish_validated_workflow_api_contract(codex_home, workflow, source_contract)?;
+
+        let (post_generation_report, post_generation_source_contract) =
+            validate_workflow_api_contract_inner(workflow, &mut command_runner)?;
+        if post_generation_report.status != WorkflowValidationStatus::Valid {
+            return Ok(post_generation_report);
+        }
+
+        publish_validated_workflow_api_contract(
+            codex_home,
+            workflow,
+            post_generation_source_contract.unwrap_or(source_contract),
+        )?;
     }
     Ok(report)
 }
@@ -209,7 +220,7 @@ fn default_contract_smoke_command(input: &JsonValue) -> Result<String> {
     let input_literal = serde_json::to_string(&input_json)
         .with_context(|| "failed to serialize validation.contractSmoke.input literal")?;
     let source = format!(
-        r#"const mod=await import("./src/workflow.ts");if(typeof mod.default!=="function"){{throw new Error("workflow default export must be a function");}}const input=JSON.parse({input_literal});const ctx={{progress(){{}},reportToUserMarkdown(){{}},status(){{}},cwd:process.cwd(),currentWorkingDirectory:process.cwd(),repoRoot:process.cwd(),workingDirectory:process.cwd()}};const output=await mod.default(ctx,input);console.log(JSON.stringify(output));"#
+        r#"const mod=await import("./src/workflow.ts");const workflow=mod.default;const run=typeof workflow==="function"?workflow:workflow?.run;if(typeof run!=="function"){{throw new Error("workflow default export must be a function or defineWorkflow object with run(ctx, input)");}}const input=JSON.parse({input_literal});const ctx={{progress(){{}},reportToUserMarkdown(){{}},status(){{}},cwd:process.cwd(),currentWorkingDirectory:process.cwd(),repoRoot:process.cwd(),workingDirectory:process.cwd()}};const output=await run.call(workflow,ctx,input);console.log(JSON.stringify(output));"#
     );
     Ok(format!("bun --eval {}", shell_quote(&source)))
 }
@@ -239,6 +250,7 @@ pub(crate) fn resolved_workflow_source_contract(
                     input_schema: contract.input_schema,
                     output_schema: contract.output_schema,
                     format_schemas: contract.format_schemas,
+                    format_hook: false,
                     hooks: contract.hooks,
                 });
             }
@@ -270,6 +282,7 @@ pub(crate) fn resolved_workflow_source_contract(
                 input_schema: contract.input_schema,
                 output_schema: contract.output_schema,
                 format_schemas: contract.format_schemas,
+                format_hook: false,
                 hooks: contract.hooks,
             })
             .ok_or_else(|| {
@@ -398,6 +411,19 @@ mod tests {
     }
 
     #[test]
+    fn default_contract_smoke_command_supports_define_workflow_object() {
+        let command = super::default_contract_smoke_command(&json!({ "value": "ok" }))
+            .expect("default smoke command");
+
+        assert!(command.contains("const workflow=mod.default;"));
+        assert!(
+            command.contains("const run=typeof workflow===\"function\"?workflow:workflow?.run;")
+        );
+        assert!(command.contains("run.call(workflow,ctx,input)"));
+        assert!(command.contains("function or defineWorkflow object with run(ctx, input)"));
+    }
+
+    #[test]
     fn resolved_workflow_source_contract_falls_back_to_workflow_yaml_api_for_legacy_sources() {
         let workflow_root = TempDir::new().expect("workflow root");
         let workflow_dir = workflow_root.path().join("legacy/report");
@@ -477,6 +503,7 @@ mod tests {
                         "additionalProperties": false
                     }),
                 )]),
+                format_hook: false,
                 hooks: Default::default(),
             }
         );
@@ -585,6 +612,7 @@ export default async function sharedReview(_ctx: unknown, input: WorkflowInput):
                     "additionalProperties": false
                 }),
             )]),
+            format_hook: false,
             hooks: Default::default(),
         };
         let current_contract = WorkflowSourceContract {
@@ -733,10 +761,17 @@ export interface WorkflowOutput {
   status: string;
 }
 
-export default async function smokeOkReview(_ctx: unknown, input: WorkflowInput): Promise<WorkflowOutput> {
-  return { status: input.value };
-}
-"#,
+	function defineWorkflow<T>(workflow: T): T {
+	  return workflow;
+	}
+
+	export default defineWorkflow({
+	  callableName: "smokeOkReview",
+	  async run(_ctx: unknown, input: WorkflowInput): Promise<WorkflowOutput> {
+	    return { status: input.value };
+	  },
+	});
+	"#,
         ) {
             return;
         }
@@ -780,6 +815,94 @@ export default async function smokeOkReview(_ctx: unknown, input: WorkflowInput)
             read_published_workflow_source_contract(codex_home.path(), &workflow)
                 .expect("read published workflow contract")
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn validate_and_publish_workflow_api_rejects_generated_client_validation_failure() {
+        let codex_home = TempDir::new().expect("codex home");
+        let cwd = TempDir::new().expect("cwd");
+        let config = codex_config::types::WorkflowsConfigToml::default();
+
+        let workflow_dir = codex_home.path().join("workflows/review/generated-check");
+        write_workflow_yaml(
+            &workflow_dir,
+            "review/generated-check",
+            json!({}),
+            json!({
+                "commands": ["bun run typecheck"],
+                "contractSmoke": { "input": { "value": "ok" } }
+            }),
+        );
+        if !write_workflow_source(
+            &workflow_dir,
+            r#"
+export interface WorkflowInput {
+  value: string;
+}
+
+export interface WorkflowOutput {
+  status: string;
+}
+
+export default async function generatedCheck(_ctx: unknown, input: WorkflowInput): Promise<WorkflowOutput> {
+  return { status: input.value };
+}
+"#,
+        ) {
+            return;
+        }
+
+        let workflow = workflow_summary(
+            "global",
+            WorkflowRootKind::Global,
+            &codex_home.path().join("workflows"),
+            &workflow_dir,
+            "review/generated-check",
+        );
+
+        let report = validate_and_publish_workflow_api(
+            codex_home.path(),
+            cwd.path(),
+            &config,
+            &workflow,
+            |command, command_cwd| {
+                if command == "bun run typecheck"
+                    && command_cwd.join("src/generated/workflows.ts").exists()
+                {
+                    return Ok(WorkflowValidationCommandResult {
+                        command: command.to_string(),
+                        succeeded: false,
+                        exit_code: Some(2),
+                        stdout: String::new(),
+                        stderr: "generated client typecheck failed".to_string(),
+                    });
+                }
+
+                if command.starts_with("bun --eval") {
+                    Ok(WorkflowValidationCommandResult {
+                        command: command.to_string(),
+                        succeeded: true,
+                        exit_code: Some(0),
+                        stdout: r#"{"status":"ok"}"#.to_string(),
+                        stderr: String::new(),
+                    })
+                } else {
+                    Ok(success_result(command))
+                }
+            },
+        )
+        .expect("workflow API validation should complete");
+
+        assert_eq!(report.status, WorkflowValidationStatus::Invalid);
+        assert_eq!(
+            crate::validation_finding::finding_messages(&report.findings),
+            vec!["validation command `bun run typecheck` failed with exit code 2".to_string()]
+        );
+        assert_eq!(
+            read_published_workflow_source_contract(codex_home.path(), &workflow)
+                .expect("read published workflow contract"),
+            None
         );
     }
 }

@@ -349,35 +349,38 @@ impl WorkflowRunManager {
         event: &WorkflowRuntimeEvent,
     ) {
         let notification = match event {
-            WorkflowRuntimeEvent::Progress { message, data } => {
+            WorkflowRuntimeEvent::Progress { message, data } => Some(
                 ServerNotification::WorkflowRunProgress(WorkflowProgressNotification {
                     run_id: run_id.to_string(),
                     thread_id: thread_id.map(ToString::to_string),
                     message: message.clone(),
                     data: data.clone(),
                     status: None,
-                })
-            }
-            WorkflowRuntimeEvent::Status { status } => {
+                }),
+            ),
+            WorkflowRuntimeEvent::Status { status } => Some(
                 ServerNotification::WorkflowRunProgress(WorkflowProgressNotification {
                     run_id: run_id.to_string(),
                     thread_id: thread_id.map(ToString::to_string),
                     message: String::new(),
                     data: None,
                     status: Some(status_to_api(status.clone())),
-                })
-            }
-            WorkflowRuntimeEvent::ReportToUserMarkdown { markdown } => {
+                }),
+            ),
+            WorkflowRuntimeEvent::ReportToUserMarkdown { markdown } => Some(
                 ServerNotification::WorkflowRunMarkdownResult(WorkflowMarkdownResultNotification {
                     run_id: run_id.to_string(),
                     thread_id: thread_id.map(ToString::to_string),
                     markdown: markdown.clone(),
-                })
-            }
+                }),
+            ),
+            WorkflowRuntimeEvent::FinalMarkdown { .. } => None,
         };
-        self.inner
-            .outgoing
-            .try_send_server_notification(notification);
+        if let Some(notification) = notification {
+            self.inner
+                .outgoing
+                .try_send_server_notification(notification);
+        }
     }
 }
 

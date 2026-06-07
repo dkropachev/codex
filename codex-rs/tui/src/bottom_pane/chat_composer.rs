@@ -66,12 +66,13 @@
 //! popup selection path and the CLI path stay aligned when a workflow advertises `command`.
 //! When the typed alias is exact, the popup can append dimmed option hints extracted from the
 //! workflow's validated TypeScript input schema plus live suggestions from an optional
-//! `complete(ctx, request)` hook. Static option hints are display-only and never become accepted
-//! text. Live completion requests carry structured partial input, active field, prefix, and mode;
-//! they are debounced, stale requests for the same command are cancelled, and runtime errors are
-//! surfaced in the popup. If exactly one live workflow completion remains after filtering by the
-//! typed argument prefix, the composer renders the untyped suffix inline in dimmed text and `Tab`
-//! accepts it as literal input before submission while preserving any multiline draft tail.
+//! `complete(ctx, request)` hook. Static option hints can complete the option name token, without
+//! inserting type placeholders. Live completion requests carry structured partial input, active
+//! field, prefix, and mode; they are debounced, stale requests for the same command are cancelled,
+//! and runtime errors are surfaced in the popup. If exactly one live workflow completion remains
+//! after filtering by the typed argument prefix, the composer renders the untyped suffix inline in
+//! dimmed text and `Tab` accepts it as literal input before submission while preserving any
+//! multiline draft tail.
 //!
 //! # Large Paste Placeholders
 //!
@@ -8515,7 +8516,7 @@ mod tests {
     }
 
     #[test]
-    fn workflow_static_option_hint_tab_does_not_commit_placeholder() {
+    fn workflow_static_option_hint_tab_completes_option_name_without_placeholder() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
@@ -8541,7 +8542,7 @@ mod tests {
         assert!(composer.popup_active());
         let result = composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(result.0, InputResult::None);
-        assert_eq!(composer.current_text(), "/code-review --a");
+        assert_eq!(composer.current_text(), "/code-review --assignee ");
         assert!(composer.popup_active());
     }
 

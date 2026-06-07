@@ -50,7 +50,8 @@ pub(crate) fn standalone_cli_runtime_event_handler<'a>(
                     data: data.clone(),
                 });
             }
-            WorkflowRuntimeEvent::ReportToUserMarkdown { .. } => {}
+            WorkflowRuntimeEvent::FinalMarkdown { .. }
+            | WorkflowRuntimeEvent::ReportToUserMarkdown { .. } => {}
         }) as Box<WorkflowRuntimeEventHandler<'a>>)
     } else {
         None

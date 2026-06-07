@@ -95,7 +95,7 @@ fn render_generated_workflow_module(
     let mut output = String::new();
     output.push_str("import { CodexWorkflow } from \"@openai/codex-sdk/workflow\";\n");
 
-    let mut formatter_imports = BTreeMap::<String, String>::new();
+    let mut formatter_imports = BTreeMap::<String, FormatterImport>::new();
     for callable in callables {
         if callable
             .contract
@@ -112,15 +112,31 @@ fn render_generated_workflow_module(
                 &module_path,
                 &callable.workflow.path.join("src/workflow.js"),
             )?;
-            formatter_imports.insert(companion_name, import_path);
+            formatter_imports.insert(
+                companion_name,
+                FormatterImport {
+                    import_path,
+                    workflow_alias: format!("{}Workflow", pascal_case(callable_name)),
+                    format_hook: callable.contract.format_hook,
+                },
+            );
         }
     }
 
-    for (alias, import_path) in &formatter_imports {
-        writeln!(
-            output,
-            "import {{ WorkflowOutput as {alias} }} from \"{import_path}\";"
-        )?;
+    for (alias, formatter_import) in &formatter_imports {
+        if formatter_import.format_hook {
+            writeln!(
+                output,
+                "import {} from \"{}\";",
+                formatter_import.workflow_alias, formatter_import.import_path
+            )?;
+        } else {
+            writeln!(
+                output,
+                "import {{ WorkflowOutput as {alias} }} from \"{}\";",
+                formatter_import.import_path
+            )?;
+        }
     }
     if !formatter_imports.is_empty() {
         output.push('\n');
@@ -149,12 +165,12 @@ fn render_generated_workflow_module(
         writeln!(output, "export type {output_type_name} = {output_ts_type};")?;
         writeln!(
             output,
-            "const {input_schema_name} = {} as const;",
+            "export const {input_schema_name} = {} as const;",
             json_literal(&callable.contract.input_schema)?,
         )?;
         writeln!(
             output,
-            "const {output_schema_name} = {} as const;",
+            "export const {output_schema_name} = {} as const;",
             json_literal(&callable.contract.output_schema)?,
         )?;
         writeln!(
@@ -167,32 +183,48 @@ fn render_generated_workflow_module(
         )?;
         output.push_str("}\n\n");
 
-        if let Some(import_alias) = formatter_imports.get(&formatter_alias) {
-            writeln!(
-                output,
-                "export const {pascal_name}Output = {{\n  toTuiMarkdown(result: {output_type_name}): {{ markdown: string }} {{\n    return {import_alias}.toTuiMarkdown(result);\n  }},\n}};\n"
-            )?;
+        if let Some(formatter_import) = formatter_imports.get(&formatter_alias) {
+            if formatter_import.format_hook {
+                let workflow_alias = &formatter_import.workflow_alias;
+                write!(
+                    output,
+                    "export const {pascal_name}Output = {{\n  toTuiMarkdown(result: {output_type_name}): {{ markdown: string }} | Promise<{{ markdown: string }}> {{\n    const formatter = ({workflow_alias} as {{ format?: (result: never, request: {{ format: \"tui.markdown.v1\" }}) => {{ markdown: string }} | Promise<{{ markdown: string }}> }}).format;\n    if (typeof formatter !== \"function\") {{\n      throw new WorkflowContractError(\"{workflow_id}\", \"output\", \"$\", \"workflow format hook is missing\");\n    }}\n    return formatter(result as never, {{ format: \"tui.markdown.v1\" }});\n  }},\n}};\n"
+                )?;
+            } else {
+                write!(
+                    output,
+                    "export const {pascal_name}Output = {{\n  toTuiMarkdown(result: {output_type_name}): {{ markdown: string }} {{\n    return {formatter_alias}.toTuiMarkdown(result as never);\n  }},\n}};\n"
+                )?;
+            }
         }
     }
 
     Ok(output)
 }
 
+struct FormatterImport {
+    import_path: String,
+    workflow_alias: String,
+    format_hook: bool,
+}
+
 const SHARED_RUNTIME_HELPERS: &str = r##"
-type JsonSchema = {
-  type?: string | string[];
-  enum?: unknown[];
-  anyOf?: JsonSchema[];
+export type JsonSchema = {
+  type?: string | readonly string[];
+  enum?: readonly unknown[];
+  anyOf?: readonly JsonSchema[];
   properties?: Record<string, JsonSchema>;
-  required?: string[];
+  required?: readonly string[];
   additionalProperties?: false | true | JsonSchema;
   items?: JsonSchema;
-  prefixItems?: JsonSchema[];
+  prefixItems?: readonly JsonSchema[];
   minItems?: number;
   maxItems?: number;
+  minimum?: number;
+  maximum?: number;
 };
 
-class WorkflowContractError extends Error {
+export class WorkflowContractError extends Error {
   readonly workflowId: string;
   readonly direction: "input" | "output";
   readonly schemaPath: string;
@@ -214,7 +246,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function validateContractValue(
+export function validateContractValue(
   workflowId: string,
   direction: "input" | "output",
   schema: JsonSchema,
@@ -284,11 +316,13 @@ function validateTypedValue(
       if (typeof value !== "number") {
         failContract(workflowId, direction, schemaPath, "expected number");
       }
+      validateNumberBounds(workflowId, direction, schema, value, schemaPath);
       return;
     case "integer":
       if (typeof value !== "number" || !Number.isInteger(value)) {
         failContract(workflowId, direction, schemaPath, "expected integer");
       }
+      validateNumberBounds(workflowId, direction, schema, value, schemaPath);
       return;
     case "boolean":
       if (typeof value !== "boolean") {
@@ -308,6 +342,24 @@ function validateTypedValue(
       return;
     default:
       failContract(workflowId, direction, schemaPath, `unsupported schema type ${typeName}`);
+  }
+}
+
+function validateNumberBounds(
+  workflowId: string,
+  direction: "input" | "output",
+  schema: JsonSchema,
+  value: number,
+  schemaPath: string,
+): void {
+  if (!Number.isFinite(value)) {
+    failContract(workflowId, direction, schemaPath, "expected finite number");
+  }
+  if (schema.minimum !== undefined && value < schema.minimum) {
+    failContract(workflowId, direction, schemaPath, `expected number >= ${schema.minimum}`);
+  }
+  if (schema.maximum !== undefined && value > schema.maximum) {
+    failContract(workflowId, direction, schemaPath, `expected number <= ${schema.maximum}`);
   }
 }
 
@@ -361,7 +413,7 @@ function validateArray(
 
   const prefixItems = schema.prefixItems ?? [];
   const minItems = schema.minItems ?? prefixItems.length;
-  const maxItems = schema.maxItems ?? prefixItems.length;
+  const maxItems = schema.maxItems ?? (schema.items ? Number.POSITIVE_INFINITY : prefixItems.length);
   if (value.length < minItems || value.length > maxItems) {
     failContract(workflowId, direction, schemaPath, `expected between ${minItems} and ${maxItems} items`);
   }
@@ -673,7 +725,9 @@ fn is_valid_ts_identifier(name: &str) -> bool {
 fn type_allows_null(schema: &JsonValue) -> bool {
     match schema.get("type") {
         Some(JsonValue::String(type_name)) => type_name == "null",
-        Some(JsonValue::Array(types)) => types.iter().any(|type_name| type_name == "null"),
+        Some(JsonValue::Array(types)) => types
+            .iter()
+            .any(|type_name| type_name.as_str() == Some("null")),
         _ => false,
     }
 }
@@ -722,7 +776,14 @@ mod tests {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "workflowId": { "type": "string" }
+                    "workflowId": { "type": "string" },
+                    "limit": { "type": ["integer", "null"], "minimum": 0, "maximum": 10 },
+                    "areas": {
+                        "type": ["array", "null"],
+                        "items": { "type": "string", "enum": ["Code", "Test"] },
+                        "minItems": 1
+                    },
+                    "includeSkipped": { "type": ["boolean", "null"], "enum": [false, true] }
                 },
                 "required": ["workflowId"],
                 "additionalProperties": false
@@ -746,6 +807,7 @@ mod tests {
                     "additionalProperties": false
                 }),
             )]),
+            format_hook: true,
             hooks: Default::default(),
         }
     }
@@ -773,11 +835,22 @@ mod tests {
         assert!(
             generated.contains("import { CodexWorkflow } from \"@openai/codex-sdk/workflow\";")
         );
-        assert!(generated.contains(
-            "import { WorkflowOutput as CodeReviewWorkflowOutput } from \"../workflow.js\";"
-        ));
-        assert!(generated.contains("export type CodeReviewInput = { workflowId: string };"));
+        assert!(generated.contains("import CodeReviewWorkflow from \"../workflow.js\";"));
+        assert!(generated.contains("export type CodeReviewInput = {"));
+        assert!(generated.contains("workflowId: string"));
+        assert!(generated.contains("limit?: null | number"));
+        assert!(generated.contains("areas?: (\"Code\" | \"Test\")[] | null"));
+        assert!(generated.contains("includeSkipped?:"));
+        assert!(generated.contains(" | null"));
         assert!(generated.contains("export type CodeReviewOutput = { status: string };"));
+        assert!(generated.contains("export type JsonSchema = {"));
+        assert!(generated.contains("minimum?: number;"));
+        assert!(generated.contains("maximum?: number;"));
+        assert!(generated.contains("export class WorkflowContractError extends Error"));
+        assert!(generated.contains("export function validateContractValue("));
+        assert!(generated.contains("export const codeReviewInputSchema = "));
+        assert!(generated.contains("\"minimum\":0"));
+        assert!(generated.contains("\"maximum\":10"));
         assert!(generated.contains(
             "export async function codeReview(input: CodeReviewInput): Promise<CodeReviewOutput> {"
         ));
@@ -787,9 +860,21 @@ mod tests {
         );
         assert!(generated.contains("output = JSON.parse(response.message);"));
         assert!(generated.contains("export const CodeReviewOutput = {"));
+        assert!(generated.contains(
+            "toTuiMarkdown(result: CodeReviewOutput): { markdown: string } | Promise<{ markdown: string }> {"
+        ));
+        assert!(generated.contains("const formatter = (CodeReviewWorkflow as { format?:"));
         assert!(
-            generated.contains("toTuiMarkdown(result: CodeReviewOutput): { markdown: string } {")
+            generated
+                .contains("return formatter(result as never, { format: \"tui.markdown.v1\" });")
         );
+        assert!(!generated.contains("CodeReviewWorkflowOutput.toTuiMarkdown(result as never);"));
+        assert!(
+            generated.contains(
+                "validateNumberBounds(workflowId, direction, schema, value, schemaPath);"
+            )
+        );
+        assert!(generated.contains("const maxItems = schema.maxItems ?? (schema.items ? Number.POSITIVE_INFINITY : prefixItems.length);"));
     }
 
     #[test]

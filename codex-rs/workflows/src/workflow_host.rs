@@ -55,6 +55,8 @@ struct WorkflowHostResponse {
     stderr: String,
     success: bool,
     exit_status: String,
+    #[serde(default)]
+    final_markdown: Option<String>,
 }
 
 #[cfg(unix)]
@@ -191,6 +193,7 @@ pub(crate) async fn run_workflow_via_host(
         stderr,
         success: response.success,
         exit_status: response.exit_status,
+        final_markdown: response.final_markdown,
     })
 }
 
@@ -654,18 +657,26 @@ function withWorkflowContext(request, callback) {
   });
 }
 
-async function emitRequestedFormat(workflowModule, workflow, result, request, emit) {
+async function requestedFinalMarkdown(workflowModule, workflow, result, request) {
   const requestedFormat = request.outputFormat ?? process.env[WORKFLOW_OUTPUT_FORMAT_ENV];
   if (typeof requestedFormat !== "string" || requestedFormat.trim().length === 0) {
-    return;
+    return undefined;
   }
 
   if (requestedFormat !== "tui.markdown.v1") {
     if (typeof workflow.format === "function") {
       await workflow.format(result, { format: requestedFormat });
-      return;
+      return undefined;
     }
     throw new Error(`unsupported host output format ${requestedFormat}`);
+  }
+
+  if (typeof workflow.format === "function") {
+    const formatted = await workflow.format(result, { format: requestedFormat });
+    const markdown = typeof formatted?.markdown === "string" && formatted.markdown.trim().length > 0
+      ? formatted.markdown
+      : undefined;
+    return markdown;
   }
 
   const formatter = workflowModule.WorkflowOutput?.toTuiMarkdown;
@@ -674,21 +685,9 @@ async function emitRequestedFormat(workflowModule, workflow, result, request, em
     const markdown = typeof formatted?.markdown === "string" && formatted.markdown.trim().length > 0
       ? formatted.markdown
       : undefined;
-    if (markdown) {
-      emit({ type: "reportToUserMarkdown", markdown });
-    }
-    return;
+    return markdown;
   }
-
-  if (typeof workflow.format === "function") {
-    const formatted = await workflow.format(result, { format: requestedFormat });
-    const markdown = typeof formatted?.markdown === "string" && formatted.markdown.trim().length > 0
-      ? formatted.markdown
-      : undefined;
-    if (markdown) {
-      emit({ type: "reportToUserMarkdown", markdown });
-    }
-  }
+  return undefined;
 }
 
 function createStatusDispatcher(emit) {
@@ -718,12 +717,13 @@ async function executeWorkflowRequest(request, emit) {
           "workflow module must export a named default async function or a default object with a run(ctx, input) method",
         );
       }
-      await emitRequestedFormat(workflowModule, workflow, output, request, emit);
+      const finalMarkdown = await requestedFinalMarkdown(workflowModule, workflow, output, request);
       return {
         stdout: `${JSON.stringify(output, null, 2)}\n`,
         stderr: stderrCapture.value,
         success: true,
         exitStatus: "0",
+        finalMarkdown,
       };
     });
   } catch (error) {
@@ -872,11 +872,24 @@ mod tests {
     use crate::spec::WORKFLOW_YAML;
     use crate::spec::write_workflow_spec;
 
+    use super::WORKFLOW_HOST_SOURCE;
     use super::WorkflowHostRequest;
     use super::connect_to_host;
     use super::ensure_workflow_host;
     use super::run_workflow_via_host;
     use super::workflow_host_socket_path;
+
+    #[test]
+    fn host_script_prefers_workflow_format_hook_for_requested_markdown() {
+        let format_index = WORKFLOW_HOST_SOURCE
+            .find("if (typeof workflow.format === \"function\")")
+            .expect("host script should inspect workflow format hook");
+        let legacy_index = WORKFLOW_HOST_SOURCE
+            .find("const formatter = workflowModule.WorkflowOutput?.toTuiMarkdown;")
+            .expect("host script should keep legacy formatter fallback");
+
+        assert!(format_index < legacy_index);
+    }
 
     #[tokio::test]
     #[serial]

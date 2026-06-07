@@ -39,7 +39,7 @@ fn validate_json_against_schema_at(
     match type_spec {
         JsonValue::String(type_name) => validate_typed_value(schema, value, path, type_name),
         JsonValue::Array(types) => {
-            if types.iter().any(|ty| ty == "null") && value.is_null() {
+            if types.iter().any(|ty| ty.as_str() == Some("null")) && value.is_null() {
                 return Ok(());
             }
 
@@ -77,8 +77,10 @@ fn validate_typed_value(
 ) -> Result<()> {
     match type_name {
         "string" if value.is_string() => Ok(()),
-        "number" if value.is_number() => Ok(()),
-        "integer" if value.as_i64().is_some() || value.as_u64().is_some() => Ok(()),
+        "number" if value.is_number() => validate_number_bounds(schema, value, path),
+        "integer" if value.as_i64().is_some() || value.as_u64().is_some() => {
+            validate_number_bounds(schema, value, path)
+        }
         "boolean" if value.is_boolean() => Ok(()),
         "null" if value.is_null() => Ok(()),
         "array" => validate_array(schema, value, path),
@@ -87,6 +89,32 @@ fn validate_typed_value(
             "workflow contract violation at {path}: expected {type_name}"
         )),
     }
+}
+
+fn validate_number_bounds(schema: &JsonValue, value: &JsonValue, path: &str) -> Result<()> {
+    let Some(number) = value.as_f64() else {
+        return Err(anyhow!(
+            "workflow contract violation at {path}: expected finite number"
+        ));
+    };
+
+    if let Some(minimum) = schema.get("minimum").and_then(JsonValue::as_f64)
+        && number < minimum
+    {
+        return Err(anyhow!(
+            "workflow contract violation at {path}: expected number >= {minimum}"
+        ));
+    }
+
+    if let Some(maximum) = schema.get("maximum").and_then(JsonValue::as_f64)
+        && number > maximum
+    {
+        return Err(anyhow!(
+            "workflow contract violation at {path}: expected number <= {maximum}"
+        ));
+    }
+
+    Ok(())
 }
 
 fn validate_object(schema: &JsonValue, value: &JsonValue, path: &str) -> Result<()> {
@@ -145,15 +173,26 @@ fn validate_array(schema: &JsonValue, value: &JsonValue, path: &str) -> Result<(
         ));
     };
 
+    let min_items = schema.get("minItems").and_then(JsonValue::as_u64);
+    let max_items = schema.get("maxItems").and_then(JsonValue::as_u64);
+    if let Some(min_items) = min_items
+        && (array.len() as u64) < min_items
+    {
+        return Err(anyhow!(
+            "workflow contract violation at {path}: expected at least {min_items} items"
+        ));
+    }
+    if let Some(max_items) = max_items
+        && (array.len() as u64) > max_items
+    {
+        return Err(anyhow!(
+            "workflow contract violation at {path}: expected at most {max_items} items"
+        ));
+    }
+
     if let Some(prefix_items) = schema.get("prefixItems").and_then(JsonValue::as_array) {
-        let min_items = schema
-            .get("minItems")
-            .and_then(JsonValue::as_u64)
-            .unwrap_or(prefix_items.len() as u64);
-        let max_items = schema
-            .get("maxItems")
-            .and_then(JsonValue::as_u64)
-            .unwrap_or(prefix_items.len() as u64);
+        let min_items = min_items.unwrap_or(prefix_items.len() as u64);
+        let max_items = max_items.unwrap_or(prefix_items.len() as u64);
         let array_len = array.len() as u64;
         if array_len < min_items || array_len > max_items {
             return Err(anyhow!(
@@ -214,5 +253,72 @@ fn join_path(path: &str, segment: &str) -> String {
         format!("{path}.{segment}")
     } else {
         format!("{path}[{segment:?}]")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    use super::validate_json_against_schema;
+
+    #[test]
+    fn validates_number_and_integer_bounds() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "limit": { "type": ["integer", "null"], "minimum": 0 },
+                "score": { "type": "number", "maximum": 10 }
+            },
+            "additionalProperties": false
+        });
+
+        validate_json_against_schema(&schema, &json!({ "limit": 0, "score": 10 }))
+            .expect("bounds should accept edge values");
+        validate_json_against_schema(&schema, &json!({ "limit": null, "score": 5 }))
+            .expect("nullable integer should accept null");
+
+        let low = validate_json_against_schema(&schema, &json!({ "limit": -1, "score": 5 }))
+            .expect_err("minimum should reject low integer");
+        assert_eq!(
+            low.to_string(),
+            "workflow contract violation at $.limit: expected number >= 0"
+        );
+
+        let high = validate_json_against_schema(&schema, &json!({ "limit": 1, "score": 11 }))
+            .expect_err("maximum should reject high number");
+        assert_eq!(
+            high.to_string(),
+            "workflow contract violation at $.score: expected number <= 10"
+        );
+    }
+
+    #[test]
+    fn validates_homogeneous_array_length_constraints() {
+        let schema = json!({
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1,
+            "maxItems": 2
+        });
+
+        validate_json_against_schema(&schema, &json!(["Code"])).expect("one item is valid");
+        validate_json_against_schema(&schema, &json!(["Code", "Test"]))
+            .expect("two items are valid");
+
+        let empty = validate_json_against_schema(&schema, &json!([]))
+            .expect_err("minItems should reject empty array");
+        assert_eq!(
+            empty.to_string(),
+            "workflow contract violation at $: expected at least 1 items"
+        );
+
+        let too_many = validate_json_against_schema(&schema, &json!(["Code", "Test", "Docs"]))
+            .expect_err("maxItems should reject long array");
+        assert_eq!(
+            too_many.to_string(),
+            "workflow contract violation at $: expected at most 2 items"
+        );
     }
 }

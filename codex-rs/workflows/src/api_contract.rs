@@ -268,17 +268,119 @@ function schemaFromWorkflowExpression(expression) {
   const inputType = checker.getTypeOfSymbolAtLocation(inputSymbol, inputDeclaration ?? runDeclaration);
   const awaitedReturnType = checker.getAwaitedType(signature.getReturnType()) ?? signature.getReturnType();
   const outputSchema = schemaForType(awaitedReturnType);
-  validateWorkflowOutputFormatter(outputSchema);
+  const formatSchemas = formatSchemasFromWorkflowExpression(workflowType);
   return {
     callableName: callableNameFromWorkflowExpression(expression, workflowType),
     inputSchema: schemaForType(inputType),
     outputSchema,
+    formatSchemas,
+    formatHook: Object.keys(formatSchemas).length > 0,
     hooks: {
       complete: objectLiteralHasCallableProperty(objectExpression, "complete")
         || hasWorkflowCompleteHook(workflowType)
         || hasModuleCompleteHook(),
     },
   };
+}
+
+function formatSchemasFromWorkflowExpression(workflowType) {
+  const format = workflowType.getProperty("format");
+  if (!format) {
+    return {};
+  }
+
+  const declaration = format.valueDeclaration ?? format.declarations?.[0];
+  if (!declaration) {
+    throw new Error("failed to inspect workflow format(result, request)");
+  }
+
+  const formatType = checker.getTypeOfSymbolAtLocation(format, declaration);
+  const signatures = callableSignatures(formatType);
+  if (signatures.length === 0) {
+    unsupportedType(formatType, "workflow format(result, request) must be callable");
+  }
+
+  const formats = {};
+  for (const signature of signatures) {
+    if (signature.parameters.length < 2) {
+      throw new Error("workflow format(result, request) must accept result and request parameters");
+    }
+
+    const requestSymbol = signature.parameters[1];
+    const requestDeclaration = requestSymbol.valueDeclaration ?? requestSymbol.declarations?.[0] ?? declaration;
+    const requestType = checker.getTypeOfSymbolAtLocation(requestSymbol, requestDeclaration);
+    const formatNames = requestFormatNames(requestType);
+    if (formatNames.length === 0) {
+      continue;
+    }
+
+    const returnType = checker.getAwaitedType(signature.getReturnType()) ?? signature.getReturnType();
+    const returnSchema = schemaForType(returnType);
+    for (const formatName of formatNames) {
+      validateFormatSchema(formatName, returnSchema, "workflow format(result, request)");
+      formats[formatName] = returnSchema;
+    }
+  }
+
+  return formats;
+}
+
+function callableSignatures(type) {
+  const signatures = type.getCallSignatures();
+  if (signatures.length > 0) {
+    return signatures;
+  }
+
+  if (type.isUnion()) {
+    return type.types.flatMap((candidate) => {
+      if ((candidate.flags & ts.TypeFlags.Undefined) !== 0) {
+        return [];
+      }
+      return callableSignatures(candidate);
+    });
+  }
+
+  return [];
+}
+
+function requestFormatNames(requestType) {
+  const formatProperty = requestType.getProperty("format");
+  if (!formatProperty) {
+    return [];
+  }
+
+  const declaration = formatProperty.valueDeclaration ?? formatProperty.declarations?.[0];
+  const formatType = checker.getTypeOfSymbolAtLocation(formatProperty, declaration ?? sourceFile);
+  return stringLiteralValues(formatType);
+}
+
+function stringLiteralValues(type) {
+  if (type.isStringLiteral()) {
+    return [type.value];
+  }
+  if (type.isUnion()) {
+    return type.types.flatMap(stringLiteralValues);
+  }
+  if (type.isIntersection()) {
+    for (const candidate of type.types) {
+      const values = stringLiteralValues(candidate);
+      if (values.length > 0) {
+        return values;
+      }
+    }
+  }
+  return [];
+}
+
+function validateFormatSchema(formatName, schema, label) {
+  if (formatName !== "tui.markdown.v1") {
+    return;
+  }
+
+  const properties = schema.properties ?? {};
+  if (schema.type !== "object" || !properties.markdown || properties.markdown.type !== "string") {
+    throw new Error(`${label} for tui.markdown.v1 must return { markdown: string }`);
+  }
 }
 
 function validateWorkflowOutputFormatter(outputSchema) {
@@ -325,6 +427,47 @@ function unsupportedType(type, reason) {
 function symbolDescription(symbol) {
   const description = ts.displayPartsToString(symbol.getDocumentationComment(checker)).trim();
   return description.length > 0 ? description : undefined;
+}
+
+function symbolTagText(symbol, tagName) {
+  const tag = symbol.getJsDocTags(checker).find((candidate) => candidate.name === tagName);
+  if (!tag?.text) {
+    return undefined;
+  }
+  return tag.text.map((part) => part.text).join("").trim();
+}
+
+function applySymbolSchemaTags(symbol, schema) {
+  if (symbol.getJsDocTags(checker).some((tag) => tag.name === "integer")) {
+    if (schema.type === "number") {
+      schema.type = "integer";
+    } else if (Array.isArray(schema.type)) {
+      schema.type = schema.type.map((typeName) => typeName === "number" ? "integer" : typeName);
+    }
+  }
+
+  for (const [tagName, schemaName] of [
+    ["minimum", "minimum"],
+    ["maximum", "maximum"],
+  ]) {
+    const value = symbolTagText(symbol, tagName);
+    if (value !== undefined) {
+      const numberValue = Number(value);
+      if (!Number.isFinite(numberValue)) {
+        throw new Error(`WorkflowInput.${symbol.name} @${tagName} must be a finite number`);
+      }
+      schema[schemaName] = numberValue;
+    }
+  }
+
+  const minItems = symbolTagText(symbol, "minItems");
+  if (minItems !== undefined) {
+    const minItemsValue = Number(minItems);
+    if (!Number.isInteger(minItemsValue) || minItemsValue < 0) {
+      throw new Error(`WorkflowInput.${symbol.name} @minItems must be a non-negative integer`);
+    }
+    schema.minItems = minItemsValue;
+  }
 }
 
 function schemaForType(type, stack = new Set()) {
@@ -387,6 +530,16 @@ function schemaForType(type, stack = new Set()) {
       };
     }
 
+    const booleanEnum = nonNullableMembers.every(
+      (member) => (member.flags & ts.TypeFlags.BooleanLiteral) !== 0,
+    );
+    if (booleanEnum) {
+      return {
+        type: hasNullish ? ["boolean", "null"] : "boolean",
+        enum: nonNullableMembers.map((member) => member.intrinsicName === "true"),
+      };
+    }
+
     if (nonNullableMembers.length === 1 && hasNullish) {
       const inner = schemaForType(nonNullableMembers[0], stack);
       if (typeof inner.type === "string") {
@@ -444,6 +597,7 @@ function schemaForType(type, stack = new Set()) {
         if (description) {
           propertySchema.description = description;
         }
+        applySymbolSchemaTags(property, propertySchema);
         schemaProperties[property.name] = propertySchema;
         if ((property.flags & ts.SymbolFlags.Optional) === 0) {
           required.push(property.name);
@@ -503,8 +657,10 @@ function formatSchemas(useTuiFormatter) {
 
         const signature = signatures[0];
         const returnType = checker.getAwaitedType(signature.getReturnType()) ?? signature.getReturnType();
+        const returnSchema = schemaForType(returnType);
+        validateFormatSchema("tui.markdown.v1", returnSchema, "WorkflowOutput.toTuiMarkdown(result)");
         return {
-          "tui.markdown.v1": schemaForType(returnType),
+          "tui.markdown.v1": returnSchema,
         };
       }
     }
@@ -552,11 +708,12 @@ process.stdout.write(
   JSON.stringify({
     callableName: defaultExportContract?.callableName ?? null,
     inputSchema,
-    outputSchema,
-    formatSchemas: formatSchemas(Boolean(defaultExportContract)),
-    hooks: defaultExportContract?.hooks ?? { complete: hasModuleCompleteHook() },
-  }),
-);
+	    outputSchema,
+	    formatSchemas: defaultExportContract?.formatSchemas ?? formatSchemas(Boolean(defaultExportContract)),
+	    formatHook: defaultExportContract?.formatHook ?? false,
+	    hooks: defaultExportContract?.hooks ?? { complete: hasModuleCompleteHook() },
+	  }),
+	);
 "#;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -568,6 +725,8 @@ pub struct WorkflowSourceContract {
     pub output_schema: JsonValue,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub format_schemas: BTreeMap<String, JsonValue>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub format_hook: bool,
     #[serde(default, skip_serializing_if = "WorkflowContractHooks::is_empty")]
     pub hooks: WorkflowContractHooks,
 }
@@ -621,6 +780,8 @@ struct ExtractedWorkflowApiContract {
     output_schema: JsonValue,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     format_schemas: BTreeMap<String, JsonValue>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    format_hook: bool,
     #[serde(default, skip_serializing_if = "WorkflowContractHooks::is_empty")]
     hooks: WorkflowContractHooks,
 }
@@ -632,6 +793,7 @@ impl From<ExtractedWorkflowApiContract> for WorkflowSourceContract {
             input_schema: value.input_schema,
             output_schema: value.output_schema,
             format_schemas: value.format_schemas,
+            format_hook: value.format_hook,
             hooks: value.hooks,
         }
     }
@@ -693,6 +855,7 @@ pub(crate) fn read_published_workflow_source_contract(
             input_schema: record.contract.input_schema,
             output_schema: record.contract.output_schema,
             format_schemas: record.contract.format_schemas,
+            format_hook: false,
             hooks: record.contract.hooks,
         }
     })))
@@ -1139,6 +1302,7 @@ mod tests {
                 "tui.markdown.v1".to_string(),
                 json!({ "type": "object", "properties": { "markdown": { "type": "string" } } }),
             )]),
+            format_hook: false,
             hooks: Default::default(),
         };
         let contract = WorkflowApiContract::from(source_contract.clone());
@@ -1241,20 +1405,31 @@ export default async function codeReview(_ctx: unknown, input: WorkflowInput): P
 	type WorkflowCompletionSuggestion<Input> =
 	  | { type: "field"; field: keyof Input & string }
 	  | { type: "value"; value: string };
-	type DefinedWorkflow<Input, Output> = {
-	  callableName?: string;
-	  run(ctx: WorkflowContext, input: Input): Promise<Output>;
-	  complete?(ctx: WorkflowContext, request: WorkflowCompletionRequest<Input>): Promise<WorkflowCompletionSuggestion<Input>[]>;
-	};
+		type DefinedWorkflow<Input, Output> = {
+		  callableName?: string;
+		  run(ctx: WorkflowContext, input: Input): Promise<Output>;
+		  complete?(ctx: WorkflowContext, request: WorkflowCompletionRequest<Input>): Promise<WorkflowCompletionSuggestion<Input>[]>;
+		  format?(result: Output, request: { format: "tui.markdown.v1" }): { markdown: string };
+		};
 	declare function defineWorkflow<Input, Output>(workflow: DefinedWorkflow<Input, Output>): DefinedWorkflow<Input, Output>;
 
 	export type WorkflowInput = {
 	  /** Review identifier */
 	  reviewId: string;
-	  /** Review areas to include */
+	  /** Review areas to include
+	   * @minItems 1
+	   */
 	  allowedAreas?: string[];
 	  /** Output format */
 	  format: "json" | "markdown";
+	  /** Maximum number of results
+	   * @integer
+	   * @minimum 0
+	   * @maximum 10
+	   */
+	  limit?: number;
+	  /** Include skipped findings */
+	  includeSkipped?: boolean;
 	};
 
 	export type WorkflowOutput = {
@@ -1266,12 +1441,15 @@ export default async function codeReview(_ctx: unknown, input: WorkflowInput): P
 	  async run(_ctx, input) {
 	    return { status: input.reviewId };
 	  },
-	  async complete(_ctx, request) {
-	    return request.mode === "field"
-	      ? [{ type: "field", field: "reviewId" }]
-	      : [{ type: "value", value: "review-1" }];
-	  },
-	});
+		  async complete(_ctx, request) {
+		    return request.mode === "field"
+		      ? [{ type: "field", field: "reviewId" }]
+		      : [{ type: "value", value: "review-1" }];
+		  },
+		  format(result, _request) {
+		    return { markdown: result.status };
+		  },
+		});
 	"#,
         ) {
             return;
@@ -1281,6 +1459,7 @@ export default async function codeReview(_ctx: unknown, input: WorkflowInput): P
             .expect("workflow source contract");
 
         assert_eq!(contract.callable_name.as_deref(), Some("reviewCode"));
+        assert!(contract.format_hook);
         assert_eq!(
             contract.input_schema,
             json!({
@@ -1290,12 +1469,24 @@ export default async function codeReview(_ctx: unknown, input: WorkflowInput): P
                     "allowedAreas": {
                         "type": ["array", "null"],
                         "items": { "type": "string" },
+                        "minItems": 1,
                         "description": "Review areas to include"
                     },
                     "format": {
                         "type": "string",
                         "enum": ["json", "markdown"],
                         "description": "Output format"
+                    },
+                    "limit": {
+                        "type": ["integer", "null"],
+                        "minimum": 0,
+                        "maximum": 10,
+                        "description": "Maximum number of results"
+                    },
+                    "includeSkipped": {
+                        "type": ["boolean", "null"],
+                        "enum": [false, true],
+                        "description": "Include skipped findings"
                     }
                 },
                 "required": ["reviewId", "format"],
@@ -1303,6 +1494,20 @@ export default async function codeReview(_ctx: unknown, input: WorkflowInput): P
             })
         );
         assert!(contract.hooks.complete);
+        assert_eq!(
+            contract.format_schemas,
+            BTreeMap::from([(
+                "tui.markdown.v1".to_string(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "markdown": { "type": "string" }
+                    },
+                    "required": ["markdown"],
+                    "additionalProperties": false
+                })
+            )])
+        );
     }
 
     #[test]

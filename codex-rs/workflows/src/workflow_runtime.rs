@@ -193,10 +193,10 @@ function legacyProgressToStatus(workflowName, message, data) {
   };
 }
 
-async function emitRequestedFormat(workflowModule, workflow, result) {
+async function requestedFinalMarkdown(workflowModule, workflow, result) {
   const requestedFormat = stringValue(process.env[WORKFLOW_OUTPUT_FORMAT_ENV]);
   if (!requestedFormat) {
-    return;
+    return undefined;
   }
 
   if (requestedFormat !== "tui.markdown.v1") {
@@ -205,34 +205,34 @@ async function emitRequestedFormat(workflowModule, workflow, result) {
       if (requestedFormat === "tui.markdown.v1") {
         const markdown = stringValue(formatted?.markdown);
         if (markdown) {
-          emitEvent({ type: "reportToUserMarkdown", markdown });
+          return markdown;
         }
-        return;
+        return undefined;
       }
     }
     throw new Error(`unsupported host output format ${requestedFormat}`);
   }
 
-  const formatter = workflowModule.WorkflowOutput?.toTuiMarkdown;
-  if (typeof formatter === "function") {
-    const formatted = await formatter(result);
+  if (typeof workflow.format === "function") {
+    const formatted = await workflow.format(result, { format: requestedFormat });
     const markdown = stringValue(formatted?.markdown);
     if (!markdown) {
       throw new Error(
         `workflow format ${requestedFormat} must return { markdown: string }`,
       );
     }
-    emitEvent({ type: "reportToUserMarkdown", markdown });
-    return;
+    return markdown;
   }
 
-  if (typeof workflow.format === "function") {
-    const formatted = await workflow.format(result, { format: requestedFormat });
+  const formatter = workflowModule.WorkflowOutput?.toTuiMarkdown;
+  if (typeof formatter === "function") {
+    const formatted = await formatter(result);
     const markdown = stringValue(formatted?.markdown);
     if (markdown) {
-      emitEvent({ type: "reportToUserMarkdown", markdown });
+      return markdown;
     }
   }
+  return undefined;
 }
 
 function createRuntimeContext() {
@@ -361,7 +361,10 @@ if (mode === "complete") {
       "workflow module must export a named default async function or a default object with a run(ctx, input) method",
     );
   }
-  await emitRequestedFormat(workflowModule, workflow, output);
+  const finalMarkdown = await requestedFinalMarkdown(workflowModule, workflow, output);
+  if (finalMarkdown) {
+    emitEvent({ type: "finalMarkdown", markdown: finalMarkdown });
+  }
 }
 process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 "#;
@@ -372,6 +375,7 @@ pub(crate) struct WorkflowRuntimeOutput {
     pub(crate) stderr: String,
     pub(crate) success: bool,
     pub(crate) exit_status: String,
+    pub(crate) final_markdown: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -386,6 +390,8 @@ pub enum WorkflowRuntimeEvent {
     },
     #[serde(rename = "reportToUserMarkdown")]
     ReportToUserMarkdown { markdown: String },
+    #[serde(rename = "finalMarkdown")]
+    FinalMarkdown { markdown: String },
 }
 
 pub type WorkflowRuntimeEventHandler<'a> = dyn Fn(&WorkflowRuntimeEvent) + Send + Sync + 'a;
@@ -491,6 +497,7 @@ pub(crate) async fn run_workflow(
         .await;
         let output = output?;
         validate_workflow_runtime_output(codex_home, options.workflows, workflow_dir, &output)?;
+        emit_final_markdown(&output, options.event_handler);
         return Ok(output);
     }
 
@@ -505,6 +512,7 @@ pub(crate) async fn run_workflow(
     )
     .await?;
     validate_workflow_runtime_output(codex_home, options.workflows, workflow_dir, &output)?;
+    emit_final_markdown(&output, options.event_handler);
     Ok(output)
 }
 
@@ -528,7 +536,30 @@ pub(crate) async fn run_workflow(
     )
     .await?;
     validate_workflow_runtime_output(codex_home, options.workflows, workflow_dir, &output)?;
+    emit_final_markdown(&output, options.event_handler);
     Ok(output)
+}
+
+fn emit_final_markdown(
+    output: &WorkflowRuntimeOutput,
+    event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
+) {
+    let Some(markdown) = output.final_markdown.as_ref() else {
+        return;
+    };
+
+    let event = WorkflowRuntimeEvent::ReportToUserMarkdown {
+        markdown: markdown.clone(),
+    };
+    if let Some(event_handler) = event_handler {
+        event_handler(&event);
+    } else if !std::io::stderr().is_terminal() {
+        let payload = serde_json::json!({
+            "type": "reportToUserMarkdown",
+            "markdown": markdown,
+        });
+        eprintln!("{WORKFLOW_RUNTIME_EVENT_PREFIX}{payload}");
+    }
 }
 
 async fn run_workflow_legacy(
@@ -677,12 +708,12 @@ async fn run_workflow_process(
 
     let wait_for_child =
         wait_for_child_with_cancellation(&mut child, invocation.runtime.cancellation_flag.clone());
-    let (status, stderr) = tokio::join!(
+    let (status, runtime_stderr) = tokio::join!(
         wait_for_child,
         read_stderr(stderr, invocation.event_handler)
     );
     let status = status.context("failed to wait for workflow runtime process")?;
-    let stderr = stderr?;
+    let runtime_stderr = runtime_stderr?;
     let stdout = stdout_task
         .await
         .context("workflow runtime stdout task panicked")?
@@ -692,9 +723,10 @@ async fn run_workflow_process(
 
     Ok(WorkflowRuntimeOutput {
         stdout,
-        stderr,
+        stderr: runtime_stderr.text,
         success: status.success(),
         exit_status: status.to_string(),
+        final_markdown: runtime_stderr.final_markdown,
     })
 }
 
@@ -724,9 +756,10 @@ async fn wait_for_cancellation(cancellation_flag: &AtomicBool) {
 async fn read_stderr(
     stderr: impl tokio::io::AsyncRead + Unpin,
     event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
-) -> Result<String> {
+) -> Result<RuntimeStderr> {
     let mut reader = BufReader::new(stderr).lines();
     let mut raw_stderr = String::new();
+    let mut final_markdown = None;
     let forward_runtime_events = event_handler.is_none() && !std::io::stderr().is_terminal();
 
     while let Some(line) = reader
@@ -737,7 +770,9 @@ async fn read_stderr(
         if let Some(payload) = line.strip_prefix(WORKFLOW_RUNTIME_EVENT_PREFIX) {
             match serde_json::from_str::<WorkflowRuntimeEvent>(payload) {
                 Ok(event) => {
-                    if let Some(event_handler) = event_handler {
+                    if let WorkflowRuntimeEvent::FinalMarkdown { markdown } = event {
+                        final_markdown = Some(markdown);
+                    } else if let Some(event_handler) = event_handler {
                         event_handler(&event);
                     } else if forward_runtime_events {
                         eprintln!("{line}");
@@ -756,7 +791,15 @@ async fn read_stderr(
         push_stderr_line(&mut raw_stderr, line);
     }
 
-    Ok(raw_stderr)
+    Ok(RuntimeStderr {
+        text: raw_stderr,
+        final_markdown,
+    })
+}
+
+struct RuntimeStderr {
+    text: String,
+    final_markdown: Option<String>,
 }
 
 fn push_stderr_line(stderr: &mut String, line: impl AsRef<str>) {
@@ -824,6 +867,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
 
@@ -837,6 +881,7 @@ mod tests {
     use super::WORKFLOW_RUNNER_SOURCE;
     use super::WORKFLOW_RUNTIME_EVENT_PREFIX;
     use super::complete_workflow;
+    use super::run_workflow;
     use super::run_workflow_legacy;
     use super::workflow_bun_path;
 
@@ -996,6 +1041,94 @@ export default workflow;
                 insert_text: workspace_cwd.display().to_string(),
                 description: None,
             }]
+        );
+    }
+
+    #[tokio::test]
+    async fn run_workflow_legacy_prefers_format_hook_for_requested_markdown() {
+        let temp = TempDir::new().expect("temp dir");
+        let codex_home = temp.path().join("codex-home");
+        let workflow_dir = temp.path().join("summary");
+        let workflow_path = workflow_dir.join("workflow.mjs");
+        fs::create_dir_all(&codex_home).expect("codex home");
+        write_test_workflow(
+            &workflow_dir,
+            &workflow_path,
+            r#"export const WorkflowOutput = {
+  toTuiMarkdown() {
+    return { markdown: "legacy formatter" };
+  },
+};
+
+const workflow = {
+  async run() {
+    return { status: "done" };
+  },
+  format(_result, request) {
+    if (request.format === "tui.markdown.v1") {
+      return { markdown: "format hook" };
+    }
+    return _result;
+  },
+};
+
+export default workflow;
+"#,
+        );
+
+        let markdown = Arc::new(Mutex::new(Vec::<String>::new()));
+        let markdown_events = Arc::clone(&markdown);
+        let event_handler = move |event: &super::WorkflowRuntimeEvent| {
+            if let super::WorkflowRuntimeEvent::ReportToUserMarkdown { markdown } = event {
+                markdown_events
+                    .lock()
+                    .expect("markdown events lock")
+                    .push(markdown.clone());
+            }
+        };
+
+        let output = run_workflow_legacy(
+            &codex_home,
+            temp.path(),
+            &workflow_dir,
+            &workflow_path,
+            "{}",
+            &crate::execute::WorkflowRuntimeContext {
+                output_format: Some("tui.markdown.v1".to_string()),
+                ..Default::default()
+            },
+            Some(&event_handler),
+        )
+        .await
+        .expect("workflow runtime should succeed");
+
+        assert!(output.success, "workflow runtime failed: {output:?}");
+        assert_eq!(output.final_markdown, Some("format hook".to_string()));
+        assert!(markdown.lock().expect("markdown events lock").is_empty());
+
+        let output = run_workflow(
+            &codex_home,
+            temp.path(),
+            &workflow_dir,
+            &workflow_path,
+            "{}",
+            super::WorkflowRuntimeRunOptions {
+                workflows: &[],
+                event_handler: Some(&event_handler),
+                runtime: crate::execute::WorkflowRuntimeContext {
+                    force_process_runtime: true,
+                    output_format: Some("tui.markdown.v1".to_string()),
+                    ..Default::default()
+                },
+            },
+        )
+        .await
+        .expect("parent workflow runtime should succeed");
+
+        assert!(output.success, "workflow runtime failed: {output:?}");
+        assert_eq!(
+            *markdown.lock().expect("markdown events lock"),
+            vec!["format hook".to_string()]
         );
     }
 
