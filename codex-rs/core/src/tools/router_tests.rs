@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use crate::config::Config;
+use crate::session::session::Session;
 use crate::session::tests::make_session_and_context;
+use crate::session::turn_context::TurnContext;
 use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_extension_api::ExtensionData;
@@ -10,11 +12,13 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ResponsesApiTool;
 use codex_extension_api::ToolCall as ExtensionToolCall;
 use codex_extension_api::ToolExecutor;
+use codex_features::Feature;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_state::ToolRouterDiagnosticsWindow;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
@@ -22,6 +26,7 @@ use codex_tools::ToolSpec;
 use codex_tools::default_namespace_description;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 use super::ToolCall;
@@ -92,6 +97,64 @@ fn extension_tool_test_registry() -> Arc<ExtensionRegistry<Config>> {
     let mut builder = ExtensionRegistryBuilder::new();
     builder.tool_contributor(Arc::new(ExtensionEchoContributor));
     Arc::new(builder.build())
+}
+
+fn extension_echo_router(session: &Session, turn: &TurnContext) -> ToolRouter {
+    ToolRouter::from_turn_context(
+        turn,
+        ToolRouterParams {
+            deferred_mcp_tools: None,
+            mcp_tools: None,
+            discoverable_tools: None,
+            extension_tool_executors: extension_tool_executors(session),
+            dynamic_tools: turn.dynamic_tools.as_slice(),
+        },
+    )
+}
+
+fn extension_echo_call(call_id: &str) -> anyhow::Result<ToolCall> {
+    Ok(ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+        id: None,
+        name: "echo".to_string(),
+        namespace: Some("extension/".to_string()),
+        arguments: json!({ "message": "hello" }).to_string(),
+        call_id: call_id.to_string(),
+    })?
+    .expect("function_call should produce a tool call"))
+}
+
+fn extension_echo_output(
+    call_id: &str,
+    conversation_history: Vec<ResponseItem>,
+) -> serde_json::Value {
+    json!({
+        "arguments": { "message": "hello" },
+        "callId": call_id,
+        "conversationHistory": conversation_history,
+        "ok": true,
+    })
+}
+
+fn assert_extension_echo_response(
+    response: ResponseInputItem,
+    call_id: &str,
+    conversation_history: Vec<ResponseItem>,
+) {
+    match response {
+        ResponseInputItem::FunctionCallOutput {
+            call_id: actual_call_id,
+            output,
+        } => {
+            assert_eq!(actual_call_id, call_id);
+            let FunctionCallOutputBody::Text(text) = output.body else {
+                panic!("expected text function call output")
+            };
+            let value: serde_json::Value =
+                serde_json::from_str(&text).expect("extension tool output should be json");
+            assert_eq!(value, extension_echo_output(call_id, conversation_history));
+        }
+        other => panic!("expected function call output, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -335,16 +398,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         .record_conversation_items(&turn, std::slice::from_ref(&history_item))
         .await;
 
-    let router = ToolRouter::from_turn_context(
-        &turn,
-        ToolRouterParams {
-            deferred_mcp_tools: None,
-            mcp_tools: None,
-            discoverable_tools: None,
-            extension_tool_executors: extension_tool_executors(&session),
-            dynamic_tools: turn.dynamic_tools.as_slice(),
-        },
-    );
+    let router = extension_echo_router(&session, &turn);
 
     assert!(
         router.model_visible_specs().iter().any(
@@ -358,14 +412,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         "expected extension-provided tool to be visible to the model"
     );
 
-    let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
-        id: None,
-        name: "echo".to_string(),
-        namespace: Some("extension/".to_string()),
-        arguments: json!({ "message": "hello" }).to_string(),
-        call_id: "call-extension".to_string(),
-    })?
-    .expect("function_call should produce a tool call");
+    let call = extension_echo_call("call-extension")?;
     let result = router
         .dispatch_tool_call_with_code_mode_result(
             Arc::new(session),
@@ -377,27 +424,169 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         )
         .await?;
 
-    let response = result.into_response();
-    match response {
-        ResponseInputItem::FunctionCallOutput { call_id, output } => {
-            assert_eq!(call_id, "call-extension");
-            let FunctionCallOutputBody::Text(text) = output.body else {
-                panic!("expected text function call output")
-            };
-            let value: serde_json::Value =
-                serde_json::from_str(&text).expect("extension tool output should be json");
-            assert_eq!(
-                value,
-                json!({
-                    "arguments": { "message": "hello" },
-                    "callId": "call-extension",
-                    "conversationHistory": [history_item],
-                    "ok": true,
-                })
-            );
+    assert_extension_echo_response(result.into_response(), "call-extension", vec![history_item]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_router_disabled_preserves_output_and_skips_diagnostics() -> anyhow::Result<()> {
+    let state_home = TempDir::new().expect("temp dir");
+    let state_db =
+        codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
+            .await?;
+    let (mut session, turn) = make_session_and_context().await;
+    let repo_key = {
+        #[allow(deprecated)]
+        {
+            turn.cwd.display().to_string()
         }
-        other => panic!("expected function call output, got {other:?}"),
-    }
+    };
+    session.services.state_db = Some(Arc::clone(&state_db));
+    session.services.extensions = extension_tool_test_registry();
+
+    let router = extension_echo_router(&session, &turn);
+    let result = router
+        .dispatch_tool_call_with_code_mode_result(
+            Arc::new(session),
+            Arc::new(turn),
+            CancellationToken::new(),
+            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            extension_echo_call("call-feature-disabled")?,
+            ToolCallSource::Direct,
+        )
+        .await?;
+    assert_extension_echo_response(result.into_response(), "call-feature-disabled", Vec::new());
+
+    let summary = state_db
+        .tool_router_diagnostics_summary(ToolRouterDiagnosticsWindow::Lifetime)
+        .await?;
+    assert_eq!(summary.total_calls, 0);
+    let remembered = state_db
+        .list_tool_router_remembered_tools(repo_key.as_str(), "chat.default", i64::MIN)
+        .await?;
+    assert_eq!(remembered, Vec::new());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_router_missing_state_db_still_returns_normal_output() -> anyhow::Result<()> {
+    let (mut session, mut turn) = make_session_and_context().await;
+    turn.features.enable(Feature::ToolRouter)?;
+    session.services.extensions = extension_tool_test_registry();
+
+    let router = extension_echo_router(&session, &turn);
+    let result = router
+        .dispatch_tool_call_with_code_mode_result(
+            Arc::new(session),
+            Arc::new(turn),
+            CancellationToken::new(),
+            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            extension_echo_call("call-no-state-db")?,
+            ToolCallSource::Direct,
+        )
+        .await?;
+
+    assert_extension_echo_response(result.into_response(), "call-no-state-db", Vec::new());
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_router_records_direct_dispatch_diagnostics() -> anyhow::Result<()> {
+    let state_home = TempDir::new().expect("temp dir");
+    let state_db =
+        codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
+            .await?;
+    let (mut session, mut turn) = make_session_and_context().await;
+    turn.features.enable(Feature::ToolRouter)?;
+    let repo_key = {
+        #[allow(deprecated)]
+        {
+            turn.cwd.display().to_string()
+        }
+    };
+    session.services.state_db = Some(Arc::clone(&state_db));
+    session.services.extensions = extension_tool_test_registry();
+
+    let router = extension_echo_router(&session, &turn);
+    let call = extension_echo_call("call-diagnostics")?;
+
+    let result = router
+        .dispatch_tool_call_with_code_mode_result(
+            Arc::new(session),
+            Arc::new(turn),
+            CancellationToken::new(),
+            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            call,
+            ToolCallSource::Direct,
+        )
+        .await?;
+    assert!(matches!(
+        result.into_response(),
+        ResponseInputItem::FunctionCallOutput { .. }
+    ));
+
+    let summary = state_db
+        .tool_router_diagnostics_summary(ToolRouterDiagnosticsWindow::Lifetime)
+        .await?;
+    assert_eq!(summary.total_calls, 1);
+    assert_eq!(summary.successful_calls, 1);
+    assert_eq!(summary.deterministic_routes, 1);
+
+    let remembered = state_db
+        .list_tool_router_remembered_tools(repo_key.as_str(), "chat.default", i64::MIN)
+        .await?;
+    assert_eq!(
+        remembered
+            .into_iter()
+            .map(|record| record.selector())
+            .collect::<Vec<_>>(),
+        vec![codex_state::ToolRouterRememberedToolSelector {
+            tool_namespace: "extension/".to_string(),
+            tool_name: "echo".to_string(),
+        }]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_router_records_code_mode_diagnostics_without_changing_result() -> anyhow::Result<()> {
+    let state_home = TempDir::new().expect("temp dir");
+    let state_db =
+        codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
+            .await?;
+    let (mut session, mut turn) = make_session_and_context().await;
+    turn.features.enable(Feature::ToolRouter)?;
+    session.services.state_db = Some(Arc::clone(&state_db));
+    session.services.extensions = extension_tool_test_registry();
+
+    let router = extension_echo_router(&session, &turn);
+    let result = router
+        .dispatch_tool_call_with_code_mode_result(
+            Arc::new(session),
+            Arc::new(turn),
+            CancellationToken::new(),
+            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            extension_echo_call("call-code-mode-diagnostics")?,
+            ToolCallSource::CodeMode {
+                cell_id: "cell-1".to_string(),
+                runtime_tool_call_id: "runtime-call-1".to_string(),
+            },
+        )
+        .await?;
+
+    assert_eq!(
+        result.code_mode_result(),
+        extension_echo_output("call-code-mode-diagnostics", Vec::new())
+    );
+    let summary = state_db
+        .tool_router_diagnostics_summary(ToolRouterDiagnosticsWindow::Lifetime)
+        .await?;
+    assert_eq!(summary.total_calls, 1);
+    assert_eq!(summary.successful_calls, 1);
+    assert_eq!(summary.deterministic_routes, 1);
 
     Ok(())
 }
