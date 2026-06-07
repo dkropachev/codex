@@ -66,6 +66,8 @@ mod remote_control;
 #[cfg(test)]
 mod test_support;
 mod threads;
+mod tool_router;
+mod tool_router_tune;
 
 pub use goals::GoalAccountingMode;
 pub use goals::GoalAccountingOutcome;
@@ -74,6 +76,23 @@ pub use goals::GoalUpdate;
 pub use memories::MemoryStore;
 pub use remote_control::RemoteControlEnrollmentRecord;
 pub use threads::ThreadFilterOptions;
+pub use tool_router::TOOL_ROUTER_REMEMBERED_TOOL_MAX_AGE_MS;
+pub use tool_router::TOOL_ROUTER_REMEMBERED_TOOL_NAMESPACE_SENTINEL;
+pub use tool_router::ToolRouterDiagnosticsSummary;
+pub use tool_router::ToolRouterDiagnosticsWindow;
+pub use tool_router::ToolRouterGuidanceKey;
+pub use tool_router::ToolRouterGuidanceRecord;
+pub use tool_router::ToolRouterLearnedRule;
+pub use tool_router::ToolRouterLedgerEntry;
+pub use tool_router::ToolRouterRememberedToolKey;
+pub use tool_router::ToolRouterRememberedToolRecord;
+pub use tool_router::ToolRouterRememberedToolSelector;
+pub use tool_router::ToolRouterRulePruneOptions;
+pub use tool_router::ToolRouterRulePruneResult;
+pub use tool_router_tune::ToolRouterRequestShape;
+pub use tool_router_tune::ToolRouterRequestShapeCluster;
+pub use tool_router_tune::ToolRouterTuneCount;
+pub use tool_router_tune::ToolRouterTuneObservation;
 
 // "Partition" is the retained-log-content bucket we cap at 10 MiB:
 // - one bucket per non-null thread_id
