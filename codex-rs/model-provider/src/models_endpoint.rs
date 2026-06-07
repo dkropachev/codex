@@ -26,6 +26,7 @@ use codex_response_debug_context::telemetry_transport_error_message;
 use http::HeaderMap;
 use tokio::time::timeout;
 
+use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
 
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -107,6 +108,18 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
         .map_err(|_| CodexErr::Timeout)?
         .map_err(map_api_error)
     }
+}
+
+/// Fetch the provider-owned `/models` catalog without consulting or updating
+/// the bundled model manager cache.
+pub async fn list_provider_models_uncached(
+    provider_info: ModelProviderInfo,
+) -> CoreResult<Vec<ModelInfo>> {
+    let auth_manager = auth_manager_for_provider(/*auth_manager*/ None, &provider_info);
+    let endpoint = OpenAiModelsEndpoint::new(provider_info, auth_manager);
+    let client_version = codex_models_manager::client_version_to_whole();
+    let (models, _etag) = endpoint.list_models(&client_version).await?;
+    Ok(models)
 }
 
 #[derive(Clone)]

@@ -2375,7 +2375,8 @@
     },
     "ModelRerouteReason": {
       "enum": [
-        "highRiskCyberActivity"
+        "highRiskCyberActivity",
+        "modelRouterPolicy"
       ],
       "type": "string"
     },

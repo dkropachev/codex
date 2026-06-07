@@ -6,6 +6,56 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AccountPoolDefinitionToml": {
+      "additionalProperties": false,
+      "properties": {
+        "accounts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "policy": {
+          "$ref": "#/definitions/AccountPoolPolicyToml"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accounts",
+        "policy",
+        "provider"
+      ],
+      "type": "object"
+    },
+    "AccountPoolPolicyToml": {
+      "enum": [
+        "drain",
+        "load_balance"
+      ],
+      "type": "string"
+    },
+    "AccountPoolToml": {
+      "additionalProperties": false,
+      "properties": {
+        "default_pool": {
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "pools": {
+          "additionalProperties": {
+            "$ref": "#/definitions/AccountPoolDefinitionToml"
+          },
+          "default": {},
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "AgentRoleToml": {
       "additionalProperties": false,
       "properties": {
@@ -1573,6 +1623,431 @@
       },
       "type": "object"
     },
+    "ModelRouterBiasRuleToml": {
+      "additionalProperties": false,
+      "properties": {
+        "except_tasks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "models": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ModelRouterModelSelectorToml"
+          },
+          "type": "array"
+        },
+        "score_bias": {
+          "format": "double",
+          "type": "number"
+        },
+        "tasks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "score_bias"
+      ],
+      "type": "object"
+    },
+    "ModelRouterBiasToml": {
+      "additionalProperties": false,
+      "properties": {
+        "rules": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ModelRouterBiasRuleToml"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ModelRouterCandidateToml": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "type": "string"
+        },
+        "account_pool": {
+          "type": "string"
+        },
+        "cached_input_price_per_million": {
+          "format": "double",
+          "type": "number"
+        },
+        "id": {
+          "type": "string"
+        },
+        "input_price_per_million": {
+          "format": "double",
+          "type": "number"
+        },
+        "intelligence_score": {
+          "format": "double",
+          "type": "number"
+        },
+        "median_latency_ms": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "model_provider": {
+          "type": "string"
+        },
+        "output_price_per_million": {
+          "format": "double",
+          "type": "number"
+        },
+        "reasoning_effort": {
+          "$ref": "#/definitions/ModelRouterReasoningEffortToml"
+        },
+        "reasoning_output_price_per_million": {
+          "format": "double",
+          "type": "number"
+        },
+        "service_tier": {
+          "$ref": "#/definitions/ServiceTier"
+        },
+        "success_rate": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "ModelRouterDiscoveryToml": {
+      "enum": [
+        "curated",
+        "manual",
+        "from_rules"
+      ],
+      "type": "string"
+    },
+    "ModelRouterLifecycleDefaultsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "auto_demote": {
+          "type": "boolean"
+        },
+        "auto_promote": {
+          "type": "boolean"
+        },
+        "cost_budget_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "min_confidence": {
+          "format": "double",
+          "type": "number"
+        },
+        "min_evaluated": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "min_success_rate": {
+          "format": "double",
+          "type": "number"
+        },
+        "monitoring_shadow_sample_rate_limit": {
+          "format": "double",
+          "type": "number"
+        },
+        "promotion_shadow_sample_rate_limit": {
+          "format": "double",
+          "type": "number"
+        },
+        "shadow_allowed": {
+          "type": "boolean"
+        },
+        "token_budget": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "window": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ModelRouterLifecycleRuleToml": {
+      "additionalProperties": false,
+      "properties": {
+        "auto_demote": {
+          "type": "boolean"
+        },
+        "auto_promote": {
+          "type": "boolean"
+        },
+        "cost_budget_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "except_tasks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "min_confidence": {
+          "format": "double",
+          "type": "number"
+        },
+        "min_evaluated": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "min_success_rate": {
+          "format": "double",
+          "type": "number"
+        },
+        "models": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ModelRouterModelSelectorToml"
+          },
+          "type": "array"
+        },
+        "monitoring_shadow_sample_rate_limit": {
+          "format": "double",
+          "type": "number"
+        },
+        "promotion_shadow_sample_rate_limit": {
+          "format": "double",
+          "type": "number"
+        },
+        "shadow_allowed": {
+          "type": "boolean"
+        },
+        "tasks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "token_budget": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "window": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "ModelRouterLifecycleToml": {
+      "additionalProperties": false,
+      "properties": {
+        "defaults": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelRouterLifecycleDefaultsToml"
+            }
+          ],
+          "default": null
+        },
+        "rules": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ModelRouterLifecycleRuleToml"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ModelRouterModelRuleToml": {
+      "additionalProperties": false,
+      "properties": {
+        "except_tasks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "models": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ModelRouterModelSelectorToml"
+          },
+          "type": "array"
+        },
+        "tasks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "type": {
+          "$ref": "#/definitions/ModelRouterModelRuleTypeToml"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "ModelRouterModelRuleTypeToml": {
+      "enum": [
+        "require",
+        "exclude"
+      ],
+      "type": "string"
+    },
+    "ModelRouterModelSelectorToml": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ModelRouterModelsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "rules": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ModelRouterModelRuleToml"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ModelRouterReasoningEffortToml": {
+      "oneOf": [
+        {
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Preserve the reasoning effort already selected by the parent/default config.",
+          "enum": [
+            "inherit"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ModelRouterSavingsReferenceToml": {
+      "enum": [
+        "implicit_incumbent"
+      ],
+      "type": "string"
+    },
+    "ModelRouterSubscriptionPricingToml": {
+      "enum": [
+        "amortized_scarce"
+      ],
+      "type": "string"
+    },
+    "ModelRouterToml": {
+      "additionalProperties": false,
+      "properties": {
+        "bias": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelRouterBiasToml"
+            }
+          ],
+          "default": null
+        },
+        "candidates": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ModelRouterCandidateToml"
+          },
+          "type": "array"
+        },
+        "discovery": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelRouterDiscoveryToml"
+            }
+          ],
+          "default": null
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "lifecycle": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelRouterLifecycleToml"
+            }
+          ],
+          "default": null
+        },
+        "models": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelRouterModelsToml"
+            }
+          ],
+          "default": null
+        },
+        "savings_reference": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelRouterSavingsReferenceToml"
+            }
+          ],
+          "default": null
+        },
+        "subscription_pricing": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelRouterSubscriptionPricingToml"
+            }
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
     "MultiAgentV2ConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -2562,6 +3037,13 @@
         }
       },
       "type": "object"
+    },
+    "ServiceTier": {
+      "enum": [
+        "fast",
+        "flex"
+      ],
+      "type": "string"
     },
     "SessionPickerViewMode": {
       "description": "Preferred layout for the resume/fork session picker.",
@@ -4359,6 +4841,15 @@
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
   "properties": {
+    "account_pool": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AccountPoolToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional account labels used for model-router policy and accounting. These labels do not switch ChatGPT auth credentials at request time."
+    },
     "agents": {
       "allOf": [
         {
@@ -4988,6 +5479,15 @@
     },
     "model_reasoning_summary": {
       "$ref": "#/definitions/ReasoningSummary"
+    },
+    "model_router": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ModelRouterToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional adaptive router for internal model calls."
     },
     "model_supports_reasoning_summaries": {
       "description": "Override to force-enable reasoning summaries for the configured model.",

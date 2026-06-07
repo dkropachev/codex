@@ -1805,6 +1805,7 @@ pub struct WarningEvent {
 #[ts(rename_all = "snake_case")]
 pub enum ModelRerouteReason {
     HighRiskCyberActivity,
+    ModelRouterPolicy,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
