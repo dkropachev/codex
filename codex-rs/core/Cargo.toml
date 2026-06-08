@@ -43,6 +43,7 @@ codex-login = { workspace = true }
 codex-memories-read = { workspace = true }
 codex-mcp = { workspace = true }
 codex-model-provider-info = { workspace = true }
+codex-model-router = { workspace = true }
 codex-models-manager = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-execpolicy = { workspace = true }

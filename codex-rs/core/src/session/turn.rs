@@ -34,6 +34,8 @@ use crate::mentions::build_skill_name_counts;
 use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
+use crate::model_router::model_client_for_config;
+use crate::model_router::record_model_router_request_usage_for_config;
 use crate::plugins::build_plugin_injections;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
@@ -95,6 +97,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::PlanDeltaEvent;
 use codex_protocol::protocol::ReasoningContentDeltaEvent;
 use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -140,8 +143,12 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
-    let mut client_session =
-        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let model_client = model_client_for_config(
+        &turn_context.config,
+        &sess.services.model_client,
+        &sess.services.auth_manager,
+    );
+    let mut client_session = prewarmed_client_session.unwrap_or_else(|| model_client.new_session());
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
@@ -1772,7 +1779,7 @@ async fn try_run_sampling_request(
         turn_context.provider.info().name.as_str(),
     );
     let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
-    let mut stream = client_session
+    let stream_result = client_session
         .stream(
             prompt,
             &turn_context.model_info,
@@ -1785,7 +1792,21 @@ async fn try_run_sampling_request(
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
-        .await??;
+        .await;
+    let mut stream = match stream_result {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(err)) => {
+            record_model_router_request_usage_for_config(
+                sess.services.state_db.as_deref(),
+                &turn_context.config,
+                &TokenUsage::default(),
+                "stream_error",
+            )
+            .await;
+            return Err(err);
+        }
+        Err(codex_async_utils::CancelErr::Cancelled) => return Err(CodexErr::TurnAborted),
+    };
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
@@ -1797,6 +1818,7 @@ async fn try_run_sampling_request(
     )> = None;
     let mut should_emit_turn_diff = false;
     let mut should_emit_token_count = false;
+    let mut model_router_usage_recorded = false;
     let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
@@ -2066,6 +2088,15 @@ async fn try_run_sampling_request(
                 .await;
                 sess.record_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
+                let accounting_usage = token_usage.clone().unwrap_or_default();
+                record_model_router_request_usage_for_config(
+                    sess.services.state_db.as_deref(),
+                    &turn_context.config,
+                    &accounting_usage,
+                    "completed",
+                )
+                .await;
+                model_router_usage_recorded = true;
                 should_emit_token_count = true;
                 should_emit_turn_diff = true;
                 if let Some(false) = end_turn {
@@ -2211,8 +2242,25 @@ async fn try_run_sampling_request(
         sess.send_token_count_event(&turn_context).await;
     }
 
-    if cancellation_token.is_cancelled() {
+    if !model_router_usage_recorded && cancellation_token.is_cancelled() {
+        record_model_router_request_usage_for_config(
+            sess.services.state_db.as_deref(),
+            &turn_context.config,
+            &TokenUsage::default(),
+            "aborted",
+        )
+        .await;
         return Err(CodexErr::TurnAborted);
+    }
+
+    if !model_router_usage_recorded && outcome.is_err() {
+        record_model_router_request_usage_for_config(
+            sess.services.state_db.as_deref(),
+            &turn_context.config,
+            &TokenUsage::default(),
+            "error",
+        )
+        .await;
     }
 
     if should_emit_turn_diff {

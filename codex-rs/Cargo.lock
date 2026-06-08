@@ -2472,6 +2472,7 @@ dependencies = [
  "multimap",
  "pretty_assertions",
  "prost 0.14.3",
+ "regex",
  "schemars 0.8.22",
  "serde",
  "serde_ignored",
@@ -2556,6 +2557,7 @@ dependencies = [
  "codex-memories-read",
  "codex-model-provider",
  "codex-model-provider-info",
+ "codex-model-router",
  "codex-models-manager",
  "codex-network-proxy",
  "codex-otel",
@@ -3348,6 +3350,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-model-router"
+version = "0.0.0"
+dependencies = [
+ "codex-config",
+ "codex-protocol",
+ "pretty_assertions",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "codex-models-manager"
 version = "0.0.0"
 dependencies = [
@@ -3759,6 +3773,7 @@ dependencies = [
  "chrono",
  "clap",
  "codex-git-utils",
+ "codex-model-router",
  "codex-protocol",
  "dirs",
  "log",
@@ -3768,6 +3783,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "strum 0.27.2",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

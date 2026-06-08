@@ -453,6 +453,51 @@ async fn live_app_server_guardian_warning_notification_renders_message() {
 }
 
 #[tokio::test]
+async fn live_app_server_model_router_reroute_notification_renders_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::ModelRerouted(codex_app_server_protocol::ModelReroutedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            from_model: "gpt-5.4".to_string(),
+            to_model: "gpt-5.2".to_string(),
+            reason: codex_app_server_protocol::ModelRerouteReason::ModelRouterPolicy,
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one warning history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Model routed from gpt-5.4 to gpt-5.2 (model router policy)."),
+        "expected model-router reroute notification message, got {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn live_app_server_cyber_reroute_notification_does_not_duplicate_warning() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::ModelRerouted(codex_app_server_protocol::ModelReroutedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            from_model: "gpt-5.3-codex".to_string(),
+            to_model: "gpt-5.2".to_string(),
+            reason: codex_app_server_protocol::ModelRerouteReason::HighRiskCyberActivity,
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "expected cyber reroute notification to rely on the paired warning event"
+    );
+}
+
+#[tokio::test]
 async fn live_app_server_config_warning_prefixes_summary() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

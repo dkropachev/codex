@@ -1,0 +1,23 @@
+[package]
+name = "codex-model-router"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+name = "codex_model_router"
+path = "src/lib.rs"
+
+[dependencies]
+codex-config = { workspace = true }
+codex-protocol = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true

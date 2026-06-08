@@ -27,6 +27,7 @@ use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
+use codex_config::config_toml::ModelRouterToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
@@ -78,6 +79,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::built_in_model_providers;
 use codex_model_provider_info::merge_configured_model_providers;
+use codex_model_router::TokenPrice;
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
@@ -814,6 +816,16 @@ pub struct Config {
     /// Combined provider map (defaults plus user-defined providers).
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
+    /// Optional logical pools of bounded Codex subscription accounts.
+    pub account_pool: Option<codex_config::config_toml::AccountPoolToml>,
+
+    /// Optional adaptive router for internal model calls.
+    pub model_router: Option<ModelRouterToml>,
+
+    /// Runtime-only accounting metadata for a model-router-applied route.
+    #[doc(hidden)]
+    pub model_router_accounting: Option<ModelRouterAccounting>,
+
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: usize,
 
@@ -1038,6 +1050,20 @@ pub struct Config {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct CodeModeConfig {
     pub excluded_tool_namespaces: Vec<String>,
+}
+
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelRouterAccounting {
+    pub(crate) task_key: String,
+    pub(crate) model_provider: String,
+    pub(crate) model: Option<String>,
+    pub(crate) account_id: Option<String>,
+    pub(crate) actual_price: Option<TokenPrice>,
+    pub(crate) actual_price_confidence: f64,
+    pub(crate) counterfactual_price: Option<TokenPrice>,
+    pub(crate) counterfactual_price_confidence: f64,
+    pub(crate) counterfactual_cached_input_tokens: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -3480,6 +3506,9 @@ impl Config {
             mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
             mcp_oauth_callback_url: cfg.mcp_oauth_callback_url.clone(),
             model_providers,
+            account_pool: cfg.account_pool,
+            model_router: cfg.model_router,
+            model_router_accounting: None,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(AGENTS_MD_MAX_BYTES),
             project_doc_fallback_filenames: cfg
                 .project_doc_fallback_filenames
