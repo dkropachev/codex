@@ -257,6 +257,7 @@ pub struct WorkflowSummary {
     pub user_description: Option<String>,
     pub search_terms: Vec<String>,
     pub command_option_hints: Vec<WorkflowCommandOptionHint>,
+    pub input_schema: Option<serde_json::Value>,
     pub root_label: String,
     pub root_kind: WorkflowRootKind,
     pub root_path: PathBuf,

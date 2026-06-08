@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use serde_json::Value as JsonValue;
 use thiserror::Error;
 
 use crate::registry::WorkflowSummary;
@@ -90,6 +91,8 @@ pub enum WorkflowCommandParseError {
     UnknownCommand(String),
     #[error("workflow command '{0}' requires {1}")]
     MissingArgument(&'static str, &'static str),
+    #[error("workflow input flag '{0}' requires a value")]
+    MissingFlagValue(String),
     #[error("unexpected argument '{0}'")]
     UnexpectedArgument(String),
     #[error(
@@ -139,7 +142,7 @@ pub fn parse_workflow_command(
         "fix" => Ok(WorkflowCommand::Fix {
             id: single_id(args, "fix")?,
         }),
-        "run" => parse_run(args),
+        "run" => parse_run(args, &[]),
         "validate" => Ok(WorkflowCommand::Validate {
             id: single_id(args, "validate")?,
         }),
@@ -175,6 +178,9 @@ pub fn parse_workflow_command_with_workflows(
     args: &[String],
     workflows: &[WorkflowSummary],
 ) -> Result<WorkflowCommand, WorkflowCommandParseError> {
+    if args.first().map(String::as_str) == Some("run") {
+        return parse_run(args, workflows);
+    }
     match parse_workflow_command(args) {
         Ok(command) => Ok(command),
         Err(WorkflowCommandParseError::UnknownCommand(name)) => {
@@ -300,6 +306,7 @@ fn parse_registered_workflow_command(
         alias_args,
         "workflow alias",
         (!allowed_fields.is_empty()).then_some(&allowed_fields),
+        workflow.input_schema.as_ref(),
     )?;
     Ok(WorkflowCommand::Run {
         id: workflow.id.clone(),
@@ -308,9 +315,21 @@ fn parse_registered_workflow_command(
     })
 }
 
-fn parse_run(args: &[String]) -> Result<WorkflowCommand, WorkflowCommandParseError> {
+fn parse_run(
+    args: &[String],
+    workflows: &[WorkflowSummary],
+) -> Result<WorkflowCommand, WorkflowCommandParseError> {
     let id = required(args, /*index*/ 1, "run", "a workflow id")?.to_string();
-    let (input, input_fields) = parse_input_args(&args[2..], "run", /*allowed_fields*/ None)?;
+    let input_schema = workflows
+        .iter()
+        .find(|workflow| workflow.id == id)
+        .and_then(|workflow| workflow.input_schema.as_ref());
+    let (input, input_fields) = parse_input_args(
+        &args[2..],
+        "run",
+        /*allowed_fields*/ None,
+        input_schema,
+    )?;
     Ok(WorkflowCommand::Run {
         id,
         input,
@@ -322,6 +341,7 @@ fn parse_input_args(
     args: &[String],
     command: &'static str,
     allowed_fields: Option<&BTreeSet<String>>,
+    input_schema: Option<&JsonValue>,
 ) -> Result<(Option<WorkflowInputSource>, BTreeMap<String, String>), WorkflowCommandParseError> {
     let mut input = None;
     let mut input_fields = BTreeMap::new();
@@ -350,7 +370,19 @@ fn parse_input_args(
                     Some(value) => (value.to_string(), 1),
                     None => match args.get(index + 1) {
                         Some(next) if !next.starts_with("--") => (next.to_string(), 2),
-                        _ => ("true".to_string(), 1),
+                        _ if input_schema.is_none()
+                            || !crate::input_adapter::field_expects_value(
+                                input_schema,
+                                &normalized_field,
+                            ) =>
+                        {
+                            ("true".to_string(), 1)
+                        }
+                        _ => {
+                            return Err(WorkflowCommandParseError::MissingFlagValue(format!(
+                                "--{field}"
+                            )));
+                        }
                     },
                 };
                 input_fields.insert(normalized_field, value);
@@ -486,6 +518,7 @@ mod tests {
     use super::*;
     use crate::command_completion::WorkflowCommandOptionHint;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     fn workflow_summary(command: Option<&str>) -> WorkflowSummary {
         workflow_summary_with_hints(command, Vec::new())
@@ -502,6 +535,7 @@ mod tests {
             user_description: Some("Prepare a concise Jira summary".to_string()),
             search_terms: vec!["jira".to_string()],
             command_option_hints,
+            input_schema: None,
             root_label: "global".to_string(),
             root_kind: crate::registry::WorkflowRootKind::Global,
             root_path: PathBuf::from("/tmp/workflows"),
@@ -515,6 +549,38 @@ mod tests {
             },
             repair_mode: "full".to_string(),
         }
+    }
+
+    fn typed_workflow_summary(command: &str) -> WorkflowSummary {
+        let mut workflow = workflow_summary_with_hints(
+            Some(command),
+            vec![
+                WorkflowCommandOptionHint {
+                    display: "--allowed-areas <array>".to_string(),
+                    description: None,
+                },
+                WorkflowCommandOptionHint {
+                    display: "--include-skipped-by-limit".to_string(),
+                    description: None,
+                },
+            ],
+        );
+        workflow.id = "code-review".to_string();
+        workflow.input_schema = Some(json!({
+            "type": "object",
+            "properties": {
+                "allowedAreas": {
+                    "type": ["array", "null"],
+                    "items": {
+                        "type": "string",
+                        "enum": ["Test", "Code"]
+                    }
+                },
+                "includeSkippedByLimit": { "type": "boolean" }
+            },
+            "additionalProperties": false
+        }));
+        workflow
     }
 
     #[test]
@@ -677,6 +743,91 @@ mod tests {
                     ("includeUntracked".to_string(), "true".to_string()),
                     ("maxFiles".to_string(), "20".to_string()),
                 ]),
+            }
+        );
+    }
+
+    #[test]
+    fn registered_workflow_alias_rejects_valueless_non_boolean_schema_flag() {
+        let workflows = vec![typed_workflow_summary("code-review")];
+        let err = parse_workflow_command_with_workflows(
+            &["code-review".to_string(), "--allowed-areas".to_string()],
+            &workflows,
+        )
+        .expect_err("array flag without a value should fail");
+
+        assert_eq!(
+            err,
+            WorkflowCommandParseError::MissingFlagValue("--allowed-areas".to_string())
+        );
+    }
+
+    #[test]
+    fn registered_workflow_alias_accepts_bare_boolean_schema_flag() {
+        let workflows = vec![typed_workflow_summary("code-review")];
+        let command = parse_workflow_command_with_workflows(
+            &[
+                "code-review".to_string(),
+                "--include-skipped-by-limit".to_string(),
+            ],
+            &workflows,
+        )
+        .unwrap();
+
+        assert_eq!(
+            command,
+            WorkflowCommand::Run {
+                id: "code-review".to_string(),
+                input: None,
+                input_fields: BTreeMap::from([(
+                    "includeSkippedByLimit".to_string(),
+                    "true".to_string()
+                )]),
+            }
+        );
+    }
+
+    #[test]
+    fn run_command_rejects_valueless_non_boolean_schema_flag() {
+        let workflows = vec![typed_workflow_summary("code-review")];
+        let err = parse_workflow_command_with_workflows(
+            &[
+                "run".to_string(),
+                "code-review".to_string(),
+                "--allowed-areas".to_string(),
+            ],
+            &workflows,
+        )
+        .expect_err("array flag without a value should fail");
+
+        assert_eq!(
+            err,
+            WorkflowCommandParseError::MissingFlagValue("--allowed-areas".to_string())
+        );
+    }
+
+    #[test]
+    fn run_command_accepts_bare_boolean_schema_flag() {
+        let workflows = vec![typed_workflow_summary("code-review")];
+        let command = parse_workflow_command_with_workflows(
+            &[
+                "run".to_string(),
+                "code-review".to_string(),
+                "--include-skipped-by-limit".to_string(),
+            ],
+            &workflows,
+        )
+        .unwrap();
+
+        assert_eq!(
+            command,
+            WorkflowCommand::Run {
+                id: "code-review".to_string(),
+                input: None,
+                input_fields: BTreeMap::from([(
+                    "includeSkippedByLimit".to_string(),
+                    "true".to_string()
+                )]),
             }
         );
     }

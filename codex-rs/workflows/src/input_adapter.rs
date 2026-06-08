@@ -486,7 +486,20 @@ fn value_completion_suggestions(
     let Some(property) = property_schema(schema, active_field) else {
         return Vec::new();
     };
-    let Some(enum_values) = property.get("enum").and_then(JsonValue::as_array) else {
+    let enum_values = property
+        .get("enum")
+        .and_then(JsonValue::as_array)
+        .or_else(|| {
+            if schema_type_name(property).as_deref() == Some("array") {
+                property
+                    .get("items")
+                    .and_then(|items| items.get("enum"))
+                    .and_then(JsonValue::as_array)
+            } else {
+                None
+            }
+        });
+    let Some(enum_values) = enum_values else {
         return Vec::new();
     };
     enum_values
@@ -519,7 +532,7 @@ fn property_schema<'a>(schema: &'a JsonValue, field: &str) -> Option<&'a JsonVal
         .and_then(|properties| properties.get(field))
 }
 
-fn field_expects_value(input_schema: Option<&JsonValue>, field: &str) -> bool {
+pub(crate) fn field_expects_value(input_schema: Option<&JsonValue>, field: &str) -> bool {
     let Some(schema) = input_schema else {
         return true;
     };
@@ -602,6 +615,34 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_nullable_schema_typed_array_input_fields() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "allowedAreas": {
+                    "type": ["array", "null"],
+                    "items": { "type": "string" }
+                }
+            },
+            "additionalProperties": false
+        });
+
+        let input = normalize_workflow_input_json(
+            Some("{}"),
+            BTreeMap::from([("allowedAreas".to_string(), "Test,Code".to_string())]),
+            Some(&schema),
+        )
+        .unwrap();
+
+        assert_eq!(
+            input,
+            json!({
+                "allowedAreas": ["Test", "Code"],
+            })
+        );
+    }
+
+    #[test]
     fn rejects_unknown_schema_field() {
         let schema = json!({
             "type": "object",
@@ -674,6 +715,37 @@ mod tests {
     }
 
     #[test]
+    fn completion_request_treats_trailing_nullable_array_flag_as_active_field() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "allowedAreas": {
+                    "type": ["array", "null"],
+                    "items": {
+                        "type": "string",
+                        "enum": ["Test", "Code"]
+                    }
+                },
+                "includeSkippedByLimit": { "type": "boolean" }
+            },
+            "additionalProperties": false
+        });
+
+        let request = workflow_completion_request_from_text("--allowed-areas ", Some(&schema));
+
+        assert_eq!(
+            request,
+            WorkflowCompletionRequest {
+                input: json!({}),
+                active_field: Some("allowedAreas".to_string()),
+                prefix: String::new(),
+                mode: WorkflowCompletionMode::Value,
+                replacement_prefix: "--allowed-areas ".to_string(),
+            }
+        );
+    }
+
+    #[test]
     fn completion_request_without_schema_treats_trailing_flag_as_value_field() {
         let request =
             workflow_completion_request_from_text("--review-id ", /*input_schema*/ None);
@@ -737,6 +809,40 @@ mod tests {
                 crate::command_completion::WorkflowCommandCompletionSuggestion {
                     display: "markdown".to_string(),
                     insert_text: "--format markdown".to_string(),
+                    description: None,
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn schema_array_item_enum_completion_uses_replacement_prefix() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "allowedAreas": {
+                    "type": ["array", "null"],
+                    "items": {
+                        "type": "string",
+                        "enum": ["Test", "Code"]
+                    }
+                }
+            }
+        });
+        let request = WorkflowCompletionRequest {
+            input: json!({}),
+            active_field: Some("allowedAreas".to_string()),
+            prefix: "C".to_string(),
+            mode: WorkflowCompletionMode::Value,
+            replacement_prefix: "--allowed-areas ".to_string(),
+        };
+
+        assert_eq!(
+            completion_suggestions_from_schema(&request, Some(&schema)),
+            vec![
+                crate::command_completion::WorkflowCommandCompletionSuggestion {
+                    display: "Code".to_string(),
+                    insert_text: "--allowed-areas Code".to_string(),
                     description: None,
                 }
             ]

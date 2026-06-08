@@ -188,6 +188,7 @@ fn api_catalog_workflow_to_info(
                 },
             )
             .collect(),
+        input_schema: workflow.input_schema,
         root_label: workflow.root_label,
         root_kind: match workflow.root_kind {
             codex_workflows::WorkflowRootKind::Global => {

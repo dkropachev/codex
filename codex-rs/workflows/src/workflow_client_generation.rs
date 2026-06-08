@@ -756,6 +756,7 @@ mod tests {
             user_description: Some(id.to_string()),
             search_terms: Vec::new(),
             command_option_hints: Vec::new(),
+            input_schema: None,
             root_label: "global".to_string(),
             root_kind: WorkflowRootKind::Global,
             root_path: workflow_dir.to_path_buf(),

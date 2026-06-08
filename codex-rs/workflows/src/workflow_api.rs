@@ -355,6 +355,7 @@ mod tests {
             user_description: Some(id.to_string()),
             search_terms: Vec::new(),
             command_option_hints: Vec::new(),
+            input_schema: None,
             root_label: root_label.to_string(),
             root_kind,
             root_path: root_path.to_path_buf(),

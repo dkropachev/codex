@@ -91,6 +91,8 @@ pub struct WorkflowSummary {
     pub search_terms: Vec<String>,
     #[serde(default)]
     pub command_option_hints: Vec<WorkflowCommandOptionHint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<serde_json::Value>,
     pub root_label: String,
     pub root_kind: WorkflowRootKind,
     pub root_path: PathBuf,
@@ -387,6 +389,7 @@ pub(crate) fn summarize_workflow(
         user_description: spec.user_description.clone(),
         search_terms: spec.search_terms.clone(),
         command_option_hints: Vec::new(),
+        input_schema: None,
         root_label: root.label.clone(),
         root_kind: root.kind,
         root_path: root.path.clone(),
@@ -417,6 +420,7 @@ pub(crate) fn summarize_workflow(
         user_description: spec.user_description,
         search_terms: spec.search_terms,
         command_option_hints,
+        input_schema,
         root_label: root.label.clone(),
         root_kind: root.kind,
         root_path: root.path.clone(),

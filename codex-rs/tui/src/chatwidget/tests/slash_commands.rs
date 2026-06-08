@@ -57,6 +57,7 @@ fn workflow_summary(id: &str, command: &str) -> codex_workflows::WorkflowSummary
         user_description: Some("Prepare a focused workflow report".to_string()),
         search_terms: vec!["report".to_string()],
         command_option_hints: Vec::new(),
+        input_schema: None,
         root_label: "global".to_string(),
         root_kind: codex_workflows::WorkflowRootKind::Global,
         root_path: root.clone(),

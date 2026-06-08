@@ -495,6 +495,7 @@ fn summary_to_api(summary: codex_workflows::WorkflowSummary) -> WorkflowSummary 
                 description: hint.description,
             })
             .collect(),
+        input_schema: summary.input_schema,
         root_label: summary.root_label,
         root_kind: root_kind_to_api(summary.root_kind),
         root_path: summary.root_path,
@@ -521,6 +522,7 @@ fn workflow_to_core(summary: &WorkflowSummary) -> codex_workflows::WorkflowSumma
                 description: hint.description.clone(),
             })
             .collect(),
+        input_schema: summary.input_schema.clone(),
         root_label: summary.root_label.clone(),
         root_kind: root_kind_from_api(summary.root_kind),
         root_path: summary.root_path.clone(),

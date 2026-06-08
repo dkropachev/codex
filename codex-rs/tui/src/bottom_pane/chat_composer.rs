@@ -4133,10 +4133,13 @@ impl ChatComposer {
             });
     }
 
-    fn workflow_command_completion_input(rest_after_name: &str) -> WorkflowCommandInput {
+    fn workflow_command_completion_input(
+        workflow: &WorkflowSummary,
+        rest_after_name: &str,
+    ) -> WorkflowCommandInput {
         codex_workflows::workflow_completion_request_from_text(
             rest_after_name,
-            /*input_schema*/ None,
+            workflow.input_schema.as_ref(),
         )
     }
 
@@ -4204,7 +4207,7 @@ impl ChatComposer {
 
         let (name, rest_after_name, _) = parse_slash_name(first_line)?;
         let workflow = self.workflow_command_by_name(name)?;
-        let input = Self::workflow_command_completion_input(rest_after_name);
+        let input = Self::workflow_command_completion_input(workflow, rest_after_name);
         self.workflow_inline_completion_for_workflow(workflow, rest_after_name, &input)
     }
 
@@ -4349,7 +4352,7 @@ impl ChatComposer {
                         name.to_string(),
                         workflow.clone(),
                         rest.to_string(),
-                        Self::workflow_command_completion_input(rest),
+                        Self::workflow_command_completion_input(workflow, rest),
                     )
                 })
             })
@@ -5369,6 +5372,7 @@ mod tests {
     use image::ImageBuffer;
     use image::Rgba;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -7362,6 +7366,7 @@ mod tests {
             user_description: Some("Prepare a focused workflow report".to_string()),
             search_terms: vec!["report".to_string()],
             command_option_hints: Vec::new(),
+            input_schema: None,
             root_label: "global".to_string(),
             root_kind: codex_workflows::WorkflowRootKind::Global,
             root_path: root.clone(),
@@ -8544,6 +8549,65 @@ mod tests {
         assert_eq!(result.0, InputResult::None);
         assert_eq!(composer.current_text(), "/code-review --assignee ");
         assert!(composer.popup_active());
+    }
+
+    #[test]
+    fn workflow_completion_request_for_trailing_array_option_uses_schema() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_workflows_enabled(/*enabled*/ true);
+        let mut workflow = test_workflow_summary_with_command_options(
+            "reports/code-review",
+            "Code Review",
+            "code-review",
+            Vec::new(),
+        );
+        workflow.input_schema = Some(json!({
+            "type": "object",
+            "properties": {
+                "allowedAreas": {
+                    "type": ["array", "null"],
+                    "items": {
+                        "type": "string",
+                        "enum": ["Test", "Code"]
+                    }
+                }
+            },
+            "additionalProperties": false
+        }));
+        composer.set_workflow_mentions(Some(vec![workflow]));
+        composer.set_text_content(
+            "/code-review --allowed-areas ".to_string(),
+            Vec::new(),
+            Vec::new(),
+        );
+        composer.move_cursor_to_end();
+
+        let mut completion_input = None;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::WorkflowCommandCompletionStart { input, .. } = event {
+                completion_input = Some(input);
+            }
+        }
+
+        assert_eq!(
+            completion_input,
+            Some(codex_workflows::WorkflowCommandInput {
+                input: json!({}),
+                active_field: Some("allowedAreas".to_string()),
+                prefix: String::new(),
+                mode: codex_workflows::WorkflowCompletionMode::Value,
+                replacement_prefix: "--allowed-areas ".to_string(),
+            })
+        );
+        assert_eq!(composer.current_text(), "/code-review --allowed-areas ");
     }
 
     #[test]

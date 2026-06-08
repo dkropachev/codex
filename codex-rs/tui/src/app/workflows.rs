@@ -650,6 +650,7 @@ fn api_workflow_summary_to_core(
                 description: hint.description,
             })
             .collect(),
+        input_schema: workflow.input_schema,
         root_label: workflow.root_label,
         root_kind: match workflow.root_kind {
             codex_app_server_protocol::WorkflowRootKind::Global => {

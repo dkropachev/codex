@@ -325,6 +325,7 @@
         "id": {
           "type": "string"
         },
+        "inputSchema": true,
         "mentionTarget": {
           "type": "string"
         },
