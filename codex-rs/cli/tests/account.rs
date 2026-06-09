@@ -1,5 +1,6 @@
 use std::io::Read;
 use std::io::Write;
+use std::net::Shutdown;
 use std::net::TcpListener;
 use std::path::Path;
 use std::sync::Arc;
@@ -746,6 +747,7 @@ fn start_http_server(
             }
             match listener.accept() {
                 Ok((mut stream, _addr)) => {
+                    let _ = stream.set_nonblocking(/*nonblocking*/ false);
                     let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
                     let mut request = Vec::new();
                     let mut chunk = [0; 1024];
@@ -782,8 +784,34 @@ fn start_http_server(
                         response.body.len(),
                         response.body
                     );
-                    if stream.write_all(response.as_bytes()).is_err() {
+                    if stream
+                        .write_all(response.as_bytes())
+                        .and_then(|_| stream.flush())
+                        .is_err()
+                    {
                         return;
+                    }
+                    let _ = stream.shutdown(Shutdown::Write);
+                    let _ =
+                        stream.set_read_timeout(Some(Duration::from_millis(/*millis*/ 20)));
+                    let drain_deadline =
+                        Instant::now() + Duration::from_millis(/*millis*/ 100);
+                    loop {
+                        match stream.read(&mut chunk) {
+                            Ok(0) => break,
+                            Ok(_) => {}
+                            Err(err)
+                                if matches!(
+                                    err.kind(),
+                                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                                ) =>
+                            {
+                                if Instant::now() >= drain_deadline {
+                                    break;
+                                }
+                            }
+                            Err(_) => break,
+                        }
                     }
                     handled += 1;
                 }
