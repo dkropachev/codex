@@ -393,7 +393,10 @@ fn write_fake_workflow_executable(
 async fn wait_for_workflow_env_capture(env_capture_path: &std::path::Path) -> String {
     time::timeout(Duration::from_secs(1), async {
         loop {
-            if let Ok(contents) = fs::read_to_string(env_capture_path) {
+            if let Ok(contents) = fs::read_to_string(env_capture_path)
+                && contents.contains("run_id=")
+                && contents.contains("thread_id=")
+            {
                 return contents;
             }
             time::sleep(Duration::from_millis(10)).await;
@@ -472,16 +475,7 @@ sleep 0.2
     );
     assert_eq!(placeholder_status.details(), None);
 
-    let env_capture = time::timeout(Duration::from_secs(1), async {
-        loop {
-            if let Ok(contents) = fs::read_to_string(&env_capture_path) {
-                return contents;
-            }
-            time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("timed out waiting for fake workflow process env capture");
+    let env_capture = wait_for_workflow_env_capture(&env_capture_path).await;
     assert!(env_capture.contains(&format!("thread_id={thread_id}")));
     let run_id_line = env_capture
         .lines()
@@ -2626,9 +2620,18 @@ fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
     })
 }
 
-#[tokio::test]
-async fn reset_memories_clears_local_memory_directories() -> Result<()> {
-    Box::pin(async {
+#[test]
+fn reset_memories_clears_local_memory_directories() -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
         let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
@@ -2655,7 +2658,6 @@ async fn reset_memories_clears_local_memory_directories() -> Result<()> {
         app_server.shutdown().await?;
         Ok(())
     })
-    .await
 }
 
 #[tokio::test]
@@ -6024,9 +6026,19 @@ async fn thread_rollback_response_discards_queued_active_thread_events() {
     assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
 }
 
-#[tokio::test]
-async fn new_session_requests_shutdown_for_previous_conversation() {
-    Box::pin(async {
+#[test]
+fn new_session_requests_shutdown_for_previous_conversation() {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()
+        .expect("test runtime");
+
+    runtime.block_on(async {
         let (mut app, mut app_event_rx, mut op_rx) = Box::pin(make_test_app_with_channels()).await;
 
         let thread_id = ThreadId::new();
@@ -6067,8 +6079,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
             op_rx.try_recv().is_err(),
             "shutdown should not submit Op::Shutdown"
         );
-    })
-    .await;
+    });
 }
 
 #[tokio::test]

@@ -2677,6 +2677,19 @@
         }
       ]
     },
+    "RustWorkflowEngineConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "default_input": {
+          "description": "Default input merged into every Rust workflow before workflow-specific defaults."
+        },
+        "enabled": {
+          "description": "Enables compiled-in Rust workflows when true.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -4283,6 +4296,33 @@
       ],
       "type": "string"
     },
+    "WorkflowEnginesConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "rust": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RustWorkflowEngineConfigToml"
+            }
+          ],
+          "description": "Settings for compiled-in Rust workflows."
+        }
+      },
+      "type": "object"
+    },
+    "WorkflowOverrideConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "default_input": {
+          "description": "Default input merged after engine and workflow defaults."
+        },
+        "enabled": {
+          "description": "Enables or disables this workflow.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "WorkflowsConfigToml": {
       "additionalProperties": false,
       "description": "JavaScript workflow discovery and authoring settings loaded from `config.toml`.",
@@ -4302,6 +4342,14 @@
         "dependency_update_policy": {
           "description": "Dependency update behavior for workflow authoring commands.",
           "type": "string"
+        },
+        "engines": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkflowEnginesConfigToml"
+            }
+          ],
+          "description": "Engine-specific workflow runtime settings."
         },
         "max_repair_cycles": {
           "description": "Maximum automatic repair cycles before returning control to the user.",
@@ -4323,6 +4371,13 @@
         "validation_profile": {
           "description": "Validation profile used by validate/fix commands unless overridden by workflow.yaml.",
           "type": "string"
+        },
+        "workflow_overrides": {
+          "additionalProperties": {
+            "$ref": "#/definitions/WorkflowOverrideConfigToml"
+          },
+          "description": "Per-workflow settings keyed by workflow id.",
+          "type": "object"
         }
       },
       "type": "object"

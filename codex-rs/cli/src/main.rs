@@ -54,6 +54,7 @@ mod app_cmd;
 mod desktop_app;
 mod marketplace_cmd;
 mod mcp_cmd;
+mod native_workflow_cmd;
 mod workflow_cmd;
 mod workflow_quality_hook_cmd;
 #[cfg(not(windows))]
@@ -63,6 +64,8 @@ use crate::api_catalog_cmd::ApiCatalogCli;
 use crate::api_catalog_cmd::run_api_catalog_command;
 use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
+use crate::native_workflow_cmd::NativeWorkflowCli;
+use crate::native_workflow_cmd::run_native_workflow_command;
 use crate::workflow_cmd::WorkflowCli;
 use crate::workflow_cmd::load_workflow_command_context;
 use crate::workflow_cmd::run_workflow_command;
@@ -275,6 +278,21 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )?;
             run_workflow_command(
                 workflow_cli,
+                root_config_overrides,
+                interactive.config_profile.clone(),
+                interactive.shared.cwd.clone(),
+                arg0_paths.clone(),
+            )
+            .await?;
+        }
+        Some(Subcommand::NativeWorkflow(native_workflow_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "native-workflow",
+            )?;
+            run_native_workflow_command(
+                native_workflow_cli,
                 root_config_overrides,
                 interactive.config_profile.clone(),
                 interactive.shared.cwd.clone(),
@@ -897,6 +915,10 @@ enum Subcommand {
 
     /// Manage Codex workflows.
     Workflow(WorkflowCli),
+
+    /// Internal: run compiled-in native workflows.
+    #[clap(hide = true, name = "native-workflow")]
+    NativeWorkflow(NativeWorkflowCli),
 
     /// Internal: run workflow quality validation.
     #[clap(hide = true, name = "workflow-quality-hook")]
@@ -3470,14 +3492,14 @@ async fn run_interactive_tui(
     remote_auth_token_env: Option<String>,
     arg0_paths: Arg0DispatchPaths,
 ) -> std::io::Result<AppExitInfo> {
+    if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
+        return Ok(AppExitInfo::fatal(
+            "stdin is not a terminal. Run `codex exec` for non-interactive use.",
+        ));
+    }
+
     let terminal_info = codex_terminal_detection::terminal_info();
     if terminal_info.name == TerminalName::Dumb {
-        if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
-            return Ok(AppExitInfo::fatal(
-                "TERM is set to \"dumb\". Refusing to start the interactive TUI because no terminal is available for a confirmation prompt (stdin/stderr is not a TTY). Run in a supported terminal or unset TERM.",
-            ));
-        }
-
         eprintln!(
             "WARNING: TERM is set to \"dumb\". Codex's interactive TUI may not work in this terminal."
         );
@@ -3503,14 +3525,28 @@ async fn run_interactive_tui(
         .map(read_remote_auth_token_from_env_var)
         .transpose()
         .map_err(std::io::Error::other)?;
-    codex_tui::run_main(
-        interactive,
-        arg0_paths,
-        LoaderOverrides::default(),
-        normalized_remote,
-        remote_auth_token,
-    )
-    .await
+    const INTERACTIVE_TUI_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+
+    std::thread::Builder::new()
+        .name("codex-interactive-tui".to_string())
+        .stack_size(INTERACTIVE_TUI_STACK_SIZE_BYTES)
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .thread_stack_size(INTERACTIVE_TUI_STACK_SIZE_BYTES)
+                .build()
+                .map_err(std::io::Error::other)?;
+
+            runtime.block_on(codex_tui::run_main(
+                interactive,
+                arg0_paths,
+                LoaderOverrides::default(),
+                normalized_remote,
+                remote_auth_token,
+            ))
+        })?
+        .join()
+        .map_err(|_| std::io::Error::other("interactive TUI thread panicked"))?
 }
 
 fn confirm(prompt: &str) -> std::io::Result<bool> {
@@ -5311,6 +5347,28 @@ mod tests {
     }
 
     #[test]
+    fn native_workflow_hidden_subcommand_parses() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "native-workflow",
+            "run",
+            "dev-cycle",
+            "--input",
+            "{}",
+        ])
+        .expect("parse should succeed");
+        let Some(Subcommand::NativeWorkflow(native_workflow_cli)) = cli.subcommand else {
+            panic!("expected native workflow subcommand");
+        };
+
+        assert!(matches!(
+            native_workflow_cli.command,
+            crate::native_workflow_cmd::NativeWorkflowSubcommand::Run { .. }
+        ));
+        assert!(cli.interactive.prompt.is_empty());
+    }
+
+    #[test]
     fn workflow_hidden_stage_session_id_parses() {
         let cli = MultitoolCli::try_parse_from([
             "codex",
@@ -5340,6 +5398,7 @@ mod tests {
             .fold(root.clone(), |path, component| path.join(component));
         let workflow = codex_workflows::WorkflowSummary {
             id: workflow_id.to_string(),
+            engine: codex_workflows::WorkflowEngine::TypeScript,
             command: Some("jira-summary".to_string()),
             title: Some("Jira Summary".to_string()),
             user_description: Some("Prepare a focused workflow report".to_string()),
@@ -5376,6 +5435,54 @@ mod tests {
                 "jira-summary".to_string(),
                 "--project".to_string(),
                 "COD".to_string(),
+            ]
+        );
+        assert!(prompt.is_empty());
+    }
+
+    #[test]
+    fn rust_workflow_alias_prompt_is_promoted_to_workflow_subcommand() {
+        let root = PathBuf::from("/tmp/workflows/.native-workflows");
+        let path = root.join("dev-cycle");
+        let workflow = codex_workflows::WorkflowSummary {
+            id: "dev-cycle".to_string(),
+            engine: codex_workflows::WorkflowEngine::Rust,
+            command: Some("dev-cycle".to_string()),
+            title: Some("Development Cycle Preview".to_string()),
+            user_description: Some("Preview a development cycle".to_string()),
+            search_terms: vec!["development".to_string()],
+            command_option_hints: Vec::new(),
+            input_schema: None,
+            root_label: "native".to_string(),
+            root_kind: codex_workflows::WorkflowRootKind::Global,
+            root_path: root.clone(),
+            path: path.clone(),
+            workflow_yaml_path: path.join("workflow.yaml"),
+            mention_target: codex_workflows::mention_target(&root, "dev-cycle").unwrap(),
+            validation: codex_workflows::WorkflowValidation {
+                status: codex_workflows::WorkflowValidationStatus::Valid,
+                findings: Vec::new(),
+            },
+            repair_mode: "full".to_string(),
+        };
+        let mut prompt = vec![
+            "dev-cycle".to_string(),
+            "--stage-tests".to_string(),
+            "off".to_string(),
+        ];
+
+        let subcommand = promote_workflow_alias_from_prompt(&mut prompt, &[workflow])
+            .expect("expected workflow promotion");
+        let Subcommand::Workflow(workflow_cli) = subcommand else {
+            panic!("expected workflow subcommand");
+        };
+
+        assert_eq!(
+            workflow_cli.args,
+            vec![
+                "dev-cycle".to_string(),
+                "--stage-tests".to_string(),
+                "off".to_string(),
             ]
         );
         assert!(prompt.is_empty());

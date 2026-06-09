@@ -78,13 +78,11 @@ impl App {
         let input_for_event = input.clone();
         let task = tokio::spawn(async move {
             tokio::time::sleep(WORKFLOW_COMPLETION_DEBOUNCE).await;
-            let entrypoint = workflow.path.join("src/workflow.ts");
             let result = match tokio::time::timeout(
                 WORKFLOW_COMPLETION_TIMEOUT,
-                codex_workflows::complete_workflow(
-                    &workflow.path,
+                codex_workflows::complete_workflow_for_summary(
+                    &workflow,
                     working_directory.as_path(),
-                    &entrypoint,
                     &input,
                 ),
             )
@@ -199,7 +197,16 @@ impl App {
             return;
         };
 
-        let input = match workflow_run_input(input, input_fields, self.config.cwd.as_path()) {
+        let input_schema = workflows
+            .iter()
+            .find(|workflow| workflow.id == id)
+            .and_then(|workflow| workflow.input_schema.as_ref());
+        let input = match workflow_run_input(
+            input,
+            input_fields,
+            self.config.cwd.as_path(),
+            input_schema,
+        ) {
             Ok(input) => input,
             Err(err) => {
                 self.chat_widget
@@ -604,6 +611,7 @@ fn workflow_run_input(
     input: Option<WorkflowInputSource>,
     input_fields: BTreeMap<String, String>,
     cwd: &Path,
+    input_schema: Option<&serde_json::Value>,
 ) -> Result<Option<serde_json::Value>, String> {
     let raw_input = match input {
         Some(WorkflowInputSource::Inline(input)) => Some(input),
@@ -624,13 +632,9 @@ fn workflow_run_input(
         return Ok(None);
     };
 
-    codex_workflows::normalize_workflow_input_json(
-        Some(&raw_input),
-        input_fields,
-        /*input_schema*/ None,
-    )
-    .map(Some)
-    .map_err(|err| err.to_string())
+    codex_workflows::normalize_workflow_input_json(Some(&raw_input), input_fields, input_schema)
+        .map(Some)
+        .map_err(|err| err.to_string())
 }
 
 fn api_workflow_summary_to_core(
@@ -638,6 +642,14 @@ fn api_workflow_summary_to_core(
 ) -> codex_workflows::WorkflowSummary {
     codex_workflows::WorkflowSummary {
         id: workflow.id,
+        engine: match workflow.engine {
+            codex_app_server_protocol::WorkflowEngine::TypeScript => {
+                codex_workflows::WorkflowEngine::TypeScript
+            }
+            codex_app_server_protocol::WorkflowEngine::Rust => {
+                codex_workflows::WorkflowEngine::Rust
+            }
+        },
         command: workflow.command,
         title: workflow.title,
         user_description: workflow.user_description,
@@ -795,7 +807,10 @@ mod tests {
     use super::WorkflowRunState;
     use crate::app_event::AppEvent;
     use codex_protocol::ThreadId;
+    use pretty_assertions::assert_eq;
     use ratatui::text::Line;
+    use serde_json::json;
+    use std::collections::BTreeMap;
 
     fn lines_to_single_string(lines: &[Line<'_>]) -> String {
         lines
@@ -827,6 +842,37 @@ mod tests {
         insta::with_settings!({snapshot_path => "../snapshots"}, {
             insta::assert_snapshot!("workflow_command_usage_error", rendered);
         });
+    }
+
+    #[test]
+    fn workflow_run_input_uses_schema_for_cli_field_values() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "reportId": { "type": ["string", "null"] },
+                "includeComments": { "type": "boolean" }
+            },
+            "additionalProperties": false
+        });
+
+        let input = super::workflow_run_input(
+            /*input*/ None,
+            BTreeMap::from([
+                ("reportId".to_string(), "1034".to_string()),
+                ("includeComments".to_string(), "true".to_string()),
+            ]),
+            std::path::Path::new("."),
+            Some(&schema),
+        )
+        .unwrap();
+
+        assert_eq!(
+            input,
+            Some(json!({
+                "reportId": "1034",
+                "includeComments": true,
+            }))
+        );
     }
 
     #[tokio::test]

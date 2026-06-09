@@ -239,6 +239,18 @@ pub struct WorkflowRootInfo {
     pub path: PathBuf,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum WorkflowEngine {
+    TypeScript,
+    Rust,
+}
+
+fn default_workflow_engine() -> WorkflowEngine {
+    WorkflowEngine::TypeScript
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -252,6 +264,8 @@ pub struct WorkflowCommandOptionHint {
 #[ts(export_to = "v2/")]
 pub struct WorkflowSummary {
     pub id: String,
+    #[serde(default = "default_workflow_engine")]
+    pub engine: WorkflowEngine,
     pub command: Option<String>,
     pub title: Option<String>,
     pub user_description: Option<String>,
@@ -290,6 +304,8 @@ pub struct WorkflowConfigValues {
     pub dependency_update_policy: String,
     pub commit_policy: String,
     pub validation_profile: String,
+    pub engines: JsonValue,
+    pub workflow_overrides: JsonValue,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

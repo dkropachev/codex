@@ -23,6 +23,7 @@ use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_workflows::WorkflowEngine;
 use codex_workflows::WorkflowHookKind;
 use codex_workflows::WorkflowPublishedTool;
 use codex_workflows::WorkflowRootKind;
@@ -462,6 +463,7 @@ async fn published_workflow_tools_are_added_to_router_specs() -> anyhow::Result<
     let published_tool = WorkflowPublishedTool {
         workflow: WorkflowSummary {
             id: "reports/jira-summary".to_string(),
+            engine: WorkflowEngine::TypeScript,
             command: Some("jira-summary".to_string()),
             title: Some("Jira Summary".to_string()),
             user_description: Some("Summarize Jira work".to_string()),

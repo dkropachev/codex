@@ -29,6 +29,7 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::WorkflowDevelopResponse;
 use codex_app_server_protocol::WorkflowDiscardResponse;
 use codex_app_server_protocol::WorkflowEditResponse;
+use codex_app_server_protocol::WorkflowEngine;
 use codex_app_server_protocol::WorkflowListResponse;
 use codex_app_server_protocol::WorkflowPublishResponse;
 use codex_app_server_protocol::WorkflowReadResponse;
@@ -41,6 +42,10 @@ use codex_app_server_protocol::WorkflowRunStartParams;
 use codex_app_server_protocol::WorkflowRunStartResponse;
 #[cfg(unix)]
 use codex_app_server_protocol::WorkflowRunStatus;
+#[cfg(unix)]
+use codex_app_server_protocol::WorkflowRunWaitParams;
+#[cfg(unix)]
+use codex_app_server_protocol::WorkflowRunWaitResponse;
 use codex_app_server_protocol::WorkflowValidateResponse;
 use codex_app_server_protocol::WorkflowValidationFindingInfo;
 use codex_app_server_protocol::WorkflowValidationStatus;
@@ -370,6 +375,155 @@ async fn workflow_list_returns_discovered_workflows() -> Result<()> {
         response.workflows[0].validation.status,
         WorkflowValidationStatus::Valid
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_list_and_read_include_enabled_native_workflow() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    append_workflows_config(&codex_home, "\n[workflows.engines.rust]\nenabled = true\n")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request("workflow/list", Some(json!({})))
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: WorkflowListResponse = to_response(response)?;
+
+    assert_eq!(response.workflows.len(), 1);
+    assert_eq!(response.workflows[0].id, "dev-cycle");
+    assert_eq!(response.workflows[0].engine, WorkflowEngine::Rust);
+    assert_eq!(
+        response.workflows[0].title,
+        Some("Development Cycle Preview".to_string())
+    );
+    assert!(
+        response.workflows[0]
+            .command_option_hints
+            .iter()
+            .any(|hint| hint.display == "--stage-tests <auto|on|off>")
+    );
+
+    let request_id = mcp
+        .send_raw_request("workflow/read", Some(json!({ "id": "dev-cycle" })))
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: WorkflowReadResponse = to_response(response)?;
+
+    assert_eq!(response.workflow.engine, WorkflowEngine::Rust);
+    assert_eq!(response.readme, None);
+    assert!(response.workflow_yaml.contains("engine: rust"));
+    assert!(response.workflow_yaml.contains("executionMode"));
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn workflow_run_start_runs_enabled_native_workflow_e2e() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    append_workflows_config(&codex_home, "\n[workflows.engines.rust]\nenabled = true\n")?;
+
+    let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .loader_overrides(loader_overrides.clone())
+        .build()
+        .await?;
+    let client = in_process::start(InProcessStartArgs {
+        arg0_paths: Arg0DispatchPaths::default(),
+        config: Arc::new(config),
+        cli_overrides: Vec::new(),
+        loader_overrides,
+        cloud_requirements: CloudRequirementsLoader::default(),
+        thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
+        feedback: CodexFeedback::new(),
+        log_db: None,
+        state_db: None,
+        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+        config_warnings: Vec::new(),
+        session_source: SessionSource::Cli.into(),
+        enable_codex_api_key_env: false,
+        initialize: InitializeParams {
+            client_info: ClientInfo {
+                name: "codex-app-server-tests".to_string(),
+                title: None,
+                version: "0.1.0".to_string(),
+            },
+            capabilities: None,
+        },
+        channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        expose_workflow_app_server: true,
+    })
+    .await?;
+    let result = client
+        .request(ClientRequest::WorkflowRunStart {
+            request_id: RequestId::Integer(1),
+            params: WorkflowRunStartParams {
+                id: "dev-cycle".to_string(),
+                input: Some(json!({ "stageTests": "off" })),
+                thread_id: None,
+                stage_session_id: None,
+                approval_handling: None,
+            },
+        })
+        .await?
+        .map_err(|err| anyhow::anyhow!("{err:?}"))?;
+    let response: WorkflowRunStartResponse = serde_json::from_value(result)?;
+    assert_eq!(response.run.status, WorkflowRunStatus::Running);
+
+    let result = client
+        .request(ClientRequest::WorkflowRunWait {
+            request_id: RequestId::Integer(2),
+            params: WorkflowRunWaitParams {
+                run_id: response.run.id,
+                timeout_ms: Some(5_000),
+            },
+        })
+        .await?
+        .map_err(|err| anyhow::anyhow!("{err:?}"))?;
+    let response: WorkflowRunWaitResponse = serde_json::from_value(result)?;
+
+    assert!(response.completed);
+    assert_eq!(response.run.status, WorkflowRunStatus::Succeeded);
+    let output = response.run.output.expect("native workflow output");
+    assert_eq!(output["status"], json!("preview"));
+    assert_eq!(output["executionMode"], json!("previewOnly"));
+    assert_eq!(output["settings"]["stages"]["tests"], json!("off"));
+    client.shutdown().await?;
 
     Ok(())
 }

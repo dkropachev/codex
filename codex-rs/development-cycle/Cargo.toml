@@ -1,0 +1,16 @@
+[package]
+name = "codex-development-cycle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+codex-native-workflow = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

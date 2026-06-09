@@ -114,6 +114,8 @@ members = [
     "codex-experimental-api-macros",
     "plugin",
     "model-provider",
+    "native-workflow",
+    "development-cycle",
 ]
 resolver = "2"
 
@@ -193,6 +195,7 @@ codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
 codex-plugin = { path = "plugin" }
 codex-model-provider = { path = "model-provider" }
+codex-native-workflow = { path = "native-workflow" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-realtime-webrtc = { path = "realtime-webrtc" }
@@ -215,6 +218,7 @@ codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }
 codex-uds = { path = "uds" }
 codex-workflows = { path = "workflows" }
+codex-development-cycle = { path = "development-cycle" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-approval-presets = { path = "utils/approval-presets" }
 codex-utils-cache = { path = "utils/cache" }

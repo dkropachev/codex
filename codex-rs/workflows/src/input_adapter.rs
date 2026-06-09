@@ -557,7 +557,7 @@ fn schema_type_name(schema: &JsonValue) -> Option<String> {
         .as_array()?
         .iter()
         .filter_map(JsonValue::as_str)
-        .find(|type_name| *type_name != "null")
+        .find(|type_name| !matches!(*type_name, "null" | "undefined"))
         .map(ToString::to_string)
 }
 
@@ -638,6 +638,31 @@ mod tests {
             input,
             json!({
                 "allowedAreas": ["Test", "Code"],
+            })
+        );
+    }
+
+    #[test]
+    fn normalizes_undefined_union_schema_typed_string_fields() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "reportId": { "type": ["undefined", "string"] }
+            },
+            "additionalProperties": false
+        });
+
+        let input = normalize_workflow_input_json(
+            Some("{}"),
+            BTreeMap::from([("reportId".to_string(), "1034".to_string())]),
+            Some(&schema),
+        )
+        .unwrap();
+
+        assert_eq!(
+            input,
+            json!({
+                "reportId": "1034",
             })
         );
     }

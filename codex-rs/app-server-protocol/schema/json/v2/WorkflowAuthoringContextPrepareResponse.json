@@ -29,6 +29,7 @@
         "dependency_update_policy": {
           "type": "string"
         },
+        "engines": true,
         "max_repair_cycles": {
           "format": "uint32",
           "minimum": 0.0,
@@ -45,18 +46,28 @@
         },
         "validation_profile": {
           "type": "string"
-        }
+        },
+        "workflow_overrides": true
       },
       "required": [
         "commit_policy",
         "default_location",
         "dependency_update_policy",
+        "engines",
         "max_repair_cycles",
         "repair_mode",
         "search_paths",
-        "validation_profile"
+        "validation_profile",
+        "workflow_overrides"
       ],
       "type": "object"
+    },
+    "WorkflowEngine": {
+      "enum": [
+        "typeScript",
+        "rust"
+      ],
+      "type": "string"
     },
     "WorkflowRootInfo": {
       "properties": {
@@ -98,6 +109,14 @@
             "$ref": "#/definitions/WorkflowCommandOptionHint"
           },
           "type": "array"
+        },
+        "engine": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkflowEngine"
+            }
+          ],
+          "default": "typeScript"
         },
         "id": {
           "type": "string"

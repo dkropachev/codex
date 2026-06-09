@@ -449,6 +449,35 @@ pub async fn complete_workflow(
     Ok(suggestions)
 }
 
+pub async fn complete_workflow_for_summary(
+    workflow: &crate::registry::WorkflowSummary,
+    working_directory: &Path,
+    input: &crate::WorkflowCommandInput,
+) -> Result<Vec<crate::command_completion::WorkflowCommandCompletionSuggestion>> {
+    match workflow.engine {
+        crate::registry::WorkflowEngine::TypeScript => {
+            complete_workflow(
+                &workflow.path,
+                working_directory,
+                &workflow.path.join("src/workflow.ts"),
+                input,
+            )
+            .await
+        }
+        crate::registry::WorkflowEngine::Rust => {
+            let suggestions = crate::native::complete_native_workflow(&workflow.id, input).await?;
+            if suggestions.is_empty() {
+                Ok(crate::input_adapter::completion_suggestions_from_schema(
+                    input,
+                    workflow.input_schema.as_ref(),
+                ))
+            } else {
+                Ok(suggestions)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowThreadStatus {

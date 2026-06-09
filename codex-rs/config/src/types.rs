@@ -487,6 +487,49 @@ pub struct WorkflowsConfigToml {
     /// Validation profile used by validate/fix commands unless overridden by workflow.yaml.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validation_profile: Option<String>,
+
+    /// Engine-specific workflow runtime settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engines: Option<WorkflowEnginesConfigToml>,
+
+    /// Per-workflow settings keyed by workflow id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workflow_overrides: BTreeMap<String, WorkflowOverrideConfigToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
+pub struct WorkflowEnginesConfigToml {
+    /// Settings for compiled-in Rust workflows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust: Option<RustWorkflowEngineConfigToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
+pub struct RustWorkflowEngineConfigToml {
+    /// Enables compiled-in Rust workflows when true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+
+    /// Default input merged into every Rust workflow before workflow-specific defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_input: Option<serde_json::Value>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
+pub struct WorkflowOverrideConfigToml {
+    /// Enables or disables this workflow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+
+    /// Default input merged after engine and workflow defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_input: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]

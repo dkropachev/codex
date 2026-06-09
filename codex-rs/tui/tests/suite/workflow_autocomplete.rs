@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
@@ -143,6 +144,46 @@ async fn slash_workflow_exact_command_shows_option_hints() -> Result<()> {
                 "Output format",
                 "--report-id <string>",
                 "Report identifier",
+            ],
+            ordered_popup_snippets: &[],
+            run_snippets: &[],
+            post_key_snippets: &[],
+            forbidden_snippets: &[],
+            popup_keys: &[],
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn slash_native_workflow_exact_command_shows_stage_option_hints() -> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex = ensure_codex_binary(&repo_root)?;
+    let codex_home = tempdir()?;
+    let workspace = tempdir()?;
+    write_trusted_workspace_config(codex_home.path(), workspace.path())?;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(codex_home.path().join("config.toml"))?
+        .write_all(b"\n[workflows.engines.rust]\nenabled = true\n")?;
+
+    run_workflow_autocomplete_session(
+        &repo_root,
+        &codex,
+        codex_home.path(),
+        workspace.path(),
+        WorkflowAutocompleteScenario {
+            typed_prefix: "/dev-cycle --stage-t",
+            completion_text: None,
+            popup_snippets: &[
+                "/dev-cycle",
+                "Development Cycle Preview",
+                "--stage-tests <auto|on|off>",
+                "Test stage mode.",
             ],
             ordered_popup_snippets: &[],
             run_snippets: &[],

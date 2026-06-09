@@ -30,6 +30,7 @@ use crate::id::normalize_workflow_id;
 use crate::quality_hook::workflow_quality_block_reason_for_path;
 use crate::quality_hook::workflow_quality_block_reason_for_workflow;
 use crate::registry::DEFAULT_MAX_REPAIR_CYCLES;
+use crate::registry::WorkflowEngine;
 use crate::registry::WorkflowRoot;
 use crate::registry::WorkflowRootKind;
 use crate::registry::WorkflowSummary;
@@ -272,6 +273,15 @@ fn list(ctx: WorkflowCommandContext<'_>) -> Result<WorkflowCommandOutput> {
 
 fn show(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommandOutput> {
     let workflow = resolve_workflow_for_context(&ctx, id)?;
+    if workflow.engine == WorkflowEngine::Rust {
+        let spec_yaml = crate::native::native_workflow_spec_yaml(&workflow.id)?;
+        let spec = serde_yaml::from_str::<JsonValue>(&spec_yaml)?;
+        return Ok(WorkflowCommandOutput {
+            message: spec_yaml,
+            data: json!({ "workflow": workflow, "spec": spec }),
+            exit_code: 0,
+        });
+    }
     let spec = read_workflow_spec(&workflow.workflow_yaml_path)?;
     Ok(WorkflowCommandOutput {
         message: serde_yaml::to_string(&spec)?,
@@ -291,6 +301,17 @@ fn where_workflow(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowC
 
 fn validate(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommandOutput> {
     let workflow = resolve_workflow_for_context(&ctx, id)?;
+    if workflow.engine == WorkflowEngine::Rust {
+        return Ok(WorkflowCommandOutput {
+            message: format!("{} is valid", workflow.id),
+            data: json!({ "workflow": workflow, "validation": {
+                "status": WorkflowValidationStatus::Valid,
+                "findings": [],
+                "commandResults": [],
+            } }),
+            exit_code: 0,
+        });
+    }
     let report = if ctx.stage_session_id.is_some() {
         validate_workflow_api_contract(&workflow, run_validation_command)?
     } else {
@@ -315,6 +336,20 @@ fn validate(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommand
 
 fn impact(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommandOutput> {
     let workflow = resolve_workflow_for_context(&ctx, id)?;
+    if workflow.engine == WorkflowEngine::Rust {
+        let impact = crate::registry::WorkflowImpact {
+            id: workflow.id.clone(),
+            path: workflow.path,
+            dependencies: Vec::new(),
+            dev_dependencies: Vec::new(),
+            git_status: Vec::new(),
+        };
+        return Ok(WorkflowCommandOutput {
+            message: serde_json::to_string_pretty(&impact)?,
+            data: json!({ "impact": impact }),
+            exit_code: 0,
+        });
+    }
     let impact = workflow_impact(&workflow)?;
     Ok(WorkflowCommandOutput {
         message: serde_json::to_string_pretty(&impact)?,
@@ -326,6 +361,13 @@ fn impact(ctx: WorkflowCommandContext<'_>, id: &str) -> Result<WorkflowCommandOu
 fn status(ctx: WorkflowCommandContext<'_>, id: Option<&str>) -> Result<WorkflowCommandOutput> {
     if let Some(id) = id {
         let workflow = resolve_workflow_for_context(&ctx, id)?;
+        if workflow.engine == WorkflowEngine::Rust {
+            return Ok(WorkflowCommandOutput {
+                message: format!("{} is built in", workflow.id),
+                data: json!({ "workflow": workflow }),
+                exit_code: 0,
+            });
+        }
         let impact = workflow_impact(&workflow)?;
         let message = if impact.git_status.is_empty() {
             format!("{} is clean", workflow.id)
@@ -519,11 +561,15 @@ async fn run(
     ensure_workflow_can_run(&workflow)?;
     let contract =
         crate::api_contract::read_published_workflow_api_contract(ctx.codex_home, &workflow)?;
-    let input = read_input(
-        input,
-        input_fields,
-        contract.as_ref().map(|contract| &contract.input_schema),
-    )?;
+    let input_schema = contract
+        .as_ref()
+        .map(|contract| &contract.input_schema)
+        .or(workflow.input_schema.as_ref());
+    let input = if workflow.engine == WorkflowEngine::Rust {
+        read_native_input(ctx.config, &workflow, input, input_fields, input_schema)?
+    } else {
+        read_input(input, input_fields, input_schema)?
+    };
     let standalone_runtime_event_handler = if ctx.runtime_event_handler.is_none() {
         standalone_cli_runtime_event_handler(ctx.progress)
     } else {
@@ -532,19 +578,30 @@ async fn run(
     let runtime_event_handler = ctx
         .runtime_event_handler
         .or(standalone_runtime_event_handler.as_deref());
-    let output = workflow_runtime::run_workflow(
-        ctx.codex_home,
-        ctx.cwd,
-        &workflow.path,
-        &workflow.path.join("src/workflow.ts"),
-        &input,
-        workflow_runtime::WorkflowRuntimeRunOptions {
-            workflows: &workflows,
-            event_handler: runtime_event_handler,
-            runtime: ctx.runtime.clone(),
-        },
-    )
-    .await
+    let output = if workflow.engine == WorkflowEngine::Rust {
+        crate::native::run_native_workflow(
+            ctx.cwd,
+            &workflow.id,
+            &input,
+            ctx.runtime.output_format.as_deref(),
+            runtime_event_handler,
+        )
+        .await
+    } else {
+        workflow_runtime::run_workflow(
+            ctx.codex_home,
+            ctx.cwd,
+            &workflow.path,
+            &workflow.path.join("src/workflow.ts"),
+            &input,
+            workflow_runtime::WorkflowRuntimeRunOptions {
+                workflows: &workflows,
+                event_handler: runtime_event_handler,
+                runtime: ctx.runtime.clone(),
+            },
+        )
+        .await
+    }
     .with_context(|| format!("failed to run workflow {}", workflow.id))?;
     let stdout = output.stdout;
     let stderr = output.stderr;
@@ -607,6 +664,8 @@ fn effective_config(config: &WorkflowsConfigToml) -> JsonValue {
         "dependency_update_policy": config.dependency_update_policy.clone().unwrap_or_else(|| "locked".to_string()),
         "commit_policy": config.commit_policy.clone().unwrap_or_else(|| "auto".to_string()),
         "validation_profile": config.validation_profile.clone().unwrap_or_else(|| "default".to_string()),
+        "engines": config.engines.clone().unwrap_or_default(),
+        "workflow_overrides": config.workflow_overrides.clone(),
     })
 }
 
@@ -1379,6 +1438,50 @@ fn read_input(
     .map_err(Into::into)
 }
 
+fn read_native_input(
+    config: &WorkflowsConfigToml,
+    workflow: &WorkflowSummary,
+    input: Option<WorkflowInputSource>,
+    input_fields: BTreeMap<String, String>,
+    input_schema: Option<&JsonValue>,
+) -> Result<String> {
+    let raw_input = match input {
+        Some(WorkflowInputSource::Inline(input)) => Some(input),
+        Some(WorkflowInputSource::File(path)) => fs::read_to_string(&path)
+            .map(Some)
+            .with_context(|| format!("failed to read workflow input {}", path.display()))?,
+        None => None,
+    };
+    let mut value = crate::native::native_default_input(config, &workflow.id)?;
+    if let Some(raw_input) = raw_input.as_deref() {
+        let explicit = serde_json::from_str::<JsonValue>(raw_input)
+            .with_context(|| "workflow input must be valid JSON")?;
+        merge_json_values(&mut value, explicit);
+    }
+    crate::input_adapter::normalize_workflow_input_string(
+        Some(&serde_json::to_string(&value)?),
+        input_fields,
+        input_schema,
+    )
+    .map_err(Into::into)
+}
+
+fn merge_json_values(base: &mut JsonValue, overlay: JsonValue) {
+    match (base, overlay) {
+        (JsonValue::Object(base), JsonValue::Object(overlay)) => {
+            for (key, value) in overlay {
+                match base.get_mut(&key) {
+                    Some(base_value) => merge_json_values(base_value, value),
+                    None => {
+                        base.insert(key, value);
+                    }
+                }
+            }
+        }
+        (base, overlay) => *base = overlay,
+    }
+}
+
 fn stage_existing_workflow(
     ctx: &WorkflowCommandContext<'_>,
     workflow: &WorkflowSummary,
@@ -1617,7 +1720,10 @@ fn workflow_config_value(key: &str, raw: &str) -> Result<Item> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_config::types::RustWorkflowEngineConfigToml;
     use codex_config::types::WorkflowDefaultLocation;
+    use codex_config::types::WorkflowEnginesConfigToml;
+    use codex_config::types::WorkflowOverrideConfigToml;
     #[cfg(unix)]
     use serial_test::serial;
 
@@ -2131,6 +2237,7 @@ mod tests {
         );
         let workflow = crate::registry::WorkflowSummary {
             id: "review/fix".to_string(),
+            engine: crate::registry::WorkflowEngine::TypeScript,
             command: Some("fix".to_string()),
             title: Some("Fix".to_string()),
             user_description: Some("Fix workflow".to_string()),
@@ -2216,6 +2323,7 @@ mod tests {
         );
         let workflow = crate::registry::WorkflowSummary {
             id: "review/fix".to_string(),
+            engine: crate::registry::WorkflowEngine::TypeScript,
             command: Some("fix".to_string()),
             title: Some("Fix".to_string()),
             user_description: Some("Fix workflow".to_string()),
@@ -2665,6 +2773,82 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "workflow input must be a JSON object when merging input flags"
+        );
+    }
+
+    #[test]
+    fn native_run_merges_defaults_explicit_input_and_cli_stage_flags() {
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        let config = WorkflowsConfigToml {
+            engines: Some(WorkflowEnginesConfigToml {
+                rust: Some(RustWorkflowEngineConfigToml {
+                    enabled: Some(true),
+                    default_input: Some(json!({
+                        "maxParallelWriters": 9,
+                        "integrationMode": "manual",
+                        "stages": { "tests": "off", "integration": "auto" }
+                    })),
+                }),
+            }),
+            workflow_overrides: [(
+                "dev-cycle".to_string(),
+                WorkflowOverrideConfigToml {
+                    enabled: None,
+                    default_input: Some(json!({
+                        "maxParallelWriters": 3,
+                        "stages": { "tests": "auto" }
+                    })),
+                },
+            )]
+            .into(),
+            ..Default::default()
+        };
+
+        let output = execute_workflow_command(
+            WorkflowCommandContext {
+                codex_home: home.path(),
+                cwd: cwd.path(),
+                config: &config,
+                codex_self_exe: None,
+                stage_session_id: None,
+                progress: None,
+                runtime_event_handler: None,
+                runtime: Default::default(),
+            },
+            WorkflowCommand::Run {
+                id: "dev-cycle".to_string(),
+                input: Some(WorkflowInputSource::Inline(
+                    r#"{"integrationMode":"cherryPick","stages":{"integration":"on"}}"#.to_string(),
+                )),
+                input_fields: BTreeMap::from([
+                    ("maxParallelWriters".to_string(), "5".to_string()),
+                    ("stageTests".to_string(), "off".to_string()),
+                ]),
+            },
+        )
+        .unwrap();
+        let stdout = serde_json::from_str::<JsonValue>(&output.message).unwrap();
+        let tests_stage = stdout["stagePlan"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|stage| stage["name"] == json!("tests"))
+            .unwrap();
+
+        assert_eq!(stdout["status"], json!("preview"));
+        assert_eq!(stdout["executionMode"], json!("previewOnly"));
+        assert_eq!(stdout["settings"]["maxParallelWriters"], json!(5));
+        assert_eq!(stdout["settings"]["integrationMode"], json!("cherryPick"));
+        assert_eq!(stdout["settings"]["stageTests"], JsonValue::Null);
+        assert_eq!(stdout["settings"]["stages"]["tests"], json!("off"));
+        assert_eq!(stdout["settings"]["stages"]["integration"], json!("on"));
+        assert_eq!(tests_stage["mode"], json!("off"));
+        assert!(
+            stdout["limitations"][1]
+                .as_str()
+                .unwrap()
+                .contains("does not launch agents")
         );
     }
 

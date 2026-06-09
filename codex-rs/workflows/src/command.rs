@@ -530,6 +530,7 @@ mod tests {
     ) -> WorkflowSummary {
         WorkflowSummary {
             id: "reports/jira-summary".to_string(),
+            engine: crate::registry::WorkflowEngine::TypeScript,
             command: command.map(ToString::to_string),
             title: Some("Jira Summary".to_string()),
             user_description: Some("Prepare a concise Jira summary".to_string()),

@@ -751,6 +751,7 @@ mod tests {
     fn workflow_summary(workflow_dir: &std::path::Path, id: &str) -> WorkflowSummary {
         WorkflowSummary {
             id: id.to_string(),
+            engine: crate::registry::WorkflowEngine::TypeScript,
             command: Some(id.split('/').next_back().unwrap_or(id).to_string()),
             title: Some(id.to_string()),
             user_description: Some(id.to_string()),

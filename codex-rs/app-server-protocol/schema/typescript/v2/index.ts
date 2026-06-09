@@ -539,6 +539,7 @@ export type { WorkflowDevelopResponse } from "./WorkflowDevelopResponse";
 export type { WorkflowDiscardResponse } from "./WorkflowDiscardResponse";
 export type { WorkflowEditParams } from "./WorkflowEditParams";
 export type { WorkflowEditResponse } from "./WorkflowEditResponse";
+export type { WorkflowEngine } from "./WorkflowEngine";
 export type { WorkflowImpactInfo } from "./WorkflowImpactInfo";
 export type { WorkflowImpactParams } from "./WorkflowImpactParams";
 export type { WorkflowImpactResponse } from "./WorkflowImpactResponse";

@@ -2677,6 +2677,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-development-cycle"
+version = "0.129.0"
+dependencies = [
+ "anyhow",
+ "codex-native-workflow",
+ "pretty_assertions",
+ "serde_json",
+]
+
+[[package]]
 name = "codex-device-key"
 version = "0.129.0"
 dependencies = [
@@ -3278,6 +3288,15 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "codex-native-workflow"
+version = "0.129.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4106,6 +4125,8 @@ dependencies = [
  "anyhow",
  "codex-artifactory",
  "codex-config",
+ "codex-development-cycle",
+ "codex-native-workflow",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-home-dir",

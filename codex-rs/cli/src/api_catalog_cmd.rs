@@ -174,6 +174,14 @@ fn api_catalog_workflow_to_info(
 ) -> codex_app_server_protocol::WorkflowSummary {
     codex_app_server_protocol::WorkflowSummary {
         id: workflow.id,
+        engine: match workflow.engine {
+            codex_workflows::WorkflowEngine::TypeScript => {
+                codex_app_server_protocol::WorkflowEngine::TypeScript
+            }
+            codex_workflows::WorkflowEngine::Rust => {
+                codex_app_server_protocol::WorkflowEngine::Rust
+            }
+        },
         command: workflow.command,
         title: workflow.title,
         user_description: workflow.user_description,

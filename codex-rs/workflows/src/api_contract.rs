@@ -1228,6 +1228,7 @@ mod tests {
     use super::publish_validated_workflow_api_contract;
     use super::read_published_workflow_api_contract;
     use super::workflow_api_contract_from_spec_api;
+    use crate::registry::WorkflowEngine;
     use crate::registry::WorkflowRootKind;
     use crate::registry::WorkflowSummary;
     use crate::registry::WorkflowValidation;
@@ -1277,6 +1278,7 @@ mod tests {
 
         let workflow = WorkflowSummary {
             id: "review/fix".to_string(),
+            engine: WorkflowEngine::TypeScript,
             command: Some("fix".to_string()),
             title: Some("Fix".to_string()),
             user_description: Some("Fix workflow".to_string()),

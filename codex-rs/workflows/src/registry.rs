@@ -42,6 +42,17 @@ pub enum WorkflowRootKind {
     SearchPath,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkflowEngine {
+    TypeScript,
+    Rust,
+}
+
+fn default_workflow_engine() -> WorkflowEngine {
+    WorkflowEngine::TypeScript
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowRoot {
@@ -85,6 +96,8 @@ impl WorkflowValidation {
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowSummary {
     pub id: String,
+    #[serde(default = "default_workflow_engine")]
+    pub engine: WorkflowEngine,
     pub command: Option<String>,
     pub title: Option<String>,
     pub user_description: Option<String>,
@@ -204,6 +217,9 @@ pub fn discover_workflows(
     for root in workflow_roots(codex_home, cwd, config) {
         collect_workflows(codex_home, &root, &root.path, config, &mut workflows)?;
     }
+    workflows.extend(crate::native::discover_native_workflows(
+        codex_home, config,
+    )?);
     workflows.sort_by(|left, right| {
         left.id
             .cmp(&right.id)
@@ -384,6 +400,7 @@ pub(crate) fn summarize_workflow(
     let mention_target = mention_target(&root.path, &id).ok()?;
     let published_summary = WorkflowSummary {
         id: id.clone(),
+        engine: WorkflowEngine::TypeScript,
         command: command.clone(),
         title: spec.title.clone(),
         user_description: spec.user_description.clone(),
@@ -415,6 +432,7 @@ pub(crate) fn summarize_workflow(
         .unwrap_or_else(|| command_option_hints_from_spec(&spec));
     Some(WorkflowSummary {
         id,
+        engine: WorkflowEngine::TypeScript,
         command,
         title: spec.title,
         user_description: spec.user_description,

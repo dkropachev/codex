@@ -20,6 +20,7 @@ use codex_app_server_protocol::WorkflowDevelopResponse;
 use codex_app_server_protocol::WorkflowDiscardResponse;
 use codex_app_server_protocol::WorkflowEditParams;
 use codex_app_server_protocol::WorkflowEditResponse;
+use codex_app_server_protocol::WorkflowEngine;
 use codex_app_server_protocol::WorkflowImpactInfo;
 use codex_app_server_protocol::WorkflowImpactParams;
 use codex_app_server_protocol::WorkflowImpactResponse;
@@ -121,13 +122,26 @@ impl WorkflowRequestProcessor {
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let workflow =
             self.resolve_workflow(params.id, params.target, params.stage_session_id.as_deref())?;
-        let workflow_yaml = fs::read_to_string(&workflow.workflow_yaml_path).map_err(|err| {
-            internal_error(format!(
-                "failed to read workflow metadata {}: {err}",
-                workflow.workflow_yaml_path.display()
-            ))
-        })?;
-        let readme = fs::read_to_string(workflow.path.join("README.md")).ok();
+        let (workflow_yaml, readme) = if workflow.engine == WorkflowEngine::Rust {
+            let workflow_yaml =
+                codex_workflows::native_workflow_spec_yaml(&workflow.id).map_err(|err| {
+                    internal_error(format!(
+                        "failed to read native workflow metadata {}: {err}",
+                        workflow.id
+                    ))
+                })?;
+            (workflow_yaml, None)
+        } else {
+            let workflow_yaml =
+                fs::read_to_string(&workflow.workflow_yaml_path).map_err(|err| {
+                    internal_error(format!(
+                        "failed to read workflow metadata {}: {err}",
+                        workflow.workflow_yaml_path.display()
+                    ))
+                })?;
+            let readme = fs::read_to_string(workflow.path.join("README.md")).ok();
+            (workflow_yaml, readme)
+        };
         Ok(Some(
             WorkflowReadResponse {
                 workflow,
@@ -483,6 +497,7 @@ impl WorkflowRequestProcessor {
 fn summary_to_api(summary: codex_workflows::WorkflowSummary) -> WorkflowSummary {
     WorkflowSummary {
         id: summary.id,
+        engine: engine_to_api(summary.engine),
         command: summary.command,
         title: summary.title,
         user_description: summary.user_description,
@@ -510,6 +525,7 @@ fn summary_to_api(summary: codex_workflows::WorkflowSummary) -> WorkflowSummary 
 fn workflow_to_core(summary: &WorkflowSummary) -> codex_workflows::WorkflowSummary {
     codex_workflows::WorkflowSummary {
         id: summary.id.clone(),
+        engine: engine_from_api(summary.engine),
         command: summary.command.clone(),
         title: summary.title.clone(),
         user_description: summary.user_description.clone(),
@@ -1043,6 +1059,20 @@ fn root_kind_from_api(kind: WorkflowRootKind) -> codex_workflows::WorkflowRootKi
     }
 }
 
+fn engine_to_api(engine: codex_workflows::WorkflowEngine) -> WorkflowEngine {
+    match engine {
+        codex_workflows::WorkflowEngine::TypeScript => WorkflowEngine::TypeScript,
+        codex_workflows::WorkflowEngine::Rust => WorkflowEngine::Rust,
+    }
+}
+
+fn engine_from_api(engine: WorkflowEngine) -> codex_workflows::WorkflowEngine {
+    match engine {
+        WorkflowEngine::TypeScript => codex_workflows::WorkflowEngine::TypeScript,
+        WorkflowEngine::Rust => codex_workflows::WorkflowEngine::Rust,
+    }
+}
+
 fn config_values(config: &WorkflowsConfigToml) -> WorkflowConfigValues {
     WorkflowConfigValues {
         search_paths: config.search_paths.clone().unwrap_or_default(),
@@ -1069,6 +1099,10 @@ fn config_values(config: &WorkflowsConfigToml) -> WorkflowConfigValues {
             .validation_profile
             .clone()
             .unwrap_or_else(|| "default".to_string()),
+        engines: serde_json::to_value(config.engines.clone().unwrap_or_default())
+            .unwrap_or(JsonValue::Null),
+        workflow_overrides: serde_json::to_value(&config.workflow_overrides)
+            .unwrap_or(JsonValue::Null),
     }
 }
 

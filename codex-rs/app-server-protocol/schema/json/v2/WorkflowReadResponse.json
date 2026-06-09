@@ -18,6 +18,13 @@
       ],
       "type": "object"
     },
+    "WorkflowEngine": {
+      "enum": [
+        "typeScript",
+        "rust"
+      ],
+      "type": "string"
+    },
     "WorkflowRootKind": {
       "enum": [
         "global",
@@ -39,6 +46,14 @@
             "$ref": "#/definitions/WorkflowCommandOptionHint"
           },
           "type": "array"
+        },
+        "engine": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkflowEngine"
+            }
+          ],
+          "default": "typeScript"
         },
         "id": {
           "type": "string"
