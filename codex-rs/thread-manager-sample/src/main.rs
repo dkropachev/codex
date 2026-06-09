@@ -213,6 +213,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,
         model_providers,
+        account_pool: None,
         project_doc_max_bytes: 32 * 1024,
         project_doc_fallback_filenames: Vec::new(),
         tool_output_token_limit: None,

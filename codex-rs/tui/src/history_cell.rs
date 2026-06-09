@@ -3957,7 +3957,35 @@ mod tests {
             /*show_fast_status*/ false,
         );
 
-        let rendered = render_transcript(&cell).join("\n");
+        let rendered = render_transcript(&cell)
+            .into_iter()
+            .map(|mut line| {
+                const SNAPSHOT_CODEX_VERSION: &str = "v0.0.0";
+                const TITLE_PREFIX: &str = "OpenAI Codex (";
+
+                if let Some(title_pos) = line.find(TITLE_PREFIX)
+                    && let Some(version_end_offset) =
+                        line[title_pos + TITLE_PREFIX.len()..].find(')')
+                {
+                    let version_start = title_pos + TITLE_PREFIX.len();
+                    let version_end = version_start + version_end_offset;
+                    let original_len = version_end - version_start;
+                    line.replace_range(version_start..version_end, SNAPSHOT_CODEX_VERSION);
+
+                    if original_len > SNAPSHOT_CODEX_VERSION.len()
+                        && let Some(pipe_idx) = line.rfind('│')
+                    {
+                        line.insert_str(
+                            pipe_idx,
+                            &" ".repeat(original_len - SNAPSHOT_CODEX_VERSION.len()),
+                        );
+                    }
+                }
+
+                line
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         insta::assert_snapshot!(rendered);
     }
 

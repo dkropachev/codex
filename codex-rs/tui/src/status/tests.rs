@@ -124,7 +124,28 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
 fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
     lines
         .into_iter()
-        .map(|line| {
+        .map(|mut line| {
+            const SNAPSHOT_CODEX_VERSION: &str = "v0.0.0";
+            const TITLE_PREFIX: &str = "OpenAI Codex (";
+
+            if let Some(title_pos) = line.find(TITLE_PREFIX)
+                && let Some(version_end_offset) = line[title_pos + TITLE_PREFIX.len()..].find(')')
+            {
+                let version_start = title_pos + TITLE_PREFIX.len();
+                let version_end = version_start + version_end_offset;
+                let original_len = version_end - version_start;
+                line.replace_range(version_start..version_end, SNAPSHOT_CODEX_VERSION);
+
+                if original_len > SNAPSHOT_CODEX_VERSION.len()
+                    && let Some(pipe_idx) = line.rfind('│')
+                {
+                    line.insert_str(
+                        pipe_idx,
+                        &" ".repeat(original_len - SNAPSHOT_CODEX_VERSION.len()),
+                    );
+                }
+            }
+
             if let (Some(dir_pos), Some(pipe_idx)) = (line.find("Directory: "), line.rfind('│')) {
                 let prefix = &line[..dir_pos + "Directory: ".len()];
                 let suffix = &line[pipe_idx..];

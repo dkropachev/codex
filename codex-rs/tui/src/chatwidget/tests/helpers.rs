@@ -101,7 +101,7 @@ pub(super) fn cache_project_root(chat: &mut ChatWidget, root_name: &str) {
 }
 
 pub(super) fn cache_missing_project_root(chat: &mut ChatWidget) {
-    cache_project_root_lookup(chat, None);
+    cache_project_root_lookup(chat, /*root_name*/ None);
 }
 
 pub(super) fn invalid_value(
