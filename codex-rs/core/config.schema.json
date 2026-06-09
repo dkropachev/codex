@@ -523,6 +523,9 @@
             "image_generation": {
               "type": "boolean"
             },
+            "imagegenext": {
+              "type": "boolean"
+            },
             "in_app_browser": {
               "type": "boolean"
             },
@@ -806,6 +809,16 @@
       "properties": {
         "config_lockfile": {
           "$ref": "#/definitions/DebugConfigLockToml"
+        }
+      },
+      "type": "object"
+    },
+    "ExperimentalRequestUserInput": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -1820,7 +1833,7 @@
     "NetworkProxyUnixSocketPermissionToml": {
       "enum": [
         "allow",
-        "none"
+        "deny"
       ],
       "type": "string"
     },
@@ -1872,7 +1885,7 @@
     "NetworkUnixSocketPermissionToml": {
       "enum": [
         "allow",
-        "none"
+        "deny"
       ],
       "type": "string"
     },
@@ -2759,6 +2772,9 @@
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
+        "experimental_request_user_input": {
+          "$ref": "#/definitions/ExperimentalRequestUserInput"
+        },
         "web_search": {
           "allOf": [
             {
@@ -2905,6 +2921,7 @@
               "start_change_operator": null,
               "start_delete_operator": null,
               "start_yank_operator": null,
+              "substitute_char": null,
               "yank_line": null
             },
             "vim_operator": {
@@ -3595,6 +3612,7 @@
             "start_change_operator": null,
             "start_delete_operator": null,
             "start_yank_operator": null,
+            "substitute_char": null,
             "yank_line": null
           }
         },
@@ -4021,6 +4039,14 @@
             }
           ],
           "description": "Begin yank operator; next key selects motion (`y`)."
+        },
+        "substitute_char": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Delete character under cursor and enter insert mode (`s`)."
         },
         "yank_line": {
           "allOf": [
@@ -4621,6 +4647,9 @@
           "type": "boolean"
         },
         "image_generation": {
+          "type": "boolean"
+        },
+        "imagegenext": {
           "type": "boolean"
         },
         "in_app_browser": {

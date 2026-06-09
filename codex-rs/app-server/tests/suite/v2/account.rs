@@ -511,6 +511,7 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
     let turn_req = mcp
         .send_turn_start_request(codex_app_server_protocol::TurnStartParams {
             thread_id: thread.thread.id,
+            client_user_message_id: None,
             input: vec![codex_app_server_protocol::UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
@@ -617,6 +618,7 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
     let turn_req = mcp
         .send_turn_start_request(codex_app_server_protocol::TurnStartParams {
             thread_id: thread.thread.id.clone(),
+            client_user_message_id: None,
             input: vec![codex_app_server_protocol::UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
@@ -739,6 +741,7 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
     let turn_req = mcp
         .send_turn_start_request(codex_app_server_protocol::TurnStartParams {
             thread_id: thread.thread.id.clone(),
+            client_user_message_id: None,
             input: vec![codex_app_server_protocol::UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
@@ -854,6 +857,7 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
     let turn_req = mcp
         .send_turn_start_request(codex_app_server_protocol::TurnStartParams {
             thread_id: thread.thread.id.clone(),
+            client_user_message_id: None,
             input: vec![codex_app_server_protocol::UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
