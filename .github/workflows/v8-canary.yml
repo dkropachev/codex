@@ -70,10 +70,12 @@ jobs:
   build:
     name: Build ${{ matrix.variant }} ${{ matrix.target }}
     needs: metadata
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ github.repository != 'openai/codex' && matrix.runner == 'macos-15-xlarge' && 'ubuntu-24.04' || matrix.runner }}
     permissions:
       contents: read
       actions: read
+    env:
+      CAN_RUN_V8_TARGET: ${{ github.repository == 'openai/codex' || matrix.runner != 'macos-15-xlarge' }}
     strategy:
       fail-fast: false
       matrix:
@@ -151,27 +153,39 @@ jobs:
             target: aarch64-unknown-linux-musl
             variant: ptrcomp-sandbox
     steps:
+      - name: Skip macOS xlarge V8 canary target on forks
+        if: ${{ env.CAN_RUN_V8_TARGET != 'true' }}
+        shell: bash
+        run: echo "Skipping ${TARGET}; macos-15-xlarge is only available in openai/codex."
+        env:
+          TARGET: ${{ matrix.target }}
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: ${{ env.CAN_RUN_V8_TARGET == 'true' }}
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Set up Bazel
+        if: ${{ env.CAN_RUN_V8_TARGET == 'true' }}
         uses: ./.github/actions/setup-bazel-ci
         with:
           target: ${{ matrix.target }}
 
       - name: Set up Python
+        if: ${{ env.CAN_RUN_V8_TARGET == 'true' }}
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
 
       - name: Set up Rust toolchain for Cargo smoke
+        if: ${{ env.CAN_RUN_V8_TARGET == 'true' }}
         uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
         with:
           toolchain: "1.93.0"
 
       - name: Build Bazel V8 release pair
+        if: ${{ env.CAN_RUN_V8_TARGET == 'true' }}
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
           PLATFORM: ${{ matrix.platform }}
@@ -206,6 +220,7 @@ jobs:
             "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
 
       - name: Stage release pair
+        if: ${{ env.CAN_RUN_V8_TARGET == 'true' }}
         env:
           BAZEL_CONFIG: ${{ matrix.bazel_config }}
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
@@ -231,6 +246,7 @@ jobs:
           python3 .github/scripts/rusty_v8_bazel.py stage-release-pair "${stage_args[@]}"
 
       - name: Smoke test staged artifact with Cargo
+        if: ${{ env.CAN_RUN_V8_TARGET == 'true' }}
         env:
           SANDBOX: ${{ matrix.sandbox }}
           TARGET: ${{ matrix.target }}
@@ -269,6 +285,7 @@ jobs:
           )
 
       - name: Upload staged artifacts
+        if: ${{ env.CAN_RUN_V8_TARGET == 'true' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: v8-canary-${{ needs.metadata.outputs.v8_version }}-${{ matrix.variant }}-${{ matrix.target }}
