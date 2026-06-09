@@ -394,6 +394,7 @@ fn auth_mode_name(auth_mode: AuthMode) -> &'static str {
         AuthMode::Chatgpt => "chatgpt",
         AuthMode::ChatgptAuthTokens => "chatgptAuthTokens",
         AuthMode::AgentIdentity => "agentIdentity",
+        AuthMode::PersonalAccessToken => "personalAccessToken",
     }
 }
 
