@@ -10,7 +10,9 @@ use super::format_section;
 use super::format_startup_context_blob;
 use chrono::TimeZone;
 use chrono::Utc;
+use codex_exec_server::LOCAL_FS;
 use codex_git_utils::GitSha;
+use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -235,10 +237,16 @@ fn fixed_section_budgets_apply_per_section_without_total_blob_truncation() {
 #[tokio::test]
 async fn workspace_section_requires_meaningful_structure() {
     let cwd = TempDir::new().expect("tempdir");
-    assert_eq!(
-        build_workspace_section_with_user_root(&cwd.path().abs(), /*user_root*/ None).await,
-        None
-    );
+    let cwd = cwd.path().abs();
+    let section = build_workspace_section_with_user_root(&cwd, /*user_root*/ None).await;
+    if resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &cwd)
+        .await
+        .is_some()
+    {
+        assert!(section.is_some_and(|section| section.contains("Git root:")));
+    } else {
+        assert_eq!(section, None);
+    }
 }
 
 #[tokio::test]
@@ -313,6 +321,11 @@ async fn recent_work_section_groups_threads_by_cwd() {
     ];
     let current_cwd = workspace_a;
     let repo = repo.abs();
+    let outside = outside.abs();
+    let outside_heading = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &outside)
+        .await
+        .map(|root| format!("### Git repo: {}", root.display()))
+        .unwrap_or_else(|| format!("### Directory: {}", outside.display()));
 
     let section = build_recent_work_section(&current_cwd.abs(), &recent_threads)
         .await
@@ -324,6 +337,6 @@ async fn recent_work_section_groups_threads_by_cwd() {
         "- {}: Log the startup context before sending it",
         current_cwd.display()
     )));
-    assert!(section.contains(&format!("### Directory: {}", outside.display())));
+    assert!(section.contains(&outside_heading));
     assert!(section.contains(&format!("- {}: Inspect flaky test", outside.display())));
 }
