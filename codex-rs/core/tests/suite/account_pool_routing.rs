@@ -247,6 +247,7 @@ async fn submit_prompt(codex: &codex_core::CodexThread, text: &str) -> Result<()
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
