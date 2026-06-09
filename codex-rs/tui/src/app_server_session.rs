@@ -1308,7 +1308,6 @@ fn config_request_overrides_from_config(
             overrides.insert(key.to_string(), serde_json::Value::String(value));
         }
     };
-    insert("profile", config.active_profile.clone());
     insert(
         "model_reasoning_effort",
         config
