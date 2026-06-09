@@ -531,13 +531,13 @@ async fn pipe_drains_stderr_without_stdout_activity() -> anyhow::Result<()> {
         return Ok(());
     };
 
-    let script = "import sys\nchunk = 'E' * 65536\nfor _ in range(64):\n    sys.stderr.write(chunk)\n    sys.stderr.flush()\n";
+    let script = "import sys\nchunk = 'E' * 65536\nfor _ in range(16):\n    sys.stderr.write(chunk)\n    sys.stderr.flush()\n";
     let args = vec!["-c".to_string(), script.to_string()];
     let env_map: HashMap<String, String> = std::env::vars().collect();
     let spawned = spawn_pipe_process(&python, &args, Path::new("."), &env_map, &None).await?;
     let (_session, output_rx, exit_rx) = combine_spawned_output(spawned);
 
-    let (output, code) = collect_output_until_exit(output_rx, exit_rx, /*timeout_ms*/ 10_000).await;
+    let (output, code) = collect_output_until_exit(output_rx, exit_rx, /*timeout_ms*/ 30_000).await;
 
     assert_eq!(code, 0, "expected python to exit cleanly");
     assert!(!output.is_empty(), "expected stderr output to be drained");

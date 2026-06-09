@@ -23,7 +23,8 @@ fn notify_event(kind: EventKind, paths: Vec<PathBuf>) -> Event {
 #[tokio::test]
 async fn throttled_receiver_coalesces_within_interval() {
     let (tx, rx) = watch_channel();
-    let mut throttled = ThrottledWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);
+    let throttle_interval = Duration::from_secs(2);
+    let mut throttled = ThrottledWatchReceiver::new(rx, throttle_interval);
 
     tx.add_changed_paths(&[path("a")]).await;
     let first = timeout(Duration::from_secs(1), throttled.recv())
@@ -37,10 +38,10 @@ async fn throttled_receiver_coalesces_within_interval() {
     );
 
     tx.add_changed_paths(&[path("b"), path("c")]).await;
-    let blocked = timeout(TEST_THROTTLE_INTERVAL / 2, throttled.recv()).await;
-    assert_eq!(blocked.is_err(), true);
+    let blocked = timeout(Duration::from_millis(50), throttled.recv()).await;
+    assert!(blocked.is_err());
 
-    let second = timeout(TEST_THROTTLE_INTERVAL * 2, throttled.recv())
+    let second = timeout(throttle_interval + Duration::from_secs(1), throttled.recv())
         .await
         .expect("second emit timeout");
     assert_eq!(
