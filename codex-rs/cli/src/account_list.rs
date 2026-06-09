@@ -49,7 +49,7 @@ struct ListedAccounts {
 
 pub async fn run_list_accounts(cli_config_overrides: CliConfigOverrides, json_output: bool) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
-    let accounts = collect_accounts(&config);
+    let accounts = collect_accounts(&config).await;
 
     if json_output {
         match serde_json::to_string_pretty(&accounts_json(&accounts)) {
@@ -66,9 +66,10 @@ pub async fn run_list_accounts(cli_config_overrides: CliConfigOverrides, json_ou
     std::process::exit(0);
 }
 
-fn collect_accounts(config: &Config) -> ListedAccounts {
+async fn collect_accounts(config: &Config) -> ListedAccounts {
     let default_account =
         credential_for_account_home(&config.codex_home, config, /*require_chatgpt*/ false)
+            .await
             .filter(|credential| credential.status != CredentialStatus::Missing)
             .map(|credential| ListedAccount {
                 id: "default".to_string(),
@@ -76,44 +77,37 @@ fn collect_accounts(config: &Config) -> ListedAccounts {
             });
 
     let effective_default_pool = effective_default_pool(config);
-    let pools = config
-        .account_pool
-        .as_ref()
-        .filter(|account_pool| account_pool.enabled)
-        .map(|account_pool| {
-            account_pool
-                .pools
-                .iter()
-                .map(|(pool_id, definition)| {
-                    listed_pool(config, pool_id, definition, &effective_default_pool)
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let mut pools = Vec::new();
+    if let Some(account_pool) = config.account_pool.as_ref().filter(|pool| pool.enabled) {
+        for (pool_id, definition) in &account_pool.pools {
+            pools.push(listed_pool(config, pool_id, definition, &effective_default_pool).await);
+        }
+    }
 
     let pool_member_ids = pools
         .iter()
         .flat_map(|pool| pool.members.iter().map(|member| member.id.clone()))
         .collect::<BTreeSet<_>>();
-    let standalone_accounts = named_account_ids(config)
-        .into_iter()
-        .filter(|account_id| !pool_member_ids.contains(account_id))
-        .map(|account_id| {
-            let account_home = account_codex_home(&config.codex_home, &account_id);
-            ListedAccount {
-                id: account_id,
-                credential: credential_for_account_home(
-                    &account_home,
-                    config,
-                    /*require_chatgpt*/ false,
-                )
-                .unwrap_or(AccountCredential {
-                    status: CredentialStatus::Missing,
-                    auth_mode: None,
-                }),
-            }
-        })
-        .collect();
+    let mut standalone_accounts = Vec::new();
+    for account_id in named_account_ids(config) {
+        if pool_member_ids.contains(&account_id) {
+            continue;
+        }
+        let account_home = account_codex_home(&config.codex_home, &account_id);
+        standalone_accounts.push(ListedAccount {
+            id: account_id,
+            credential: credential_for_account_home(
+                &account_home,
+                config,
+                /*require_chatgpt*/ false,
+            )
+            .await
+            .unwrap_or(AccountCredential {
+                status: CredentialStatus::Missing,
+                auth_mode: None,
+            }),
+        });
+    }
 
     ListedAccounts {
         default_account,
@@ -122,31 +116,29 @@ fn collect_accounts(config: &Config) -> ListedAccounts {
     }
 }
 
-fn listed_pool(
+async fn listed_pool(
     config: &Config,
     pool_id: &str,
     definition: &AccountPoolDefinitionToml,
     effective_default_pool: &Option<String>,
 ) -> ListedPool {
-    let members = definition
-        .accounts
-        .iter()
-        .map(|account_id| {
-            let account_home = account_codex_home(&config.codex_home, account_id);
-            ListedAccount {
-                id: account_id.clone(),
-                credential: credential_for_account_home(
-                    &account_home,
-                    config,
-                    /*require_chatgpt*/ true,
-                )
-                .unwrap_or(AccountCredential {
-                    status: CredentialStatus::Missing,
-                    auth_mode: None,
-                }),
-            }
-        })
-        .collect();
+    let mut members = Vec::new();
+    for account_id in &definition.accounts {
+        let account_home = account_codex_home(&config.codex_home, account_id);
+        members.push(ListedAccount {
+            id: account_id.clone(),
+            credential: credential_for_account_home(
+                &account_home,
+                config,
+                /*require_chatgpt*/ true,
+            )
+            .await
+            .unwrap_or(AccountCredential {
+                status: CredentialStatus::Missing,
+                auth_mode: None,
+            }),
+        });
+    }
 
     ListedPool {
         id: pool_id.to_string(),
@@ -157,12 +149,18 @@ fn listed_pool(
     }
 }
 
-fn credential_for_account_home(
+async fn credential_for_account_home(
     codex_home: &Path,
     config: &Config,
     require_chatgpt: bool,
 ) -> Option<AccountCredential> {
-    match CodexAuth::from_auth_storage(codex_home, config.cli_auth_credentials_store_mode) {
+    match CodexAuth::from_auth_storage(
+        codex_home,
+        config.cli_auth_credentials_store_mode,
+        Some(&config.chatgpt_base_url),
+    )
+    .await
+    {
         Ok(Some(auth)) => {
             let status = if require_chatgpt && !auth.is_chatgpt_auth() {
                 CredentialStatus::Invalid

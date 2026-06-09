@@ -21,6 +21,7 @@ use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
+use crate::turn_timing::now_unix_timestamp_ms;
 use crate::user_shell_command::user_shell_command_record_item;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
@@ -29,7 +30,6 @@ use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExecCommandStatus;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_sandboxing::SandboxType;
 use codex_shell_command::parse_command::parse_command;
@@ -165,6 +165,7 @@ pub(crate) async fn execute_user_shell_command(
                 call_id: call_id.clone(),
                 process_id: None,
                 turn_id: turn_context.sub_id.clone(),
+                started_at_ms: now_unix_timestamp_ms(),
                 command: display_command.clone(),
                 cwd: cwd.clone(),
                 parsed_cmd: parsed_cmd.clone(),
@@ -195,7 +196,6 @@ pub(crate) async fn execute_user_shell_command(
             .permissions
             .windows_sandbox_private_desktop,
         permission_profile: permission_profile.clone(),
-        sandbox_policy: SandboxPolicy::DangerFullAccess,
         file_system_sandbox_policy: permission_profile.file_system_sandbox_policy(),
         network_sandbox_policy: permission_profile.network_sandbox_policy(),
         windows_sandbox_filesystem_overrides: None,
@@ -238,6 +238,7 @@ pub(crate) async fn execute_user_shell_command(
                         call_id,
                         process_id: None,
                         turn_id: turn_context.sub_id.clone(),
+                        completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command.clone(),
                         cwd: cwd.clone(),
                         parsed_cmd: parsed_cmd.clone(),
@@ -262,6 +263,7 @@ pub(crate) async fn execute_user_shell_command(
                         call_id: call_id.clone(),
                         process_id: None,
                         turn_id: turn_context.sub_id.clone(),
+                        completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command.clone(),
                         cwd: cwd.clone(),
                         parsed_cmd: parsed_cmd.clone(),
@@ -306,6 +308,7 @@ pub(crate) async fn execute_user_shell_command(
                         call_id,
                         process_id: None,
                         turn_id: turn_context.sub_id.clone(),
+                        completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command,
                         cwd,
                         parsed_cmd,
@@ -356,7 +359,16 @@ async fn persist_user_shell_output(
     }
 
     let response_input_item = match output_item {
-        ResponseItem::Message { role, content, .. } => ResponseInputItem::Message { role, content },
+        ResponseItem::Message {
+            role,
+            content,
+            phase,
+            ..
+        } => ResponseInputItem::Message {
+            role,
+            content,
+            phase,
+        },
         _ => unreachable!("user shell command output record should always be a message"),
     };
 

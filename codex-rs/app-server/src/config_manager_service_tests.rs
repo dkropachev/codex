@@ -107,6 +107,30 @@ personality = true
 }
 
 #[tokio::test]
+async fn clear_missing_nested_config_is_noop() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&path, "")?;
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    let response = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(path.display().to_string()),
+            key_path: "features.personality".to_string(),
+            value: serde_json::Value::Null,
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect("clear missing config succeeds");
+
+    assert_eq!(response.status, WriteStatus::Ok);
+    assert_eq!(response.overridden_metadata, None);
+    assert_eq!(std::fs::read_to_string(&path)?, "");
+    Ok(())
+}
+
+#[tokio::test]
 async fn write_value_supports_nested_app_paths() -> Result<()> {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "")?;
@@ -226,7 +250,6 @@ async fn read_includes_origins_and_layers() {
         vec![],
         LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
-        /*host_name*/ None,
     );
 
     let response = service
@@ -305,7 +328,6 @@ writable_roots = ["~/code"]
         vec![],
         loader_overrides,
         CloudRequirementsLoader::default(),
-        /*host_name*/ None,
     );
 
     let response = service
@@ -346,7 +368,6 @@ async fn write_value_reports_override() {
         vec![],
         LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
-        /*host_name*/ None,
     );
 
     let result = service
@@ -446,7 +467,6 @@ async fn invalid_user_value_rejected_even_if_overridden_by_managed() {
         vec![],
         LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
-        /*host_name*/ None,
     );
 
     let error = service
@@ -514,7 +534,6 @@ async fn write_value_rejects_feature_requirement_conflict() {
                 ..Default::default()
             }))
         }),
-        /*host_name*/ None,
     );
 
     let error = service
@@ -561,7 +580,6 @@ async fn write_value_rejects_profile_feature_requirement_conflict() {
                 ..Default::default()
             }))
         }),
-        /*host_name*/ None,
     );
 
     let error = service
@@ -612,7 +630,6 @@ async fn read_reports_managed_overrides_user_and_session_flags() {
         cli_overrides,
         LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
-        /*host_name*/ None,
     );
 
     let response = service
@@ -666,7 +683,6 @@ async fn write_value_reports_managed_override() {
         vec![],
         LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
-        /*host_name*/ None,
     );
 
     let result = service

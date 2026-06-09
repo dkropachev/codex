@@ -39,7 +39,7 @@ pub(crate) async fn run_account_limits(
     cli_config_overrides: CliConfigOverrides,
 ) -> anyhow::Result<()> {
     let config = load_config(cli_config_overrides).await?;
-    let sections = account_usage_sections(&config);
+    let sections = account_usage_sections(&config).await;
     let targets = sections
         .iter()
         .flat_map(|section| section.targets.iter().cloned())
@@ -94,7 +94,7 @@ async fn load_config(cli_config_overrides: CliConfigOverrides) -> anyhow::Result
     Ok(Config::load_with_cli_overrides(cli_overrides).await?)
 }
 
-fn account_usage_sections(config: &Config) -> Vec<AccountUsageSection> {
+async fn account_usage_sections(config: &Config) -> Vec<AccountUsageSection> {
     let mut sections = Vec::new();
     let mut seen = BTreeSet::new();
     if account_has_auth(&config.codex_home) {
@@ -122,7 +122,7 @@ fn account_usage_sections(config: &Config) -> Vec<AccountUsageSection> {
             for account_id in &definition.accounts {
                 pool_member_ids.insert(account_id.clone());
                 let codex_home = account_codex_home(&config.codex_home, account_id);
-                match credential_status(config, &codex_home, /*require_chatgpt*/ true) {
+                match credential_status(config, &codex_home, /*require_chatgpt*/ true).await {
                     AccountCredentialStatus::Missing => missing_count += 1,
                     AccountCredentialStatus::Invalid => invalid_count += 1,
                     AccountCredentialStatus::LoggedIn => {}
@@ -190,12 +190,18 @@ enum AccountCredentialStatus {
     Invalid,
 }
 
-fn credential_status(
+async fn credential_status(
     config: &Config,
     codex_home: &Path,
     require_chatgpt: bool,
 ) -> AccountCredentialStatus {
-    match CodexAuth::from_auth_storage(codex_home, config.cli_auth_credentials_store_mode) {
+    match CodexAuth::from_auth_storage(
+        codex_home,
+        config.cli_auth_credentials_store_mode,
+        Some(&config.chatgpt_base_url),
+    )
+    .await
+    {
         Ok(Some(auth)) if !require_chatgpt || auth.is_chatgpt_auth() => {
             AccountCredentialStatus::LoggedIn
         }
@@ -272,7 +278,7 @@ async fn render_account_usage(config: &Config, target: &AccountUsageTarget) -> S
     let mut output = String::new();
     write_account_header(&mut output, target);
     let require_chatgpt = matches!(target.source, AccountUsageSource::PoolMember { .. });
-    match credential_status(config, &target.codex_home, require_chatgpt) {
+    match credential_status(config, &target.codex_home, require_chatgpt).await {
         AccountCredentialStatus::LoggedIn => {}
         AccountCredentialStatus::Missing => {
             output.push_str("  credentials: missing\n");
@@ -290,7 +296,8 @@ async fn render_account_usage(config: &Config, target: &AccountUsageTarget) -> S
         /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
         Some(config.chatgpt_base_url.clone()),
-    );
+    )
+    .await;
     let Some(auth) = manager.auth().await else {
         output.push_str("  credentials: missing\n");
         output.push_str("  limits: unavailable\n");

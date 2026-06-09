@@ -25,7 +25,7 @@ use crate::state::LoaderOverrides;
 use crate::thread_config::ThreadConfigContext;
 use crate::thread_config::ThreadConfigLoader;
 use codex_app_server_protocol::ConfigLayerSource;
-use codex_exec_server::ExecutorFileSystem;
+use codex_file_system::ExecutorFileSystem;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
@@ -46,6 +46,22 @@ const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
 
 #[cfg(windows)]
 const DEFAULT_PROGRAM_DATA_DIR_WINDOWS: &str = r"C:\ProgramData";
+
+// Project-local config comes from repository contents, so it should not get to
+// choose where a user's credentials are sent or which local commands are run.
+// These settings are still supported from user, system, managed, and runtime
+// config layers.
+const PROJECT_LOCAL_CONFIG_DENYLIST: &[&str] = &[
+    "openai_base_url",
+    "chatgpt_base_url",
+    "model_provider",
+    "model_providers",
+    "notify",
+    "profile",
+    "profiles",
+    "experimental_realtime_ws_base_url",
+    "otel",
+];
 
 async fn first_layer_config_error_from_entries(layers: &[ConfigLayerEntry]) -> Option<ConfigError> {
     typed_first_layer_config_error_from_entries::<ConfigToml>(layers, CONFIG_TOML_FILE).await
@@ -91,52 +107,47 @@ pub async fn load_config_layers_state(
     overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     thread_config_loader: &dyn ThreadConfigLoader,
-    host_name: Option<&str>,
 ) -> io::Result<ConfigLayerStack> {
+    let ignore_managed_requirements = overrides.ignore_managed_requirements;
     let ignore_user_config = overrides.ignore_user_config;
     let ignore_user_and_project_exec_policy_rules =
         overrides.ignore_user_and_project_exec_policy_rules;
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
-    if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
-        merge_requirements_with_remote_sandbox_config(
+    if !ignore_managed_requirements {
+        if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
+            merge_requirements_with_remote_sandbox_config(
+                &mut config_requirements_toml,
+                RequirementSource::CloudRequirements,
+                requirements,
+            );
+        }
+
+        #[cfg(target_os = "macos")]
+        macos::load_managed_admin_requirements_toml(
             &mut config_requirements_toml,
-            RequirementSource::CloudRequirements,
-            requirements,
-            host_name,
-        );
+            overrides
+                .macos_managed_config_requirements_base64
+                .as_deref(),
+        )
+        .await?;
+
+        // Honor the system requirements.toml location.
+        let requirements_toml_file = system_requirements_toml_file_with_overrides(&overrides)?;
+        load_requirements_toml(fs, &mut config_requirements_toml, &requirements_toml_file).await?;
     }
-
-    #[cfg(target_os = "macos")]
-    macos::load_managed_admin_requirements_toml(
-        &mut config_requirements_toml,
-        overrides
-            .macos_managed_config_requirements_base64
-            .as_deref(),
-        host_name,
-    )
-    .await?;
-
-    // Honor the system requirements.toml location.
-    let requirements_toml_file = system_requirements_toml_file_with_overrides(&overrides)?;
-    load_requirements_toml(
-        fs,
-        &mut config_requirements_toml,
-        &requirements_toml_file,
-        host_name,
-    )
-    .await?;
 
     // Make a best-effort to support the legacy `managed_config.toml` as a
     // requirements specification.
     let loaded_config_layers =
         layer_io::load_config_layers_internal(fs, codex_home, overrides.clone()).await?;
-    load_requirements_from_legacy_scheme(
-        &mut config_requirements_toml,
-        loaded_config_layers.clone(),
-        host_name,
-    )
-    .await?;
+    if !ignore_managed_requirements {
+        load_requirements_from_legacy_scheme(
+            &mut config_requirements_toml,
+            loaded_config_layers.clone(),
+        )
+        .await?;
+    }
 
     let thread_config_context = ThreadConfigContext {
         thread_id: None,
@@ -202,6 +213,7 @@ pub async fn load_config_layers_state(
     };
     layers.push(user_layer);
 
+    let mut startup_warnings = None;
     if let Some(cwd) = cwd {
         let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
         for layer in &layers {
@@ -258,7 +270,8 @@ pub async fn load_config_layers_state(
             codex_home,
         )
         .await?;
-        layers.extend(project_layers);
+        layers.extend(project_layers.layers);
+        startup_warnings = Some(project_layers.startup_warnings);
     }
 
     // Add a layer for runtime overrides from the CLI or UI, if any exist.
@@ -314,12 +327,16 @@ pub async fn load_config_layers_state(
         ));
     }
 
-    Ok(ConfigLayerStack::new(
+    let config_layer_stack = ConfigLayerStack::new(
         layers,
         config_requirements_toml.clone().try_into()?,
         config_requirements_toml.into_toml(),
     )?
-    .with_user_and_project_exec_policy_rules_ignored(ignore_user_and_project_exec_policy_rules))
+    .with_user_and_project_exec_policy_rules_ignored(ignore_user_and_project_exec_policy_rules);
+    Ok(match startup_warnings {
+        Some(startup_warnings) => config_layer_stack.with_startup_warnings(startup_warnings),
+        None => config_layer_stack,
+    })
 }
 
 fn insert_layer_by_precedence(layers: &mut Vec<ConfigLayerEntry>, layer: ConfigLayerEntry) {
@@ -388,7 +405,6 @@ pub async fn load_requirements_toml(
     fs: &dyn ExecutorFileSystem,
     config_requirements_toml: &mut ConfigRequirementsWithSources,
     requirements_toml_file: &AbsolutePathBuf,
-    host_name: Option<&str>,
 ) -> io::Result<()> {
     match fs
         .read_file_text(requirements_toml_file, /*sandbox*/ None)
@@ -421,7 +437,6 @@ pub async fn load_requirements_toml(
                     file: requirements_toml_file.clone(),
                 },
                 requirements_config,
-                host_name,
             );
         }
         Err(e) => {
@@ -554,7 +569,6 @@ fn windows_program_data_dir_from_known_folder() -> io::Result<PathBuf> {
 async fn load_requirements_from_legacy_scheme(
     config_requirements_toml: &mut ConfigRequirementsWithSources,
     loaded_config_layers: LoadedConfigLayers,
-    host_name: Option<&str>,
 ) -> io::Result<()> {
     // In this implementation, earlier layers cannot be overwritten by later
     // layers, so list managed_config_from_mdm first because it has the highest
@@ -591,7 +605,6 @@ async fn load_requirements_from_legacy_scheme(
             config_requirements_toml,
             source,
             ConfigRequirementsToml::from(legacy_config),
-            host_name,
         );
     }
 
@@ -602,9 +615,11 @@ pub(super) fn merge_requirements_with_remote_sandbox_config(
     target: &mut ConfigRequirementsWithSources,
     source: RequirementSource,
     mut requirements: ConfigRequirementsToml,
-    host_name: Option<&str>,
 ) {
-    requirements.apply_remote_sandbox_config(host_name);
+    if requirements.remote_sandbox_config.is_some() {
+        let host_name = crate::host_name();
+        requirements.apply_remote_sandbox_config(host_name.as_deref());
+    }
     target.merge_unset_fields(source, requirements);
 }
 
@@ -713,6 +728,38 @@ fn project_layer_entry(
     } else {
         ConfigLayerEntry::new(source, config)
     }
+}
+
+fn sanitize_project_config(config: &mut TomlValue) -> Vec<String> {
+    let Some(table) = config.as_table_mut() else {
+        return Vec::new();
+    };
+
+    let mut ignored_keys = Vec::new();
+    for key in PROJECT_LOCAL_CONFIG_DENYLIST {
+        if table.remove(*key).is_some() {
+            ignored_keys.push((*key).to_string());
+        }
+    }
+
+    ignored_keys
+}
+
+fn project_ignored_config_keys_warning(
+    dot_codex_folder: &AbsolutePathBuf,
+    ignored_keys: &[String],
+) -> String {
+    let config_path = dot_codex_folder.join(CONFIG_TOML_FILE);
+    let ignored_keys = ignored_keys.join(", ");
+    format!(
+        concat!(
+            "Ignored unsupported project-local config keys in {config_path}: {ignored_keys}. ",
+            "If you want these settings to apply, manually set them in your ",
+            "user-level config.toml."
+        ),
+        config_path = config_path.display(),
+        ignored_keys = ignored_keys,
+    )
 }
 
 async fn project_trust_context(
@@ -897,18 +944,24 @@ async fn find_project_root(
     Ok(cwd.clone())
 }
 
+struct LoadedProjectLayers {
+    layers: Vec<ConfigLayerEntry>,
+    startup_warnings: Vec<String>,
+}
+
 /// Return the appropriate list of layers (each with
 /// [ConfigLayerSource::Project] as the source) between `cwd` and
 /// `project_root`, inclusive. The list is ordered in _increasing_ precdence,
 /// starting from folders closest to `project_root` (which is the lowest
 /// precedence) to those closest to `cwd` (which is the highest precedence).
+/// Any warnings are stack-level startup messages, not additional config layers.
 async fn load_project_layers(
     fs: &dyn ExecutorFileSystem,
     cwd: &AbsolutePathBuf,
     project_root: &AbsolutePathBuf,
     trust_context: &ProjectTrustContext,
     codex_home: &Path,
-) -> io::Result<Vec<ConfigLayerEntry>> {
+) -> io::Result<LoadedProjectLayers> {
     let codex_home_abs = AbsolutePathBuf::from_absolute_path(codex_home)?;
     let codex_home_normalized =
         normalize_path(codex_home_abs.as_path()).unwrap_or_else(|_| codex_home_abs.to_path_buf());
@@ -928,6 +981,7 @@ async fn load_project_layers(
     dirs.reverse();
 
     let mut layers = Vec::new();
+    let mut startup_warnings = Vec::new();
     for dir in dirs {
         let dot_codex_abs = dir.join(".codex");
         if !fs
@@ -969,8 +1023,16 @@ async fn load_project_layers(
                         continue;
                     }
                 };
+                let mut config = config;
+                let ignored_project_config_keys = sanitize_project_config(&mut config);
                 let config =
                     resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
+                if disabled_reason.is_none() && !ignored_project_config_keys.is_empty() {
+                    startup_warnings.push(project_ignored_config_keys_warning(
+                        &dot_codex_abs,
+                        &ignored_project_config_keys,
+                    ));
+                }
                 let entry = project_layer_entry(&dot_codex_abs, config, disabled_reason.clone());
                 layers.push(entry);
             }
@@ -995,7 +1057,10 @@ async fn load_project_layers(
         }
     }
 
-    Ok(layers)
+    Ok(LoadedProjectLayers {
+        layers,
+        startup_warnings,
+    })
 }
 /// The legacy mechanism for specifying admin-enforced configuration is to read
 /// from a file like `/etc/codex/managed_config.toml` that has the same
