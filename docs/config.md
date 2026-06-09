@@ -6,41 +6,47 @@ For advanced configuration instructions, see [this documentation](https://develo
 
 For a full configuration reference, see [this documentation](https://developers.openai.com/codex/config-reference).
 
-## Connecting to MCP servers
+## Commit attribution
 
-Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the configuration reference for the latest MCP server options:
+Codex can add a [git trailer](https://git-scm.com/docs/git-interpret-trailers) to
+generated commit messages so commits make Codex's involvement explicit. This
+behavior is gated by the `codex_git_commit` feature flag; the top-level
+`commit_attribution` setting is only used when that feature is enabled.
 
-- https://developers.openai.com/codex/config-reference
-
-MCP tools default to serialized calls. To mark every tool exposed by one server
-as eligible for parallel tool calls, set `supports_parallel_tool_calls` on that
-server:
-
-```toml
-[mcp_servers.docs]
-command = "docs-server"
-supports_parallel_tool_calls = true
-```
-
-Only enable parallel calls for MCP servers whose tools are safe to run at the
-same time. If tools read and write shared state, files, databases, or external
-resources, review those read/write race conditions before enabling this setting.
-
-## MCP tool approvals
-
-Codex stores approval defaults and per-tool overrides for custom MCP servers
-under `mcp_servers` in `~/.codex/config.toml`. Set
-`default_tools_approval_mode` on the server to apply a default to every tool,
-and use per-tool `approval_mode` entries for exceptions:
+Add the following to `~/.codex/config.toml`:
 
 ```toml
-[mcp_servers.docs]
-command = "docs-server"
-default_tools_approval_mode = "approve"
+commit_attribution = "Codex <noreply@openai.com>"
 
-[mcp_servers.docs.tools.search]
-approval_mode = "prompt"
+[features]
+codex_git_commit = true
 ```
+
+When enabled, Codex appends a `Co-authored-by:` trailer using the configured
+attribution value. If `commit_attribution` is omitted, Codex uses
+`Codex <noreply@openai.com>`. Set `commit_attribution = ""` to disable the
+trailer while leaving the feature flag enabled.
+
+## OpenTelemetry Trace Metadata
+
+Codex can add static OpenTelemetry span attributes to exported trace spans and
+static W3C tracestate fields to propagated trace context:
+
+```toml
+[otel.span_attributes]
+"example.trace_attr" = "enabled"
+
+[otel.tracestate.example]
+alpha = "one"
+beta = "two"
+```
+
+Nested `otel.tracestate` tables are encoded as semicolon-separated `key:value`
+fields inside the named tracestate member. If propagated trace context already
+has the named member, Codex upserts configured fields and preserves other fields
+in that member. This config shape does not support setting opaque tracestate
+member values. Invalid trace metadata entries are ignored during config load and
+reported as startup warnings.
 
 ## Apps (Connectors)
 

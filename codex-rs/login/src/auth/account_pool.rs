@@ -102,7 +102,7 @@ pub struct AccountPoolManager {
 }
 
 impl AccountPoolManager {
-    pub fn from_config(
+    pub async fn from_config(
         codex_home: &Path,
         config: AccountPoolToml,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
@@ -116,36 +116,35 @@ impl AccountPoolManager {
             .default_pool
             .clone()
             .or_else(|| config.pools.keys().next().cloned())?;
-        let pools = config
-            .pools
-            .into_iter()
-            .map(|(pool_id, definition)| {
-                let members = definition
-                    .accounts
-                    .iter()
-                    .map(|account_id| AccountPoolMember {
-                        account_id: account_id.clone(),
-                        manager: Arc::new(AuthManager::new(
+        let mut pools = HashMap::new();
+        for (pool_id, definition) in config.pools {
+            let mut members = Vec::new();
+            for account_id in &definition.accounts {
+                members.push(AccountPoolMember {
+                    account_id: account_id.clone(),
+                    manager: Arc::new(
+                        AuthManager::new(
                             codex_home.join("accounts").join(account_id),
                             /*enable_codex_api_key_env*/ false,
                             auth_credentials_store_mode,
                             chatgpt_base_url.clone(),
-                        )),
-                    })
-                    .collect();
-                (
-                    pool_id.clone(),
-                    AccountPool {
-                        pool_id,
-                        definition,
-                        members,
-                        chatgpt_base_url: chatgpt_base_url.clone(),
-                        active_account_id: RwLock::new(None),
-                        state: RwLock::new(HashMap::new()),
-                    },
-                )
-            })
-            .collect();
+                        )
+                        .await,
+                    ),
+                });
+            }
+            pools.insert(
+                pool_id.clone(),
+                AccountPool {
+                    pool_id,
+                    definition,
+                    members,
+                    chatgpt_base_url: chatgpt_base_url.clone(),
+                    active_account_id: RwLock::new(None),
+                    state: RwLock::new(HashMap::new()),
+                },
+            );
+        }
 
         Some(Self {
             default_pool,
@@ -775,7 +774,8 @@ mod tests {
             codex_home.path(),
             AccountPoolPolicyToml::Drain,
             vec!["work-pro", "personal-pro"],
-        );
+        )
+        .await;
 
         let auth = pool.auth().await.expect("pool should select auth");
         assert_eq!(
@@ -797,7 +797,8 @@ mod tests {
             codex_home.path(),
             AccountPoolPolicyToml::Drain,
             vec!["work-pro", "personal-pro"],
-        );
+        )
+        .await;
 
         let auth = pool.auth().await.expect("pool should select fallback auth");
         assert_eq!(
@@ -825,7 +826,8 @@ mod tests {
             codex_home.path(),
             AccountPoolPolicyToml::LoadBalance,
             vec!["work-pro", "personal-pro"],
-        );
+        )
+        .await;
         pool.set_usage_for_testing("work-pro", Some(10), Some(100), Instant::now());
         pool.set_usage_for_testing("personal-pro", Some(90), Some(1), Instant::now());
 
@@ -880,7 +882,8 @@ mod tests {
             AccountPoolPolicyToml::LoadBalance,
             vec!["work-pro", "personal-pro"],
             Some(server.uri()),
-        );
+        )
+        .await;
 
         let observed_request_count = Arc::clone(&request_count);
         let ((), request_count_while_first_response_delayed) =
@@ -935,7 +938,8 @@ mod tests {
             codex_home.path(),
             AccountPoolPolicyToml::Drain,
             vec!["work-pro", "personal-pro"],
-        );
+        )
+        .await;
         pool.mark_exhausted(
             "work-pro",
             AccountPoolBucket::Regular,
@@ -952,14 +956,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn mark_active_exhausted_reports_whether_bucket_has_fallback() {
+    #[tokio::test]
+    async fn mark_active_exhausted_reports_whether_bucket_has_fallback() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let pool = pool_manager(
             codex_home.path(),
             AccountPoolPolicyToml::Drain,
             vec!["work-pro", "personal-pro"],
-        );
+        )
+        .await;
         let account_pool = pool.pools.get("codex-pro").expect("pool");
         account_pool.set_active_account_id("work-pro".to_string());
 
@@ -1029,15 +1034,15 @@ mod tests {
         assert_eq!(remaining_from_rate_limit(Some(&json!({}))), None);
     }
 
-    fn pool_manager(
+    async fn pool_manager(
         codex_home: &Path,
         policy: AccountPoolPolicyToml,
         accounts: Vec<&str>,
     ) -> AccountPoolManager {
-        pool_manager_with_base_url(codex_home, policy, accounts, /*chatgpt_base_url*/ None)
+        pool_manager_with_base_url(codex_home, policy, accounts, /*chatgpt_base_url*/ None).await
     }
 
-    fn pool_manager_with_base_url(
+    async fn pool_manager_with_base_url(
         codex_home: &Path,
         policy: AccountPoolPolicyToml,
         accounts: Vec<&str>,
@@ -1061,6 +1066,7 @@ mod tests {
             AuthCredentialsStoreMode::File,
             chatgpt_base_url,
         )
+        .await
         .expect("account pool should be enabled")
     }
 

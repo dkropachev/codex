@@ -51,14 +51,21 @@ async fn refresh_single_account(config: &Config, account_id: &str) -> ! {
     } else {
         account_codex_home(&config.codex_home, Some(account_id))
     };
-    match CodexAuth::from_auth_storage(&account_home, config.cli_auth_credentials_store_mode) {
+    match CodexAuth::from_auth_storage(
+        &account_home,
+        config.cli_auth_credentials_store_mode,
+        Some(&config.chatgpt_base_url),
+    )
+    .await
+    {
         Ok(Some(auth)) if auth.is_chatgpt_auth() => {
             let manager = AuthManager::new(
                 account_home,
                 /*enable_codex_api_key_env*/ false,
                 config.cli_auth_credentials_store_mode,
                 Some(config.chatgpt_base_url.clone()),
-            );
+            )
+            .await;
             if access_token_expired(&auth)
                 && let Err(err) = manager.refresh_token().await
             {
@@ -95,7 +102,7 @@ fn access_token_expired(auth: &CodexAuth) -> bool {
 }
 
 async fn refresh_account_pools(config: &Config, pool_id: Option<&str>) -> ! {
-    let manager = AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
+    let manager = AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
     let Some(report) = manager.refresh_account_pool_usage_report(pool_id).await else {
         eprintln!("No account pools configured");
         std::process::exit(1);
