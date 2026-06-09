@@ -746,10 +746,30 @@ fn start_http_server(
             }
             match listener.accept() {
                 Ok((mut stream, _addr)) => {
-                    let mut request = [0; 4096];
                     let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
-                    let read = stream.read(&mut request).unwrap_or(0);
-                    let request = parse_http_request(&request[..read]);
+                    let mut request = Vec::new();
+                    let mut chunk = [0; 1024];
+                    loop {
+                        match stream.read(&mut chunk) {
+                            Ok(0) => break,
+                            Ok(read) => {
+                                request.extend_from_slice(&chunk[..read]);
+                                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                                    break;
+                                }
+                            }
+                            Err(err)
+                                if matches!(
+                                    err.kind(),
+                                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                                ) =>
+                            {
+                                break;
+                            }
+                            Err(_) => return,
+                        }
+                    }
+                    let request = parse_http_request(&request);
                     if let Ok(mut requests) = thread_requests.lock() {
                         requests.push(request.clone());
                     }
