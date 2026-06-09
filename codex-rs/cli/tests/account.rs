@@ -747,6 +747,7 @@ fn start_http_server(
             }
             match listener.accept() {
                 Ok((mut stream, _addr)) => {
+                    let _ = stream.set_nonblocking(/*nonblocking*/ false);
                     let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
                     let mut request = Vec::new();
                     let mut chunk = [0; 1024];
