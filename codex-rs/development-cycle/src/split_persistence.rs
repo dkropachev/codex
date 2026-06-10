@@ -106,6 +106,22 @@ impl DevCycleState {
                 reason TEXT NOT NULL,
                 created_at INTEGER NOT NULL
             );
+            CREATE INDEX IF NOT EXISTS idx_split_strategy_proposals_scope_status
+                ON split_strategy_proposals (
+                    model_key, repo_tshirt_bucket, item_set_key, status, strategy_id
+                );
+            CREATE INDEX IF NOT EXISTS idx_split_strategy_attempts_scope_status
+                ON split_strategy_attempts (
+                    model_key, repo_tshirt_bucket, item_set_key, status, strategy_id
+                );
+            CREATE INDEX IF NOT EXISTS idx_split_strategy_attempts_model
+                ON split_strategy_attempts (model_key, created_at);
+            CREATE INDEX IF NOT EXISTS idx_split_scores_model_updated
+                ON split_scores (model_key, updated_at);
+            CREATE INDEX IF NOT EXISTS idx_split_suppressions_scope_strategy
+                ON split_suppressions (
+                    model_key, repo_tshirt_bucket, item_set_key, strategy_id
+                );
             ",
         )?;
         Ok(())
@@ -418,9 +434,12 @@ impl DevCycleState {
     ) -> anyhow::Result<JsonValue> {
         Ok(json!({
             "globalSameModel": self.split_score_rows(model_key, None, None)?,
+            "globalSameModelAttempts": self.split_attempt_rows(model_key, None, None)?,
             "repoSizeBucket": repo_tshirt_bucket,
             "repoSizeSpecific": self.split_score_rows(model_key, Some(repo_tshirt_bucket), None)?,
+            "repoSizeSpecificAttempts": self.split_attempt_rows(model_key, Some(repo_tshirt_bucket), None)?,
             "sameItemSetAndBucket": self.split_score_rows(model_key, Some(repo_tshirt_bucket), Some(item_set_key))?,
+            "sameItemSetAndBucketAttempts": self.split_attempt_rows(model_key, Some(repo_tshirt_bucket), Some(item_set_key))?,
         }))
     }
 
@@ -468,6 +487,57 @@ impl DevCycleState {
                 "lostEvidenceCount": row.get::<_, u32>(6)?,
                 "reviewerCountSavings": row.get::<_, i64>(7)?,
                 "score": row.get::<_, f64>(8)?,
+            }));
+        }
+        Ok(values)
+    }
+
+    fn split_attempt_rows(
+        &self,
+        model_key: &str,
+        repo_tshirt_bucket: Option<&str>,
+        item_set_key: Option<&str>,
+    ) -> anyhow::Result<Vec<JsonValue>> {
+        let conn = self.conn()?;
+        let mut sql = "SELECT repo_tshirt_bucket, item_set_key, strategy_id,
+                reviewer_group_count, baseline_strategy_id, baseline_group_count, status,
+                reviewer_count_savings, lost_evidence_count, created_at
+             FROM split_strategy_attempts
+             WHERE model_key = ?1"
+            .to_string();
+        if repo_tshirt_bucket.is_some() {
+            sql.push_str(" AND repo_tshirt_bucket = ?2");
+        }
+        if item_set_key.is_some() {
+            sql.push_str(if repo_tshirt_bucket.is_some() {
+                " AND item_set_key = ?3"
+            } else {
+                " AND item_set_key = ?2"
+            });
+        }
+        sql.push_str(" ORDER BY created_at DESC LIMIT 30");
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = match (repo_tshirt_bucket, item_set_key) {
+            (Some(bucket), Some(item_set_key)) => {
+                stmt.query(params![model_key, bucket, item_set_key])?
+            }
+            (Some(bucket), None) => stmt.query(params![model_key, bucket])?,
+            (None, Some(item_set_key)) => stmt.query(params![model_key, item_set_key])?,
+            (None, None) => stmt.query(params![model_key])?,
+        };
+        let mut values = Vec::new();
+        while let Some(row) = rows.next()? {
+            values.push(json!({
+                "repoTshirtBucket": row.get::<_, String>(0)?,
+                "itemSetKey": row.get::<_, String>(1)?,
+                "strategyId": row.get::<_, String>(2)?,
+                "reviewerGroupCount": row.get::<_, u32>(3)?,
+                "baselineStrategyId": row.get::<_, Option<String>>(4)?,
+                "baselineGroupCount": row.get::<_, Option<u32>>(5)?,
+                "status": row.get::<_, String>(6)?,
+                "reviewerCountSavings": row.get::<_, i64>(7)?,
+                "lostEvidenceCount": row.get::<_, u32>(8)?,
+                "createdAt": row.get::<_, i64>(9)?,
             }));
         }
         Ok(values)
@@ -594,6 +664,53 @@ mod tests {
                 .best_split_strategy_record("openai:gpt-5.5:xhigh", "XL", "items")
                 .unwrap(),
             None
+        );
+    }
+
+    #[test]
+    fn split_evidence_for_prompt_includes_attempts_before_scores_exist() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let state = DevCycleState::open(tempdir.path()).unwrap();
+        state
+            .record_split_attempt(SplitAttemptRecord {
+                run_id: "run-1",
+                model_key: "openai:gpt-5.5:xhigh",
+                repo_tshirt_bucket: "S",
+                item_set_key: "items",
+                strategy_id: "separate:v1",
+                groups_json: "[]",
+                reviewer_group_count: 2,
+                baseline_strategy_id: None,
+                baseline_group_count: None,
+                status: "separate",
+                reviewer_count_savings: 0,
+                lost_evidence_count: 0,
+            })
+            .unwrap();
+
+        let evidence = state
+            .split_evidence_for_prompt("openai:gpt-5.5:xhigh", "S", "items")
+            .unwrap();
+
+        assert_eq!(evidence["globalSameModel"], json!([]));
+        assert_eq!(
+            evidence["globalSameModelAttempts"],
+            json!([{
+                "repoTshirtBucket": "S",
+                "itemSetKey": "items",
+                "strategyId": "separate:v1",
+                "reviewerGroupCount": 2,
+                "baselineStrategyId": null,
+                "baselineGroupCount": null,
+                "status": "separate",
+                "reviewerCountSavings": 0,
+                "lostEvidenceCount": 0,
+                "createdAt": evidence["globalSameModelAttempts"][0]["createdAt"],
+            }])
+        );
+        assert_eq!(
+            evidence["sameItemSetAndBucketAttempts"],
+            evidence["globalSameModelAttempts"]
         );
     }
 }
