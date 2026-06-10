@@ -319,6 +319,7 @@ jobs:
   build-windows-source:
     name: Build ptrcomp-sandbox ${{ matrix.target }} from source
     needs: metadata
+    if: ${{ github.repository == 'openai/codex' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
