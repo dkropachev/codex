@@ -240,7 +240,6 @@ fn usage_limit_response(limit_id: &str) -> ResponseTemplate {
 async fn submit_prompt(codex: &codex_core::CodexThread, text: &str) -> Result<()> {
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: text.to_string(),
                 text_elements: Vec::new(),
