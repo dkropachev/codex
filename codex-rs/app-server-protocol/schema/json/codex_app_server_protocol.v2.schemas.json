@@ -8056,6 +8056,12 @@
         },
         "status": {
           "$ref": "#/definitions/McpServerStartupState"
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
