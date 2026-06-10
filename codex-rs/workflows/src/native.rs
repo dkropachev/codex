@@ -1,14 +1,20 @@
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::types::WorkflowsConfigToml;
 use codex_native_workflow::NativeWorkflow;
+use codex_native_workflow::NativeWorkflowCancellation;
 use codex_native_workflow::NativeWorkflowCompletionMode;
 use codex_native_workflow::NativeWorkflowCompletionRequest;
 use codex_native_workflow::NativeWorkflowDefinition;
 use codex_native_workflow::NativeWorkflowEvent;
+use codex_native_workflow::NativeWorkflowModelCandidate;
+use codex_native_workflow::NativeWorkflowModelProviderCatalog;
 use codex_native_workflow::NativeWorkflowRunContext;
 use codex_native_workflow::NativeWorkflowRunOutput;
 use codex_native_workflow::NativeWorkflowStatusUpdate;
@@ -90,24 +96,52 @@ pub(crate) fn native_default_input(config: &WorkflowsConfigToml, id: &str) -> Re
 }
 
 pub(crate) async fn run_native_workflow(
+    codex_home: &Path,
     cwd: &Path,
     id: &str,
     input: &str,
     output_format: Option<&str>,
+    runtime: &crate::execute::WorkflowRuntimeContext,
     event_handler: Option<&WorkflowRuntimeEventHandler<'_>>,
 ) -> Result<WorkflowRuntimeOutput> {
     let definition = native_definition(id)?;
     let input = serde_json::from_str::<JsonValue>(input)
         .with_context(|| format!("failed to parse input for native workflow {id}"))?;
+    let state_dir = native_root_path(codex_home).join(id).join("state");
+    std::fs::create_dir_all(&state_dir).with_context(|| {
+        format!(
+            "failed to create native workflow state directory {}",
+            state_dir.display()
+        )
+    })?;
     let event_handler = |event: &NativeWorkflowEvent| {
         if let Some(event_handler) = event_handler {
             event_handler(&native_event_to_runtime(event.clone()));
         }
     };
+    let model_catalog = RuntimeModelProviderCatalog {
+        candidates: runtime.model_candidates.clone(),
+    };
+    let cancellation = runtime
+        .cancellation_flag
+        .as_ref()
+        .map(|flag| RuntimeCancellation {
+            flag: Arc::clone(flag),
+        });
     let ctx = NativeWorkflowRunContext {
+        codex_home,
         cwd,
+        state_dir: &state_dir,
         output_format,
         event_handler: Some(&event_handler),
+        agent_runtime: runtime
+            .native_agent_runtime
+            .as_deref()
+            .map(|runtime| runtime as &dyn codex_native_workflow::NativeWorkflowAgentRuntime),
+        model_provider_catalog: Some(&model_catalog),
+        cancellation_token: cancellation
+            .as_ref()
+            .map(|token| token as &dyn NativeWorkflowCancellation),
     };
     let output = match id {
         codex_development_cycle::DEVELOPMENT_CYCLE_WORKFLOW_ID => {
@@ -123,6 +157,26 @@ pub(crate) async fn run_native_workflow(
         .with_context(|| format!("native workflow output for {id} did not match schema"))?;
     }
     native_output_to_runtime(output)
+}
+
+struct RuntimeModelProviderCatalog {
+    candidates: Vec<NativeWorkflowModelCandidate>,
+}
+
+impl NativeWorkflowModelProviderCatalog for RuntimeModelProviderCatalog {
+    fn model_candidates(&self) -> Vec<NativeWorkflowModelCandidate> {
+        self.candidates.clone()
+    }
+}
+
+struct RuntimeCancellation {
+    flag: Arc<AtomicBool>,
+}
+
+impl NativeWorkflowCancellation for RuntimeCancellation {
+    fn is_cancelled(&self) -> bool {
+        self.flag.load(Ordering::SeqCst)
+    }
 }
 
 pub(crate) async fn complete_native_workflow(

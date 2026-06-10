@@ -16,6 +16,8 @@ use app_test_support::write_mock_responses_config_toml;
 #[cfg(unix)]
 use codex_app_server::in_process;
 #[cfg(unix)]
+use codex_app_server::in_process::InProcessServerEvent;
+#[cfg(unix)]
 use codex_app_server::in_process::InProcessStartArgs;
 #[cfg(unix)]
 use codex_app_server_protocol::ClientInfo;
@@ -24,6 +26,8 @@ use codex_app_server_protocol::ClientRequest;
 #[cfg(unix)]
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::RequestId;
+#[cfg(unix)]
+use codex_app_server_protocol::ServerNotification;
 #[cfg(unix)]
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::WorkflowDevelopResponse;
@@ -63,10 +67,11 @@ use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use serial_test::serial;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 30);
 
 fn append_workflows_config(codex_home: &TempDir, extra: &str) -> Result<()> {
     fs::OpenOptions::new()
@@ -332,6 +337,7 @@ fn write_schema_repair_fixture(
 }
 
 #[tokio::test]
+#[serial(workflow_process)]
 async fn workflow_list_returns_discovered_workflows() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
@@ -380,6 +386,7 @@ async fn workflow_list_returns_discovered_workflows() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial(workflow_process)]
 async fn workflow_list_and_read_include_enabled_native_workflow() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
@@ -412,7 +419,7 @@ async fn workflow_list_and_read_include_enabled_native_workflow() -> Result<()> 
     assert_eq!(response.workflows[0].engine, WorkflowEngine::Rust);
     assert_eq!(
         response.workflows[0].title,
-        Some("Development Cycle Preview".to_string())
+        Some("Development Cycle".to_string())
     );
     assert!(
         response.workflows[0]
@@ -434,7 +441,7 @@ async fn workflow_list_and_read_include_enabled_native_workflow() -> Result<()> 
     assert_eq!(response.workflow.engine, WorkflowEngine::Rust);
     assert_eq!(response.readme, None);
     assert!(response.workflow_yaml.contains("engine: rust"));
-    assert!(response.workflow_yaml.contains("executionMode"));
+    assert!(response.workflow_yaml.contains("taskDescription"));
 
     Ok(())
 }
@@ -463,7 +470,7 @@ async fn workflow_run_start_runs_enabled_native_workflow_e2e() -> Result<()> {
         .loader_overrides(loader_overrides.clone())
         .build()
         .await?;
-    let client = in_process::start(InProcessStartArgs {
+    let mut client = in_process::start(InProcessStartArgs {
         arg0_paths: Arg0DispatchPaths::default(),
         config: Arc::new(config),
         cli_overrides: Vec::new(),
@@ -504,13 +511,62 @@ async fn workflow_run_start_runs_enabled_native_workflow_e2e() -> Result<()> {
         .map_err(|err| anyhow::anyhow!("{err:?}"))?;
     let response: WorkflowRunStartResponse = serde_json::from_value(result)?;
     assert_eq!(response.run.status, WorkflowRunStatus::Running);
+    let run_id = response.run.id.clone();
+
+    let mut saw_planning_status = false;
+    let mut saw_started_progress = false;
+    let mut saw_markdown_result = false;
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        while !(saw_planning_status && saw_started_progress && saw_markdown_result) {
+            let event = client
+                .next_event()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("in-process event stream closed"))?;
+            match event {
+                InProcessServerEvent::ServerNotification(
+                    ServerNotification::WorkflowRunProgress(notification),
+                ) if notification.run_id == run_id => {
+                    if notification.message == "Started native development cycle" {
+                        saw_started_progress = true;
+                    }
+                    if let Some(status) = notification.status
+                        && status.workflow_status == "planning"
+                    {
+                        assert_eq!(
+                            status,
+                            codex_app_server_protocol::WorkflowStatusUpdate {
+                                workflow_name: "dev-cycle".to_string(),
+                                workflow_status: "planning".to_string(),
+                                threads: vec![codex_app_server_protocol::WorkflowThreadStatus {
+                                    name: "planner".to_string(),
+                                    status: "creating work packets".to_string(),
+                                },],
+                                child_statuses: Vec::new(),
+                            }
+                        );
+                        saw_planning_status = true;
+                    }
+                }
+                InProcessServerEvent::ServerNotification(
+                    ServerNotification::WorkflowRunMarkdownResult(notification),
+                ) if notification.run_id == run_id => {
+                    assert!(notification.markdown.contains("# Development Cycle"));
+                    assert!(notification.markdown.contains("Review Split:"));
+                    saw_markdown_result = true;
+                }
+                _ => {}
+            }
+        }
+        anyhow::Ok(())
+    })
+    .await??;
 
     let result = client
         .request(ClientRequest::WorkflowRunWait {
             request_id: RequestId::Integer(2),
             params: WorkflowRunWaitParams {
-                run_id: response.run.id,
-                timeout_ms: Some(5_000),
+                run_id,
+                timeout_ms: Some(/*timeout_ms*/ 5_000),
             },
         })
         .await?
@@ -520,8 +576,11 @@ async fn workflow_run_start_runs_enabled_native_workflow_e2e() -> Result<()> {
     assert!(response.completed);
     assert_eq!(response.run.status, WorkflowRunStatus::Succeeded);
     let output = response.run.output.expect("native workflow output");
-    assert_eq!(output["status"], json!("preview"));
-    assert_eq!(output["executionMode"], json!("previewOnly"));
+    assert_eq!(output["status"], json!("blocked"));
+    assert_eq!(
+        output["blockedReason"],
+        json!("native agent runtime is unavailable")
+    );
     assert_eq!(output["settings"]["stages"]["tests"], json!("off"));
     client.shutdown().await?;
 
@@ -648,6 +707,7 @@ async fn workflow_run_shutdown_kills_active_runtime_process_e2e() -> Result<()> 
 }
 
 #[tokio::test]
+#[serial(workflow_process)]
 async fn workflow_develop_location_project_overrides_global_default() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
@@ -704,6 +764,7 @@ async fn workflow_develop_location_project_overrides_global_default() -> Result<
 }
 
 #[tokio::test]
+#[serial(workflow_process)]
 async fn workflow_validate_response_includes_non_zero_exit_code_for_invalid_status() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
@@ -748,6 +809,7 @@ async fn workflow_validate_response_includes_non_zero_exit_code_for_invalid_stat
 }
 
 #[tokio::test]
+#[serial(workflow_process)]
 async fn workflow_read_round_trips_new_validation_finding_variants() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
@@ -820,6 +882,7 @@ async fn workflow_read_round_trips_new_validation_finding_variants() -> Result<(
 
 #[cfg(unix)]
 #[tokio::test]
+#[serial(workflow_process)]
 async fn workflow_repair_treats_bun_test_assertion_failure_as_unsupported_e2e() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
@@ -874,6 +937,7 @@ async fn workflow_repair_treats_bun_test_assertion_failure_as_unsupported_e2e() 
 }
 
 #[tokio::test]
+#[serial(workflow_process)]
 async fn workflow_repair_returns_structured_result() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
@@ -919,6 +983,7 @@ async fn workflow_repair_returns_structured_result() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial(workflow_process)]
 async fn workflow_repair_returns_blocked_mode_result() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
@@ -964,6 +1029,7 @@ async fn workflow_repair_returns_blocked_mode_result() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial(workflow_process)]
 async fn workflow_repair_returns_unsupported_command_result() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
@@ -1020,6 +1086,7 @@ async fn workflow_repair_returns_unsupported_command_result() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial(workflow_process)]
 async fn workflow_repair_repairs_missing_design_and_schema_e2e() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
@@ -1100,6 +1167,7 @@ async fn workflow_repair_repairs_missing_design_and_schema_e2e() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial(workflow_process)]
 async fn workflow_repair_blocked_schema_finding_round_trips_e2e() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
@@ -1156,6 +1224,7 @@ async fn workflow_repair_blocked_schema_finding_round_trips_e2e() -> Result<()> 
 }
 
 #[tokio::test]
+#[serial(workflow_process)]
 async fn workflow_repair_blocked_runtime_state_finding_round_trips_e2e() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
@@ -1213,6 +1282,7 @@ async fn workflow_repair_blocked_runtime_state_finding_round_trips_e2e() -> Resu
 }
 
 #[tokio::test]
+#[serial(workflow_process)]
 async fn workflow_stage_session_id_keeps_edits_private_until_done() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
@@ -1333,6 +1403,7 @@ async fn workflow_stage_session_id_keeps_edits_private_until_done() -> Result<()
 }
 
 #[tokio::test]
+#[serial(workflow_process)]
 async fn workflow_stage_session_id_discard_removes_staged_changes() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;

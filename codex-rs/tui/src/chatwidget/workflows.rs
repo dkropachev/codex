@@ -76,7 +76,9 @@ pub(crate) fn workflow_status_surface(
         "Workflow {}: {}",
         status.workflow_name, status.workflow_status,
     );
-    let details = if status.threads.len() > 1 {
+    let details = if status.threads.is_empty() {
+        None
+    } else {
         Some(
             status
                 .threads
@@ -85,8 +87,6 @@ pub(crate) fn workflow_status_surface(
                 .collect::<Vec<_>>()
                 .join("\n"),
         )
-    } else {
-        None
     };
     (header, details)
 }

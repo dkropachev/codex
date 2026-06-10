@@ -4,15 +4,18 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_features::Feature;
 use codex_utils_cli::CliConfigOverrides;
+use codex_workflows::NativeWorkflowModelCandidate;
 use codex_workflows::WORKFLOW_RUNTIME_EVENT_PREFIX;
 use codex_workflows::WorkflowCommandContext;
 use codex_workflows::WorkflowCommandProgress;
+use codex_workflows::WorkflowRuntimeContext;
 use codex_workflows::WorkflowSummary;
 use codex_workflows::discover_workflows_for_context;
 use codex_workflows::execute_workflow_command;
 use codex_workflows::parse_workflow_command_with_workflows;
 use serde_json::Value as JsonValue;
 use serde_json::json;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 #[derive(Debug, clap::Parser)]
@@ -58,7 +61,10 @@ pub(crate) async fn load_workflow_command_context(
         stage_session_id: stage_session_id.map(ToString::to_string),
         progress: None,
         runtime_event_handler: None,
-        runtime: Default::default(),
+        runtime: WorkflowRuntimeContext {
+            model_candidates: native_model_candidates_from_config(&config),
+            ..Default::default()
+        },
     })?;
     Ok((config, workflows))
 }
@@ -107,7 +113,10 @@ pub async fn run_workflow_command(
             stage_session_id: cmd.stage_session_id,
             progress: Some(&progress),
             runtime_event_handler: None,
-            runtime: Default::default(),
+            runtime: WorkflowRuntimeContext {
+                model_candidates: native_model_candidates_from_config(&config),
+                ..Default::default()
+            },
         },
         command,
     )?;
@@ -116,6 +125,67 @@ pub async fn run_workflow_command(
         std::process::exit(output.exit_code);
     }
     Ok(())
+}
+
+pub(crate) fn native_model_candidates_from_config(
+    config: &Config,
+) -> Vec<NativeWorkflowModelCandidate> {
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+    push_native_model_candidate(
+        &mut candidates,
+        &mut seen,
+        config.model_provider_id.clone(),
+        config.model.clone(),
+        config
+            .model_reasoning_effort
+            .map(|effort| effort.to_string()),
+        None,
+    );
+
+    if let Some(model_router) = config.model_router.as_ref() {
+        for candidate in &model_router.candidates {
+            push_native_model_candidate(
+                &mut candidates,
+                &mut seen,
+                candidate
+                    .model_provider
+                    .clone()
+                    .unwrap_or_else(|| config.model_provider_id.clone()),
+                candidate.model.clone().or_else(|| config.model.clone()),
+                candidate
+                    .reasoning_effort
+                    .and_then(codex_config::config_toml::ModelRouterReasoningEffortToml::as_reasoning_effort)
+                    .or(config.model_reasoning_effort)
+                    .map(|effort| effort.to_string()),
+                candidate.intelligence_score,
+            );
+        }
+    }
+
+    candidates
+}
+
+fn push_native_model_candidate(
+    candidates: &mut Vec<NativeWorkflowModelCandidate>,
+    seen: &mut BTreeSet<(String, String, Option<String>)>,
+    provider_id: String,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+    intelligence_score: Option<f64>,
+) {
+    let Some(model) = model else {
+        return;
+    };
+    let key = (provider_id.clone(), model.clone(), reasoning_effort.clone());
+    if seen.insert(key) {
+        candidates.push(NativeWorkflowModelCandidate {
+            provider_id,
+            model,
+            reasoning_effort,
+            intelligence_score,
+        });
+    }
 }
 
 fn format_cli_progress_data(data: &JsonValue) -> Option<String> {

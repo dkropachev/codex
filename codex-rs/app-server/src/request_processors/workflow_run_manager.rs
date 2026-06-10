@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -26,6 +27,7 @@ use codex_app_server_protocol::WorkflowRunWaitResponse;
 use codex_app_server_protocol::WorkflowStatusUpdate as ApiWorkflowStatusUpdate;
 use codex_app_server_protocol::WorkflowThreadStatus as ApiWorkflowThreadStatus;
 use codex_core::config::Config;
+use codex_workflows::NativeWorkflowModelCandidate;
 use codex_workflows::WorkflowCommand;
 use codex_workflows::WorkflowCommandContext;
 use codex_workflows::WorkflowCommandOutput;
@@ -405,6 +407,8 @@ async fn run_workflow_blocking(
             output_format: Some("tui.markdown.v1".to_string()),
             force_process_runtime: true,
             cancellation_flag: Some(Arc::clone(&canceled)),
+            model_candidates: native_model_candidates_from_config(&args.config),
+            native_agent_runtime: None,
         };
         let thread_id = args.thread_id.clone();
         let runtime_event_handler = |event: &WorkflowRuntimeEvent| {
@@ -433,6 +437,65 @@ async fn run_workflow_blocking(
     })
     .await
     .map_err(|err| format!("workflow run task failed: {err}"))?
+}
+
+fn native_model_candidates_from_config(config: &Config) -> Vec<NativeWorkflowModelCandidate> {
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+    push_native_model_candidate(
+        &mut candidates,
+        &mut seen,
+        config.model_provider_id.clone(),
+        config.model.clone(),
+        config
+            .model_reasoning_effort
+            .map(|effort| effort.to_string()),
+        None,
+    );
+
+    if let Some(model_router) = config.model_router.as_ref() {
+        for candidate in &model_router.candidates {
+            push_native_model_candidate(
+                &mut candidates,
+                &mut seen,
+                candidate
+                    .model_provider
+                    .clone()
+                    .unwrap_or_else(|| config.model_provider_id.clone()),
+                candidate.model.clone().or_else(|| config.model.clone()),
+                candidate
+                    .reasoning_effort
+                    .and_then(codex_config::config_toml::ModelRouterReasoningEffortToml::as_reasoning_effort)
+                    .or(config.model_reasoning_effort)
+                    .map(|effort| effort.to_string()),
+                candidate.intelligence_score,
+            );
+        }
+    }
+
+    candidates
+}
+
+fn push_native_model_candidate(
+    candidates: &mut Vec<NativeWorkflowModelCandidate>,
+    seen: &mut BTreeSet<(String, String, Option<String>)>,
+    provider_id: String,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+    intelligence_score: Option<f64>,
+) {
+    let Some(model) = model else {
+        return;
+    };
+    let key = (provider_id.clone(), model.clone(), reasoning_effort.clone());
+    if seen.insert(key) {
+        candidates.push(NativeWorkflowModelCandidate {
+            provider_id,
+            model,
+            reasoning_effort,
+            intelligence_score,
+        });
+    }
 }
 
 fn workflow_run_output(output: WorkflowCommandOutput) -> JsonValue {

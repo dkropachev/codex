@@ -5,11 +5,13 @@ use codex_workflows::WorkflowCommand;
 use codex_workflows::WorkflowCommandContext;
 use codex_workflows::WorkflowEngine;
 use codex_workflows::WorkflowInputSource;
+use codex_workflows::WorkflowRuntimeContext;
 use codex_workflows::execute_workflow_command;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::workflow_cmd::load_workflow_command_context;
+use crate::workflow_cmd::native_model_candidates_from_config;
 
 #[derive(Debug, clap::Parser)]
 #[command(bin_name = "codex native-workflow")]
@@ -82,7 +84,10 @@ pub async fn run_native_workflow_command(
                     stage_session_id: None,
                     progress: None,
                     runtime_event_handler: None,
-                    runtime: Default::default(),
+                    runtime: WorkflowRuntimeContext {
+                        model_candidates: native_model_candidates_from_config(&config),
+                        ..Default::default()
+                    },
                 },
                 WorkflowCommand::Run {
                     id: workflow.id.clone(),

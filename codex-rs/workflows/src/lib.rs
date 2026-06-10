@@ -27,6 +27,7 @@ mod workflow_host;
 mod workflow_runtime;
 
 pub use api_contract::WorkflowApiContract;
+pub use codex_native_workflow::NativeWorkflowModelCandidate;
 pub use command::WorkflowCommand;
 pub use command::WorkflowCommandParseError;
 pub use command::WorkflowConfigCommand;

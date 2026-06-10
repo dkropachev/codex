@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -11,6 +12,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::WorkflowsConfigToml;
+use codex_native_workflow::NativeWorkflowAgentRuntime;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
@@ -79,7 +81,7 @@ pub struct WorkflowCommandContext<'a> {
 
 pub type WorkflowCommandProgressHandler<'a> = dyn Fn(WorkflowCommandProgress) + Send + Sync + 'a;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct WorkflowRuntimeContext {
     pub run_id: Option<String>,
     pub origin_thread_id: Option<String>,
@@ -89,6 +91,28 @@ pub struct WorkflowRuntimeContext {
     pub output_format: Option<String>,
     pub force_process_runtime: bool,
     pub cancellation_flag: Option<Arc<AtomicBool>>,
+    pub model_candidates: Vec<codex_native_workflow::NativeWorkflowModelCandidate>,
+    pub native_agent_runtime: Option<Arc<dyn NativeWorkflowAgentRuntime>>,
+}
+
+impl fmt::Debug for WorkflowRuntimeContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WorkflowRuntimeContext")
+            .field("run_id", &self.run_id)
+            .field("origin_thread_id", &self.origin_thread_id)
+            .field("app_server_url", &self.app_server_url)
+            .field("approvals", &self.approvals)
+            .field(
+                "interactive_request_behavior",
+                &self.interactive_request_behavior,
+            )
+            .field("output_format", &self.output_format)
+            .field("force_process_runtime", &self.force_process_runtime)
+            .field("cancellation_flag", &self.cancellation_flag.is_some())
+            .field("model_candidates", &self.model_candidates)
+            .field("native_agent_runtime", &self.native_agent_runtime.is_some())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -580,10 +604,12 @@ async fn run(
         .or(standalone_runtime_event_handler.as_deref());
     let output = if workflow.engine == WorkflowEngine::Rust {
         crate::native::run_native_workflow(
+            ctx.codex_home,
             ctx.cwd,
             &workflow.id,
             &input,
             ctx.runtime.output_format.as_deref(),
+            &ctx.runtime,
             runtime_event_handler,
         )
         .await
@@ -1720,10 +1746,21 @@ fn workflow_config_value(key: &str, raw: &str) -> Result<Item> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Mutex;
+
     use codex_config::types::RustWorkflowEngineConfigToml;
     use codex_config::types::WorkflowDefaultLocation;
     use codex_config::types::WorkflowEnginesConfigToml;
     use codex_config::types::WorkflowOverrideConfigToml;
+    use codex_native_workflow::NativeWorkflowAgentHandle;
+    use codex_native_workflow::NativeWorkflowAgentOutput;
+    use codex_native_workflow::NativeWorkflowAgentRuntime;
+    use codex_native_workflow::NativeWorkflowAgentSpawnRequest;
+    use codex_native_workflow::NativeWorkflowAgentTurnRequest;
+    use codex_native_workflow::NativeWorkflowModelCandidate;
+    use codex_native_workflow::NativeWorkflowModelSelection;
     #[cfg(unix)]
     use serial_test::serial;
 
@@ -2829,27 +2866,251 @@ mod tests {
         )
         .unwrap();
         let stdout = serde_json::from_str::<JsonValue>(&output.message).unwrap();
-        let tests_stage = stdout["stagePlan"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|stage| stage["name"] == json!("tests"))
-            .unwrap();
 
-        assert_eq!(stdout["status"], json!("preview"));
-        assert_eq!(stdout["executionMode"], json!("previewOnly"));
+        assert_eq!(stdout["status"], json!("blocked"));
+        assert_eq!(
+            stdout["blockedReason"],
+            json!("native agent runtime is unavailable")
+        );
         assert_eq!(stdout["settings"]["maxParallelWriters"], json!(5));
         assert_eq!(stdout["settings"]["integrationMode"], json!("cherryPick"));
         assert_eq!(stdout["settings"]["stageTests"], JsonValue::Null);
         assert_eq!(stdout["settings"]["stages"]["tests"], json!("off"));
         assert_eq!(stdout["settings"]["stages"]["integration"], json!("on"));
-        assert_eq!(tests_stage["mode"], json!("off"));
+        assert!(stdout["selectedReviewTypes"].is_array());
         assert!(
-            stdout["limitations"][1]
+            stdout["stateDatabase"]
                 .as_str()
-                .unwrap()
-                .contains("does not launch agents")
+                .is_some_and(|path| path.ends_with("dev_cycle.sqlite3"))
         );
+    }
+
+    #[test]
+    fn native_dev_cycle_e2e_promotes_grouping_and_reloads_active_split() {
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        fs::write(cwd.path().join("lib.rs"), "pub fn answer() -> i32 { 41 }\n").unwrap();
+        let config = WorkflowsConfigToml {
+            engines: Some(WorkflowEnginesConfigToml {
+                rust: Some(RustWorkflowEngineConfigToml {
+                    enabled: Some(true),
+                    default_input: None,
+                }),
+            }),
+            ..Default::default()
+        };
+        let agent_runtime = Arc::new(E2eDevCycleAgentRuntime::default());
+        let runtime = WorkflowRuntimeContext {
+            model_candidates: vec![NativeWorkflowModelCandidate {
+                provider_id: "openai".to_string(),
+                model: "gpt-5.5".to_string(),
+                reasoning_effort: Some("xhigh".to_string()),
+                intelligence_score: Some(1.0),
+            }],
+            native_agent_runtime: Some(agent_runtime.clone()),
+            ..Default::default()
+        };
+        let run_dev_cycle = |input: JsonValue| {
+            let output = execute_workflow_command(
+                WorkflowCommandContext {
+                    codex_home: home.path(),
+                    cwd: cwd.path(),
+                    config: &config,
+                    codex_self_exe: None,
+                    stage_session_id: None,
+                    progress: None,
+                    runtime_event_handler: None,
+                    runtime: runtime.clone(),
+                },
+                WorkflowCommand::Run {
+                    id: "dev-cycle".to_string(),
+                    input: Some(WorkflowInputSource::Inline(input.to_string())),
+                    input_fields: BTreeMap::new(),
+                },
+            )
+            .unwrap();
+            serde_json::from_str::<JsonValue>(&output.message).unwrap()
+        };
+
+        let first = run_dev_cycle(json!({
+            "taskDescription": "fix bug",
+            "reviewTypes": ["correctness", "tests"],
+            "experimentSampleRate": 1.0,
+            "baselineResampleRate": 0.0,
+            "testMode": "provided",
+            "testCommands": ["printf ok"]
+        }));
+        assert_eq!(first["status"], json!("succeeded"));
+        assert_eq!(
+            first["reviewSplit"]["primarySplit"]["strategyId"],
+            json!("separate:v1")
+        );
+        assert_eq!(
+            first["reviewSplit"]["stopReason"],
+            json!("new model key starts with separate:v1 until baseline evidence exists")
+        );
+        assert_eq!(first["testResults"][0]["stdout"], json!("ok"));
+
+        let second = run_dev_cycle(json!({
+            "taskDescription": "fix bug",
+            "reviewTypes": ["correctness", "tests"],
+            "experimentSampleRate": 1.0,
+            "baselineResampleRate": 0.0,
+            "testMode": "provided",
+            "testCommands": ["printf ok"]
+        }));
+        assert_eq!(second["status"], json!("succeeded"));
+        assert_eq!(
+            second["reviewSplit"]["primarySplit"]["strategyId"],
+            json!("grouping:v1")
+        );
+        assert_eq!(second["reviewSplit"]["mode"], json!("grouped"));
+        assert_eq!(second["reviewSplit"]["costSavings"], json!(1));
+        assert_eq!(
+            second["reviewSplit"]["baselineResample"],
+            json!({
+                "ran": true,
+                "reason": "challenger_quality_gate",
+                "lostEvidenceCount": 0
+            })
+        );
+        assert_eq!(
+            second["reviewSplit"]["promotionReason"],
+            json!("saved 1 reviewer group(s) with no lost baseline evidence")
+        );
+        assert_eq!(
+            second["verifiedFindings"][0]["reviewTypeId"],
+            json!("correctness")
+        );
+
+        let third = run_dev_cycle(json!({
+            "taskDescription": "fix bug",
+            "reviewTypes": ["correctness", "tests"],
+            "experimentSampleRate": 0.0,
+            "baselineResampleRate": 1.0,
+            "testMode": "provided",
+            "testCommands": ["printf ok"]
+        }));
+        assert_eq!(third["status"], json!("succeeded"));
+        assert_eq!(
+            third["reviewSplit"]["activeSplit"]["strategyId"],
+            json!("grouping:v1")
+        );
+        assert_eq!(
+            third["reviewSplit"]["primarySplit"]["strategyId"],
+            json!("grouping:v1")
+        );
+        assert_eq!(
+            third["reviewSplit"]["baselineResample"],
+            json!({
+                "ran": true,
+                "reason": "baseline_resample_rate",
+                "lostEvidenceCount": 0
+            })
+        );
+
+        let spawns = agent_runtime.spawns.lock().unwrap();
+        let proposer_spawns = spawns
+            .iter()
+            .filter(|request| request.name == "review-split-proposer")
+            .collect::<Vec<_>>();
+        assert_eq!(proposer_spawns.len(), 1);
+        let proposer = proposer_spawns[0];
+        assert_eq!(
+            proposer.model,
+            Some(NativeWorkflowModelSelection {
+                provider_id: "openai".to_string(),
+                model: "gpt-5.5".to_string(),
+                reasoning_effort: Some("xhigh".to_string()),
+            })
+        );
+        assert!(proposer.prompt.contains("\"globalSameModel\""));
+        assert!(proposer.prompt.contains("\"repoSizeSpecific\""));
+        assert!(proposer.prompt.contains("correctness"));
+        assert!(proposer.prompt.contains("tests"));
+    }
+
+    #[derive(Default)]
+    struct E2eDevCycleAgentRuntime {
+        spawns: Mutex<Vec<NativeWorkflowAgentSpawnRequest>>,
+        pending_followups: Mutex<Vec<String>>,
+    }
+
+    impl NativeWorkflowAgentRuntime for E2eDevCycleAgentRuntime {
+        fn spawn_agent(
+            &self,
+            request: NativeWorkflowAgentSpawnRequest,
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<NativeWorkflowAgentHandle>> + Send + '_>>
+        {
+            Box::pin(async move {
+                let id = request.name.clone();
+                let name = request.role.clone();
+                self.spawns.lock().unwrap().push(request);
+                Ok(NativeWorkflowAgentHandle { id, name })
+            })
+        }
+
+        fn send_follow_up(
+            &self,
+            request: NativeWorkflowAgentTurnRequest,
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+            Box::pin(async move {
+                self.pending_followups
+                    .lock()
+                    .unwrap()
+                    .push(request.agent_id);
+                Ok(())
+            })
+        }
+
+        fn wait_for_output(
+            &self,
+            agent_id: &str,
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<NativeWorkflowAgentOutput>> + Send + '_>>
+        {
+            let agent_id = agent_id.to_string();
+            Box::pin(async move {
+                let text = match agent_id.as_str() {
+                    "planner" => "{\"packets\":[\"implement\"]}",
+                    "writer-1" => {
+                        let mut pending_followups = self.pending_followups.lock().unwrap();
+                        if let Some(index) = pending_followups.iter().position(|id| id == &agent_id)
+                        {
+                            pending_followups.remove(index);
+                            "{\"commits\":[\"fix-commit\"]}"
+                        } else {
+                            "{\"commits\":[\"writer-commit\"]}"
+                        }
+                    }
+                    "review-split-proposer" => {
+                        "{\"strategyId\":\"grouping:v1\",\"groups\":[{\"groupId\":\"quality\",\"reviewTypeIds\":[\"correctness\",\"tests\"]}],\"rationale\":\"correctness and tests overlap\",\"expectedReviewerCountSavings\":1,\"riskNotes\":[]}"
+                    }
+                    agent if agent.starts_with("reviewer-grouping-v1") => {
+                        "{\"findings\":[{\"reviewTypeId\":\"correctness\",\"title\":\"Broken behavior\",\"details\":\"details\",\"filePath\":\"lib.rs\",\"line\":1,\"severity\":\"high\"}]}"
+                    }
+                    agent if agent.starts_with("baseline-reviewer-separate-v1-correctness") => {
+                        "{\"findings\":[{\"title\":\"Broken behavior\",\"details\":\"details\",\"filePath\":\"lib.rs\",\"line\":1,\"severity\":\"high\"}]}"
+                    }
+                    agent if agent.starts_with("baseline-reviewer-separate-v1-tests") => {
+                        "{\"findings\":[]}"
+                    }
+                    "reviewer-correctness" => {
+                        "{\"findings\":[{\"title\":\"Broken behavior\",\"details\":\"details\",\"filePath\":\"lib.rs\",\"line\":1,\"severity\":\"high\"}]}"
+                    }
+                    "reviewer-tests" => "{\"findings\":[]}",
+                    agent if agent.starts_with("verifier-") => {
+                        "{\"accepted\":true,\"reason\":\"confirmed\"}"
+                    }
+                    "integrator" => "{\"integrationBranch\":\"integration/dev-cycle\"}",
+                    _ => "{}",
+                };
+                Ok(NativeWorkflowAgentOutput {
+                    agent_id,
+                    text: text.to_string(),
+                    metadata: JsonValue::Null,
+                })
+            })
+        }
     }
 
     #[test]

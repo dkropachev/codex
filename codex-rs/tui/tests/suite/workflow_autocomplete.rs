@@ -181,7 +181,7 @@ async fn slash_native_workflow_exact_command_shows_stage_option_hints() -> Resul
             completion_text: None,
             popup_snippets: &[
                 "/dev-cycle",
-                "Development Cycle Preview",
+                "Development Cycle",
                 "--stage-tests <auto|on|off>",
                 "Test stage mode.",
             ],

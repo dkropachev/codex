@@ -284,6 +284,49 @@ async fn workflow_structured_status_notification_renders_threads() {
 }
 
 #[tokio::test]
+async fn workflow_structured_status_notification_renders_single_thread_details() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::WorkflowRunProgress(
+            codex_app_server_protocol::WorkflowProgressNotification {
+                run_id: "run-1".to_string(),
+                thread_id: None,
+                message: String::new(),
+                data: None,
+                status: Some(codex_app_server_protocol::WorkflowStatusUpdate {
+                    workflow_name: "dev-cycle".to_string(),
+                    workflow_status: "review".to_string(),
+                    threads: vec![codex_app_server_protocol::WorkflowThreadStatus {
+                        name: "quality".to_string(),
+                        status: "reviewing correctness+tests".to_string(),
+                    }],
+                    child_statuses: Vec::new(),
+                }),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    let rendered = format!(
+        "{}\n{}",
+        status.header(),
+        status.details().unwrap_or_default()
+    );
+    insta::assert_snapshot!(
+        rendered.as_str(),
+        @r###"
+Workflow dev-cycle: review
+-> quality: reviewing correctness+tests
+"###
+    );
+}
+
+#[tokio::test]
 async fn workflow_markdown_result_adds_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

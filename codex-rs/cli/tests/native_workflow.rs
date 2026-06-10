@@ -46,7 +46,7 @@ fn native_workflow_list_and_run_dev_cycle() -> Result<()> {
 
     assert_eq!(workflows[0]["id"], json!("dev-cycle"));
     assert_eq!(workflows[0]["engine"], json!("rust"));
-    assert_eq!(workflows[0]["title"], json!("Development Cycle Preview"));
+    assert_eq!(workflows[0]["title"], json!("Development Cycle"));
 
     let output = codex_command(codex_home.path())?
         .args([
@@ -63,8 +63,11 @@ fn native_workflow_list_and_run_dev_cycle() -> Result<()> {
         .clone();
     let run_output = serde_json::from_slice::<JsonValue>(&output)?;
 
-    assert_eq!(run_output["status"], json!("preview"));
-    assert_eq!(run_output["executionMode"], json!("previewOnly"));
+    assert_eq!(run_output["status"], json!("blocked"));
+    assert_eq!(
+        run_output["blockedReason"],
+        json!("native agent runtime is unavailable")
+    );
     assert_eq!(run_output["settings"]["stages"]["tests"], json!("off"));
 
     Ok(())
