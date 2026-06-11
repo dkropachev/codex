@@ -164,6 +164,7 @@ async fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
         .arg(&prompt2)
         .arg("resume")
         .arg("--last")
+        .arg("--include-non-interactive")
         .assert()
         .success();
 
@@ -176,6 +177,53 @@ async fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
     );
     let content = std::fs::read_to_string(&resumed_path)?;
     assert!(content.contains(&marker));
+    assert!(content.contains(&marker2));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_resume_last_skips_non_interactive_sessions_by_default() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let test = test_codex_exec();
+    let server = MockServer::start().await;
+    let _response_mock = mount_exec_responses(&server, /*count*/ 2).await;
+    let repo_root = exec_repo_root()?;
+
+    let marker = format!("resume-last-skip-exec-{}", Uuid::new_v4());
+    let prompt = format!("echo {marker}");
+    test.cmd_with_server(&server)
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(&repo_root)
+        .arg(&prompt)
+        .assert()
+        .success();
+
+    let sessions_dir = test.home_path().join("sessions");
+    let path = find_session_file_containing_marker(&sessions_dir, &marker)
+        .expect("no session file found after first run");
+
+    let marker2 = format!("resume-last-skip-exec-2-{}", Uuid::new_v4());
+    let prompt2 = format!("echo {marker2}");
+    test.cmd_with_server(&server)
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(&repo_root)
+        .arg(&prompt2)
+        .arg("resume")
+        .arg("--last")
+        .assert()
+        .success();
+
+    let new_path = find_session_file_containing_marker(&sessions_dir, &marker2)
+        .expect("no new session file containing marker2");
+    assert_ne!(
+        new_path, path,
+        "resume --last should not append to exec-sourced sessions by default"
+    );
+    let content = std::fs::read_to_string(&new_path)?;
+    assert!(!content.contains(&marker));
     assert!(content.contains(&marker2));
     Ok(())
 }
@@ -217,6 +265,7 @@ async fn exec_resume_last_accepts_prompt_after_flag_in_json_mode() -> anyhow::Re
         .arg("--json")
         .arg("resume")
         .arg("--last")
+        .arg("--include-non-interactive")
         .arg(&prompt2)
         .assert()
         .success();
@@ -301,6 +350,7 @@ async fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<(
         .arg(dir_a.path())
         .arg("resume")
         .arg("--last")
+        .arg("--include-non-interactive")
         .arg("--all")
         .arg(&prompt_b2)
         .assert()
@@ -321,6 +371,7 @@ async fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<(
         .arg(dir_a.path())
         .arg("resume")
         .arg("--last")
+        .arg("--include-non-interactive")
         .arg(&prompt_a2)
         .assert()
         .success();
@@ -359,6 +410,7 @@ async fn exec_resume_accepts_global_flags_after_subcommand() -> anyhow::Result<(
     test.cmd()
         .arg("resume")
         .arg("--last")
+        .arg("--include-non-interactive")
         .arg("--config")
         .arg(base_config)
         .arg("--json")
@@ -404,6 +456,7 @@ async fn exec_resume_includes_output_schema_in_request() -> anyhow::Result<()> {
         .arg("--skip-git-repo-check")
         .arg("resume")
         .arg("--last")
+        .arg("--include-non-interactive")
         .arg("--json")
         .arg("--output-schema")
         .arg(&schema_path)
@@ -530,6 +583,7 @@ async fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<(
         .arg(&prompt2)
         .arg("resume")
         .arg("--last")
+        .arg("--include-non-interactive")
         .output()
         .context("resume run should succeed")?;
 
@@ -602,6 +656,7 @@ async fn exec_resume_accepts_images_after_subcommand() -> anyhow::Result<()> {
         .arg(&repo_root)
         .arg("resume")
         .arg("--last")
+        .arg("--include-non-interactive")
         .arg("--image")
         .arg(&image_path)
         .arg("--image")
