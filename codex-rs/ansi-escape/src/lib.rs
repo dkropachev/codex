@@ -2,21 +2,80 @@ use ansi_to_tui::Error;
 use ansi_to_tui::IntoText;
 use ratatui::text::Line;
 use ratatui::text::Text;
+use std::borrow::Cow;
 
 // Expand tabs in a best-effort way for transcript rendering.
 // Tabs can interact poorly with left-gutter prefixes in our TUI and CLI
 // transcript views (e.g., `nl` separates line numbers from content with a tab).
 // Replacing tabs with spaces avoids odd visual artifacts without changing
 // semantics for our use cases.
-fn expand_tabs(s: &str) -> std::borrow::Cow<'_, str> {
+fn expand_tabs(s: &str) -> Cow<'_, str> {
     if s.contains('\t') {
         // Keep it simple: replace each tab with 4 spaces.
         // We do not try to align to tab stops since most usages (like `nl`)
         // look acceptable with a fixed substitution and this avoids stateful math
         // across spans.
-        std::borrow::Cow::Owned(s.replace('\t', "    "))
+        Cow::Owned(s.replace('\t', "    "))
     } else {
-        std::borrow::Cow::Borrowed(s)
+        Cow::Borrowed(s)
+    }
+}
+
+fn strip_osc_sequences(s: &str) -> Cow<'_, str> {
+    if !s.contains('\x1B') && !s.contains('\x07') {
+        return Cow::Borrowed(s);
+    }
+
+    let bytes = s.as_bytes();
+    let mut index = 0;
+    let mut visible_start = 0;
+    let mut output = String::with_capacity(s.len());
+    let mut modified = false;
+
+    while index < bytes.len() {
+        if bytes[index] == 0x1B && bytes.get(index + 1) == Some(&b']') {
+            output.push_str(&s[visible_start..index]);
+            modified = true;
+            index += 2;
+            while index < bytes.len() {
+                if bytes[index] == 0x07 {
+                    index += 1;
+                    break;
+                }
+                if bytes[index] == 0x1B && bytes.get(index + 1) == Some(&b'\\') {
+                    index += 2;
+                    break;
+                }
+                index += 1;
+            }
+            visible_start = index;
+            continue;
+        }
+
+        if bytes[index] == 0x1B && index + 1 == bytes.len() {
+            output.push_str(&s[visible_start..index]);
+            modified = true;
+            index += 1;
+            visible_start = index;
+            continue;
+        }
+
+        if bytes[index] == 0x07 {
+            output.push_str(&s[visible_start..index]);
+            modified = true;
+            index += 1;
+            visible_start = index;
+            continue;
+        }
+
+        index += 1;
+    }
+
+    if modified {
+        output.push_str(&s[visible_start..]);
+        Cow::Owned(output)
+    } else {
+        Cow::Borrowed(s)
     }
 }
 
@@ -38,9 +97,10 @@ pub fn ansi_escape_line(s: &str) -> Line<'static> {
 }
 
 pub fn ansi_escape(s: &str) -> Text<'static> {
+    let s = strip_osc_sequences(s);
     // to_text() claims to be faster, but introduces complex lifetime issues
     // such that it's not worth it.
-    match s.into_text() {
+    match s.as_ref().into_text() {
         Ok(text) => text,
         Err(err) => match err {
             Error::NomError(message) => {
