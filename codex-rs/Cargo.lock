@@ -3603,6 +3603,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-repo-ci"
+version = "0.139.0"
+dependencies = [
+ "pretty_assertions",
+ "tempfile",
+]
+
+[[package]]
 name = "codex-response-debug-context"
 version = "0.139.0"
 dependencies = [
