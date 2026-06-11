@@ -2209,6 +2209,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-artifactory"
+version = "0.139.0"
+dependencies = [
+ "pretty_assertions",
+ "serde",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "codex-async-utils"
 version = "0.139.0"
 dependencies = [
