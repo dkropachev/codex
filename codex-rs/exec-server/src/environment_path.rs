@@ -287,6 +287,7 @@ mod tests {
                 file_name: "SKILL.md".to_string(),
                 is_directory: false,
                 is_file: true,
+                is_symlink: false,
             }])
         }
 
@@ -355,6 +356,7 @@ mod tests {
                 file_name: "SKILL.md".to_string(),
                 is_directory: false,
                 is_file: true,
+                is_symlink: false,
             }]
         );
         assert_eq!(
