@@ -273,6 +273,16 @@ impl ThreadMetadataState {
         parent_thread_id: Option<String>,
         initialization_mode: ThreadInitializationMode,
     ) -> Self {
+        let thread_source = thread_source.or(match session_source {
+            SessionSource::SubAgent(_) => Some(ThreadSource::Subagent),
+            SessionSource::Cli
+            | SessionSource::VSCode
+            | SessionSource::Exec
+            | SessionSource::Mcp
+            | SessionSource::Custom(_)
+            | SessionSource::Internal(_)
+            | SessionSource::Unknown => Some(ThreadSource::User),
+        });
         let subagent_source = match session_source {
             SessionSource::SubAgent(subagent_source) => Some(subagent_source_name(subagent_source)),
             SessionSource::Cli
@@ -283,6 +293,11 @@ impl ThreadMetadataState {
             | SessionSource::Internal(_)
             | SessionSource::Unknown => None,
         };
+        let parent_thread_id = parent_thread_id.or_else(|| {
+            session_source
+                .parent_thread_id()
+                .map(|parent_thread_id| parent_thread_id.to_string())
+        });
         Self {
             session_id,
             thread_source,
