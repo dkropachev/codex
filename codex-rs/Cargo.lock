@@ -2304,6 +2304,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-cicd-artifacts"
+version = "0.139.0"
+dependencies = [
+ "anyhow",
+ "codex-artifactory",
+ "pretty_assertions",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "codex-cli"
 version = "0.139.0"
 dependencies = [
