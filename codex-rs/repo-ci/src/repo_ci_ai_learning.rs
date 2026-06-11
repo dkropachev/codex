@@ -585,6 +585,7 @@ mod tests {
                         exit_code: Some(2),
                     },
                 ],
+                resource_usage: None,
             },
         };
 
