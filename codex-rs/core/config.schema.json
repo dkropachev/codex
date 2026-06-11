@@ -709,6 +709,9 @@
             "web_search_request": {
               "type": "boolean"
             },
+            "workflows": {
+              "type": "boolean"
+            },
             "workspace_dependencies": {
               "type": "boolean"
             },
@@ -5389,6 +5392,9 @@
           "type": "boolean"
         },
         "web_search_request": {
+          "type": "boolean"
+        },
+        "workflows": {
           "type": "boolean"
         },
         "workspace_dependencies": {

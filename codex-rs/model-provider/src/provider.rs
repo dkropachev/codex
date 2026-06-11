@@ -8,6 +8,7 @@ use codex_login::AccountPoolBucket;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
@@ -164,6 +165,7 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         &self,
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
+        collaboration_modes_config: CollaborationModesConfig,
     ) -> SharedModelsManager;
 }
 
@@ -300,11 +302,13 @@ impl ModelProvider for ConfiguredModelProvider {
         &self,
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
+        collaboration_modes_config: CollaborationModesConfig,
     ) -> SharedModelsManager {
         match config_model_catalog {
             Some(model_catalog) => Arc::new(StaticModelsManager::new(
                 self.auth_manager.clone(),
                 model_catalog,
+                collaboration_modes_config,
             )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
@@ -315,6 +319,7 @@ impl ModelProvider for ConfiguredModelProvider {
                     codex_home,
                     endpoint,
                     self.auth_manager.clone(),
+                    collaboration_modes_config,
                 ))
             }
         }
@@ -577,8 +582,11 @@ mod tests {
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
             /*auth_manager*/ None,
         );
-        let manager =
-            provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
+        let manager = provider.models_manager(
+            test_codex_home(),
+            /*config_model_catalog*/ None,
+            CollaborationModesConfig::default(),
+        );
 
         let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
         let model_ids = catalog
@@ -619,6 +627,7 @@ mod tests {
             Some(ModelsResponse {
                 models: vec![configured_model],
             }),
+            CollaborationModesConfig::default(),
         );
 
         let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
@@ -661,8 +670,11 @@ mod tests {
             )),
         );
 
-        let manager =
-            provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
+        let manager = provider.models_manager(
+            test_codex_home(),
+            /*config_model_catalog*/ None,
+            CollaborationModesConfig::default(),
+        );
         let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
 
         assert!(

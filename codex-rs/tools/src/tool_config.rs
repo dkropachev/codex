@@ -38,10 +38,10 @@ pub enum ToolUserShellType {
 pub fn request_user_input_available_modes(features: &Features) -> Vec<ModeKind> {
     TUI_VISIBLE_COLLABORATION_MODES
         .into_iter()
-        .filter(|mode| {
-            mode.allows_request_user_input()
-                || (features.enabled(Feature::DefaultModeRequestUserInput)
-                    && *mode == ModeKind::Default)
+        .filter(|mode| match mode {
+            ModeKind::Default => features.enabled(Feature::DefaultModeRequestUserInput),
+            ModeKind::Workflow => features.enabled(Feature::Workflows),
+            _ => mode.allows_request_user_input(),
         })
         .collect()
 }
