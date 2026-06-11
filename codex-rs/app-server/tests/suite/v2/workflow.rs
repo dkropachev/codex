@@ -1,9 +1,17 @@
 use std::collections::BTreeMap;
 use std::fs;
+#[cfg(unix)]
+use std::future::Future;
 use std::io::Write;
 use std::path::Path;
 #[cfg(unix)]
+use std::pin::Pin;
+#[cfg(unix)]
 use std::sync::Arc;
+#[cfg(unix)]
+use std::sync::Mutex;
+#[cfg(unix)]
+use std::sync::MutexGuard;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -65,7 +73,19 @@ use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
 #[cfg(unix)]
 use codex_feedback::CodexFeedback;
+#[cfg(unix)]
+use codex_workflows::NativeWorkflowAgentHandle;
+#[cfg(unix)]
+use codex_workflows::NativeWorkflowAgentOutput;
+#[cfg(unix)]
+use codex_workflows::NativeWorkflowAgentRuntime;
+#[cfg(unix)]
+use codex_workflows::NativeWorkflowAgentSpawnRequest;
+#[cfg(unix)]
+use codex_workflows::NativeWorkflowAgentTurnRequest;
 use pretty_assertions::assert_eq;
+#[cfg(unix)]
+use serde_json::Value as JsonValue;
 use serde_json::json;
 use serial_test::serial;
 use tempfile::TempDir;
@@ -462,7 +482,223 @@ async fn workflow_run_start_runs_enabled_native_workflow_e2e() -> Result<()> {
         "compact",
     )?;
     append_workflows_config(&codex_home, "\n[workflows.engines.rust]\nenabled = true\n")?;
+    let agent_runtime = Arc::new(MockDevCycleAgentRuntime::new(MockDevCycleMode::Success));
+    let mut client =
+        start_native_workflow_client(&codex_home, &cwd, Some(agent_runtime.clone())).await?;
 
+    let run_id = start_dev_cycle_run(
+        &client,
+        RequestId::Integer(1),
+        json!({
+            "taskDescription": "fix bug",
+            "reviewTypes": ["correctness", "tests"],
+            "experimentSampleRate": 0.0,
+            "baselineResampleRate": 0.0,
+            "testMode": "provided",
+            "testCommands": ["printf ok"]
+        }),
+    )
+    .await?;
+
+    let mut saw_planning_status = false;
+    let mut saw_started_progress = false;
+    let mut saw_integration_status = false;
+    let mut saw_markdown_result = false;
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        while !(saw_planning_status
+            && saw_started_progress
+            && saw_integration_status
+            && saw_markdown_result)
+        {
+            let event = client
+                .next_event()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("in-process event stream closed"))?;
+            match event {
+                InProcessServerEvent::ServerNotification(
+                    ServerNotification::WorkflowRunProgress(notification),
+                ) if notification.run_id == run_id => {
+                    if notification.message == "Started native development cycle" {
+                        saw_started_progress = true;
+                    }
+                    if let Some(status) = notification.status.as_ref()
+                        && status.workflow_status == "planning"
+                    {
+                        assert_eq!(
+                            status,
+                            &codex_app_server_protocol::WorkflowStatusUpdate {
+                                workflow_name: "dev-cycle".to_string(),
+                                workflow_status: "planning".to_string(),
+                                threads: vec![codex_app_server_protocol::WorkflowThreadStatus {
+                                    name: "planner".to_string(),
+                                    status: "creating work packets".to_string(),
+                                },],
+                                child_statuses: Vec::new(),
+                            }
+                        );
+                        saw_planning_status = true;
+                    }
+                    if let Some(status) = notification.status.as_ref()
+                        && status.workflow_status == "integration"
+                    {
+                        saw_integration_status = true;
+                    }
+                }
+                InProcessServerEvent::ServerNotification(
+                    ServerNotification::WorkflowRunMarkdownResult(notification),
+                ) if notification.run_id == run_id => {
+                    assert!(notification.markdown.contains("# Development Cycle"));
+                    assert!(notification.markdown.contains("Review Split:"));
+                    saw_markdown_result = true;
+                }
+                _ => {}
+            }
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+
+    let response = wait_for_workflow_run(&client, RequestId::Integer(2), run_id).await?;
+
+    assert!(response.completed);
+    assert_eq!(response.run.status, WorkflowRunStatus::Succeeded);
+    let output = response.run.output.expect("native workflow output");
+    assert_eq!(output["status"], json!("succeeded"));
+    assert_eq!(output["blockedReason"], JsonValue::Null);
+    assert_eq!(output["integrationBranch"], json!("integration/dev-cycle"));
+    assert_eq!(output["testResults"][0]["stdout"], json!("ok"));
+    assert_eq!(
+        output["verifiedFindings"][0]["title"],
+        json!("Broken behavior")
+    );
+    assert!(
+        output["stateDatabase"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("dev_cycle.sqlite3"))
+    );
+
+    let spawned = agent_runtime.spawned_names();
+    assert!(spawned.contains(&"planner".to_string()));
+    assert!(spawned.contains(&"writer-1".to_string()));
+    assert!(spawned.contains(&"reviewer-correctness".to_string()));
+    assert!(spawned.iter().any(|name| name.starts_with("verifier-")));
+    assert!(spawned.contains(&"integrator".to_string()));
+    assert_eq!(agent_runtime.followup_count(), 1);
+    client.shutdown().await?;
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn workflow_run_start_native_workflow_reports_test_gate_failure() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    append_workflows_config(&codex_home, "\n[workflows.engines.rust]\nenabled = true\n")?;
+    let agent_runtime = Arc::new(MockDevCycleAgentRuntime::new(MockDevCycleMode::Success));
+    let client =
+        start_native_workflow_client(&codex_home, &cwd, Some(agent_runtime.clone())).await?;
+
+    let run_id = start_dev_cycle_run(
+        &client,
+        RequestId::Integer(1),
+        json!({
+            "taskDescription": "fix bug",
+            "reviewTypes": ["correctness", "tests"],
+            "experimentSampleRate": 0.0,
+            "baselineResampleRate": 0.0,
+            "testMode": "provided",
+            "testCommands": ["printf fail >&2; exit 7"]
+        }),
+    )
+    .await?;
+    let response = wait_for_workflow_run(&client, RequestId::Integer(2), run_id).await?;
+
+    assert!(response.completed);
+    assert_eq!(response.run.status, WorkflowRunStatus::Succeeded);
+    let output = response.run.output.expect("native workflow output");
+    assert_eq!(output["status"], json!("failed"));
+    assert_eq!(output["blockedReason"], json!("test gates failed"));
+    assert_eq!(output["testResults"][0]["success"], json!(false));
+    assert_eq!(output["testResults"][0]["stderr"], json!("fail"));
+    assert!(
+        !agent_runtime
+            .spawned_names()
+            .contains(&"integrator".to_string())
+    );
+    client.shutdown().await?;
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn workflow_run_start_native_workflow_fails_when_agent_runtime_fails() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    append_workflows_config(&codex_home, "\n[workflows.engines.rust]\nenabled = true\n")?;
+    let client = start_native_workflow_client(
+        &codex_home,
+        &cwd,
+        Some(Arc::new(MockDevCycleAgentRuntime::new(
+            MockDevCycleMode::PlannerSpawnFails,
+        ))),
+    )
+    .await?;
+
+    let run_id = start_dev_cycle_run(
+        &client,
+        RequestId::Integer(1),
+        json!({
+            "taskDescription": "fix bug",
+            "reviewTypes": ["correctness"],
+            "testMode": "off"
+        }),
+    )
+    .await?;
+    let response = wait_for_workflow_run(&client, RequestId::Integer(2), run_id).await?;
+
+    assert!(response.completed);
+    assert_eq!(response.run.status, WorkflowRunStatus::Failed);
+    assert!(
+        response
+            .run
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("mock planner spawn failed"))
+    );
+    assert_eq!(response.run.output, None);
+    client.shutdown().await?;
+
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn start_native_workflow_client(
+    codex_home: &TempDir,
+    cwd: &TempDir,
+    native_agent_runtime: Option<Arc<dyn NativeWorkflowAgentRuntime>>,
+) -> Result<in_process::InProcessClientHandle> {
     let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
@@ -470,7 +706,7 @@ async fn workflow_run_start_runs_enabled_native_workflow_e2e() -> Result<()> {
         .loader_overrides(loader_overrides.clone())
         .build()
         .await?;
-    let mut client = in_process::start(InProcessStartArgs {
+    Ok(in_process::start(InProcessStartArgs {
         arg0_paths: Arg0DispatchPaths::default(),
         config: Arc::new(config),
         cli_overrides: Vec::new(),
@@ -494,14 +730,23 @@ async fn workflow_run_start_runs_enabled_native_workflow_e2e() -> Result<()> {
         },
         channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
         expose_workflow_app_server: true,
+        native_agent_runtime,
     })
-    .await?;
+    .await?)
+}
+
+#[cfg(unix)]
+async fn start_dev_cycle_run(
+    client: &in_process::InProcessClientHandle,
+    request_id: RequestId,
+    input: JsonValue,
+) -> Result<String> {
     let result = client
         .request(ClientRequest::WorkflowRunStart {
-            request_id: RequestId::Integer(1),
+            request_id,
             params: WorkflowRunStartParams {
                 id: "dev-cycle".to_string(),
-                input: Some(json!({ "stageTests": "off" })),
+                input: Some(input),
                 thread_id: None,
                 stage_session_id: None,
                 approval_handling: None,
@@ -511,59 +756,18 @@ async fn workflow_run_start_runs_enabled_native_workflow_e2e() -> Result<()> {
         .map_err(|err| anyhow::anyhow!("{err:?}"))?;
     let response: WorkflowRunStartResponse = serde_json::from_value(result)?;
     assert_eq!(response.run.status, WorkflowRunStatus::Running);
-    let run_id = response.run.id.clone();
+    Ok(response.run.id)
+}
 
-    let mut saw_planning_status = false;
-    let mut saw_started_progress = false;
-    let mut saw_markdown_result = false;
-    timeout(DEFAULT_READ_TIMEOUT, async {
-        while !(saw_planning_status && saw_started_progress && saw_markdown_result) {
-            let event = client
-                .next_event()
-                .await
-                .ok_or_else(|| anyhow::anyhow!("in-process event stream closed"))?;
-            match event {
-                InProcessServerEvent::ServerNotification(
-                    ServerNotification::WorkflowRunProgress(notification),
-                ) if notification.run_id == run_id => {
-                    if notification.message == "Started native development cycle" {
-                        saw_started_progress = true;
-                    }
-                    if let Some(status) = notification.status
-                        && status.workflow_status == "planning"
-                    {
-                        assert_eq!(
-                            status,
-                            codex_app_server_protocol::WorkflowStatusUpdate {
-                                workflow_name: "dev-cycle".to_string(),
-                                workflow_status: "planning".to_string(),
-                                threads: vec![codex_app_server_protocol::WorkflowThreadStatus {
-                                    name: "planner".to_string(),
-                                    status: "creating work packets".to_string(),
-                                },],
-                                child_statuses: Vec::new(),
-                            }
-                        );
-                        saw_planning_status = true;
-                    }
-                }
-                InProcessServerEvent::ServerNotification(
-                    ServerNotification::WorkflowRunMarkdownResult(notification),
-                ) if notification.run_id == run_id => {
-                    assert!(notification.markdown.contains("# Development Cycle"));
-                    assert!(notification.markdown.contains("Review Split:"));
-                    saw_markdown_result = true;
-                }
-                _ => {}
-            }
-        }
-        anyhow::Ok(())
-    })
-    .await??;
-
+#[cfg(unix)]
+async fn wait_for_workflow_run(
+    client: &in_process::InProcessClientHandle,
+    request_id: RequestId,
+    run_id: String,
+) -> Result<WorkflowRunWaitResponse> {
     let result = client
         .request(ClientRequest::WorkflowRunWait {
-            request_id: RequestId::Integer(2),
+            request_id,
             params: WorkflowRunWaitParams {
                 run_id,
                 timeout_ms: Some(/*timeout_ms*/ 5_000),
@@ -571,20 +775,126 @@ async fn workflow_run_start_runs_enabled_native_workflow_e2e() -> Result<()> {
         })
         .await?
         .map_err(|err| anyhow::anyhow!("{err:?}"))?;
-    let response: WorkflowRunWaitResponse = serde_json::from_value(result)?;
+    Ok(serde_json::from_value(result)?)
+}
 
-    assert!(response.completed);
-    assert_eq!(response.run.status, WorkflowRunStatus::Succeeded);
-    let output = response.run.output.expect("native workflow output");
-    assert_eq!(output["status"], json!("blocked"));
-    assert_eq!(
-        output["blockedReason"],
-        json!("native agent runtime is unavailable")
-    );
-    assert_eq!(output["settings"]["stages"]["tests"], json!("off"));
-    client.shutdown().await?;
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MockDevCycleMode {
+    Success,
+    PlannerSpawnFails,
+}
 
-    Ok(())
+#[cfg(unix)]
+struct MockDevCycleAgentRuntime {
+    mode: MockDevCycleMode,
+    spawns: Mutex<Vec<NativeWorkflowAgentSpawnRequest>>,
+    followups: Mutex<Vec<NativeWorkflowAgentTurnRequest>>,
+    pending_followups: Mutex<Vec<String>>,
+}
+
+#[cfg(unix)]
+impl MockDevCycleAgentRuntime {
+    fn new(mode: MockDevCycleMode) -> Self {
+        Self {
+            mode,
+            spawns: Mutex::new(Vec::new()),
+            followups: Mutex::new(Vec::new()),
+            pending_followups: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn spawned_names(&self) -> Vec<String> {
+        lock_unpoisoned(&self.spawns)
+            .iter()
+            .map(|request| request.name.clone())
+            .collect()
+    }
+
+    fn followup_count(&self) -> usize {
+        lock_unpoisoned(&self.followups).len()
+    }
+}
+
+#[cfg(unix)]
+impl NativeWorkflowAgentRuntime for MockDevCycleAgentRuntime {
+    fn spawn_agent(
+        &self,
+        request: NativeWorkflowAgentSpawnRequest,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<NativeWorkflowAgentHandle>> + Send + '_>> {
+        Box::pin(async move {
+            if self.mode == MockDevCycleMode::PlannerSpawnFails && request.name == "planner" {
+                anyhow::bail!("mock planner spawn failed");
+            }
+            let id = request.name.clone();
+            let name = request.role.clone();
+            lock_unpoisoned(&self.spawns).push(request);
+            Ok(NativeWorkflowAgentHandle { id, name })
+        })
+    }
+
+    fn send_follow_up(
+        &self,
+        request: NativeWorkflowAgentTurnRequest,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            lock_unpoisoned(&self.pending_followups).push(request.agent_id.clone());
+            lock_unpoisoned(&self.followups).push(request);
+            Ok(())
+        })
+    }
+
+    fn wait_for_output(
+        &self,
+        agent_id: &str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<NativeWorkflowAgentOutput>> + Send + '_>> {
+        let agent_id = agent_id.to_string();
+        Box::pin(async move {
+            let text = match agent_id.as_str() {
+                "planner" => "{\"packets\":[\"implement\"]}",
+                "writer-1" => {
+                    let mut pending_followups = lock_unpoisoned(&self.pending_followups);
+                    if let Some(index) = pending_followups.iter().position(|id| id == &agent_id) {
+                        pending_followups.remove(index);
+                        "{\"commits\":[\"fix-commit\"]}"
+                    } else {
+                        "{\"commits\":[\"writer-commit\"]}"
+                    }
+                }
+                "review-split-proposer" => "{}",
+                agent if agent.starts_with("reviewer-grouping-v1") => {
+                    "{\"findings\":[{\"reviewTypeId\":\"correctness\",\"title\":\"Broken behavior\",\"details\":\"details\",\"filePath\":\"src/lib.rs\",\"line\":1,\"severity\":\"high\"}]}"
+                }
+                "reviewer-correctness" => {
+                    "{\"findings\":[{\"title\":\"Broken behavior\",\"details\":\"details\",\"filePath\":\"src/lib.rs\",\"line\":1,\"severity\":\"high\"}]}"
+                }
+                "reviewer-tests" => "{\"findings\":[]}",
+                agent if agent.starts_with("baseline-reviewer-separate-v1-correctness") => {
+                    "{\"findings\":[{\"title\":\"Broken behavior\",\"details\":\"details\",\"filePath\":\"src/lib.rs\",\"line\":1,\"severity\":\"high\"}]}"
+                }
+                agent if agent.starts_with("baseline-reviewer-separate-v1-tests") => {
+                    "{\"findings\":[]}"
+                }
+                agent if agent.starts_with("verifier-") => {
+                    "{\"accepted\":true,\"reason\":\"confirmed\"}"
+                }
+                "integrator" => "{\"integrationBranch\":\"integration/dev-cycle\"}",
+                _ => "{}",
+            };
+            Ok(NativeWorkflowAgentOutput {
+                agent_id,
+                text: text.to_string(),
+                metadata: JsonValue::Null,
+            })
+        })
+    }
+}
+
+#[cfg(unix)]
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(unix)]
@@ -652,6 +962,7 @@ async fn workflow_run_shutdown_kills_active_runtime_process_e2e() -> Result<()> 
         },
         channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
         expose_workflow_app_server: true,
+        native_agent_runtime: None,
     })
     .await?;
     let result = client

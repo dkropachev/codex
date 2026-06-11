@@ -48,6 +48,7 @@ use codex_app_server_protocol::WorkflowValidationStatus;
 use codex_config::types::WorkflowDefaultLocation;
 use codex_config::types::WorkflowsConfigToml;
 use codex_core::config::Config;
+use codex_workflows::NativeWorkflowAgentRuntime;
 use codex_workflows::WorkflowCommand;
 use codex_workflows::WorkflowCommandContext;
 use codex_workflows::WorkflowCommandProgress;
@@ -89,8 +90,9 @@ impl WorkflowRequestProcessor {
         config_manager: ConfigManager,
         outgoing: Arc<OutgoingMessageSender>,
         workflow_app_server_url: Option<String>,
+        native_agent_runtime: Option<Arc<dyn NativeWorkflowAgentRuntime>>,
     ) -> Self {
-        let workflow_runs = WorkflowRunManager::new(Arc::clone(&outgoing));
+        let workflow_runs = WorkflowRunManager::new(Arc::clone(&outgoing), native_agent_runtime);
         Self {
             config,
             config_manager,
@@ -1309,6 +1311,7 @@ export default async function run(_ctx: WorkflowContext, input: WorkflowInput): 
             config_manager,
             Arc::clone(&outgoing),
             /*workflow_app_server_url*/ None,
+            /*native_agent_runtime*/ None,
         );
 
         let Some(ClientResponsePayload::WorkflowRepair(response)) = processor

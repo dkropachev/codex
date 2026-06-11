@@ -267,6 +267,7 @@ async fn build_test_processor(
         remote_control_handle: None,
         plugin_startup_tasks: crate::PluginStartupTasks::Start,
         workflow_app_server_url: None,
+        native_agent_runtime: None,
     }));
     (processor, outgoing_rx)
 }

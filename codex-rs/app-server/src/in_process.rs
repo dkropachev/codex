@@ -161,6 +161,8 @@ pub struct InProcessStartArgs {
     pub channel_capacity: usize,
     /// Whether to expose this embedded runtime on the app-server Unix control socket.
     pub expose_workflow_app_server: bool,
+    /// Native agent runtime used by compiled-in Rust workflows.
+    pub native_agent_runtime: Option<Arc<dyn codex_workflows::NativeWorkflowAgentRuntime>>,
 }
 
 /// Event emitted from the app-server to the in-process client.
@@ -552,6 +554,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 remote_control_handle: None,
                 plugin_startup_tasks: crate::PluginStartupTasks::Start,
                 workflow_app_server_url,
+                native_agent_runtime: args.native_agent_runtime,
             }));
             let mut thread_created_rx = processor.thread_created_receiver();
             let session = Arc::new(ConnectionSessionState::new(ConnectionOrigin::InProcess));
@@ -1155,6 +1158,7 @@ mod tests {
             },
             channel_capacity,
             expose_workflow_app_server,
+            native_agent_runtime: None,
         };
         let mut client = start(args).await.expect("in-process runtime should start");
         client._test_codex_home = Some(codex_home);

@@ -27,6 +27,7 @@ use codex_app_server_protocol::WorkflowRunWaitResponse;
 use codex_app_server_protocol::WorkflowStatusUpdate as ApiWorkflowStatusUpdate;
 use codex_app_server_protocol::WorkflowThreadStatus as ApiWorkflowThreadStatus;
 use codex_core::config::Config;
+use codex_workflows::NativeWorkflowAgentRuntime;
 use codex_workflows::NativeWorkflowModelCandidate;
 use codex_workflows::WorkflowCommand;
 use codex_workflows::WorkflowCommandContext;
@@ -53,6 +54,7 @@ struct WorkflowRunManagerInner {
     runs: Mutex<HashMap<String, ManagedWorkflowRun>>,
     notify: Notify,
     outgoing: Arc<OutgoingMessageSender>,
+    native_agent_runtime: Option<Arc<dyn NativeWorkflowAgentRuntime>>,
 }
 
 struct ManagedWorkflowRun {
@@ -72,12 +74,16 @@ pub(crate) struct WorkflowRunStartArgs {
 }
 
 impl WorkflowRunManager {
-    pub(crate) fn new(outgoing: Arc<OutgoingMessageSender>) -> Self {
+    pub(crate) fn new(
+        outgoing: Arc<OutgoingMessageSender>,
+        native_agent_runtime: Option<Arc<dyn NativeWorkflowAgentRuntime>>,
+    ) -> Self {
         Self {
             inner: Arc::new(WorkflowRunManagerInner {
                 runs: Mutex::new(HashMap::new()),
                 notify: Notify::new(),
                 outgoing,
+                native_agent_runtime,
             }),
         }
     }
@@ -408,7 +414,7 @@ async fn run_workflow_blocking(
             force_process_runtime: true,
             cancellation_flag: Some(Arc::clone(&canceled)),
             model_candidates: native_model_candidates_from_config(&args.config),
-            native_agent_runtime: None,
+            native_agent_runtime: manager.inner.native_agent_runtime.clone(),
         };
         let thread_id = args.thread_id.clone();
         let runtime_event_handler = |event: &WorkflowRuntimeEvent| {
@@ -597,7 +603,7 @@ mod tests {
             outgoing_tx,
             codex_analytics::AnalyticsEventsClient::disabled(),
         ));
-        (WorkflowRunManager::new(outgoing), outgoing_rx)
+        (WorkflowRunManager::new(outgoing, None), outgoing_rx)
     }
 
     async fn insert_running(manager: &WorkflowRunManager, run: WorkflowRun) {

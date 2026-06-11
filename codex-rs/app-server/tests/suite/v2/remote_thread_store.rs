@@ -99,6 +99,7 @@ fn thread_start_with_non_local_thread_store_does_not_create_local_persistence() 
                     },
                     channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
                     expose_workflow_app_server: false,
+                    native_agent_runtime: None,
                 })
                 .await?;
 

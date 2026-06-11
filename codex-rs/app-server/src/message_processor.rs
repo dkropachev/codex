@@ -293,6 +293,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) remote_control_handle: Option<RemoteControlHandle>,
     pub(crate) plugin_startup_tasks: crate::PluginStartupTasks,
     pub(crate) workflow_app_server_url: Option<String>,
+    pub(crate) native_agent_runtime: Option<Arc<dyn codex_workflows::NativeWorkflowAgentRuntime>>,
 }
 
 impl MessageProcessor {
@@ -316,6 +317,7 @@ impl MessageProcessor {
             remote_control_handle,
             plugin_startup_tasks,
             workflow_app_server_url,
+            native_agent_runtime,
         } = args;
         auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
@@ -451,6 +453,7 @@ impl MessageProcessor {
             config_manager.clone(),
             Arc::clone(&outgoing),
             workflow_app_server_url,
+            native_agent_runtime,
         );
         let artifact_processor = ArtifactRequestProcessor::new(Arc::clone(&config));
         if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {

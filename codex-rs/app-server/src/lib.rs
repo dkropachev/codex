@@ -749,6 +749,7 @@ pub async fn run_main_with_transport_options(
             remote_control_handle: Some(remote_control_handle),
             plugin_startup_tasks: runtime_options.plugin_startup_tasks,
             workflow_app_server_url,
+            native_agent_runtime: None,
         }));
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();

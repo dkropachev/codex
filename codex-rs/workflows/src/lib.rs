@@ -27,6 +27,11 @@ mod workflow_host;
 mod workflow_runtime;
 
 pub use api_contract::WorkflowApiContract;
+pub use codex_native_workflow::NativeWorkflowAgentHandle;
+pub use codex_native_workflow::NativeWorkflowAgentOutput;
+pub use codex_native_workflow::NativeWorkflowAgentRuntime;
+pub use codex_native_workflow::NativeWorkflowAgentSpawnRequest;
+pub use codex_native_workflow::NativeWorkflowAgentTurnRequest;
 pub use codex_native_workflow::NativeWorkflowModelCandidate;
 pub use command::WorkflowCommand;
 pub use command::WorkflowCommandParseError;
