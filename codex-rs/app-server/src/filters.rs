@@ -3,6 +3,19 @@ use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 
+const ALL_THREAD_SOURCE_KINDS: &[ThreadSourceKind] = &[
+    ThreadSourceKind::Cli,
+    ThreadSourceKind::VsCode,
+    ThreadSourceKind::Exec,
+    ThreadSourceKind::AppServer,
+    ThreadSourceKind::SubAgent,
+    ThreadSourceKind::SubAgentReview,
+    ThreadSourceKind::SubAgentCompact,
+    ThreadSourceKind::SubAgentThreadSpawn,
+    ThreadSourceKind::SubAgentOther,
+    ThreadSourceKind::Unknown,
+];
+
 pub(crate) fn compute_source_filters(
     source_kinds: Option<Vec<ThreadSourceKind>>,
 ) -> (Vec<CoreSessionSource>, Option<Vec<ThreadSourceKind>>) {
@@ -12,6 +25,13 @@ pub(crate) fn compute_source_filters(
 
     if source_kinds.is_empty() {
         return (INTERACTIVE_SESSION_SOURCES.to_vec(), None);
+    }
+
+    if ALL_THREAD_SOURCE_KINDS
+        .iter()
+        .all(|kind| source_kinds.contains(kind))
+    {
+        return (Vec::new(), None);
     }
 
     let requires_post_filter = source_kinds.iter().any(|kind| {
@@ -101,6 +121,15 @@ mod tests {
         let (allowed_sources, filter) = compute_source_filters(Some(Vec::new()));
 
         assert_eq!(allowed_sources, INTERACTIVE_SESSION_SOURCES.to_vec());
+        assert_eq!(filter, None);
+    }
+
+    #[test]
+    fn compute_source_filters_all_source_kinds_disable_filtering() {
+        let (allowed_sources, filter) =
+            compute_source_filters(Some(ALL_THREAD_SOURCE_KINDS.to_vec()));
+
+        assert_eq!(allowed_sources, Vec::new());
         assert_eq!(filter, None);
     }
 

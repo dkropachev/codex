@@ -62,6 +62,24 @@ fn resume_accepts_output_flags_after_subcommand() {
 }
 
 #[test]
+fn resume_accepts_include_non_interactive_flag() {
+    let cli = Cli::parse_from([
+        "codex-exec",
+        "resume",
+        "--last",
+        "--include-non-interactive",
+        "echo resumed",
+    ]);
+
+    let Some(Command::Resume(args)) = cli.command else {
+        panic!("expected resume command");
+    };
+    assert!(args.last);
+    assert!(args.include_non_interactive);
+    assert_eq!(args.prompt.as_deref(), Some("echo resumed"));
+}
+
+#[test]
 fn parses_config_isolation_flags() {
     let cli = Cli::parse_from([
         "codex-exec",
