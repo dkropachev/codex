@@ -19,6 +19,7 @@ use std::time::UNIX_EPOCH;
 mod branch_diff;
 mod inference;
 mod learning_hints;
+mod remote_commit;
 mod repo_ci_ai_learning;
 
 const MANIFEST_VERSION: u32 = 1;
@@ -136,6 +137,16 @@ pub struct LearnedPlan {
 pub use branch_diff::BranchDiffSnapshot;
 pub use learning_hints::RepoCiLearningHints;
 pub use learning_hints::WorkflowRunHint;
+pub use remote_commit::RemoteCommitApplied;
+pub use remote_commit::RemoteCommitChangeDetails;
+pub use remote_commit::RemoteCommitDecision;
+pub use remote_commit::RemoteCommitDecisionContext;
+pub use remote_commit::RemoteCommitStrategy;
+pub use remote_commit::apply_remote_commit_decision;
+pub use remote_commit::fallback_remote_commit_decision;
+pub use remote_commit::remote_commit_decision_context;
+pub use remote_commit::remote_commit_decision_schema;
+pub use remote_commit::render_remote_commit_decision_prompt;
 pub use repo_ci_ai_learning::AI_LEARN_MAX_ATTEMPTS;
 pub use repo_ci_ai_learning::RepoCiAiLearnedPlan;
 pub use repo_ci_ai_learning::render_repo_ci_learning_prompt;
