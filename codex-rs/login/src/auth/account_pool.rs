@@ -15,6 +15,7 @@ use serde_json::Value;
 use crate::CodexAuth;
 
 use super::manager::AuthManager;
+use super::manager::RefreshTokenError;
 
 const USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
@@ -218,6 +219,13 @@ impl AccountPoolManager {
         }
         reports.sort_by(|left, right| left.pool_id.cmp(&right.pool_id));
         AccountPoolUsageRefreshReport { pools: reports }
+    }
+
+    pub async fn refresh_active_token(&self) -> Result<(), RefreshTokenError> {
+        let Some(pool) = self.pools.get(&self.default_pool) else {
+            return Ok(());
+        };
+        pool.refresh_active_token().await
     }
 
     pub fn set_usage_for_testing(
@@ -469,6 +477,12 @@ impl AccountPool {
     ) {
         if let Ok(mut guard) = self.state.write() {
             let state = guard.entry(account_id.to_string()).or_default();
+            if regular_remaining.is_some_and(|remaining| remaining > 0) {
+                state.regular_exhausted = false;
+            }
+            if spark_remaining.is_some_and(|remaining| remaining > 0) {
+                state.spark_exhausted = false;
+            }
             state.usage = Some(MemberUsage {
                 regular_remaining,
                 spark_remaining,
@@ -534,6 +548,23 @@ impl AccountPool {
         self.members
             .iter()
             .any(|member| !self.is_exhausted(&member.account_id, bucket))
+    }
+
+    async fn refresh_active_token(&self) -> Result<(), RefreshTokenError> {
+        if self.active_account_id().is_none() {
+            let _ = self.select_cached_auth(AccountPoolBucket::Regular);
+        }
+        let Some(account_id) = self.active_account_id() else {
+            return Ok(());
+        };
+        let Some(member) = self
+            .members
+            .iter()
+            .find(|member| member.account_id == account_id)
+        else {
+            return Ok(());
+        };
+        member.manager.refresh_token_unpooled().await
     }
 }
 
@@ -953,6 +984,40 @@ mod tests {
         assert_eq!(
             auth.get_account_email().as_deref(),
             Some("personal@example.com")
+        );
+    }
+
+    #[tokio::test]
+    async fn refreshed_positive_usage_makes_exhausted_member_available_again() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        write_chatgpt_auth(codex_home.path(), "work-pro", "work@example.com");
+        write_chatgpt_auth(codex_home.path(), "personal-pro", "personal@example.com");
+
+        let pool = pool_manager(
+            codex_home.path(),
+            AccountPoolPolicyToml::Drain,
+            vec!["work-pro", "personal-pro"],
+        )
+        .await;
+        pool.mark_exhausted(
+            "work-pro",
+            AccountPoolBucket::Regular,
+            "usage limit reached".to_string(),
+        );
+        pool.set_usage_for_testing(
+            "work-pro",
+            Some(100),
+            /*spark_remaining*/ None,
+            Instant::now(),
+        );
+
+        let auth = pool
+            .auth()
+            .await
+            .expect("pool should select refreshed auth");
+        assert_eq!(
+            auth.get_account_email().as_deref(),
+            Some("work@example.com")
         );
     }
 
