@@ -1,0 +1,19 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-repo-ci"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_repo_ci"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
