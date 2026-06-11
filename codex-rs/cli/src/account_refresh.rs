@@ -54,7 +54,7 @@ async fn refresh_single_account(config: &Config, account_id: &str) -> ! {
     match CodexAuth::from_auth_storage(
         &account_home,
         config.cli_auth_credentials_store_mode,
-        Some(&config.chatgpt_base_url),
+        Some(config.chatgpt_base_url.as_str()),
     )
     .await
     {

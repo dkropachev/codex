@@ -198,7 +198,7 @@ async fn credential_status(
     match CodexAuth::from_auth_storage(
         codex_home,
         config.cli_auth_credentials_store_mode,
-        Some(&config.chatgpt_base_url),
+        Some(config.chatgpt_base_url.as_str()),
     )
     .await
     {
