@@ -14,8 +14,10 @@ use std::path::PathBuf;
 mod lifecycle;
 
 pub use lifecycle::MODEL_ROUTER_LIFECYCLE_EVENT_DEMOTED;
+pub use lifecycle::MODEL_ROUTER_LIFECYCLE_EVENT_EVALUATING;
 pub use lifecycle::MODEL_ROUTER_LIFECYCLE_EVENT_PROMOTED;
 pub use lifecycle::MODEL_ROUTER_LIFECYCLE_EVENT_PROMOTION_BLOCKED;
+pub use lifecycle::MODEL_ROUTER_LIFECYCLE_EVENT_REJECTED;
 pub use lifecycle::MODEL_ROUTER_LIFECYCLE_SOURCE_AUTO;
 pub use lifecycle::MODEL_ROUTER_LIFECYCLE_SOURCE_MANUAL;
 pub use lifecycle::ModelRouterLifecycleCandidateStats;
@@ -299,6 +301,24 @@ impl StateRuntime {
                 row.try_get("counterfactual_cost_usd_micros")?,
             ),
         })
+    }
+
+    pub async fn model_router_route_max_observed_total_tokens(
+        &self,
+        task_key: &str,
+    ) -> anyhow::Result<Option<i64>> {
+        let row = sqlx::query(
+            r#"
+            SELECT MAX(total_tokens) AS max_total_tokens
+            FROM model_router_ledger
+            WHERE task_key = ?
+              AND request_kind IN ('production', 'shadow')
+            "#,
+        )
+        .bind(task_key)
+        .fetch_one(self.pool.as_ref())
+        .await?;
+        Ok(row.try_get("max_total_tokens")?)
     }
 
     pub async fn model_router_usage_summary(
@@ -1213,6 +1233,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn route_max_observed_total_tokens_uses_production_and_shadow_only() {
+        let codex_home = TempDir::new().expect("temp dir");
+        let runtime = StateRuntime::init(codex_home.path().to_path_buf(), "test".to_string())
+            .await
+            .expect("state runtime");
+
+        for (task_key, request_kind, total_tokens) in [
+            ("module.repo_ci.review", RouterRequestKind::Production, 100),
+            ("module.repo_ci.review", RouterRequestKind::Shadow, 250),
+            ("module.repo_ci.review", RouterRequestKind::Judge, 1_000),
+            ("module.other", RouterRequestKind::Production, 900),
+        ] {
+            runtime
+                .record_model_router_ledger_entry(ModelRouterLedgerEntry {
+                    task_key: task_key.to_string(),
+                    request_kind,
+                    model_provider: Some("openai".to_string()),
+                    model: Some("model".to_string()),
+                    account_id: None,
+                    token_usage: TokenUsage {
+                        input_tokens: total_tokens,
+                        cached_input_tokens: 0,
+                        output_tokens: 0,
+                        reasoning_output_tokens: 0,
+                        total_tokens,
+                    },
+                    actual_cost_usd_micros: 0,
+                    counterfactual_cost_usd_micros: 0,
+                    price_confidence: 0.0,
+                    outcome: None,
+                })
+                .await
+                .expect("record route");
+        }
+
+        assert_eq!(
+            runtime
+                .model_router_route_max_observed_total_tokens("module.repo_ci.review")
+                .await
+                .expect("max observed tokens"),
+            Some(250)
+        );
+        assert_eq!(
+            runtime
+                .model_router_route_max_observed_total_tokens("module.missing")
+                .await
+                .expect("missing max observed tokens"),
+            None
+        );
+    }
+
+    #[tokio::test]
     async fn usage_summary_groups_costs_tokens_and_coverage_gaps() {
         let codex_home = TempDir::new().expect("temp dir");
         let runtime = StateRuntime::init(codex_home.path().to_path_buf(), "test".to_string())
@@ -1827,7 +1899,9 @@ mod tests {
         let expected_counts = ModelRouterLifecycleEventCounts {
             promoted: 2,
             demoted: 1,
+            evaluating: 0,
             promotion_blocked: 1,
+            rejected: 0,
             auto: 2,
             manual: 2,
         };
@@ -1858,7 +1932,9 @@ mod tests {
             ModelRouterLifecycleEventCounts {
                 promoted: 0,
                 demoted: 0,
+                evaluating: 0,
                 promotion_blocked: 1,
+                rejected: 0,
                 auto: 1,
                 manual: 0,
             }
@@ -1877,6 +1953,121 @@ mod tests {
                 .expect("missing stats")
                 .candidates
                 .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn lifecycle_persists_evaluating_and_rejected_statuses() {
+        let codex_home = TempDir::new().expect("temp dir");
+        let runtime = StateRuntime::init(codex_home.path().to_path_buf(), "test".to_string())
+            .await
+            .expect("state runtime");
+        let task_key = "module.repo_ci.review";
+        let candidate_identity = "candidate";
+        let base_candidate_identity = "base";
+        let summary = ModelRouterShadowEvaluationSummary {
+            task_key: task_key.to_string(),
+            phase: "promotion".to_string(),
+            candidate_identity: candidate_identity.to_string(),
+            base_candidate_identity: base_candidate_identity.to_string(),
+            evaluated_count: 1,
+            success_count: 0,
+            success_rate: 0.0,
+            average_score: Some(0.0),
+            average_confidence: 1.0,
+            cost_used_usd_micros: 10,
+            tokens_used: 20,
+            latest_evaluation_id: Some(7),
+            latest_evaluation_at_ms: Some(9),
+        };
+
+        runtime
+            .mark_model_router_lifecycle_candidate_evaluating(
+                ModelRouterLifecyclePromotionRecord {
+                    task_key: task_key.to_string(),
+                    candidate_identity: candidate_identity.to_string(),
+                    base_candidate_identity: base_candidate_identity.to_string(),
+                    status: MODEL_ROUTER_LIFECYCLE_EVENT_EVALUATING.to_string(),
+                    rule_id: Some("review".to_string()),
+                    production_model_provider: Some("openai".to_string()),
+                    production_model: Some("gpt-5.5".to_string()),
+                    base_model_provider: Some("openai".to_string()),
+                    base_model: Some("gpt-5.4".to_string()),
+                    promoted_at_ms: 10,
+                    updated_at_ms: 10,
+                    reason: Some("started".to_string()),
+                },
+                ModelRouterLifecycleTransitionContext {
+                    source: MODEL_ROUTER_LIFECYCLE_SOURCE_AUTO.to_string(),
+                    lifecycle_window: Some("all".to_string()),
+                    shadow_phase: Some("promotion".to_string()),
+                    shadow_summary: Some(summary.clone()),
+                    failed_gates_json: None,
+                },
+            )
+            .await
+            .expect("mark evaluating");
+        runtime
+            .reject_model_router_lifecycle_candidate(
+                ModelRouterLifecyclePromotionRecord {
+                    task_key: task_key.to_string(),
+                    candidate_identity: candidate_identity.to_string(),
+                    base_candidate_identity: base_candidate_identity.to_string(),
+                    status: MODEL_ROUTER_LIFECYCLE_EVENT_REJECTED.to_string(),
+                    rule_id: Some("review".to_string()),
+                    production_model_provider: Some("openai".to_string()),
+                    production_model: Some("gpt-5.5".to_string()),
+                    base_model_provider: Some("openai".to_string()),
+                    base_model: Some("gpt-5.4".to_string()),
+                    promoted_at_ms: 20,
+                    updated_at_ms: 20,
+                    reason: Some("failed gates".to_string()),
+                },
+                ModelRouterLifecycleTransitionContext {
+                    source: MODEL_ROUTER_LIFECYCLE_SOURCE_AUTO.to_string(),
+                    lifecycle_window: Some("all".to_string()),
+                    shadow_phase: Some("promotion".to_string()),
+                    shadow_summary: Some(summary),
+                    failed_gates_json: Some(r#"[{"gate":"min_success_rate"}]"#.to_string()),
+                },
+            )
+            .await
+            .expect("reject");
+
+        assert_eq!(
+            runtime
+                .model_router_lifecycle_promotions(Some(task_key))
+                .await
+                .expect("promotions")
+                .first()
+                .map(|promotion| promotion.status.as_str()),
+            Some(MODEL_ROUTER_LIFECYCLE_EVENT_REJECTED)
+        );
+        let stats = runtime
+            .model_router_lifecycle_stats(ModelRouterLifecycleStatsQuery {
+                window_start_ms: None,
+                window_end_ms: i64::MAX,
+                task_key: Some(task_key.to_string()),
+                candidate_identity: Some(candidate_identity.to_string()),
+                event_limit: 50,
+            })
+            .await
+            .expect("stats");
+        assert_eq!(
+            stats.totals,
+            ModelRouterLifecycleEventCounts {
+                promoted: 0,
+                demoted: 0,
+                evaluating: 1,
+                promotion_blocked: 0,
+                rejected: 1,
+                auto: 2,
+                manual: 0,
+            }
+        );
+        assert_eq!(
+            stats.candidates[0].current_status.as_deref(),
+            Some(MODEL_ROUTER_LIFECYCLE_EVENT_REJECTED)
         );
     }
 
