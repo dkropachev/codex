@@ -1,3 +1,7 @@
+use codex_config::config_toml::ModelPolicyReasoningEffortToml;
+use codex_config::config_toml::ModelPolicyRouteToml;
+use codex_config::config_toml::ModelPolicyRuleToml;
+use codex_config::config_toml::ModelPolicyToml;
 use codex_core::CodexThread;
 use codex_core::REVIEW_PROMPT;
 use codex_core::config::Config;
@@ -434,6 +438,70 @@ async fn review_uses_custom_review_model_from_config() {
     assert_eq!(request.path(), "/v1/responses");
     let body = request.body_json();
     assert_eq!(body["model"].as_str().unwrap(), "gpt-5.4");
+
+    let _codex_home_guard = codex_home;
+    server.verify().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_uses_model_policy_override_when_configured() {
+    skip_if_no_network!();
+
+    let (server, request_log) =
+        start_responses_server_with_sse(completed_sse(), /*expected_requests*/ 1).await;
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |cfg| {
+        cfg.model = Some("gpt-4.1".to_string());
+        cfg.review_model = Some("gpt-5.4".to_string());
+        cfg.model_policy = Some(ModelPolicyToml {
+            enabled: true,
+            rules: vec![ModelPolicyRuleToml {
+                source: Some(vec!["subagent.review".to_string()]),
+                route: ModelPolicyRouteToml {
+                    model: Some("gpt-5.2".to_string()),
+                    reasoning_effort: Some(ModelPolicyReasoningEffortToml::Low),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            default_route: None,
+        });
+    })
+    .await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "use policy model".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    let _closed = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+                review_output: None
+            })
+        )
+    })
+    .await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = request_log.single_request();
+    assert_eq!(request.path(), "/v1/responses");
+    let body = request.body_json();
+    assert_eq!(body["model"].as_str(), Some("gpt-5.2"));
+    assert_eq!(
+        body.pointer("/reasoning/effort")
+            .and_then(|value| value.as_str()),
+        Some("low")
+    );
 
     let _codex_home_guard = codex_home;
     server.verify().await;
