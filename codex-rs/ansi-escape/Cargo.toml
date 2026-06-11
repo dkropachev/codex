@@ -20,3 +20,6 @@ ratatui = { workspace = true, features = [
     "unstable-widget-ref",
 ] }
 tracing = { workspace = true, features = ["log"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
