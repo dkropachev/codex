@@ -6,6 +6,8 @@ use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
+use crate::model_policy::ModelPolicySource;
+use crate::model_policy::apply_model_policy;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v1;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -112,6 +114,25 @@ async fn handle_spawn_agent(
             .await
             .map_err(FunctionCallError::RespondToModel)?;
     }
+    let spawn_source = thread_spawn_source(
+        session.thread_id,
+        &turn.session_source,
+        child_depth,
+        role_name,
+        /*task_name*/ None,
+    )?;
+    if args.model.is_none()
+        && args.reasoning_effort.is_none()
+        && args.service_tier.is_none()
+        && let codex_protocol::protocol::SessionSource::SubAgent(source) = spawn_source.clone()
+        && let Err(err) = apply_model_policy(
+            &mut config,
+            ModelPolicySource::SubAgent(source),
+            prompt.len(),
+        )
+    {
+        tracing::warn!("failed to apply spawn_agent model policy: {err}");
+    }
     apply_spawn_agent_service_tier(
         &session,
         &mut config,
@@ -124,13 +145,7 @@ async fn handle_spawn_agent(
     let result = Box::pin(session.services.agent_control.spawn_agent_with_metadata(
         config,
         input_items,
-        Some(thread_spawn_source(
-            session.thread_id,
-            &turn.session_source,
-            child_depth,
-            role_name,
-            /*task_name*/ None,
-        )?),
+        Some(spawn_source),
         SpawnAgentOptions {
             fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
             fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),

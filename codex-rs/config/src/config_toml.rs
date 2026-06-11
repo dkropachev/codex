@@ -287,6 +287,10 @@ pub struct ConfigToml {
     #[serde(default, deserialize_with = "deserialize_account_pool")]
     pub account_pool: Option<AccountPoolToml>,
 
+    /// Optional routing policy for internal model calls.
+    #[serde(default, deserialize_with = "deserialize_model_policy")]
+    pub model_policy: Option<ModelPolicyToml>,
+
     /// Optional adaptive router for internal model calls.
     #[serde(default, deserialize_with = "deserialize_model_router")]
     pub model_router: Option<ModelRouterToml>,
@@ -588,6 +592,79 @@ pub struct AccountPoolDefinitionToml {
 pub enum AccountPoolPolicyToml {
     Drain,
     LoadBalance,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelPolicyToml {
+    #[serde(default)]
+    pub enabled: bool,
+
+    #[serde(default)]
+    pub rules: Vec<ModelPolicyRuleToml>,
+
+    #[serde(default)]
+    pub default_route: Option<ModelPolicyRouteToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelPolicyRuleToml {
+    /// Source selector, for example `subagent`, `subagent.review`,
+    /// `module.memory_consolidation`, or `*`. Accepts one selector or a list.
+    #[serde(
+        default,
+        alias = "sources",
+        deserialize_with = "deserialize_model_policy_sources"
+    )]
+    pub source: Option<Vec<String>>,
+
+    /// Inclusive lower prompt-size bound, in UTF-8 bytes.
+    pub min_prompt_bytes: Option<usize>,
+
+    /// Inclusive upper prompt-size bound, in UTF-8 bytes.
+    pub max_prompt_bytes: Option<usize>,
+
+    #[serde(flatten)]
+    pub route: ModelPolicyRouteToml,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelPolicyRouteToml {
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub service_tier: Option<ServiceTier>,
+    pub reasoning_effort: Option<ModelPolicyReasoningEffortToml>,
+    pub account_pool: Option<String>,
+    pub account: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelPolicyReasoningEffortToml {
+    /// Preserve the reasoning effort already selected by the parent/default config.
+    Inherit,
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    XHigh,
+}
+
+impl ModelPolicyReasoningEffortToml {
+    pub fn as_reasoning_effort(self) -> Option<ReasoningEffort> {
+        match self {
+            ModelPolicyReasoningEffortToml::Inherit => None,
+            ModelPolicyReasoningEffortToml::None => Some(ReasoningEffort::None),
+            ModelPolicyReasoningEffortToml::Minimal => Some(ReasoningEffort::Minimal),
+            ModelPolicyReasoningEffortToml::Low => Some(ReasoningEffort::Low),
+            ModelPolicyReasoningEffortToml::Medium => Some(ReasoningEffort::Medium),
+            ModelPolicyReasoningEffortToml::High => Some(ReasoningEffort::High),
+            ModelPolicyReasoningEffortToml::XHigh => Some(ReasoningEffort::XHigh),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
@@ -1278,6 +1355,117 @@ where
     Ok(account_pool)
 }
 
+pub fn validate_model_policy(model_policy: &ModelPolicyToml) -> Result<(), String> {
+    if !model_policy.enabled {
+        return Ok(());
+    }
+
+    if model_policy.rules.is_empty() && model_policy.default_route.is_none() {
+        return Err(
+            "model_policy: enabled model policy must define rules or default_route".to_string(),
+        );
+    }
+    if let Some(route) = &model_policy.default_route {
+        validate_model_policy_route("model_policy.default_route", route)?;
+    }
+    for (index, rule) in model_policy.rules.iter().enumerate() {
+        let label = format!("model_policy.rules[{index}]");
+        if let Some(sources) = &rule.source
+            && sources.is_empty()
+        {
+            return Err(format!("{label}: source must not be an empty list"));
+        }
+        if let Some(sources) = &rule.source {
+            for source in sources {
+                if source.trim().is_empty() {
+                    return Err(format!("{label}: source entries must not be empty"));
+                }
+            }
+        }
+        if let (Some(min), Some(max)) = (rule.min_prompt_bytes, rule.max_prompt_bytes)
+            && min > max
+        {
+            return Err(format!(
+                "{label}: min_prompt_bytes must be less than or equal to max_prompt_bytes"
+            ));
+        }
+        if rule.source.is_none()
+            && rule.min_prompt_bytes.is_none()
+            && rule.max_prompt_bytes.is_none()
+        {
+            return Err(format!(
+                "{label}: rule must specify source or a prompt-size bound"
+            ));
+        }
+        validate_model_policy_route(&label, &rule.route)?;
+    }
+
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum OneOrManyStrings {
+    One(String),
+    Many(Vec<String>),
+}
+
+fn deserialize_model_policy_sources<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(value) = Option::<OneOrManyStrings>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    Ok(Some(match value {
+        OneOrManyStrings::One(source) => vec![source],
+        OneOrManyStrings::Many(sources) => sources,
+    }))
+}
+
+fn validate_model_policy_route(label: &str, route: &ModelPolicyRouteToml) -> Result<(), String> {
+    if route.model.is_none()
+        && route.model_provider.is_none()
+        && route.service_tier.is_none()
+        && route.reasoning_effort.is_none()
+        && route.account_pool.is_none()
+        && route.account.is_none()
+    {
+        return Err(format!("{label}: route must set at least one target field"));
+    }
+    if route.account_pool.is_some() && route.account.is_some() {
+        return Err(format!(
+            "{label}: account_pool and account are mutually exclusive"
+        ));
+    }
+    if let Some(account) = &route.account
+        && (account.trim().is_empty() || !is_safe_account_id(account))
+    {
+        return Err(format!(
+            "{label}: account must not be empty or contain path separators or parent directory components"
+        ));
+    }
+    if let Some(account_pool) = &route.account_pool
+        && account_pool.trim().is_empty()
+    {
+        return Err(format!("{label}: account_pool must not be empty"));
+    }
+    Ok(())
+}
+
+fn deserialize_model_policy<'de, D>(deserializer: D) -> Result<Option<ModelPolicyToml>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let model_policy = Option::<ModelPolicyToml>::deserialize(deserializer)?;
+    if let Some(model_policy) = model_policy.as_ref() {
+        validate_model_policy(model_policy).map_err(serde::de::Error::custom)?;
+    }
+    Ok(model_policy)
+}
+
 pub fn validate_model_router(model_router: &ModelRouterToml) -> Result<(), String> {
     if !model_router.enabled {
         return Ok(());
@@ -1736,6 +1924,71 @@ intelligence_score = 0.8
             account_pool.pools.get("codex-pro").expect("pool").policy,
             AccountPoolPolicyToml::LoadBalance
         );
+    }
+
+    #[test]
+    fn parses_model_policy_config() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            [model_policy]
+            enabled = true
+
+            [[model_policy.rules]]
+            source = ["subagent", "module.repo_ci"]
+            max_prompt_bytes = 20000
+            model = "gpt-5.3-codex-spark"
+            service_tier = "flex"
+            reasoning_effort = "inherit"
+            account = "spark-account"
+
+            [model_policy.default_route]
+            account_pool = "codex-pro"
+            "#,
+        )
+        .expect("config should parse");
+
+        let model_policy = config.model_policy.expect("model policy");
+        assert!(model_policy.enabled);
+        assert_eq!(model_policy.rules.len(), 1);
+        let rule = model_policy.rules.first().expect("rule");
+        assert_eq!(
+            rule.source.as_deref(),
+            Some(["subagent".to_string(), "module.repo_ci".to_string()].as_slice())
+        );
+        assert_eq!(rule.max_prompt_bytes, Some(20000));
+        assert_eq!(rule.route.model.as_deref(), Some("gpt-5.3-codex-spark"));
+        assert_eq!(rule.route.service_tier, Some(ServiceTier::Flex));
+        assert_eq!(
+            rule.route.reasoning_effort,
+            Some(ModelPolicyReasoningEffortToml::Inherit)
+        );
+        assert_eq!(rule.route.account.as_deref(), Some("spark-account"));
+        assert_eq!(
+            model_policy
+                .default_route
+                .as_ref()
+                .and_then(|route| route.account_pool.as_deref()),
+            Some("codex-pro")
+        );
+    }
+
+    #[test]
+    fn rejects_model_policy_with_ambiguous_account_target() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+            [model_policy]
+            enabled = true
+
+            [[model_policy.rules]]
+            source = "subagent"
+            model = "gpt-5.3-codex-spark"
+            account_pool = "codex-pro"
+            account = "work-pro"
+            "#,
+        )
+        .expect_err("ambiguous account target should be rejected");
+
+        assert!(err.to_string().contains("mutually exclusive"));
     }
 
     #[test]

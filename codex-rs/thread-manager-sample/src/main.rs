@@ -223,6 +223,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         project_doc_max_bytes: 32 * 1024,
         project_doc_fallback_filenames: Vec::new(),
         account_pool: None,
+        model_policy: None,
         model_router: None,
         model_router_accounting: None,
         tool_output_token_limit: None,

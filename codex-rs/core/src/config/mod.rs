@@ -28,6 +28,7 @@ use codex_config::config_toml::AccountPoolToml;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
+use codex_config::config_toml::ModelPolicyToml;
 use codex_config::config_toml::ModelRouterToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
@@ -820,6 +821,9 @@ pub struct Config {
 
     /// Optional logical pools of ChatGPT accounts.
     pub account_pool: Option<AccountPoolToml>,
+
+    /// Optional routing policy for internal model calls.
+    pub model_policy: Option<ModelPolicyToml>,
 
     /// Optional adaptive router for internal model calls.
     pub model_router: Option<ModelRouterToml>,
@@ -3516,6 +3520,7 @@ impl Config {
             mcp_oauth_callback_url: cfg.mcp_oauth_callback_url.clone(),
             model_providers,
             account_pool: cfg.account_pool,
+            model_policy: cfg.model_policy,
             model_router: cfg.model_router,
             model_router_accounting: None,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(AGENTS_MD_MAX_BYTES),
