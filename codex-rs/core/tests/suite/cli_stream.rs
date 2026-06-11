@@ -552,12 +552,18 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg(&repo_root)
         .arg(&prompt2)
         .arg("resume")
-        .arg("--last");
+        .arg("--last")
+        .arg("--include-non-interactive");
     cmd2.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
 
     let output2 = cmd2.output().unwrap();
-    assert!(output2.status.success(), "resume codex-cli run failed");
+    assert!(
+        output2.status.success(),
+        "resume codex-cli run failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output2.stdout),
+        String::from_utf8_lossy(&output2.stderr)
+    );
     assert_eq!(resp_mock.requests().len(), 2);
 
     // Find the new session file containing the resumed marker.
@@ -576,7 +582,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     // Resume should write to the existing log file.
     assert_eq!(
         resumed_path, path,
-        "resume should create a new session file"
+        "resume should append to the existing session file"
     );
 
     let resumed_content = std::fs::read_to_string(&resumed_path)?;

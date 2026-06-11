@@ -188,6 +188,10 @@ struct ResumeArgsRaw {
     #[arg(long = "all", default_value_t = false)]
     all: bool,
 
+    /// Include non-interactive sessions in --last and thread name lookup.
+    #[arg(long = "include-non-interactive", default_value_t = false)]
+    include_non_interactive: bool,
+
     /// Optional image(s) to attach to the prompt sent after resuming.
     #[arg(
         long = "image",
@@ -215,6 +219,9 @@ pub struct ResumeArgs {
     /// Show all sessions (disables cwd filtering).
     pub all: bool,
 
+    /// Include non-interactive sessions in --last and thread name lookup.
+    pub include_non_interactive: bool,
+
     /// Optional image(s) to attach to the prompt sent after resuming.
     pub images: Vec<PathBuf>,
 
@@ -235,6 +242,7 @@ impl From<ResumeArgsRaw> for ResumeArgs {
             session_id,
             last: raw.last,
             all: raw.all,
+            include_non_interactive: raw.include_non_interactive,
             images: raw.images,
             prompt,
         }

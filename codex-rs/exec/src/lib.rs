@@ -57,6 +57,7 @@ use codex_config::ConfigLoadError;
 use codex_config::ConfigLoadOptions;
 use codex_config::LoaderOverrides;
 use codex_config::format_config_error_with_source;
+use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::StateDbHandle;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
@@ -1386,6 +1387,25 @@ fn all_thread_source_kinds() -> Vec<ThreadSourceKind> {
     ]
 }
 
+fn resume_thread_source_kinds(include_non_interactive: bool) -> Option<Vec<ThreadSourceKind>> {
+    if include_non_interactive {
+        Some(all_thread_source_kinds())
+    } else {
+        None
+    }
+}
+
+fn resume_state_db_allowed_sources(include_non_interactive: bool) -> Vec<String> {
+    if include_non_interactive {
+        Vec::new()
+    } else {
+        INTERACTIVE_SESSION_SOURCES
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    }
+}
+
 async fn latest_thread_cwd(thread: &AppServerThread) -> PathBuf {
     if let Some(path) = thread.path.as_deref()
         && let Some(cwd) = parse_latest_turn_context_cwd(path).await
@@ -1423,6 +1443,7 @@ async fn resolve_resume_thread_id(
     args: &crate::cli::ResumeArgs,
 ) -> anyhow::Result<Option<String>> {
     let model_providers = resume_lookup_model_providers(config, args);
+    let source_kinds = resume_thread_source_kinds(args.include_non_interactive);
 
     if args.last {
         let mut cursor = None;
@@ -1437,7 +1458,7 @@ async fn resolve_resume_thread_id(
                         sort_key: Some(ThreadSortKey::UpdatedAt),
                         sort_direction: None,
                         model_providers: model_providers.clone(),
-                        source_kinds: Some(all_thread_source_kinds()),
+                        source_kinds: source_kinds.clone(),
                         archived: Some(false),
                         cwd: None,
                         use_state_db_only: false,
@@ -1469,10 +1490,11 @@ async fn resolve_resume_thread_id(
     }
     if let Some(state_db) = state_db {
         let cwd = (!args.all).then_some(config.cwd.as_path());
+        let allowed_sources = resume_state_db_allowed_sources(args.include_non_interactive);
         let resolved = state_db
             .find_thread_by_exact_title(
                 session_id,
-                &[],
+                &allowed_sources,
                 /*model_providers*/ None,
                 /*archived_only*/ false,
                 cwd,
@@ -1502,7 +1524,7 @@ async fn resolve_resume_thread_id(
                     sort_key: Some(ThreadSortKey::UpdatedAt),
                     sort_direction: None,
                     model_providers: model_providers.clone(),
-                    source_kinds: Some(all_thread_source_kinds()),
+                    source_kinds: source_kinds.clone(),
                     archived: Some(false),
                     cwd: None,
                     use_state_db_only: false,
