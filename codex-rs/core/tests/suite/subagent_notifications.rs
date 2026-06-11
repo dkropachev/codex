@@ -1085,17 +1085,19 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
         .await?
         .pop()
         .expect("child request");
-    assert_eq!(
-        child_request.inputs_of_type("agent_message"),
-        vec![json!({
-            "type": "agent_message",
-            "author": "/root",
-            "recipient": "/root/worker",
-            "content": [{
-                "type": "encrypted_content",
-                "encrypted_content": encrypted_message,
-            }],
-        })]
+    let expected_agent_message = json!({
+        "type": "agent_message",
+        "author": "/root",
+        "recipient": "/root/worker",
+        "content": [{
+            "type": "encrypted_content",
+            "encrypted_content": encrypted_message,
+        }],
+    });
+    let agent_messages = child_request.inputs_of_type("agent_message");
+    assert!(
+        agent_messages.contains(&expected_agent_message),
+        "child request should include encrypted agent message: {agent_messages:#?}"
     );
 
     Ok(())

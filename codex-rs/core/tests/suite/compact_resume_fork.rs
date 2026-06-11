@@ -16,6 +16,7 @@ use codex_core::ThreadManager;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -41,6 +42,8 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
@@ -67,6 +70,29 @@ fn normalize_line_endings_str(text: &str) -> String {
         text.replace("\r\n", "\n").replace('\r', "\n")
     } else {
         text.to_string()
+    }
+}
+
+struct ThreadIdleCounter {
+    count: Arc<AtomicUsize>,
+    tx: async_channel::Sender<usize>,
+}
+
+#[async_trait::async_trait]
+impl codex_extension_api::ThreadLifecycleContributor<Config> for ThreadIdleCounter {
+    async fn on_thread_idle(&self, _input: codex_extension_api::ThreadIdleInput<'_>) {
+        let count = self.count.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = self.tx.send(count).await;
+    }
+}
+
+async fn wait_for_idle_after(
+    idle_rx: &async_channel::Receiver<usize>,
+    idle_count: &Arc<AtomicUsize>,
+    previous_idle_count: usize,
+) {
+    while idle_count.load(Ordering::SeqCst) <= previous_idle_count {
+        idle_rx.recv().await.expect("thread idle notification");
     }
 }
 
@@ -448,23 +474,48 @@ async fn snapshot_rollback_past_compaction_replays_append_only_history() -> Resu
 
     let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
 
-    let (_home, _config, _manager, base) = start_test_conversation(&server, /*model*/ None).await;
+    let idle_count = Arc::new(AtomicUsize::new(0));
+    let (idle_tx, idle_rx) = async_channel::unbounded();
+    let mut extension_builder = ExtensionRegistryBuilder::<Config>::new();
+    extension_builder.thread_lifecycle_contributor(Arc::new(ThreadIdleCounter {
+        count: Arc::clone(&idle_count),
+        tx: idle_tx,
+    }));
+    let extensions = Arc::new(extension_builder.build());
+    let base_url = server.uri();
+    let mut builder = test_codex()
+        .with_extensions(extensions)
+        .with_config(move |config| {
+            config.model_provider.name = "Non-OpenAI Model provider".to_string();
+            config.model_provider.base_url = Some(base_url);
+            config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+        });
+    let test = Box::pin(builder.build(&server))
+        .await
+        .expect("create conversation");
+    let base = &test.codex;
 
-    user_turn(&base, "hello world").await;
-    compact_conversation(&base).await;
-    user_turn(&base, EDITED_AFTER_COMPACT).await;
+    let idle_before = idle_count.load(Ordering::SeqCst);
+    user_turn(base, "hello world").await;
+    wait_for_idle_after(&idle_rx, &idle_count, idle_before).await;
+    let idle_before = idle_count.load(Ordering::SeqCst);
+    compact_conversation(base).await;
+    wait_for_idle_after(&idle_rx, &idle_count, idle_before).await;
+    let idle_before = idle_count.load(Ordering::SeqCst);
+    user_turn(base, EDITED_AFTER_COMPACT).await;
+    wait_for_idle_after(&idle_rx, &idle_count, idle_before).await;
 
     base.submit(Op::ThreadRollback { num_turns: 1 })
         .await
         .expect("submit thread rollback");
     let rollback_event =
-        wait_for_event(&base, |ev| matches!(ev, EventMsg::ThreadRolledBack(_))).await;
+        wait_for_event(base, |ev| matches!(ev, EventMsg::ThreadRolledBack(_))).await;
     let EventMsg::ThreadRolledBack(rollback_event) = rollback_event else {
         panic!("expected thread rolled back event");
     };
     assert_eq!(rollback_event.num_turns, 1);
 
-    user_turn(&base, AFTER_ROLLBACK).await;
+    user_turn(base, AFTER_ROLLBACK).await;
 
     let requests = request_log.requests();
     assert_eq!(requests.len(), 4);
