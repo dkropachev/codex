@@ -2347,6 +2347,41 @@ async fn status_line_model_with_reasoning_plan_mode_footer_snapshot() {
 }
 
 #[tokio::test]
+async fn status_line_model_with_reasoning_workflow_mode_footer_snapshot() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.show_welcome_banner = false;
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    chat.config.tui_status_line = Some(vec!["model-with-reasoning".to_string()]);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let workflow_mask = collaboration_modes::mask_for_kind_with_config(
+        chat.model_catalog.as_ref(),
+        ModeKind::Workflow,
+        codex_models_manager::collaboration_mode_presets::CollaborationModesConfig {
+            default_mode_request_user_input: false,
+            workflows_enabled: true,
+        },
+    )
+    .expect("expected workflow collaboration mode");
+    chat.set_collaboration_mask(workflow_mask);
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw workflow-mode footer");
+    assert_chatwidget_snapshot!(
+        "status_line_model_with_reasoning_workflow_mode_footer",
+        normalized_backend_snapshot(terminal.backend())
+    );
+}
+
+#[tokio::test]
 async fn renamed_thread_footer_title_snapshot() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
