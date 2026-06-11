@@ -1907,6 +1907,7 @@ name = "codex-ansi-escape"
 version = "0.139.0"
 dependencies = [
  "ansi-to-tui",
+ "pretty_assertions",
  "ratatui",
  "tracing",
 ]
