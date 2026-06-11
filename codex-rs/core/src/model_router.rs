@@ -77,6 +77,7 @@ impl ModelRouterSource {
             ModelRouterSource::Chat(mode) => {
                 let suffix = match mode {
                     ModeKind::Plan => "plan",
+                    ModeKind::Workflow => "workflow",
                     ModeKind::Default => "codex",
                     ModeKind::PairProgramming | ModeKind::Execute => "default",
                 };
@@ -1637,6 +1638,10 @@ mod tests {
             "chat.plan"
         );
         assert_eq!(
+            ModelRouterSource::Chat(ModeKind::Workflow).task_key(),
+            "chat.workflow"
+        );
+        assert_eq!(
             ModelRouterSource::Chat(ModeKind::PairProgramming).task_key(),
             "chat.default"
         );
@@ -2949,6 +2954,7 @@ mod tests {
         Arc::new(StaticModelsManager::new(
             /*auth_manager*/ None,
             ModelsResponse { models: Vec::new() },
+            codex_models_manager::collaboration_mode_presets::CollaborationModesConfig::default(),
         ))
     }
 

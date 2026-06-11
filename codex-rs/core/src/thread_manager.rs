@@ -29,6 +29,7 @@ use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::ThreadId;
@@ -225,7 +226,17 @@ pub fn build_models_manager(
     provider.models_manager(
         config.codex_home.to_path_buf(),
         config.model_catalog.clone(),
+        collaboration_modes_config(config),
     )
+}
+
+fn collaboration_modes_config(config: &Config) -> CollaborationModesConfig {
+    CollaborationModesConfig {
+        default_mode_request_user_input: config
+            .features
+            .enabled(Feature::DefaultModeRequestUserInput),
+        workflows_enabled: config.features.enabled(Feature::Workflows),
+    }
 }
 
 pub fn thread_store_from_config(
@@ -381,7 +392,11 @@ impl ThreadManager {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: create_model_provider(provider, Some(auth_manager.clone()))
-                    .models_manager(codex_home, /*config_model_catalog*/ None),
+                    .models_manager(
+                        codex_home,
+                        /*config_model_catalog*/ None,
+                        CollaborationModesConfig::default(),
+                    ),
                 environment_manager,
                 skills_manager,
                 plugins_manager,

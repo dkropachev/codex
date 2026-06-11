@@ -241,7 +241,9 @@ impl TurnRequestProcessor {
         mut collaboration_mode: CollaborationMode,
     ) -> CollaborationMode {
         if collaboration_mode.settings.developer_instructions.is_none()
-            && let Some(instructions) = builtin_collaboration_mode_presets()
+            && let Some(instructions) = self
+                .thread_manager
+                .list_collaboration_modes()
                 .into_iter()
                 .find(|preset| preset.mode == Some(collaboration_mode.mode))
                 .and_then(|preset| preset.developer_instructions.flatten())

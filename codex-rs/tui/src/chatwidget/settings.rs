@@ -624,7 +624,10 @@ impl ChatWidget {
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
-            ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => None,
+            ModeKind::Workflow
+            | ModeKind::Default
+            | ModeKind::PairProgramming
+            | ModeKind::Execute => None,
         }
     }
 
@@ -681,17 +684,30 @@ impl ChatWidget {
         self.update_collaboration_mode_indicator();
     }
 
-    /// Cycle to the next collaboration mode variant (Plan -> Default -> Plan).
+    /// Cycle to the next collaboration mode preset.
     pub(super) fn cycle_collaboration_mode(&mut self) {
         if !self.collaboration_modes_enabled() {
             return;
         }
 
-        if let Some(next_mask) = collaboration_modes::next_mask(
+        if let Some(next_mask) = collaboration_modes::next_mask_with_config(
             self.model_catalog.as_ref(),
             self.active_collaboration_mask.as_ref(),
+            self.collaboration_modes_config(),
         ) {
             self.set_collaboration_mask_from_user_action(next_mask);
+        }
+    }
+
+    fn collaboration_modes_config(
+        &self,
+    ) -> codex_models_manager::collaboration_mode_presets::CollaborationModesConfig {
+        codex_models_manager::collaboration_mode_presets::CollaborationModesConfig {
+            default_mode_request_user_input: self
+                .config
+                .features
+                .enabled(Feature::DefaultModeRequestUserInput),
+            workflows_enabled: self.config.features.enabled(Feature::Workflows),
         }
     }
 
