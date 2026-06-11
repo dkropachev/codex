@@ -24,6 +24,8 @@ use crate::CapturedExitStatus;
 use crate::CapturedRun;
 use crate::CapturedStep;
 use crate::RepoCiPaths;
+use crate::resource_monitor;
+use crate::resource_monitor::ResourceMonitor;
 
 const JSONL_ENV: &str = "CODEX_REPO_CI_JSONL";
 const REPO_ROOT_ENV: &str = "CODEX_REPO_CI_REPO_ROOT";
@@ -116,6 +118,7 @@ pub(crate) fn capture_runner_with_progress(
     let now_micros = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_micros());
+    let run_id = resource_monitor::run_id_for_capture(arg, now_micros);
     let jsonl_path = run_dir.join(format!("{arg}-{}-{}.jsonl", std::process::id(), now_micros));
     let mut runner = spawn_runner(
         paths,
@@ -123,6 +126,7 @@ pub(crate) fn capture_runner_with_progress(
         /*jsonl_path*/ Some(&jsonl_path),
         RunnerStdio::Capture,
     )?;
+    let mut resource_monitor = ResourceMonitor::start(run_id, runner.child.id());
     let stdout = runner
         .child
         .stdout
@@ -143,10 +147,12 @@ pub(crate) fn capture_runner_with_progress(
         cancellation,
         || {
             step_reader.read_available()?;
+            resource_monitor.poll();
             Ok(())
         },
     )?;
     step_reader.read_to_end()?;
+    let resource_usage = resource_monitor.finish();
     let stdout = join_pipe_reader(stdout_reader, "stdout")?;
     let mut stderr = join_pipe_reader(stderr_reader, "stderr")?;
     let status = match completion {
@@ -168,6 +174,7 @@ pub(crate) fn capture_runner_with_progress(
         stdout: String::from_utf8_lossy(&stdout).to_string(),
         stderr: String::from_utf8_lossy(&stderr).to_string(),
         steps: read_captured_steps(&jsonl_path)?,
+        resource_usage: Some(resource_usage),
     };
     let _ = fs::remove_file(&jsonl_path);
     Ok(run)

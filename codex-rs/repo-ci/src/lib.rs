@@ -1,6 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_cicd_artifacts::RunResourceUsage;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
@@ -23,6 +24,7 @@ mod plan_guardrail;
 mod remote_commit;
 mod remote_workflow;
 mod repo_ci_ai_learning;
+mod resource_monitor;
 mod runner;
 mod workflow_history;
 
@@ -196,6 +198,7 @@ pub struct CapturedRun {
     pub stdout: String,
     pub stderr: String,
     pub steps: Vec<CapturedStep>,
+    pub resource_usage: Option<RunResourceUsage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1004,6 +1007,7 @@ mod tests {
             "stdout:\n{}\nstderr:\n{}",
             run.stdout, run.stderr
         );
+        assert!(run.resource_usage.is_some());
         assert_eq!(
             run.steps,
             vec![
