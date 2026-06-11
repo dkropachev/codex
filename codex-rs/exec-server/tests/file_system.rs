@@ -459,14 +459,22 @@ async fn file_system_methods_cover_surface_area(use_remote: bool) -> Result<()> 
         entries,
         vec![
             ReadDirectoryEntry {
+                file_name: "broken-link".to_string(),
+                is_directory: false,
+                is_file: false,
+                is_symlink: !use_remote,
+            },
+            ReadDirectoryEntry {
                 file_name: "nested".to_string(),
                 is_directory: true,
                 is_file: false,
+                is_symlink: false,
             },
             ReadDirectoryEntry {
                 file_name: "root.txt".to_string(),
                 is_directory: false,
                 is_file: true,
+                is_symlink: false,
             },
         ]
     );
