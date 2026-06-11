@@ -18,6 +18,7 @@ use std::time::UNIX_EPOCH;
 
 mod branch_diff;
 mod inference;
+mod learning_hints;
 
 const MANIFEST_VERSION: u32 = 1;
 const JSONL_ENV: &str = "CODEX_REPO_CI_JSONL";
@@ -132,6 +133,8 @@ pub struct LearnedPlan {
 }
 
 pub use branch_diff::BranchDiffSnapshot;
+pub use learning_hints::RepoCiLearningHints;
+pub use learning_hints::WorkflowRunHint;
 
 #[derive(Debug, Clone)]
 pub struct LearnOutcome {
@@ -596,6 +599,11 @@ pub(crate) fn read_optional(repo_root: &Path, relative: &str) -> Result<Option<S
 
 pub(crate) fn has_file(repo_root: &Path, relative: &str) -> bool {
     repo_root.join(relative).is_file()
+}
+
+/// Collect prompt scaffolding for AI-based repo CI discovery.
+pub fn collect_learning_hints(repo_root: &Path) -> Result<RepoCiLearningHints> {
+    learning_hints::collect_learning_hints(repo_root)
 }
 
 fn hash_file(path: &Path) -> Option<String> {
