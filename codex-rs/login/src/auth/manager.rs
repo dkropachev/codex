@@ -1860,16 +1860,17 @@ impl AuthManager {
         )
         .await;
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id());
-        auth_manager.account_pool = match config.account_pool() {
-            Some(account_pool) => AccountPoolManager::from_config(
+        auth_manager.account_pool = if let Some(account_pool) = config.account_pool() {
+            AccountPoolManager::from_config(
                 &codex_home,
                 account_pool,
                 auth_credentials_store_mode,
                 chatgpt_base_url,
             )
             .await
-            .map(Arc::new),
-            None => None,
+            .map(Arc::new)
+        } else {
+            None
         };
         Arc::new(auth_manager)
     }

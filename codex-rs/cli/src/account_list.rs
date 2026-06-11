@@ -78,7 +78,11 @@ async fn collect_accounts(config: &Config) -> ListedAccounts {
 
     let effective_default_pool = effective_default_pool(config);
     let mut pools = Vec::new();
-    if let Some(account_pool) = config.account_pool.as_ref().filter(|pool| pool.enabled) {
+    if let Some(account_pool) = config
+        .account_pool
+        .as_ref()
+        .filter(|account_pool| account_pool.enabled)
+    {
         for (pool_id, definition) in &account_pool.pools {
             pools.push(listed_pool(config, pool_id, definition, &effective_default_pool).await);
         }
@@ -89,10 +93,10 @@ async fn collect_accounts(config: &Config) -> ListedAccounts {
         .flat_map(|pool| pool.members.iter().map(|member| member.id.clone()))
         .collect::<BTreeSet<_>>();
     let mut standalone_accounts = Vec::new();
-    for account_id in named_account_ids(config) {
-        if pool_member_ids.contains(&account_id) {
-            continue;
-        }
+    for account_id in named_account_ids(config)
+        .into_iter()
+        .filter(|account_id| !pool_member_ids.contains(account_id))
+    {
         let account_home = account_codex_home(&config.codex_home, &account_id);
         standalone_accounts.push(ListedAccount {
             id: account_id,
@@ -157,7 +161,7 @@ async fn credential_for_account_home(
     match CodexAuth::from_auth_storage(
         codex_home,
         config.cli_auth_credentials_store_mode,
-        Some(&config.chatgpt_base_url),
+        Some(config.chatgpt_base_url.as_str()),
     )
     .await
     {

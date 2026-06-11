@@ -25,6 +25,7 @@ use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
 use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 use codex_utils_output_truncation::truncate_text;
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::LazyLock;
@@ -48,6 +49,7 @@ pub(crate) struct ContextManager {
     /// also clear this when it trims a mixed initial-context developer bundle
     /// whose non-diff fragments no longer exist in the surviving history.
     reference_context_item: Option<TurnContextItem>,
+    code_mode_exec_output_policies: HashMap<String, TruncationPolicy>,
 }
 
 impl ContextManager {
@@ -59,6 +61,7 @@ impl ContextManager {
                 &None, &None, /*model_context_window*/ None,
             ),
             reference_context_item: None,
+            code_mode_exec_output_policies: HashMap::new(),
         }
     }
 
@@ -99,8 +102,40 @@ impl ContextManager {
                 continue;
             }
 
-            let processed = self.process_item(item_ref, policy);
+            let item_policy = self.policy_for_item(item_ref, policy);
+            let processed = self.process_item(item_ref, item_policy);
             self.items.push(processed);
+        }
+    }
+
+    fn policy_for_item(
+        &mut self,
+        item: &ResponseItem,
+        default_policy: TruncationPolicy,
+    ) -> TruncationPolicy {
+        match item {
+            ResponseItem::CustomToolCall {
+                call_id,
+                name,
+                input,
+                ..
+            } if name == codex_code_mode::PUBLIC_TOOL_NAME => {
+                if let Ok(args) = codex_code_mode::parse_exec_source(input) {
+                    let max_output_tokens = args
+                        .max_output_tokens
+                        .unwrap_or(codex_code_mode::DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL);
+                    self.code_mode_exec_output_policies
+                        .insert(call_id.clone(), TruncationPolicy::Tokens(max_output_tokens));
+                }
+                default_policy
+            }
+            ResponseItem::CustomToolCallOutput { call_id, .. } => {
+                match self.code_mode_exec_output_policies.remove(call_id) {
+                    Some(policy) if policy.byte_budget() > default_policy.byte_budget() => policy,
+                    _ => default_policy,
+                }
+            }
+            _ => default_policy,
         }
     }
 

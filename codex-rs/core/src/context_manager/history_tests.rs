@@ -1055,6 +1055,37 @@ fn record_items_truncates_custom_tool_call_output_content() {
 }
 
 #[test]
+fn record_items_uses_code_mode_exec_output_policy_when_larger() {
+    let mut history = ContextManager::new();
+    let call = ResponseItem::CustomToolCall {
+        id: None,
+        status: None,
+        call_id: "call-200".to_string(),
+        name: codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
+        input: r#"// @exec: {"max_output_tokens": 20000}
+text("ok");
+"#
+        .to_string(),
+    };
+    let long_output = "x".repeat(50_000);
+    let output = ResponseItem::CustomToolCallOutput {
+        call_id: "call-200".to_string(),
+        name: None,
+        output: FunctionCallOutputPayload::from_text(long_output.clone()),
+    };
+
+    history.record_items([&call, &output], TruncationPolicy::Bytes(10_000));
+
+    assert_eq!(history.items.len(), 2);
+    match &history.items[1] {
+        ResponseItem::CustomToolCallOutput { output, .. } => {
+            assert_eq!(output.text_content(), Some(long_output.as_str()));
+        }
+        other => panic!("unexpected history item: {other:?}"),
+    }
+}
+
+#[test]
 fn record_items_respects_custom_token_limit() {
     let mut history = ContextManager::new();
     let policy = TruncationPolicy::Tokens(10);

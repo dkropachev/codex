@@ -5,6 +5,7 @@ use super::*;
 #[cfg_attr(debug_assertions, allow(dead_code))]
 #[derive(Debug)]
 pub(crate) struct UpdateAvailableHistoryCell {
+    current_version: String,
     latest_version: String,
     update_action: Option<UpdateAction>,
 }
@@ -12,7 +13,16 @@ pub(crate) struct UpdateAvailableHistoryCell {
 #[cfg_attr(debug_assertions, allow(dead_code))]
 impl UpdateAvailableHistoryCell {
     pub(crate) fn new(latest_version: String, update_action: Option<UpdateAction>) -> Self {
+        Self::new_with_current_version(CODEX_CLI_VERSION.to_string(), latest_version, update_action)
+    }
+
+    pub(crate) fn new_with_current_version(
+        current_version: String,
+        latest_version: String,
+        update_action: Option<UpdateAction>,
+    ) -> Self {
         Self {
+            current_version,
             latest_version,
             update_action,
         }
@@ -32,13 +42,15 @@ impl HistoryCell for UpdateAvailableHistoryCell {
                 " for installation options."
             ]
         };
+        let current_version = &self.current_version;
+        let latest_version = &self.latest_version;
 
         let content = text![
             line![
                 padded_emoji("✨").bold().cyan(),
                 "Update available!".bold().cyan(),
                 " ",
-                format!("{CODEX_CLI_VERSION} -> {}", self.latest_version).bold(),
+                format!("{current_version} -> {latest_version}").bold(),
             ],
             update_instruction,
             "",
@@ -62,9 +74,11 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         } else {
             "See https://github.com/openai/codex for installation options.".to_string()
         };
+        let current_version = &self.current_version;
+        let latest_version = &self.latest_version;
         vec![
             Line::from("Update available!"),
-            Line::from(format!("{CODEX_CLI_VERSION} -> {}", self.latest_version)),
+            Line::from(format!("{current_version} -> {latest_version}")),
             Line::from(update_instruction),
             Line::from(""),
             Line::from("See full release notes:"),

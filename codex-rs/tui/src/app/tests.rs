@@ -22,6 +22,7 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::history_cell::new_session_info;
 use crate::multi_agents::AgentPickerThreadEntry;
+use crate::tests::run_current_thread_test_with_stack;
 use assert_matches::assert_matches;
 
 use crate::app_command::AppCommand as Op;
@@ -1203,117 +1204,137 @@ async fn collab_receiver_notification_does_not_cache_not_found_thread() {
     assert_eq!(app.agent_navigation.get(&receiver_thread_id), None);
 }
 
-#[tokio::test]
-async fn open_agent_picker_keeps_missing_threads_for_replay() -> Result<()> {
-    let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let thread_id = ThreadId::new();
-    app.thread_event_channels
-        .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+#[test]
+fn open_agent_picker_keeps_missing_threads_for_replay() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "open_agent_picker_keeps_missing_threads_for_replay",
+        || async {
+            let mut app = Box::pin(make_test_app()).await;
+            let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+                app.chat_widget.config_ref(),
+            ))
+            .await
+            .expect("embedded app server");
+            let thread_id = ThreadId::new();
+            app.thread_event_channels
+                .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
 
-    Box::pin(app.open_agent_picker(&mut app_server)).await;
+            Box::pin(app.open_agent_picker(&mut app_server)).await;
 
-    assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
-    assert_eq!(
-        app.agent_navigation.get(&thread_id),
-        Some(&AgentPickerThreadEntry {
-            agent_nickname: None,
-            agent_role: None,
-            is_closed: true,
-        })
-    );
-    assert_eq!(app.agent_navigation.ordered_thread_ids(), vec![thread_id]);
-    Ok(())
+            assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
+            assert_eq!(
+                app.agent_navigation.get(&thread_id),
+                Some(&AgentPickerThreadEntry {
+                    agent_nickname: None,
+                    agent_role: None,
+                    is_closed: true,
+                })
+            );
+            assert_eq!(app.agent_navigation.ordered_thread_ids(), vec![thread_id]);
+            Ok(())
+        },
+    )
 }
 
-#[tokio::test]
-async fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Result<()> {
-    let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let thread_id = ThreadId::new();
-    app.thread_event_channels
-        .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
-    app.agent_navigation.upsert(
-        thread_id,
-        Some("Robie".to_string()),
-        Some("explorer".to_string()),
-        /*is_closed*/ true,
-    );
+#[test]
+fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "open_agent_picker_preserves_cached_metadata_for_replay_threads",
+        || async {
+            let mut app = Box::pin(make_test_app()).await;
+            let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+                app.chat_widget.config_ref(),
+            ))
+            .await
+            .expect("embedded app server");
+            let thread_id = ThreadId::new();
+            app.thread_event_channels
+                .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+            app.agent_navigation.upsert(
+                thread_id,
+                Some("Robie".to_string()),
+                Some("explorer".to_string()),
+                /*is_closed*/ true,
+            );
 
-    Box::pin(app.open_agent_picker(&mut app_server)).await;
+            Box::pin(app.open_agent_picker(&mut app_server)).await;
 
-    assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
-    assert_eq!(
-        app.agent_navigation.get(&thread_id),
-        Some(&AgentPickerThreadEntry {
-            agent_nickname: Some("Robie".to_string()),
-            agent_role: Some("explorer".to_string()),
-            is_closed: true,
-        })
-    );
-    Ok(())
+            assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
+            assert_eq!(
+                app.agent_navigation.get(&thread_id),
+                Some(&AgentPickerThreadEntry {
+                    agent_nickname: Some("Robie".to_string()),
+                    agent_role: Some("explorer".to_string()),
+                    is_closed: true,
+                })
+            );
+            Ok(())
+        },
+    )
 }
 
-#[tokio::test]
-async fn open_agent_picker_prunes_terminal_metadata_only_threads() -> Result<()> {
-    let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let thread_id = ThreadId::new();
-    app.agent_navigation.upsert(
-        thread_id,
-        Some("Ghost".to_string()),
-        Some("worker".to_string()),
-        /*is_closed*/ false,
-    );
+#[test]
+fn open_agent_picker_prunes_terminal_metadata_only_threads() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "open_agent_picker_prunes_terminal_metadata_only_threads",
+        || async {
+            let mut app = Box::pin(make_test_app()).await;
+            let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+                app.chat_widget.config_ref(),
+            ))
+            .await
+            .expect("embedded app server");
+            let thread_id = ThreadId::new();
+            app.agent_navigation.upsert(
+                thread_id,
+                Some("Ghost".to_string()),
+                Some("worker".to_string()),
+                /*is_closed*/ false,
+            );
 
-    Box::pin(app.open_agent_picker(&mut app_server)).await;
+            Box::pin(app.open_agent_picker(&mut app_server)).await;
 
-    assert_eq!(app.agent_navigation.get(&thread_id), None);
-    assert!(app.agent_navigation.is_empty());
-    Ok(())
+            assert_eq!(app.agent_navigation.get(&thread_id), None);
+            assert!(app.agent_navigation.is_empty());
+            Ok(())
+        },
+    )
 }
 
-#[tokio::test]
-async fn open_agent_picker_marks_terminal_read_errors_closed() -> Result<()> {
-    let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let thread_id = ThreadId::new();
-    app.thread_event_channels
-        .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
-    app.agent_navigation.upsert(
-        thread_id,
-        Some("Robie".to_string()),
-        Some("explorer".to_string()),
-        /*is_closed*/ false,
-    );
+#[test]
+fn open_agent_picker_marks_terminal_read_errors_closed() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "open_agent_picker_marks_terminal_read_errors_closed",
+        || async {
+            let mut app = Box::pin(make_test_app()).await;
+            let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+                app.chat_widget.config_ref(),
+            ))
+            .await
+            .expect("embedded app server");
+            let thread_id = ThreadId::new();
+            app.thread_event_channels
+                .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+            app.agent_navigation.upsert(
+                thread_id,
+                Some("Robie".to_string()),
+                Some("explorer".to_string()),
+                /*is_closed*/ false,
+            );
 
-    Box::pin(app.open_agent_picker(&mut app_server)).await;
+            Box::pin(app.open_agent_picker(&mut app_server)).await;
 
-    assert_eq!(
-        app.agent_navigation.get(&thread_id),
-        Some(&AgentPickerThreadEntry {
-            agent_nickname: Some("Robie".to_string()),
-            agent_role: Some("explorer".to_string()),
-            is_closed: true,
-        })
-    );
-    Ok(())
+            assert_eq!(
+                app.agent_navigation.get(&thread_id),
+                Some(&AgentPickerThreadEntry {
+                    agent_nickname: Some("Robie".to_string()),
+                    agent_role: Some("explorer".to_string()),
+                    is_closed: true,
+                })
+            );
+            Ok(())
+        },
+    )
 }
 
 #[test]
@@ -1464,104 +1485,121 @@ async fn should_attach_live_thread_for_selection_skips_closed_metadata_only_thre
     assert!(!app.should_attach_live_thread_for_selection(thread_id));
 }
 
-#[tokio::test]
-async fn refresh_agent_picker_thread_liveness_prunes_closed_metadata_only_threads() -> Result<()> {
-    let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let thread_id = ThreadId::new();
-    app.agent_navigation.upsert(
-        thread_id,
-        Some("Ghost".to_string()),
-        Some("worker".to_string()),
-        /*is_closed*/ false,
-    );
+#[test]
+fn refresh_agent_picker_thread_liveness_prunes_closed_metadata_only_threads() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "refresh_agent_picker_thread_liveness_prunes_closed_metadata_only_threads",
+        || async {
+            let mut app = Box::pin(make_test_app()).await;
+            let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+                app.chat_widget.config_ref(),
+            ))
+            .await
+            .expect("embedded app server");
+            let thread_id = ThreadId::new();
+            app.agent_navigation.upsert(
+                thread_id,
+                Some("Ghost".to_string()),
+                Some("worker".to_string()),
+                /*is_closed*/ false,
+            );
 
-    let is_available =
-        Box::pin(app.refresh_agent_picker_thread_liveness(&mut app_server, thread_id)).await;
+            let is_available =
+                Box::pin(app.refresh_agent_picker_thread_liveness(&mut app_server, thread_id))
+                    .await;
 
-    assert!(!is_available);
-    assert_eq!(app.agent_navigation.get(&thread_id), None);
-    assert!(!app.thread_event_channels.contains_key(&thread_id));
-    Ok(())
+            assert!(!is_available);
+            assert_eq!(app.agent_navigation.get(&thread_id), None);
+            assert!(!app.thread_event_channels.contains_key(&thread_id));
+            Ok(())
+        },
+    )
 }
 
-#[tokio::test]
-async fn open_agent_picker_prompts_to_enable_multi_agent_when_disabled() -> Result<()> {
-    let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let _ = app.config.features.disable(Feature::Collab);
+#[test]
+fn open_agent_picker_prompts_to_enable_multi_agent_when_disabled() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "open_agent_picker_prompts_to_enable_multi_agent_when_disabled",
+        || async {
+            let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+            let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+                app.chat_widget.config_ref(),
+            ))
+            .await
+            .expect("embedded app server");
+            let _ = app.config.features.disable(Feature::Collab);
 
-    Box::pin(app.open_agent_picker(&mut app_server)).await;
-    app.chat_widget
-        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            Box::pin(app.open_agent_picker(&mut app_server)).await;
+            app.chat_widget
+                .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_matches!(
-        app_event_rx.try_recv(),
-        Ok(AppEvent::UpdateFeatureFlags { updates }) if updates == vec![(Feature::Collab, true)]
-    );
-    let cell = match app_event_rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
-        other => panic!("expected InsertHistoryCell event, got {other:?}"),
-    };
-    let rendered = cell
-        .display_lines(/*width*/ 120)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(rendered.contains("Subagents will be enabled in the next session."));
-    Ok(())
+            assert_matches!(
+                app_event_rx.try_recv(),
+                Ok(AppEvent::UpdateFeatureFlags { updates }) if updates == vec![(Feature::Collab, true)]
+            );
+            let cell = match app_event_rx.try_recv() {
+                Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+                other => panic!("expected InsertHistoryCell event, got {other:?}"),
+            };
+            let rendered = cell
+                .display_lines(/*width*/ 120)
+                .into_iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(rendered.contains("Subagents will be enabled in the next session."));
+            Ok(())
+        },
+    )
 }
 
-#[tokio::test]
-async fn update_memory_settings_persists_and_updates_widget_config() -> Result<()> {
-    let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
-    let codex_home = tempdir()?;
-    app.config.codex_home = codex_home.path().to_path_buf().abs();
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+#[test]
+fn update_memory_settings_persists_and_updates_widget_config() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "update_memory_settings_persists_and_updates_widget_config",
+        || async {
+            let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+            let codex_home = tempdir()?;
+            app.config.codex_home = codex_home.path().to_path_buf().abs();
+            let mut app_server =
+                Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
 
-    Box::pin(app.update_memory_settings_with_app_server(
-        &mut app_server,
-        /*use_memories*/ false,
-        /*generate_memories*/ false,
-    ))
-    .await;
+            Box::pin(app.update_memory_settings_with_app_server(
+                &mut app_server,
+                /*use_memories*/ false,
+                /*generate_memories*/ false,
+            ))
+            .await;
 
-    assert!(!app.config.memories.use_memories);
-    assert!(!app.config.memories.generate_memories);
-    assert!(!app.chat_widget.config_ref().memories.use_memories);
-    assert!(!app.chat_widget.config_ref().memories.generate_memories);
+            assert!(!app.config.memories.use_memories);
+            assert!(!app.config.memories.generate_memories);
+            assert!(!app.chat_widget.config_ref().memories.use_memories);
+            assert!(!app.chat_widget.config_ref().memories.generate_memories);
 
-    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    let config_value = toml::from_str::<TomlValue>(&config)?;
-    let memories = config_value
-        .as_table()
-        .and_then(|table| table.get("memories"))
-        .and_then(TomlValue::as_table)
-        .expect("memories table should exist");
-    assert_eq!(
-        memories.get("use_memories"),
-        Some(&TomlValue::Boolean(false))
-    );
-    assert_eq!(
-        memories.get("generate_memories"),
-        Some(&TomlValue::Boolean(false))
-    );
-    assert!(
-        !memories.contains_key("disable_on_external_context")
-            && !memories.contains_key("no_memories_if_mcp_or_web_search"),
-        "the TUI menu should not write the external-context memory setting"
-    );
-    app_server.shutdown().await?;
-    Ok(())
+            let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+            let config_value = toml::from_str::<TomlValue>(&config)?;
+            let memories = config_value
+                .as_table()
+                .and_then(|table| table.get("memories"))
+                .and_then(TomlValue::as_table)
+                .expect("memories table should exist");
+            assert_eq!(
+                memories.get("use_memories"),
+                Some(&TomlValue::Boolean(false))
+            );
+            assert_eq!(
+                memories.get("generate_memories"),
+                Some(&TomlValue::Boolean(false))
+            );
+            assert!(
+                !memories.contains_key("disable_on_external_context")
+                    && !memories.contains_key("no_memories_if_mcp_or_web_search"),
+                "the TUI menu should not write the external-context memory setting"
+            );
+            app_server.shutdown().await?;
+            Ok(())
+        },
+    )
 }
 
 #[test]
@@ -1613,9 +1651,9 @@ fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
     })
 }
 
-#[tokio::test]
-async fn reset_memories_clears_local_memory_directories() -> Result<()> {
-    Box::pin(async {
+#[test]
+fn reset_memories_clears_local_memory_directories() -> Result<()> {
+    run_current_thread_test_with_stack("reset_memories_clears_local_memory_directories", || async {
         let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
@@ -1642,7 +1680,6 @@ async fn reset_memories_clears_local_memory_directories() -> Result<()> {
         app_server.shutdown().await?;
         Ok(())
     })
-    .await
 }
 
 #[tokio::test]
@@ -1730,355 +1767,379 @@ default_permissions = "locked-down"
     Ok(())
 }
 
-#[tokio::test]
-async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<()> {
-    let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-    let codex_home = tempdir()?;
-    app.config.codex_home = codex_home.path().to_path_buf().abs();
-    let auto_review = auto_review_mode();
-    let mut app_server = start_config_write_test_app_server(&app).await?;
+#[test]
+fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "update_feature_flags_enabling_guardian_selects_auto_review",
+        || async {
+            let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+            let codex_home = tempdir()?;
+            app.config.codex_home = codex_home.path().to_path_buf().abs();
+            let auto_review = auto_review_mode();
+            let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, true)])
-        .await;
+            app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, true)])
+                .await;
 
-    assert!(app.config.features.enabled(Feature::GuardianApproval));
-    assert!(
-        app.chat_widget
-            .config_ref()
-            .features
-            .enabled(Feature::GuardianApproval)
-    );
-    assert_eq!(
-        app.config.approvals_reviewer,
-        auto_review.approvals_reviewer
-    );
-    assert_eq!(
-        AskForApproval::from(app.config.permissions.approval_policy.value()),
-        auto_review.approval_policy
-    );
-    assert_eq!(
-        AskForApproval::from(
+            assert!(app.config.features.enabled(Feature::GuardianApproval));
+            assert!(
+                app.chat_widget
+                    .config_ref()
+                    .features
+                    .enabled(Feature::GuardianApproval)
+            );
+            assert_eq!(
+                app.config.approvals_reviewer,
+                auto_review.approvals_reviewer
+            );
+            assert_eq!(
+                AskForApproval::from(app.config.permissions.approval_policy.value()),
+                auto_review.approval_policy
+            );
+            assert_eq!(
+                AskForApproval::from(
+                    app.chat_widget
+                        .config_ref()
+                        .permissions
+                        .approval_policy
+                        .value(),
+                ),
+                auto_review.approval_policy
+            );
+            assert_eq!(
+                app.chat_widget
+                    .config_ref()
+                    .permissions
+                    .permission_profile(),
+                &auto_review.permission_profile()
+            );
+            assert_eq!(
+                app.config.permissions.active_permission_profile(),
+                Some(auto_review.active_permission_profile.clone())
+            );
+            assert_eq!(
+                app.chat_widget
+                    .config_ref()
+                    .permissions
+                    .active_permission_profile(),
+                Some(auto_review.active_permission_profile.clone())
+            );
+            assert_eq!(
+                app.chat_widget.config_ref().approvals_reviewer,
+                auto_review.approvals_reviewer
+            );
+            assert_eq!(app.runtime_approval_policy_override, None);
+            assert_eq!(
+                app.runtime_permission_profile_override,
+                Some(RuntimePermissionProfileOverride::from_config(&app.config))
+            );
+            assert_eq!(
+                op_rx.try_recv(),
+                Ok(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: Some(auto_review.approval_policy),
+                    approvals_reviewer: Some(auto_review.approvals_reviewer),
+                    permission_profile: Some(auto_review.permission_profile()),
+                    active_permission_profile: Some(auto_review.active_permission_profile.clone()),
+                    windows_sandbox_level: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    service_tier: None,
+                    collaboration_mode: None,
+                    personality: None,
+                })
+            );
+            let cell = match app_event_rx.try_recv() {
+                Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+                other => panic!("expected InsertHistoryCell event, got {other:?}"),
+            };
+            let rendered = cell
+                .display_lines(/*width*/ 120)
+                .into_iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(rendered.contains("Permissions updated to Approve for me"));
+
+            let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+            assert!(config.contains("guardian_approval = true"));
+            assert!(config.contains("approvals_reviewer = \"auto_review\""));
+            assert!(config.contains("approval_policy = \"on-request\""));
+            assert!(config.contains("sandbox_mode = \"workspace-write\""));
+            app_server.shutdown().await?;
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn update_feature_flags_disabling_guardian_clears_review_policy_and_restores_default() -> Result<()>
+{
+    run_current_thread_test_with_stack(
+        "update_feature_flags_disabling_guardian_clears_review_policy_and_restores_default",
+        || async {
+            let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+            let codex_home = tempdir()?;
+            app.config.codex_home = codex_home.path().to_path_buf().abs();
+            let config_toml_path = codex_home.path().join("config.toml").abs();
+            let config_toml = "approvals_reviewer = \"guardian_subagent\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
+            std::fs::write(config_toml_path.as_path(), config_toml)?;
+            let user_config = toml::from_str::<TomlValue>(config_toml)?;
+            app.config.config_layer_stack = app
+                .config
+                .config_layer_stack
+                .with_user_config(&config_toml_path, user_config);
+            app.config
+                .features
+                .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
             app.chat_widget
-                .config_ref()
+                .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
+            app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            app.chat_widget
+                .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
+            app.config
                 .permissions
                 .approval_policy
-                .value(),
-        ),
-        auto_review.approval_policy
-    );
-    assert_eq!(
-        app.chat_widget
-            .config_ref()
-            .permissions
-            .permission_profile(),
-        &auto_review.permission_profile()
-    );
-    assert_eq!(
-        app.config.permissions.active_permission_profile(),
-        Some(auto_review.active_permission_profile.clone())
-    );
-    assert_eq!(
-        app.chat_widget
-            .config_ref()
-            .permissions
-            .active_permission_profile(),
-        Some(auto_review.active_permission_profile.clone())
-    );
-    assert_eq!(
-        app.chat_widget.config_ref().approvals_reviewer,
-        auto_review.approvals_reviewer
-    );
-    assert_eq!(app.runtime_approval_policy_override, None);
-    assert_eq!(
-        app.runtime_permission_profile_override,
-        Some(RuntimePermissionProfileOverride::from_config(&app.config))
-    );
-    assert_eq!(
-        op_rx.try_recv(),
-        Ok(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: Some(auto_review.approval_policy),
-            approvals_reviewer: Some(auto_review.approvals_reviewer),
-            permission_profile: Some(auto_review.permission_profile()),
-            active_permission_profile: Some(auto_review.active_permission_profile.clone()),
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-    );
-    let cell = match app_event_rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
-        other => panic!("expected InsertHistoryCell event, got {other:?}"),
-    };
-    let rendered = cell
-        .display_lines(/*width*/ 120)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(rendered.contains("Permissions updated to Approve for me"));
+                .set(AskForApproval::OnRequest.to_core())?;
+            app.config
+                .permissions
+                .set_permission_profile(PermissionProfile::workspace_write())?;
+            app.chat_widget
+                .set_approval_policy(AskForApproval::OnRequest);
+            app.chat_widget
+                .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::legacy(
+                    PermissionProfile::workspace_write(),
+                ))?;
+            let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    assert!(config.contains("guardian_approval = true"));
-    assert!(config.contains("approvals_reviewer = \"auto_review\""));
-    assert!(config.contains("approval_policy = \"on-request\""));
-    assert!(config.contains("sandbox_mode = \"workspace-write\""));
-    app_server.shutdown().await?;
-    Ok(())
+            app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, false)])
+                .await;
+
+            assert!(!app.config.features.enabled(Feature::GuardianApproval));
+            assert!(
+                !app.chat_widget
+                    .config_ref()
+                    .features
+                    .enabled(Feature::GuardianApproval)
+            );
+            assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::User);
+            assert_eq!(
+                AskForApproval::from(app.config.permissions.approval_policy.value()),
+                AskForApproval::OnRequest
+            );
+            assert_eq!(
+                app.chat_widget.config_ref().approvals_reviewer,
+                ApprovalsReviewer::User
+            );
+            assert_eq!(app.runtime_approval_policy_override, None);
+            assert_eq!(
+                op_rx.try_recv(),
+                Ok(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    approvals_reviewer: Some(ApprovalsReviewer::User),
+                    permission_profile: None,
+                    active_permission_profile: None,
+                    windows_sandbox_level: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    service_tier: None,
+                    collaboration_mode: None,
+                    personality: None,
+                })
+            );
+            let cell = match app_event_rx.try_recv() {
+                Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+                other => panic!("expected InsertHistoryCell event, got {other:?}"),
+            };
+            let rendered = cell
+                .display_lines(/*width*/ 120)
+                .into_iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(rendered.contains("Permissions updated to Ask for approval"));
+
+            let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+            assert!(!config.contains("guardian_approval = true"));
+            assert!(!config.contains("approvals_reviewer ="));
+            assert!(config.contains("approval_policy = \"on-request\""));
+            assert!(config.contains("sandbox_mode = \"workspace-write\""));
+            app_server.shutdown().await?;
+            Ok(())
+        },
+    )
 }
 
-#[tokio::test]
-async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restores_default()
+#[test]
+fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review_policy() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "update_feature_flags_enabling_guardian_overrides_explicit_manual_review_policy",
+        || async {
+            let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+            let codex_home = tempdir()?;
+            app.config.codex_home = codex_home.path().to_path_buf().abs();
+            let auto_review = auto_review_mode();
+            let config_toml_path = codex_home.path().join("config.toml").abs();
+            let config_toml = "approvals_reviewer = \"user\"\n";
+            std::fs::write(config_toml_path.as_path(), config_toml)?;
+            let user_config = toml::from_str::<TomlValue>(config_toml)?;
+            app.config.config_layer_stack = app
+                .config
+                .config_layer_stack
+                .with_user_config(&config_toml_path, user_config);
+            app.config.approvals_reviewer = ApprovalsReviewer::User;
+            app.chat_widget
+                .set_approvals_reviewer(ApprovalsReviewer::User);
+            let mut app_server = start_config_write_test_app_server(&app).await?;
+
+            app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, true)])
+                .await;
+
+            assert!(app.config.features.enabled(Feature::GuardianApproval));
+            assert_eq!(
+                app.config.approvals_reviewer,
+                auto_review.approvals_reviewer
+            );
+            assert_eq!(
+                app.chat_widget.config_ref().approvals_reviewer,
+                auto_review.approvals_reviewer
+            );
+            assert_eq!(
+                AskForApproval::from(app.config.permissions.approval_policy.value()),
+                auto_review.approval_policy
+            );
+            assert_eq!(
+                app.chat_widget
+                    .config_ref()
+                    .permissions
+                    .permission_profile(),
+                &auto_review.permission_profile()
+            );
+            assert_eq!(
+                op_rx.try_recv(),
+                Ok(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: Some(auto_review.approval_policy),
+                    approvals_reviewer: Some(auto_review.approvals_reviewer),
+                    permission_profile: Some(auto_review.permission_profile()),
+                    active_permission_profile: Some(auto_review.active_permission_profile.clone()),
+                    windows_sandbox_level: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    service_tier: None,
+                    collaboration_mode: None,
+                    personality: None,
+                })
+            );
+
+            let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+            assert!(config.contains("approvals_reviewer = \"auto_review\""));
+            assert!(config.contains("guardian_approval = true"));
+            assert!(config.contains("approval_policy = \"on-request\""));
+            assert!(config.contains("sandbox_mode = \"workspace-write\""));
+            app_server.shutdown().await?;
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn update_feature_flags_disabling_guardian_clears_manual_review_policy_without_history()
 -> Result<()> {
-    let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-    let codex_home = tempdir()?;
-    app.config.codex_home = codex_home.path().to_path_buf().abs();
-    let config_toml_path = codex_home.path().join("config.toml").abs();
-    let config_toml = "approvals_reviewer = \"guardian_subagent\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
-    std::fs::write(config_toml_path.as_path(), config_toml)?;
-    let user_config = toml::from_str::<TomlValue>(config_toml)?;
-    app.config.config_layer_stack = app
-        .config
-        .config_layer_stack
-        .with_user_config(&config_toml_path, user_config);
-    app.config
-        .features
-        .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
-    app.chat_widget
-        .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
-    app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
-    app.chat_widget
-        .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
-    app.config
-        .permissions
-        .approval_policy
-        .set(AskForApproval::OnRequest.to_core())?;
-    app.config
-        .permissions
-        .set_permission_profile(PermissionProfile::workspace_write())?;
-    app.chat_widget
-        .set_approval_policy(AskForApproval::OnRequest);
-    app.chat_widget
-        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::legacy(
-            PermissionProfile::workspace_write(),
-        ))?;
-    let mut app_server = start_config_write_test_app_server(&app).await?;
+    run_current_thread_test_with_stack(
+        "update_feature_flags_disabling_guardian_clears_manual_review_policy_without_history",
+        || async {
+            let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+            let codex_home = tempdir()?;
+            app.config.codex_home = codex_home.path().to_path_buf().abs();
+            let config_toml_path = codex_home.path().join("config.toml").abs();
+            let config_toml = "approvals_reviewer = \"user\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
+            std::fs::write(config_toml_path.as_path(), config_toml)?;
+            let user_config = toml::from_str::<TomlValue>(config_toml)?;
+            app.config.config_layer_stack = app
+                .config
+                .config_layer_stack
+                .with_user_config(&config_toml_path, user_config);
+            app.config
+                .features
+                .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
+            app.chat_widget
+                .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
+            app.config.approvals_reviewer = ApprovalsReviewer::User;
+            app.chat_widget
+                .set_approvals_reviewer(ApprovalsReviewer::User);
+            let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, false)])
-        .await;
+            app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, false)])
+                .await;
 
-    assert!(!app.config.features.enabled(Feature::GuardianApproval));
-    assert!(
-        !app.chat_widget
-            .config_ref()
-            .features
-            .enabled(Feature::GuardianApproval)
-    );
-    assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::User);
-    assert_eq!(
-        AskForApproval::from(app.config.permissions.approval_policy.value()),
-        AskForApproval::OnRequest
-    );
-    assert_eq!(
-        app.chat_widget.config_ref().approvals_reviewer,
-        ApprovalsReviewer::User
-    );
-    assert_eq!(app.runtime_approval_policy_override, None);
-    assert_eq!(
-        op_rx.try_recv(),
-        Ok(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: Some(ApprovalsReviewer::User),
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-    );
-    let cell = match app_event_rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
-        other => panic!("expected InsertHistoryCell event, got {other:?}"),
-    };
-    let rendered = cell
-        .display_lines(/*width*/ 120)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(rendered.contains("Permissions updated to Ask for approval"));
+            assert!(!app.config.features.enabled(Feature::GuardianApproval));
+            assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::User);
+            assert_eq!(
+                app.chat_widget.config_ref().approvals_reviewer,
+                ApprovalsReviewer::User
+            );
+            assert_eq!(
+                op_rx.try_recv(),
+                Ok(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    approvals_reviewer: Some(ApprovalsReviewer::User),
+                    permission_profile: None,
+                    active_permission_profile: None,
+                    windows_sandbox_level: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    service_tier: None,
+                    collaboration_mode: None,
+                    personality: None,
+                })
+            );
+            assert!(
+                app_event_rx.try_recv().is_err(),
+                "manual review should not emit a permissions history update when the effective state stays default"
+            );
 
-    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    assert!(!config.contains("guardian_approval = true"));
-    assert!(!config.contains("approvals_reviewer ="));
-    assert!(config.contains("approval_policy = \"on-request\""));
-    assert!(config.contains("sandbox_mode = \"workspace-write\""));
-    app_server.shutdown().await?;
-    Ok(())
+            let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+            assert!(!config.contains("guardian_approval = true"));
+            assert!(!config.contains("approvals_reviewer ="));
+            app_server.shutdown().await?;
+            Ok(())
+        },
+    )
 }
 
-#[tokio::test]
-async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review_policy()
--> Result<()> {
-    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-    let codex_home = tempdir()?;
-    app.config.codex_home = codex_home.path().to_path_buf().abs();
-    let auto_review = auto_review_mode();
-    let config_toml_path = codex_home.path().join("config.toml").abs();
-    let config_toml = "approvals_reviewer = \"user\"\n";
-    std::fs::write(config_toml_path.as_path(), config_toml)?;
-    let user_config = toml::from_str::<TomlValue>(config_toml)?;
-    app.config.config_layer_stack = app
-        .config
-        .config_layer_stack
-        .with_user_config(&config_toml_path, user_config);
-    app.config.approvals_reviewer = ApprovalsReviewer::User;
-    app.chat_widget
-        .set_approvals_reviewer(ApprovalsReviewer::User);
-    let mut app_server = start_config_write_test_app_server(&app).await?;
+#[test]
+fn open_agent_picker_allows_existing_agent_threads_when_feature_is_disabled() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "open_agent_picker_allows_existing_agent_threads_when_feature_is_disabled",
+        || async {
+            let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+            let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+                app.chat_widget.config_ref(),
+            ))
+            .await
+            .expect("embedded app server");
+            let thread_id = ThreadId::new();
+            app.thread_event_channels
+                .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
 
-    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, true)])
-        .await;
+            Box::pin(app.open_agent_picker(&mut app_server)).await;
+            app.chat_widget
+                .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert!(app.config.features.enabled(Feature::GuardianApproval));
-    assert_eq!(
-        app.config.approvals_reviewer,
-        auto_review.approvals_reviewer
-    );
-    assert_eq!(
-        app.chat_widget.config_ref().approvals_reviewer,
-        auto_review.approvals_reviewer
-    );
-    assert_eq!(
-        AskForApproval::from(app.config.permissions.approval_policy.value()),
-        auto_review.approval_policy
-    );
-    assert_eq!(
-        app.chat_widget
-            .config_ref()
-            .permissions
-            .permission_profile(),
-        &auto_review.permission_profile()
-    );
-    assert_eq!(
-        op_rx.try_recv(),
-        Ok(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: Some(auto_review.approval_policy),
-            approvals_reviewer: Some(auto_review.approvals_reviewer),
-            permission_profile: Some(auto_review.permission_profile()),
-            active_permission_profile: Some(auto_review.active_permission_profile.clone()),
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-    );
-
-    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    assert!(config.contains("approvals_reviewer = \"auto_review\""));
-    assert!(config.contains("guardian_approval = true"));
-    assert!(config.contains("approval_policy = \"on-request\""));
-    assert!(config.contains("sandbox_mode = \"workspace-write\""));
-    app_server.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_without_history()
--> Result<()> {
-    let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-    let codex_home = tempdir()?;
-    app.config.codex_home = codex_home.path().to_path_buf().abs();
-    let config_toml_path = codex_home.path().join("config.toml").abs();
-    let config_toml = "approvals_reviewer = \"user\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
-    std::fs::write(config_toml_path.as_path(), config_toml)?;
-    let user_config = toml::from_str::<TomlValue>(config_toml)?;
-    app.config.config_layer_stack = app
-        .config
-        .config_layer_stack
-        .with_user_config(&config_toml_path, user_config);
-    app.config
-        .features
-        .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
-    app.chat_widget
-        .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
-    app.config.approvals_reviewer = ApprovalsReviewer::User;
-    app.chat_widget
-        .set_approvals_reviewer(ApprovalsReviewer::User);
-    let mut app_server = start_config_write_test_app_server(&app).await?;
-
-    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, false)])
-        .await;
-
-    assert!(!app.config.features.enabled(Feature::GuardianApproval));
-    assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::User);
-    assert_eq!(
-        app.chat_widget.config_ref().approvals_reviewer,
-        ApprovalsReviewer::User
-    );
-    assert_eq!(
-        op_rx.try_recv(),
-        Ok(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: Some(ApprovalsReviewer::User),
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-    );
-    assert!(
-        app_event_rx.try_recv().is_err(),
-        "manual review should not emit a permissions history update when the effective state stays default"
-    );
-
-    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    assert!(!config.contains("guardian_approval = true"));
-    assert!(!config.contains("approvals_reviewer ="));
-    app_server.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn open_agent_picker_allows_existing_agent_threads_when_feature_is_disabled() -> Result<()> {
-    let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let thread_id = ThreadId::new();
-    app.thread_event_channels
-        .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
-
-    Box::pin(app.open_agent_picker(&mut app_server)).await;
-    app.chat_widget
-        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    assert_matches!(
-        app_event_rx.try_recv(),
-        Ok(AppEvent::SelectAgentThread(selected_thread_id)) if selected_thread_id == thread_id
-    );
-    Ok(())
+            assert_matches!(
+                app_event_rx.try_recv(),
+                Ok(AppEvent::SelectAgentThread(selected_thread_id)) if selected_thread_id == thread_id
+            );
+            Ok(())
+        },
+    )
 }
 
 #[tokio::test]
@@ -3585,71 +3646,77 @@ async fn side_discard_selection_keeps_current_side_thread() {
     );
 }
 
-#[tokio::test]
-async fn discard_side_thread_removes_agent_navigation_entry() -> Result<()> {
-    Box::pin(async {
-        let mut app = make_test_app().await;
-        let mut app_server =
-            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
-        let mut side_config = app.chat_widget.config_ref().clone();
-        side_config.ephemeral = true;
-        let started = app_server.start_thread(&side_config).await?;
-        let side_thread_id = started.session.thread_id;
-        app.side_threads
-            .insert(side_thread_id, SideThreadState::new(ThreadId::new()));
-        app.agent_navigation.upsert(
-            side_thread_id,
-            Some("Side".to_string()),
-            Some("side".to_string()),
-            /*is_closed*/ false,
-        );
+#[test]
+fn discard_side_thread_removes_agent_navigation_entry() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "discard_side_thread_removes_agent_navigation_entry",
+        || async {
+            let mut app = Box::pin(make_test_app()).await;
+            let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+                app.chat_widget.config_ref(),
+            ))
+            .await?;
+            let mut side_config = app.chat_widget.config_ref().clone();
+            side_config.ephemeral = true;
+            let started = app_server.start_thread(&side_config).await?;
+            let side_thread_id = started.session.thread_id;
+            app.side_threads
+                .insert(side_thread_id, SideThreadState::new(ThreadId::new()));
+            app.agent_navigation.upsert(
+                side_thread_id,
+                Some("Side".to_string()),
+                Some("side".to_string()),
+                /*is_closed*/ false,
+            );
 
-        assert!(
-            app.discard_side_thread(&mut app_server, side_thread_id)
-                .await
-        );
+            let discarded =
+                Box::pin(app.discard_side_thread(&mut app_server, side_thread_id)).await;
+            assert!(discarded);
 
-        assert_eq!(app.agent_navigation.get(&side_thread_id), None);
-        assert!(!app.side_threads.contains_key(&side_thread_id));
-        Ok(())
-    })
-    .await
+            assert_eq!(app.agent_navigation.get(&side_thread_id), None);
+            assert!(!app.side_threads.contains_key(&side_thread_id));
+            Ok(())
+        },
+    )
 }
 
-#[tokio::test]
-async fn discard_side_thread_keeps_local_state_when_server_close_fails() -> Result<()> {
-    Box::pin(async {
-        let mut app = make_test_app().await;
-        let mut app_server =
-            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
-        let parent_thread_id = ThreadId::new();
-        let side_thread_id = ThreadId::new();
-        app.active_thread_id = Some(side_thread_id);
-        app.side_threads
-            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
-        app.agent_navigation.upsert(
-            side_thread_id,
-            Some("Side".to_string()),
-            Some("side".to_string()),
-            /*is_closed*/ false,
-        );
-
-        assert!(
-            !app.discard_side_thread(&mut app_server, side_thread_id)
-                .await
-        );
-
-        assert_eq!(app.active_thread_id, Some(side_thread_id));
-        assert_eq!(
+#[test]
+fn discard_side_thread_keeps_local_state_when_server_close_fails() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "discard_side_thread_keeps_local_state_when_server_close_fails",
+        || async {
+            let mut app = Box::pin(make_test_app()).await;
+            let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+                app.chat_widget.config_ref(),
+            ))
+            .await?;
+            let parent_thread_id = ThreadId::new();
+            let side_thread_id = ThreadId::new();
+            app.active_thread_id = Some(side_thread_id);
             app.side_threads
-                .get(&side_thread_id)
-                .map(|state| state.parent_thread_id),
-            Some(parent_thread_id)
-        );
-        assert!(app.agent_navigation.get(&side_thread_id).is_some());
-        Ok(())
-    })
-    .await
+                .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+            app.agent_navigation.upsert(
+                side_thread_id,
+                Some("Side".to_string()),
+                Some("side".to_string()),
+                /*is_closed*/ false,
+            );
+
+            let discarded =
+                Box::pin(app.discard_side_thread(&mut app_server, side_thread_id)).await;
+            assert!(!discarded);
+
+            assert_eq!(app.active_thread_id, Some(side_thread_id));
+            assert_eq!(
+                app.side_threads
+                    .get(&side_thread_id)
+                    .map(|state| state.parent_thread_id),
+                Some(parent_thread_id)
+            );
+            assert!(app.agent_navigation.get(&side_thread_id).is_some());
+            Ok(())
+        },
+    )
 }
 
 #[tokio::test]
@@ -5277,266 +5344,291 @@ async fn thread_rollback_response_discards_queued_active_thread_events() {
     assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
 }
 
-#[tokio::test]
-async fn new_session_requests_shutdown_for_previous_conversation() {
-    Box::pin(async {
-        let (mut app, mut app_event_rx, mut op_rx) = Box::pin(make_test_app_with_channels()).await;
+#[test]
+fn new_session_requests_shutdown_for_previous_conversation() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "new_session_requests_shutdown_for_previous_conversation",
+        || async {
+            let (mut app, mut app_event_rx, mut op_rx) =
+                Box::pin(make_test_app_with_channels()).await;
 
-        let thread_id = ThreadId::new();
-        let event = crate::session_state::ThreadSessionState {
-            thread_id,
-            forked_from_id: None,
-            fork_parent_title: None,
-            thread_name: None,
-            model: "gpt-test".to_string(),
-            model_provider_id: "test-provider".to_string(),
-            service_tier: None,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: ApprovalsReviewer::User,
-            permission_profile: PermissionProfile::read_only(),
-            active_permission_profile: None,
-            cwd: test_path_buf("/home/user/project").abs(),
-            runtime_workspace_roots: Vec::new(),
-            instruction_source_paths: Vec::new(),
-            reasoning_effort: None,
-            collaboration_mode: None,
-            personality: None,
-            message_history: None,
-            network_proxy: None,
-            rollout_path: Some(PathBuf::new()),
-        };
+            let thread_id = ThreadId::new();
+            let event = crate::session_state::ThreadSessionState {
+                thread_id,
+                forked_from_id: None,
+                fork_parent_title: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                permission_profile: PermissionProfile::read_only(),
+                active_permission_profile: None,
+                cwd: test_path_buf("/home/user/project").abs(),
+                runtime_workspace_roots: Vec::new(),
+                instruction_source_paths: Vec::new(),
+                reasoning_effort: None,
+                collaboration_mode: None,
+                personality: None,
+                message_history: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            };
 
-        app.chat_widget.handle_thread_session(event);
+            app.chat_widget.handle_thread_session(event);
 
-        while app_event_rx.try_recv().is_ok() {}
-        while op_rx.try_recv().is_ok() {}
+            while app_event_rx.try_recv().is_ok() {}
+            while op_rx.try_recv().is_ok() {}
 
-        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-            app.chat_widget.config_ref(),
-        ))
-        .await
-        .expect("embedded app server");
-        Box::pin(app.shutdown_current_thread(&mut app_server)).await;
-
-        assert!(
-            op_rx.try_recv().is_err(),
-            "shutdown should not submit Op::Shutdown"
-        );
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails() {
-    let mut app = make_test_app().await;
-    let thread_id = ThreadId::new();
-    app.active_thread_id = Some(thread_id);
-
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let control = Box::pin(app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)).await;
-
-    assert_eq!(app.pending_shutdown_exit_thread_id, None);
-    assert!(matches!(
-        control,
-        AppRunControl::Exit(ExitReason::UserRequested)
-    ));
-}
-
-#[tokio::test]
-async fn shutdown_first_exit_uses_app_server_shutdown_without_submitting_op() {
-    let (mut app, _app_event_rx, mut op_rx) = Box::pin(make_test_app_with_channels()).await;
-    let thread_id = ThreadId::new();
-    app.active_thread_id = Some(thread_id);
-
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let control = Box::pin(app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)).await;
-
-    assert_eq!(app.pending_shutdown_exit_thread_id, None);
-    assert!(matches!(
-        control,
-        AppRunControl::Exit(ExitReason::UserRequested)
-    ));
-    assert!(
-        op_rx.try_recv().is_err(),
-        "shutdown should not submit Op::Shutdown"
-    );
-}
-
-#[tokio::test]
-async fn interrupt_without_active_turn_is_treated_as_handled() {
-    Box::pin(async {
-        let mut app = make_test_app().await;
-        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-            app.chat_widget.config_ref(),
-        ))
-        .await
-        .expect("embedded app server");
-        let started = app_server
-            .start_thread(app.chat_widget.config_ref())
+            let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+                app.chat_widget.config_ref(),
+            ))
             .await
-            .expect("thread/start should succeed");
-        let thread_id = started.session.thread_id;
-        app.enqueue_primary_thread_session(started.session, started.turns)
-            .await
-            .expect("primary thread should be registered");
-        let op = AppCommand::interrupt();
+            .expect("embedded app server");
+            Box::pin(app.shutdown_current_thread(&mut app_server)).await;
 
-        let handled = Box::pin(app.try_submit_active_thread_op_via_app_server(
-            &mut app_server,
-            thread_id,
-            &op,
-        ))
-        .await
-        .expect("interrupt submission should not fail");
-
-        assert_eq!(handled, true);
-    })
-    .await;
+            assert!(
+                op_rx.try_recv().is_err(),
+                "shutdown should not submit Op::Shutdown"
+            );
+            Ok(())
+        },
+    )
 }
 
-#[tokio::test]
-async fn override_turn_context_sends_thread_settings_update() {
-    Box::pin(async {
-        let mut app = make_test_app().await;
-        let mut app_server =
-            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+#[test]
+fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails",
+        || async {
+            let mut app = Box::pin(make_test_app()).await;
+            let thread_id = ThreadId::new();
+            app.active_thread_id = Some(thread_id);
+
+            let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+                app.chat_widget.config_ref(),
+            ))
+            .await
+            .expect("embedded app server");
+            let control =
+                Box::pin(app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)).await;
+
+            assert_eq!(app.pending_shutdown_exit_thread_id, None);
+            assert!(matches!(
+                control,
+                AppRunControl::Exit(ExitReason::UserRequested)
+            ));
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn shutdown_first_exit_uses_app_server_shutdown_without_submitting_op() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "shutdown_first_exit_uses_app_server_shutdown_without_submitting_op",
+        || async {
+            let (mut app, _app_event_rx, mut op_rx) = Box::pin(make_test_app_with_channels()).await;
+            let thread_id = ThreadId::new();
+            app.active_thread_id = Some(thread_id);
+
+            let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+                app.chat_widget.config_ref(),
+            ))
+            .await
+            .expect("embedded app server");
+            let control =
+                Box::pin(app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)).await;
+
+            assert_eq!(app.pending_shutdown_exit_thread_id, None);
+            assert!(matches!(
+                control,
+                AppRunControl::Exit(ExitReason::UserRequested)
+            ));
+            assert!(
+                op_rx.try_recv().is_err(),
+                "shutdown should not submit Op::Shutdown"
+            );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn interrupt_without_active_turn_is_treated_as_handled() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "interrupt_without_active_turn_is_treated_as_handled",
+        || async {
+            let mut app = Box::pin(make_test_app()).await;
+            let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+                app.chat_widget.config_ref(),
+            ))
+            .await
+            .expect("embedded app server");
+            let started = app_server
+                .start_thread(app.chat_widget.config_ref())
                 .await
-                .expect("embedded app server");
-        let started = app_server
-            .start_thread(app.chat_widget.config_ref())
-            .await
-            .expect("thread/start should succeed");
-        let thread_id = started.session.thread_id;
-        let initial_model = started.session.model.clone();
-        let initial_effort = started.session.reasoning_effort.clone();
-        app.enqueue_primary_thread_session(started.session, started.turns)
-            .await
-            .expect("primary thread should be registered");
-        let service_tier = ServiceTier::Fast.request_value().to_string();
-        let collaboration_mode = CollaborationMode {
-            mode: ModeKind::Plan,
-            settings: Settings {
-                model: "gpt-5.4".to_string(),
-                reasoning_effort: Some(ReasoningEffortConfig::High),
-                developer_instructions: None,
-            },
-        };
-        let op = AppCommand::override_turn_context(
-            /*cwd*/ None,
-            Some(AskForApproval::OnRequest),
-            Some(ApprovalsReviewer::AutoReview),
-            /*permission_profile*/ None,
-            Some(ActivePermissionProfile::new(
-                codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
-            )),
-            /*windows_sandbox_level*/ None,
-            Some("gpt-5.4".to_string()),
-            Some(Some(ReasoningEffortConfig::High)),
-            /*summary*/ None,
-            Some(Some(service_tier.clone())),
-            Some(collaboration_mode.clone()),
-            Some(Personality::Pragmatic),
-        );
+                .expect("thread/start should succeed");
+            let thread_id = started.session.thread_id;
+            app.enqueue_primary_thread_session(started.session, started.turns)
+                .await
+                .expect("primary thread should be registered");
+            let op = AppCommand::interrupt();
 
-        let handled = app
-            .try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op)
+            let handled = Box::pin(app.try_submit_active_thread_op_via_app_server(
+                &mut app_server,
+                thread_id,
+                &op,
+            ))
             .await
-            .expect("settings update submission should not fail");
+            .expect("interrupt submission should not fail");
 
-        assert_eq!(handled, true);
-        assert_eq!(
-            app.primary_session_configured
+            assert_eq!(handled, true);
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn override_turn_context_sends_thread_settings_update() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "override_turn_context_sends_thread_settings_update",
+        || async {
+            let mut app = Box::pin(make_test_app()).await;
+            let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+                app.chat_widget.config_ref(),
+            ))
+            .await
+            .expect("embedded app server");
+            let started = app_server
+                .start_thread(app.chat_widget.config_ref())
+                .await
+                .expect("thread/start should succeed");
+            let thread_id = started.session.thread_id;
+            let initial_model = started.session.model.clone();
+            let initial_effort = started.session.reasoning_effort.clone();
+            app.enqueue_primary_thread_session(started.session, started.turns)
+                .await
+                .expect("primary thread should be registered");
+            let service_tier = ServiceTier::Fast.request_value().to_string();
+            let collaboration_mode = CollaborationMode {
+                mode: ModeKind::Plan,
+                settings: Settings {
+                    model: "gpt-5.4".to_string(),
+                    reasoning_effort: Some(ReasoningEffortConfig::High),
+                    developer_instructions: None,
+                },
+            };
+            let op = AppCommand::override_turn_context(
+                /*cwd*/ None,
+                Some(AskForApproval::OnRequest),
+                Some(ApprovalsReviewer::AutoReview),
+                /*permission_profile*/ None,
+                Some(ActivePermissionProfile::new(
+                    codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+                )),
+                /*windows_sandbox_level*/ None,
+                Some("gpt-5.4".to_string()),
+                Some(Some(ReasoningEffortConfig::High)),
+                /*summary*/ None,
+                Some(Some(service_tier.clone())),
+                Some(collaboration_mode.clone()),
+                Some(Personality::Pragmatic),
+            );
+
+            let handled = app
+                .try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op)
+                .await
+                .expect("settings update submission should not fail");
+
+            assert_eq!(handled, true);
+            assert_eq!(
+                app.primary_session_configured
+                    .as_ref()
+                    .expect("primary session")
+                    .model,
+                initial_model,
+                "thread/settings/update response is only an ack; cached state changes on notification"
+            );
+
+            let notification = next_thread_settings_updated(&mut app_server, thread_id).await;
+            assert_eq!(notification.thread_settings.model, "gpt-5.4");
+            assert_eq!(
+                notification.thread_settings.effort,
+                Some(ReasoningEffortConfig::High)
+            );
+            assert_eq!(
+                notification.thread_settings.service_tier,
+                Some(service_tier.clone())
+            );
+            assert_eq!(
+                notification.thread_settings.approval_policy,
+                AskForApproval::OnRequest
+            );
+            assert_eq!(
+                notification.thread_settings.approvals_reviewer.to_core(),
+                ApprovalsReviewer::AutoReview
+            );
+            let notified_mode = &notification.thread_settings.collaboration_mode;
+            assert_eq!(notified_mode.mode, collaboration_mode.mode);
+            assert_eq!(
+                notified_mode.settings.model,
+                collaboration_mode.settings.model
+            );
+            assert_eq!(
+                notified_mode.settings.reasoning_effort,
+                collaboration_mode.settings.reasoning_effort
+            );
+            assert_eq!(
+                notification.thread_settings.personality,
+                Some(Personality::Pragmatic)
+            );
+
+            app.handle_app_server_event(
+                &mut app_server,
+                codex_app_server_client::AppServerEvent::ServerNotification(
+                    ServerNotification::ThreadSettingsUpdated(notification),
+                ),
+            )
+            .await;
+            let updated_session = app
+                .primary_session_configured
                 .as_ref()
-                .expect("primary session")
-                .model,
-            initial_model,
-            "thread/settings/update response is only an ack; cached state changes on notification"
-        );
-
-        let notification = next_thread_settings_updated(&mut app_server, thread_id).await;
-        assert_eq!(notification.thread_settings.model, "gpt-5.4");
-        assert_eq!(
-            notification.thread_settings.effort,
-            Some(ReasoningEffortConfig::High)
-        );
-        assert_eq!(
-            notification.thread_settings.service_tier,
-            Some(service_tier.clone())
-        );
-        assert_eq!(
-            notification.thread_settings.approval_policy,
-            AskForApproval::OnRequest
-        );
-        assert_eq!(
-            notification.thread_settings.approvals_reviewer.to_core(),
-            ApprovalsReviewer::AutoReview
-        );
-        let notified_mode = &notification.thread_settings.collaboration_mode;
-        assert_eq!(notified_mode.mode, collaboration_mode.mode);
-        assert_eq!(
-            notified_mode.settings.model,
-            collaboration_mode.settings.model
-        );
-        assert_eq!(
-            notified_mode.settings.reasoning_effort,
-            collaboration_mode.settings.reasoning_effort
-        );
-        assert_eq!(
-            notification.thread_settings.personality,
-            Some(Personality::Pragmatic)
-        );
-
-        app.handle_app_server_event(
-            &mut app_server,
-            codex_app_server_client::AppServerEvent::ServerNotification(
-                ServerNotification::ThreadSettingsUpdated(notification),
-            ),
-        )
-        .await;
-        let updated_session = app
-            .primary_session_configured
-            .as_ref()
-            .expect("primary session should be updated from notification");
-        assert_eq!(updated_session.model, initial_model);
-        assert_eq!(updated_session.reasoning_effort, initial_effort);
-        let updated_mode = updated_session
-            .collaboration_mode
-            .as_deref()
-            .expect("collaboration mode should be cached");
-        assert_eq!(updated_mode.mode, collaboration_mode.mode);
-        assert_eq!(
-            updated_mode.settings.model,
-            collaboration_mode.settings.model
-        );
-        assert_eq!(
-            updated_mode.settings.reasoning_effort,
-            collaboration_mode.settings.reasoning_effort
-        );
-        assert_eq!(updated_session.personality, Some(Personality::Pragmatic));
-        assert_eq!(updated_session.service_tier, Some(service_tier));
-        assert_eq!(updated_session.approval_policy, AskForApproval::OnRequest);
-        assert_eq!(
-            updated_session.approvals_reviewer,
-            ApprovalsReviewer::AutoReview
-        );
-        assert_eq!(
-            updated_session
-                .active_permission_profile
-                .as_ref()
-                .expect("active profile")
-                .id,
-            codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE
-        );
-    })
-    .await;
+                .expect("primary session should be updated from notification");
+            assert_eq!(updated_session.model, initial_model);
+            assert_eq!(updated_session.reasoning_effort, initial_effort);
+            let updated_mode = updated_session
+                .collaboration_mode
+                .as_deref()
+                .expect("collaboration mode should be cached");
+            assert_eq!(updated_mode.mode, collaboration_mode.mode);
+            assert_eq!(
+                updated_mode.settings.model,
+                collaboration_mode.settings.model
+            );
+            assert_eq!(
+                updated_mode.settings.reasoning_effort,
+                collaboration_mode.settings.reasoning_effort
+            );
+            assert_eq!(updated_session.personality, Some(Personality::Pragmatic));
+            assert_eq!(updated_session.service_tier, Some(service_tier));
+            assert_eq!(updated_session.approval_policy, AskForApproval::OnRequest);
+            assert_eq!(
+                updated_session.approvals_reviewer,
+                ApprovalsReviewer::AutoReview
+            );
+            assert_eq!(
+                updated_session
+                    .active_permission_profile
+                    .as_ref()
+                    .expect("active profile")
+                    .id,
+                codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE
+            );
+            Ok(())
+        },
+    )
 }
 
 #[tokio::test]

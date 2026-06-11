@@ -200,6 +200,10 @@ pub(super) async fn make_chatwidget_manual(
     widget
         .bottom_pane
         .set_placeholder_text(widget.normal_placeholder_text.clone());
+    widget.status_line_project_root_name_cache = Some(CachedProjectRootName {
+        cwd: widget.config.cwd.to_path_buf(),
+        root_name: None,
+    });
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
 }
