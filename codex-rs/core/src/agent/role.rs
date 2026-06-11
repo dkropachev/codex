@@ -346,6 +346,46 @@ Rules:
                         nickname_candidates: None,
                     }
                 ),
+                (
+                    "workflow-arch-reviewer".to_string(),
+                    AgentRoleConfig {
+                        description: Some("Fresh-context reviewer for workflow DESIGN.md. Returns findings only with `WF-*` rule citations, or exactly `0 findings`.".to_string()),
+                        config_file: Some("workflow-arch-reviewer.toml".to_string().parse().unwrap_or_default()),
+                        nickname_candidates: None,
+                    }
+                ),
+                (
+                    "workflow-architect".to_string(),
+                    AgentRoleConfig {
+                        description: Some("Owns workflow design. Produces and revises DESIGN.md, handles coder design-change requests, and keeps the design review loop going until it reaches `0 findings`.".to_string()),
+                        config_file: Some("workflow-architect.toml".to_string().parse().unwrap_or_default()),
+                        nickname_candidates: None,
+                    }
+                ),
+                (
+                    "workflow-code-reviewer".to_string(),
+                    AgentRoleConfig {
+                        description: Some("Fresh-context reviewer for workflow implementation against README.md, DESIGN.md, and workflow rules. Returns findings only or exactly `0 findings`.".to_string()),
+                        config_file: Some("workflow-code-reviewer.toml".to_string().parse().unwrap_or_default()),
+                        nickname_candidates: None,
+                    }
+                ),
+                (
+                    "workflow-coder".to_string(),
+                    AgentRoleConfig {
+                        description: Some("Implements workflow code and tests from the settled DESIGN.md. Must not edit DESIGN.md; raises design-change requests instead.".to_string()),
+                        config_file: Some("workflow-coder.toml".to_string().parse().unwrap_or_default()),
+                        nickname_candidates: None,
+                    }
+                ),
+                (
+                    "workflow-resilience-reviewer".to_string(),
+                    AgentRoleConfig {
+                        description: Some("Fresh-context reviewer for workflow runtime resilience, recovery, failure handling, and correctness-preserving fallback behavior. Returns findings only or exactly `0 findings`.".to_string()),
+                        config_file: Some("workflow-resilience-reviewer.toml".to_string().parse().unwrap_or_default()),
+                        nickname_candidates: None,
+                    }
+                ),
                 // Awaiter is temp removed
 //                 (
 //                     "awaiter".to_string(),
@@ -373,9 +413,20 @@ Rules:
     pub(super) fn config_file_contents(path: &Path) -> Option<&'static str> {
         const EXPLORER: &str = include_str!("builtins/explorer.toml");
         const AWAITER: &str = include_str!("builtins/awaiter.toml");
+        const WORKFLOW_ARCH_REVIEWER: &str = include_str!("builtins/workflow-arch-reviewer.toml");
+        const WORKFLOW_ARCHITECT: &str = include_str!("builtins/workflow-architect.toml");
+        const WORKFLOW_CODE_REVIEWER: &str = include_str!("builtins/workflow-code-reviewer.toml");
+        const WORKFLOW_CODER: &str = include_str!("builtins/workflow-coder.toml");
+        const WORKFLOW_RESILIENCE_REVIEWER: &str =
+            include_str!("builtins/workflow-resilience-reviewer.toml");
         match path.to_str()? {
             "explorer.toml" => Some(EXPLORER),
             "awaiter.toml" => Some(AWAITER),
+            "workflow-arch-reviewer.toml" => Some(WORKFLOW_ARCH_REVIEWER),
+            "workflow-architect.toml" => Some(WORKFLOW_ARCHITECT),
+            "workflow-code-reviewer.toml" => Some(WORKFLOW_CODE_REVIEWER),
+            "workflow-coder.toml" => Some(WORKFLOW_CODER),
+            "workflow-resilience-reviewer.toml" => Some(WORKFLOW_RESILIENCE_REVIEWER),
             _ => None,
         }
     }
