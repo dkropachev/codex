@@ -633,7 +633,26 @@ async fn session_info_availability_nux_tooltip_snapshot() {
         /*show_fast_status*/ false,
     );
 
-    let rendered = render_transcript(&cell).join("\n");
+    let mut rendered = render_transcript(&cell).join("\n");
+    const SNAPSHOT_CODEX_VERSION: &str = "v0.0.0";
+    const TITLE_PREFIX: &str = "OpenAI Codex (";
+    if let Some(title_pos) = rendered.find(TITLE_PREFIX)
+        && let Some(version_end_offset) = rendered[title_pos + TITLE_PREFIX.len()..].find(')')
+    {
+        let version_start = title_pos + TITLE_PREFIX.len();
+        let version_end = version_start + version_end_offset;
+        let original_len = version_end - version_start;
+        rendered.replace_range(version_start..version_end, SNAPSHOT_CODEX_VERSION);
+
+        if original_len > SNAPSHOT_CODEX_VERSION.len()
+            && let Some(line_end) = rendered[version_end..].find('│')
+        {
+            rendered.insert_str(
+                version_end + line_end,
+                &" ".repeat(original_len - SNAPSHOT_CODEX_VERSION.len()),
+            );
+        }
+    }
     insta::assert_snapshot!(rendered);
 }
 
@@ -1086,8 +1105,11 @@ fn web_search_history_cell_snapshot() {
 
 #[test]
 fn standalone_unix_update_available_history_cell_snapshot() {
-    let cell =
-        UpdateAvailableHistoryCell::new("9.9.9".to_string(), Some(UpdateAction::StandaloneUnix));
+    let cell = UpdateAvailableHistoryCell::new_with_current_version(
+        "<VERSION>".to_string(),
+        "9.9.9".to_string(),
+        Some(UpdateAction::StandaloneUnix),
+    );
     let rendered = render_lines(&cell.display_lines(/*width*/ 110)).join("\n");
 
     insta::assert_snapshot!(rendered);
@@ -1095,8 +1117,11 @@ fn standalone_unix_update_available_history_cell_snapshot() {
 
 #[test]
 fn standalone_windows_update_available_history_cell_snapshot() {
-    let cell =
-        UpdateAvailableHistoryCell::new("9.9.9".to_string(), Some(UpdateAction::StandaloneWindows));
+    let cell = UpdateAvailableHistoryCell::new_with_current_version(
+        "<VERSION>".to_string(),
+        "9.9.9".to_string(),
+        Some(UpdateAction::StandaloneWindows),
+    );
     let rendered = render_lines(&cell.display_lines(/*width*/ 110)).join("\n");
 
     insta::assert_snapshot!(rendered);
