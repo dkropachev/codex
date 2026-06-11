@@ -17,6 +17,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 mod branch_diff;
+mod inference;
 
 const MANIFEST_VERSION: u32 = 1;
 const JSONL_ENV: &str = "CODEX_REPO_CI_JSONL";
@@ -219,6 +220,21 @@ pub fn paths_for_repo(codex_home: &Path, cwd: &Path) -> Result<RepoCiPaths> {
         runner_path: state_dir.join("run_ci.sh"),
         state_dir,
     })
+}
+
+pub fn learn(codex_home: &Path, cwd: &Path, options: LearnOptions) -> Result<LearnOutcome> {
+    let paths = paths_for_repo(codex_home, cwd)?;
+    let (prepare_steps, fast_steps, full_steps) = inference::infer_steps(&paths.repo_root)?;
+    learn_with_plan(
+        codex_home,
+        cwd,
+        options,
+        LearnedPlan {
+            prepare_steps,
+            fast_steps,
+            full_steps,
+        },
+    )
 }
 
 pub fn learn_with_plan(
@@ -439,6 +455,149 @@ fn source_candidates(repo_root: &Path) -> Result<Vec<(PathBuf, SourceKind)>> {
     Ok(candidates)
 }
 
+pub(crate) fn add_just_steps(
+    justfile: &str,
+    prepare: &mut Vec<RepoCiStep>,
+    fast: &mut Vec<RepoCiStep>,
+    full: &mut Vec<RepoCiStep>,
+) {
+    if justfile_has_recipe(justfile, "setup") {
+        prepare.push(step("just-setup", "just setup", StepPhase::Prepare));
+    }
+    if justfile_has_recipe(justfile, "prepare") {
+        prepare.push(step("just-prepare", "just prepare", StepPhase::Prepare));
+    }
+    for (recipe, phase) in [
+        ("fmt", StepPhase::Lint),
+        ("format", StepPhase::Lint),
+        ("lint", StepPhase::Lint),
+        ("clippy", StepPhase::Lint),
+        ("build", StepPhase::Build),
+        ("test", StepPhase::Test),
+    ] {
+        if justfile_has_recipe(justfile, recipe) {
+            let ci_step = step(
+                &format!("just-{recipe}"),
+                &format!("just {recipe}"),
+                phase.clone(),
+            );
+            fast.push(ci_step.clone());
+            full.push(ci_step);
+        }
+    }
+    for recipe in ["integration", "e2e", "ui-test", "ui-tests"] {
+        if justfile_has_recipe(justfile, recipe) {
+            full.push(step(
+                &format!("just-{recipe}"),
+                &format!("just {recipe}"),
+                StepPhase::Test,
+            ));
+        }
+    }
+}
+
+pub(crate) fn add_node_steps(
+    repo_root: &Path,
+    prepare: &mut Vec<RepoCiStep>,
+    fast: &mut Vec<RepoCiStep>,
+    full: &mut Vec<RepoCiStep>,
+) {
+    if has_file(repo_root, "pnpm-lock.yaml") {
+        prepare.push(step(
+            "pnpm-install",
+            "pnpm install --frozen-lockfile",
+            StepPhase::Prepare,
+        ));
+    } else if has_file(repo_root, "package-lock.json") {
+        prepare.push(step("npm-ci", "npm ci", StepPhase::Prepare));
+    } else if has_file(repo_root, "yarn.lock") {
+        prepare.push(step(
+            "yarn-install",
+            "yarn install --frozen-lockfile",
+            StepPhase::Prepare,
+        ));
+    }
+
+    let Some(package_json) = read_optional(repo_root, "package.json").ok().flatten() else {
+        return;
+    };
+    for (script, phase) in [
+        ("lint", StepPhase::Lint),
+        ("build", StepPhase::Build),
+        ("test", StepPhase::Test),
+    ] {
+        if package_json.contains(&format!("\"{script}\"")) {
+            let cmd = if has_file(repo_root, "pnpm-lock.yaml") {
+                format!("pnpm {script}")
+            } else if has_file(repo_root, "yarn.lock") {
+                format!("yarn {script}")
+            } else {
+                format!("npm run {script}")
+            };
+            let ci_step = step(&format!("node-{script}"), &cmd, phase.clone());
+            fast.push(ci_step.clone());
+            full.push(ci_step);
+        }
+    }
+}
+
+pub(crate) fn add_python_steps(
+    repo_root: &Path,
+    prepare: &mut Vec<RepoCiStep>,
+    fast: &mut Vec<RepoCiStep>,
+    full: &mut Vec<RepoCiStep>,
+) {
+    if has_file(repo_root, "uv.lock") {
+        prepare.push(step("uv-sync", "uv sync --frozen", StepPhase::Prepare));
+    } else if has_file(repo_root, "requirements.txt") {
+        prepare.push(step(
+            "python-venv",
+            "python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt",
+            StepPhase::Prepare,
+        ));
+    }
+    let pytest_cmd = if has_file(repo_root, "uv.lock") {
+        "uv run pytest"
+    } else {
+        ". .venv/bin/activate 2>/dev/null || true; pytest"
+    };
+    if has_file(repo_root, "pytest.ini") || has_file(repo_root, "pyproject.toml") {
+        let ci_step = step("python-pytest", pytest_cmd, StepPhase::Test);
+        fast.push(ci_step.clone());
+        full.push(ci_step);
+    }
+}
+
+pub(crate) fn justfile_has_recipe(justfile: &str, recipe: &str) -> bool {
+    let prefix = format!("{recipe}:");
+    justfile
+        .lines()
+        .any(|line| line.starts_with(&prefix) || line.starts_with(&format!("@{prefix}")))
+}
+
+pub(crate) fn step(id: &str, command: &str, phase: StepPhase) -> RepoCiStep {
+    RepoCiStep {
+        id: id.to_string(),
+        command: command.to_string(),
+        phase,
+    }
+}
+
+pub(crate) fn read_optional(repo_root: &Path, relative: &str) -> Result<Option<String>> {
+    let path = repo_root.join(relative);
+    if path.exists() {
+        fs::read_to_string(&path)
+            .map(Some)
+            .with_context(|| format!("failed to read {}", path.display()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub(crate) fn has_file(repo_root: &Path, relative: &str) -> bool {
+    repo_root.join(relative).is_file()
+}
+
 fn hash_file(path: &Path) -> Option<String> {
     let data = fs::read(path).ok()?;
     let mut hasher = Sha256::new();
@@ -523,6 +682,88 @@ mod tests {
             command: command.to_string(),
             phase,
         }
+    }
+
+    #[test]
+    fn learns_justfile_steps() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            temp.path().join("justfile"),
+            "fmt:\n\tcargo fmt\n\nclippy:\n\tcargo clippy\n\ntest:\n\tcargo test\n",
+        )
+        .expect("write justfile");
+
+        let (_prepare, fast, full) = inference::infer_steps(temp.path()).expect("infer steps");
+
+        assert_eq!(
+            fast,
+            vec![
+                step("just-fmt", "just fmt", StepPhase::Lint),
+                step("just-clippy", "just clippy", StepPhase::Lint),
+                step("just-test", "just test", StepPhase::Test),
+            ]
+        );
+        assert_eq!(full, fast);
+    }
+
+    #[test]
+    fn learns_makefile_steps_for_scala_repo() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            temp.path().join("Makefile"),
+            "lint:\n\t@echo lint\n\nbuild:\n\t@echo build\n\ntest-unit:\n\t@echo unit\n\ntest-integration:\n\t@echo integration\n",
+        )
+        .expect("write makefile");
+        fs::write(temp.path().join("build.sbt"), "lazy val root = project").expect("write sbt");
+
+        let (prepare, fast, full) = inference::infer_steps(temp.path()).expect("infer steps");
+
+        assert_eq!(prepare, Vec::<RepoCiStep>::new());
+        assert_eq!(
+            fast,
+            vec![
+                step("make-lint", "make lint", StepPhase::Lint),
+                step("make-build", "make build", StepPhase::Build),
+                step("make-test-unit", "make test-unit", StepPhase::Test),
+            ]
+        );
+        assert_eq!(
+            full,
+            vec![
+                step("make-lint", "make lint", StepPhase::Lint),
+                step("make-build", "make build", StepPhase::Build),
+                step("make-test-unit", "make test-unit", StepPhase::Test),
+                step(
+                    "make-test-integration",
+                    "make test-integration",
+                    StepPhase::Test,
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn learns_sbt_steps_without_makefile() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(temp.path().join("build.sbt"), "lazy val root = project").expect("write sbt");
+        fs::write(temp.path().join(".scalafmt.conf"), "version=3.0.0").expect("write scalafmt");
+
+        let (prepare, fast, full) = inference::infer_steps(temp.path()).expect("infer steps");
+
+        assert_eq!(prepare, Vec::<RepoCiStep>::new());
+        assert_eq!(
+            fast,
+            vec![
+                step(
+                    "sbt-scalafmt-check",
+                    "sbt scalafmtCheckAll",
+                    StepPhase::Lint
+                ),
+                step("sbt-compile", "sbt compile", StepPhase::Build),
+                step("sbt-test", "sbt test", StepPhase::Test),
+            ]
+        );
+        assert_eq!(full, fast);
     }
 
     #[test]
