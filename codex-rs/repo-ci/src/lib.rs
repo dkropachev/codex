@@ -19,9 +19,11 @@ use std::time::UNIX_EPOCH;
 mod branch_diff;
 mod inference;
 mod learning_hints;
+mod plan_guardrail;
 mod remote_commit;
 mod remote_workflow;
 mod repo_ci_ai_learning;
+mod workflow_history;
 
 const MANIFEST_VERSION: u32 = 1;
 const JSONL_ENV: &str = "CODEX_REPO_CI_JSONL";
@@ -138,6 +140,7 @@ pub struct LearnedPlan {
 pub use branch_diff::BranchDiffSnapshot;
 pub use learning_hints::RepoCiLearningHints;
 pub use learning_hints::WorkflowRunHint;
+pub use plan_guardrail::render_plan_guardrail_feedback;
 pub use remote_commit::RemoteCommitApplied;
 pub use remote_commit::RemoteCommitChangeDetails;
 pub use remote_commit::RemoteCommitDecision;
@@ -161,6 +164,7 @@ pub use repo_ci_ai_learning::RepoCiAiLearnedPlan;
 pub use repo_ci_ai_learning::render_repo_ci_learning_prompt;
 pub use repo_ci_ai_learning::render_validation_feedback;
 pub use repo_ci_ai_learning::repo_ci_ai_plan_schema;
+pub use workflow_history::WorkflowHistoryHint;
 
 #[derive(Debug, Clone)]
 pub struct LearnOutcome {
