@@ -23,10 +23,10 @@ mod plan_guardrail;
 mod remote_commit;
 mod remote_workflow;
 mod repo_ci_ai_learning;
+mod runner;
 mod workflow_history;
 
 const MANIFEST_VERSION: u32 = 1;
-const JSONL_ENV: &str = "CODEX_REPO_CI_JSONL";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -164,6 +164,8 @@ pub use repo_ci_ai_learning::RepoCiAiLearnedPlan;
 pub use repo_ci_ai_learning::render_repo_ci_learning_prompt;
 pub use repo_ci_ai_learning::render_validation_feedback;
 pub use repo_ci_ai_learning::repo_ci_ai_plan_schema;
+pub use runner::RepoCiCancellation;
+pub use runner::RepoCiProgress;
 pub use workflow_history::WorkflowHistoryHint;
 
 #[derive(Debug, Clone)]
@@ -294,9 +296,22 @@ pub fn learn_with_plan(
     write_runner(&paths.runner_path, &manifest)?;
     write_manifest(&paths.manifest_path, &manifest)?;
 
-    let prepare_run = capture_runner(&paths, "prepare")?;
+    let prepare_run = runner::capture_runner(
+        &paths,
+        "prepare",
+        manifest.local_test_time_budget_sec,
+        &RepoCiCancellation::default(),
+    )?;
     let (validation_phase, validation_run) = if prepare_run.status.success {
-        (ValidationPhase::Fast, capture_runner(&paths, "fast")?)
+        (
+            ValidationPhase::Fast,
+            runner::capture_runner(
+                &paths,
+                "fast",
+                manifest.local_test_time_budget_sec,
+                &RepoCiCancellation::default(),
+            )?,
+        )
     } else {
         (ValidationPhase::Prepare, prepare_run)
     };
@@ -324,19 +339,53 @@ pub fn learn_with_plan(
 pub fn prepare(codex_home: &Path, cwd: &Path) -> Result<std::process::ExitStatus> {
     let paths = paths_for_repo(codex_home, cwd)?;
     require_runner(&paths)?;
-    run_runner(&paths, "prepare")
+    let manifest = read_manifest(&paths.manifest_path)?;
+    runner::run_runner(&paths, "prepare", manifest.local_test_time_budget_sec)
 }
 
 pub fn run(codex_home: &Path, cwd: &Path, mode: RunMode) -> Result<std::process::ExitStatus> {
     let paths = paths_for_repo(codex_home, cwd)?;
     require_runner(&paths)?;
-    run_runner(&paths, mode.as_str())
+    let manifest = read_manifest(&paths.manifest_path)?;
+    runner::run_runner(&paths, mode.as_str(), manifest.local_test_time_budget_sec)
 }
 
 pub fn run_capture(codex_home: &Path, cwd: &Path, mode: RunMode) -> Result<CapturedRun> {
+    run_capture_with_cancellation(codex_home, cwd, mode, RepoCiCancellation::default())
+}
+
+pub fn run_capture_with_cancellation(
+    codex_home: &Path,
+    cwd: &Path,
+    mode: RunMode,
+    cancellation: RepoCiCancellation,
+) -> Result<CapturedRun> {
+    run_capture_with_cancellation_and_progress(
+        codex_home,
+        cwd,
+        mode,
+        cancellation,
+        RepoCiProgress::none(),
+    )
+}
+
+pub fn run_capture_with_cancellation_and_progress(
+    codex_home: &Path,
+    cwd: &Path,
+    mode: RunMode,
+    cancellation: RepoCiCancellation,
+    progress: RepoCiProgress,
+) -> Result<CapturedRun> {
     let paths = paths_for_repo(codex_home, cwd)?;
     require_runner(&paths)?;
-    capture_runner(&paths, mode.as_str())
+    let manifest = read_manifest(&paths.manifest_path)?;
+    runner::capture_runner_with_progress(
+        &paths,
+        mode.as_str(),
+        manifest.local_test_time_budget_sec,
+        &cancellation,
+        progress,
+    )
 }
 
 pub fn status(codex_home: &Path, cwd: &Path) -> Result<StatusOutcome> {
@@ -371,43 +420,6 @@ fn require_runner(paths: &RepoCiPaths) -> Result<()> {
             paths.repo_root.display()
         ))
     }
-}
-
-fn run_runner(paths: &RepoCiPaths, arg: &str) -> Result<std::process::ExitStatus> {
-    Command::new("bash")
-        .arg(&paths.runner_path)
-        .arg(arg)
-        .current_dir(&paths.repo_root)
-        .status()
-        .with_context(|| format!("failed to run {}", paths.runner_path.display()))
-}
-
-fn capture_runner(paths: &RepoCiPaths, arg: &str) -> Result<CapturedRun> {
-    let jsonl_path = paths.state_dir.join(format!("run-{arg}-steps.jsonl"));
-    let _ = fs::remove_file(&jsonl_path);
-    let output = Command::new("bash")
-        .arg(&paths.runner_path)
-        .arg(arg)
-        .env(JSONL_ENV, &jsonl_path)
-        .current_dir(&paths.repo_root)
-        .output()
-        .with_context(|| format!("failed to run {}", paths.runner_path.display()))?;
-    Ok(CapturedRun {
-        status: output.status.into(),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        steps: read_captured_steps(&jsonl_path)?,
-    })
-}
-
-fn read_captured_steps(path: &Path) -> Result<Vec<CapturedStep>> {
-    let Ok(data) = fs::read_to_string(path) else {
-        return Ok(Vec::new());
-    };
-    data.lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).context("failed to parse repo CI step JSONL"))
-        .collect()
 }
 
 fn write_manifest(path: &Path, manifest: &RepoCiManifest) -> Result<()> {
@@ -979,7 +991,13 @@ mod tests {
         };
         write_runner(&paths.runner_path, &manifest).expect("write runner");
 
-        let run = capture_runner(&paths, "fast").expect("capture");
+        let run = runner::capture_runner(
+            &paths,
+            "fast",
+            /*local_test_time_budget_sec*/ 300,
+            &RepoCiCancellation::default(),
+        )
+        .expect("capture");
 
         assert!(
             run.status.success,
