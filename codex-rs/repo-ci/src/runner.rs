@@ -78,7 +78,14 @@ pub(crate) fn run_runner(
     arg: &str,
     local_test_time_budget_sec: u64,
 ) -> Result<ExitStatus> {
-    let mut runner = spawn_runner(paths, arg, /*jsonl_path*/ None, RunnerStdio::Inherit)?;
+    let mut runner = spawn_runner(
+        paths,
+        arg,
+        /*jsonl_path*/ None,
+        RunnerStdio::Inherit,
+        /*run_id*/ None,
+        /*compose_project_name*/ None,
+    )?;
     match wait_for_runner(
         &mut runner,
         arg,
@@ -119,14 +126,24 @@ pub(crate) fn capture_runner_with_progress(
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_micros());
     let run_id = resource_monitor::run_id_for_capture(arg, now_micros);
+    let compose_project_name = std::env::var("COMPOSE_PROJECT_NAME")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| run_id.clone());
     let jsonl_path = run_dir.join(format!("{arg}-{}-{}.jsonl", std::process::id(), now_micros));
     let mut runner = spawn_runner(
         paths,
         arg,
         /*jsonl_path*/ Some(&jsonl_path),
         RunnerStdio::Capture,
+        /*run_id*/ Some(&run_id),
+        /*compose_project_name*/ Some(&compose_project_name),
     )?;
-    let mut resource_monitor = ResourceMonitor::start(run_id, runner.child.id());
+    let mut resource_monitor = ResourceMonitor::start(
+        run_id,
+        /*compose_project_name*/ Some(compose_project_name),
+        runner.child.id(),
+    );
     let stdout = runner
         .child
         .stdout
@@ -312,6 +329,8 @@ fn spawn_runner(
     arg: &str,
     jsonl_path: Option<&Path>,
     stdio: RunnerStdio,
+    run_id: Option<&str>,
+    compose_project_name: Option<&str>,
 ) -> Result<ManagedRunner> {
     let mut command = bash_command();
     command
@@ -321,6 +340,14 @@ fn spawn_runner(
         .current_dir(&paths.repo_root);
     if let Some(jsonl_path) = jsonl_path {
         command.env(JSONL_ENV, path_for_bash(jsonl_path));
+    }
+    if let Some(run_id) = run_id {
+        command.env("CODEX_REPO_CI_RUN_ID", run_id);
+        if let Some(compose_project_name) = compose_project_name
+            && std::env::var_os("COMPOSE_PROJECT_NAME").is_none_or(|value| value.is_empty())
+        {
+            command.env("COMPOSE_PROJECT_NAME", compose_project_name);
+        }
     }
     let kill_mode = match stdio {
         RunnerStdio::Inherit => RunnerKillMode::Process,
