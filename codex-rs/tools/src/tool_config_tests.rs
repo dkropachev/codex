@@ -174,6 +174,12 @@ fn request_user_input_modes_follow_default_mode_feature() {
         request_user_input_available_modes(&features),
         vec![ModeKind::Default, ModeKind::Plan]
     );
+
+    features.enable(Feature::Workflows);
+    assert_eq!(
+        request_user_input_available_modes(&features),
+        vec![ModeKind::Default, ModeKind::Plan, ModeKind::Workflow]
+    );
 }
 
 #[test]
