@@ -553,6 +553,10 @@ if (!tool) {
                 .features
                 .enable(Feature::CodeModeOnly)
                 .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::ToolRouter)
+                .expect("test config should allow feature update");
             let mut model_catalog = bundled_models_response()
                 .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
             let model = model_catalog

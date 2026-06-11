@@ -664,6 +664,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     let missing_model_capability = probe_with(
         |turn| {
             turn.model_info.supports_search_tool = false;
+            set_feature(turn, Feature::ToolRouter, /*enabled*/ true);
         },
         ToolPlanInputs {
             deferred_mcp_tools: searchable_mcp.deferred_mcp_tools.clone(),
@@ -675,6 +676,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
 
     let missing_deferred_tools = probe(|turn| {
         set_feature(turn, Feature::Collab, /*enabled*/ false);
+        set_feature(turn, Feature::ToolRouter, /*enabled*/ true);
         turn.model_info.supports_search_tool = true;
     })
     .await;
@@ -688,6 +690,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     let bedrock_namespace_capability = probe_with(
         |turn| {
             turn.model_info.supports_search_tool = true;
+            set_feature(turn, Feature::ToolRouter, /*enabled*/ true);
             use_bedrock_provider(turn);
         },
         ToolPlanInputs {
@@ -701,6 +704,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     let enabled = probe_with(
         |turn| {
             turn.model_info.supports_search_tool = true;
+            set_feature(turn, Feature::ToolRouter, /*enabled*/ true);
         },
         searchable_mcp,
     )
@@ -717,6 +721,7 @@ async fn deferred_extension_tools_are_discoverable_with_tool_search() {
     let plan = probe_with(
         |turn| {
             turn.model_info.supports_search_tool = true;
+            set_feature(turn, Feature::ToolRouter, /*enabled*/ true);
         },
         ToolPlanInputs {
             extension_tool_executors: vec![Arc::new(DeferredExtensionTool)],
@@ -915,6 +920,7 @@ async fn excluded_deferred_namespaces_do_not_enable_nested_tool_guidance() {
         |turn| {
             set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
             set_feature(turn, Feature::Collab, /*enabled*/ false);
+            set_feature(turn, Feature::ToolRouter, /*enabled*/ true);
             turn.model_info.supports_search_tool = true;
             update_config(turn, |config| {
                 config.code_mode.excluded_tool_namespaces = vec!["excluded".to_string()];
@@ -1085,6 +1091,7 @@ async fn tool_mode_selector_overrides_feature_flags() {
 async fn v1_multi_agent_tools_defer_when_tool_search_available() {
     let plan = probe(|turn| {
         turn.model_info.supports_search_tool = true;
+        set_feature(turn, Feature::ToolRouter, /*enabled*/ true);
         set_feature(turn, Feature::Collab, /*enabled*/ true);
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ false);
     })
