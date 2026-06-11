@@ -371,6 +371,7 @@ impl PendingInteractiveReplayState {
             ServerRequest::PermissionsRequestApproval { params, .. } => {
                 self.request_permissions_call_ids.contains(&params.item_id)
             }
+            ServerRequest::DynamicToolCall { .. } => false,
             _ => true,
         }
     }
@@ -567,6 +568,7 @@ mod tests {
     use crate::app_command::AppCommand as Op;
     use codex_app_server_protocol::CommandExecutionApprovalDecision;
     use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
+    use codex_app_server_protocol::DynamicToolCallParams;
     use codex_app_server_protocol::FileChangeRequestApprovalParams;
     use codex_app_server_protocol::McpElicitationObjectType;
     use codex_app_server_protocol::McpElicitationSchema;
@@ -662,6 +664,20 @@ mod tests {
         }
     }
 
+    fn dynamic_tool_call_request(call_id: &str, turn_id: &str) -> ServerRequest {
+        ServerRequest::DynamicToolCall {
+            request_id: AppServerRequestId::Integer(6),
+            params: DynamicToolCallParams {
+                thread_id: "thread-1".to_string(),
+                turn_id: turn_id.to_string(),
+                call_id: call_id.to_string(),
+                namespace: None,
+                tool: "tool".to_string(),
+                arguments: serde_json::json!({}),
+            },
+        }
+    }
+
     fn turn_completed(turn_id: &str) -> ServerNotification {
         ServerNotification::TurnCompleted(TurnCompletedNotification {
             thread_id: "thread-1".to_string(),
@@ -705,6 +721,18 @@ mod tests {
             Some(ThreadBufferedEvent::Request(ServerRequest::ToolRequestUserInput { params, .. }))
                 if params.item_id == "call-1"
         ));
+    }
+
+    #[test]
+    fn thread_event_snapshot_drops_dynamic_tool_call_request() {
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
+        store.push_request(dynamic_tool_call_request("call-1", "turn-1"));
+
+        let snapshot = store.snapshot();
+        assert!(
+            snapshot.events.is_empty(),
+            "dynamic tool call requests are handled by the active thread and should not replay"
+        );
     }
 
     #[test]
