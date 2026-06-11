@@ -139,6 +139,9 @@ fn render_learning_hints(learning_hints: &RepoCiLearningHints) -> String {
     prompt.push_str(&render_workflow_hint_section(
         &learning_hints.workflow_run_hints,
     ));
+    prompt.push_str(&render_workflow_history_hint_section(
+        &learning_hints.workflow_history_hints,
+    ));
     prompt.push_str("\nPrompt rules for strong signals:\n");
     prompt.push_str(
         "- Prefer repo-native entrypoints already present in Makefiles, workflows, package scripts, or checked-in repo scripts.\n",
@@ -186,6 +189,24 @@ fn render_workflow_hint_section(hints: &[crate::WorkflowRunHint]) -> String {
     rendered
 }
 
+fn render_workflow_history_hint_section(hints: &[crate::WorkflowHistoryHint]) -> String {
+    let mut rendered = String::from("Workflow duration history:\n");
+    if hints.is_empty() {
+        rendered.push_str("- (none)\n");
+        return rendered;
+    }
+    for hint in hints {
+        rendered.push_str(&format!(
+            "- {}: {} over {} sample(s), conclusion {}\n",
+            hint.origin,
+            format_duration(hint.duration_seconds),
+            hint.sample_count,
+            hint.conclusion
+        ));
+    }
+    rendered
+}
+
 fn has_repo_native_hints(learning_hints: &RepoCiLearningHints) -> bool {
     learning_hints
         .prepare_steps
@@ -194,6 +215,7 @@ fn has_repo_native_hints(learning_hints: &RepoCiLearningHints) -> bool {
         .chain(learning_hints.full_steps.iter())
         .any(|step| step.command != "git diff --check")
         || !learning_hints.workflow_run_hints.is_empty()
+        || !learning_hints.workflow_history_hints.is_empty()
 }
 
 fn phase_name(phase: &StepPhase) -> &'static str {
@@ -202,6 +224,18 @@ fn phase_name(phase: &StepPhase) -> &'static str {
         StepPhase::Lint => "lint",
         StepPhase::Build => "build",
         StepPhase::Test => "test",
+    }
+}
+
+fn format_duration(seconds: u64) -> String {
+    let minutes = seconds / 60;
+    let seconds = seconds % 60;
+    if minutes == 0 {
+        format!("{seconds}s")
+    } else if seconds == 0 {
+        format!("{minutes}m")
+    } else {
+        format!("{minutes}m{seconds}s")
     }
 }
 
@@ -466,6 +500,13 @@ mod tests {
                 origin: ".github/workflows/tests.yml::lint (Lint)".to_string(),
                 command: "make lint".to_string(),
             }],
+            workflow_history_hints: vec![crate::WorkflowHistoryHint {
+                origin: "CI::integration".to_string(),
+                conclusion: "success".to_string(),
+                duration_seconds: 620,
+                sample_count: 2,
+                url: None,
+            }],
         };
 
         let prompt = render_repo_ci_learning_prompt(
@@ -481,6 +522,8 @@ mod tests {
         assert!(prompt.contains("make lint"));
         assert!(prompt.contains("make test-unit"));
         assert!(prompt.contains("make build"));
+        assert!(prompt.contains("Workflow duration history:"));
+        assert!(prompt.contains("CI::integration: 10m20s over 2 sample(s)"));
         assert!(prompt.contains("Do not replace discovered repo-native lint/test/build commands with generic fallback checks like `git diff --check` unless validation proves the repo-native commands are unusable."));
     }
 
