@@ -5,6 +5,8 @@ use std::net::TcpListener;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -739,91 +741,108 @@ fn start_http_server(
     let handler = Arc::new(handler);
     let requests: Arc<Mutex<Vec<TestHttpRequest>>> = Arc::new(Mutex::new(Vec::new()));
     let thread_requests = Arc::clone(&requests);
+    let thread_handled_requests = Arc::new(AtomicUsize::new(0));
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(/*secs*/ 30);
-        let mut handled = 0usize;
+        let mut connection_handles = Vec::new();
         loop {
-            if handled >= expected_requests {
-                return;
+            if thread_handled_requests.load(Ordering::SeqCst) >= expected_requests {
+                break;
             }
             match listener.accept() {
                 Ok((mut stream, _addr)) => {
-                    let _ = stream.set_nonblocking(/*nonblocking*/ false);
-                    let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
-                    let mut request = Vec::new();
-                    let mut chunk = [0; 1024];
-                    loop {
-                        match stream.read(&mut chunk) {
-                            Ok(0) => break,
-                            Ok(read) => {
-                                request.extend_from_slice(&chunk[..read]);
-                                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let connection_requests = Arc::clone(&thread_requests);
+                    let connection_handler = Arc::clone(&handler);
+                    let connection_handled_requests = Arc::clone(&thread_handled_requests);
+                    connection_handles.push(thread::spawn(move || {
+                        let _ = stream.set_nonblocking(/*nonblocking*/ false);
+                        let mut request = Vec::new();
+                        let mut buffer = [0; 1024];
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+                        while request.len() < 8192 {
+                            match stream.read(&mut buffer) {
+                                Ok(0) => break,
+                                Ok(read) => {
+                                    request.extend_from_slice(&buffer[..read]);
+                                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                                        break;
+                                    }
+                                }
+                                Err(err)
+                                    if matches!(
+                                        err.kind(),
+                                        std::io::ErrorKind::WouldBlock
+                                            | std::io::ErrorKind::TimedOut
+                                    ) =>
+                                {
                                     break;
                                 }
+                                Err(_) => return,
                             }
-                            Err(err)
-                                if matches!(
-                                    err.kind(),
-                                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                                ) =>
-                            {
-                                break;
-                            }
-                            Err(_) => return,
                         }
-                    }
-                    let request = parse_http_request(&request);
-                    if let Ok(mut requests) = thread_requests.lock() {
-                        requests.push(request.clone());
-                    }
-                    let response = handler(&request);
-                    let response = format!(
-                        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        response.status_code,
-                        reason_phrase(response.status_code),
-                        response.content_type,
-                        response.body.len(),
-                        response.body
-                    );
-                    if stream
-                        .write_all(response.as_bytes())
-                        .and_then(|_| stream.flush())
-                        .is_err()
-                    {
-                        return;
-                    }
-                    let _ = stream.shutdown(Shutdown::Write);
-                    let _ =
-                        stream.set_read_timeout(Some(Duration::from_millis(/*millis*/ 20)));
-                    let drain_deadline =
-                        Instant::now() + Duration::from_millis(/*millis*/ 100);
-                    loop {
-                        match stream.read(&mut chunk) {
-                            Ok(0) => break,
-                            Ok(_) => {}
-                            Err(err)
-                                if matches!(
-                                    err.kind(),
-                                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                                ) =>
-                            {
-                                if Instant::now() >= drain_deadline {
-                                    break;
+                        let request = parse_http_request(&request);
+                        if request.method.is_empty() || request.path.is_empty() {
+                            return;
+                        }
+                        if let Ok(mut requests) = connection_requests.lock() {
+                            requests.push(request.clone());
+                        }
+                        let response = connection_handler(&request);
+                        let response = format!(
+                            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            response.status_code,
+                            reason_phrase(response.status_code),
+                            response.content_type,
+                            response.body.len(),
+                            response.body
+                        );
+                        if stream
+                            .write_all(response.as_bytes())
+                            .and_then(|_| stream.flush())
+                            .is_err()
+                        {
+                            return;
+                        }
+                        connection_handled_requests.fetch_add(1, Ordering::SeqCst);
+                        let _ = stream.shutdown(Shutdown::Write);
+                        let _ =
+                            stream.set_read_timeout(Some(Duration::from_millis(/*millis*/ 20)));
+                        let drain_deadline =
+                            Instant::now() + Duration::from_millis(/*millis*/ 100);
+                        loop {
+                            match stream.read(&mut buffer) {
+                                Ok(0) => break,
+                                Ok(_) => {}
+                                Err(err)
+                                    if matches!(
+                                        err.kind(),
+                                        std::io::ErrorKind::TimedOut
+                                            | std::io::ErrorKind::WouldBlock
+                                    ) =>
+                                {
+                                    if Instant::now() >= drain_deadline {
+                                        break;
+                                    }
                                 }
+                                Err(_) => break,
                             }
-                            Err(_) => break,
                         }
-                    }
-                    handled += 1;
+                    }));
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                     if Instant::now() >= deadline {
-                        return;
+                        break;
                     }
                     thread::sleep(Duration::from_millis(10));
                 }
-                Err(_) => return,
+                Err(_) => break,
             }
+        }
+        for connection_handle in connection_handles {
+            assert!(
+                connection_handle.join().is_ok(),
+                "test HTTP connection handler panicked"
+            );
         }
     });
     Ok(TestHttpServer {
