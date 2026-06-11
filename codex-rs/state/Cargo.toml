@@ -8,6 +8,7 @@ license.workspace = true
 anyhow = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
+codex-model-router = { workspace = true }
 codex-protocol = { workspace = true }
 dirs = { workspace = true }
 log = { workspace = true }
@@ -24,6 +25,7 @@ uuid = { workspace = true }
 [dev-dependencies]
 codex-git-utils = { workspace = true }
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
