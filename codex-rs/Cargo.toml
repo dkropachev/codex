@@ -26,6 +26,7 @@ members = [
     "cloud-tasks",
     "cloud-tasks-client",
     "cloud-tasks-mock-client",
+    "cicd-artifacts",
     "cli",
     "collaboration-mode-templates",
     "connectors",
@@ -149,6 +150,7 @@ codex-app-server-protocol = { path = "app-server-protocol" }
 codex-app-server-test-client = { path = "app-server-test-client" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
+codex-artifactory = { path = "artifactory" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
 codex-chatgpt = { path = "chatgpt" }
