@@ -1,5 +1,6 @@
 use anyhow::Result;
 use codex_artifactory::Artifactory;
+use codex_artifactory::CacheEntry;
 use codex_artifactory::PruneOptions;
 use codex_artifactory::StateRegistration;
 use serde_json::Value;
@@ -92,6 +93,54 @@ pub fn latest_artifact_state_dirs(codex_home: &Path, repo_key: &str) -> Result<V
         .into_iter()
         .map(|state| state.state_dir)
         .collect())
+}
+
+pub(crate) fn index_artifact_file(
+    codex_home: &Path,
+    state_dir: &Path,
+    relative_path: &Path,
+) -> Result<()> {
+    let store = Artifactory::open(codex_home)?;
+    store.index_file(NAMESPACE, state_dir, relative_path)
+}
+
+pub(crate) fn artifact_file_path(
+    codex_home: &Path,
+    relative_path: &Path,
+) -> Result<Option<PathBuf>> {
+    let store = Artifactory::open(codex_home)?;
+    let Some((state, file)) = store.find_file(NAMESPACE, relative_path)? else {
+        return Ok(None);
+    };
+    store.record_state_hit_by_dir(NAMESPACE, &state.state_dir)?;
+    Ok(Some(state.state_dir.join(file.relative_path)))
+}
+
+pub fn put_cache_entry(
+    codex_home: &Path,
+    key: &str,
+    artifact_id: &str,
+    status: &str,
+    metadata: Value,
+) -> Result<()> {
+    let store = Artifactory::open(codex_home)?;
+    store.put_cache_entry(
+        NAMESPACE,
+        key,
+        artifact_id,
+        status,
+        &serde_json::to_string(&metadata)?,
+    )
+}
+
+pub fn cache_entry(codex_home: &Path, key: &str) -> Result<Option<CacheEntry>> {
+    let store = Artifactory::open(codex_home)?;
+    store.cache_entry(NAMESPACE, key)
+}
+
+pub fn delete_cache_entry(codex_home: &Path, key: &str) -> Result<()> {
+    let store = Artifactory::open(codex_home)?;
+    store.delete_cache_entry(NAMESPACE, key)
 }
 
 pub fn repo_key(repo_root: &Path) -> String {
