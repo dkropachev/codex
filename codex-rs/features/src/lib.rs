@@ -213,6 +213,8 @@ pub enum Feature {
     RemoteCompactionV2,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
+    /// Enable JavaScript workflows that can share the TUI app-server.
+    Workflows,
 
     // Removed
     /// Removed compatibility flag retained as a no-op so old configs can
@@ -1246,6 +1248,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "workspace_dependencies",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::Workflows,
+        key: "workflows",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
 ];
 

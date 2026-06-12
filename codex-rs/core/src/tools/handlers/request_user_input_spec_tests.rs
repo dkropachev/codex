@@ -13,6 +13,12 @@ fn default_mode_enabled_available_modes() -> Vec<ModeKind> {
     request_user_input_available_modes(&features)
 }
 
+fn workflow_enabled_available_modes() -> Vec<ModeKind> {
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Workflows);
+    request_user_input_available_modes(&features)
+}
+
 fn default_available_modes() -> Vec<ModeKind> {
     request_user_input_available_modes(&Features::with_defaults())
 }
@@ -141,5 +147,9 @@ fn request_user_input_tool_description_mentions_available_modes() {
     assert_eq!(
         request_user_input_tool_description(&default_mode_enabled_available_modes()),
         "Request user input for one to three short questions and wait for the response. This tool is only available in Default or Plan mode.".to_string()
+    );
+    assert_eq!(
+        request_user_input_tool_description(&workflow_enabled_available_modes()),
+        "Request user input for one to three short questions and wait for the response. This tool is only available in Plan or Workflow mode.".to_string()
     );
 }
