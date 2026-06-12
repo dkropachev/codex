@@ -542,9 +542,93 @@ impl From<&ModelUpgrade> for ModelInfoUpgrade {
 }
 
 /// Response wrapper for `/models`.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema, Default)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq, TS, JsonSchema, Default)]
 pub struct ModelsResponse {
     pub models: Vec<ModelInfo>,
+}
+
+impl<'de> Deserialize<'de> for ModelsResponse {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match serde_json::from_value::<CodexModelsResponse>(value.clone()) {
+            Ok(response) => Ok(Self {
+                models: response.models,
+            }),
+            Err(codex_error) => serde_json::from_value::<OpenAiModelsListResponse>(value)
+                .map(|response| Self {
+                    models: response
+                        .data
+                        .into_iter()
+                        .map(|model| model_info_from_openai_model_id(&model.id))
+                        .collect(),
+                })
+                .map_err(|openai_error| {
+                    serde::de::Error::custom(format!(
+                        "expected Codex models response ({codex_error}) or OpenAI models list ({openai_error})"
+                    ))
+                }),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct CodexModelsResponse {
+    models: Vec<ModelInfo>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiModelsListResponse {
+    data: Vec<OpenAiModelListItem>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiModelListItem {
+    id: String,
+}
+
+fn model_info_from_openai_model_id(id: &str) -> ModelInfo {
+    ModelInfo {
+        slug: id.to_string(),
+        display_name: id.to_string(),
+        description: None,
+        default_reasoning_level: None,
+        supported_reasoning_levels: Vec::new(),
+        shell_type: ConfigShellToolType::Default,
+        visibility: ModelVisibility::None,
+        supported_in_api: true,
+        priority: 99,
+        additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
+        default_service_tier: None,
+        availability_nux: None,
+        upgrade: None,
+        base_instructions: String::new(),
+        model_messages: None,
+        supports_reasoning_summaries: false,
+        default_reasoning_summary: ReasoningSummary::Auto,
+        support_verbosity: false,
+        default_verbosity: None,
+        apply_patch_tool_type: None,
+        web_search_tool_type: WebSearchToolType::Text,
+        truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
+        supports_parallel_tool_calls: false,
+        supports_image_detail_original: false,
+        context_window: None,
+        max_context_window: None,
+        auto_compact_token_limit: None,
+        effective_context_window_percent: default_effective_context_window_percent(),
+        experimental_supported_tools: Vec::new(),
+        input_modalities: default_input_modalities(),
+        used_fallback_model_metadata: true,
+        supports_search_tool: false,
+        use_responses_lite: false,
+        auto_review_model_override: None,
+        tool_mode: None,
+        multi_agent_version: None,
+    }
 }
 
 // convert ModelInfo to ModelPreset
@@ -689,6 +773,26 @@ mod tests {
             personality_friendly: Some("friendly".to_string()),
             personality_pragmatic: Some("pragmatic".to_string()),
         }
+    }
+
+    #[test]
+    fn models_response_accepts_openai_data_list() {
+        let response: ModelsResponse = serde_json::from_value(serde_json::json!({
+            "object": "list",
+            "data": [
+                {
+                    "id": "deepseek-v4-flash",
+                    "object": "model",
+                    "owned_by": "deepseek"
+                }
+            ]
+        }))
+        .expect("deserialize OpenAI models list");
+
+        assert_eq!(response.models.len(), 1);
+        assert_eq!(response.models[0].slug, "deepseek-v4-flash");
+        assert_eq!(response.models[0].display_name, "deepseek-v4-flash");
+        assert!(response.models[0].used_fallback_model_metadata);
     }
 
     #[test]
