@@ -46,6 +46,8 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
 
+const GITHUB_RELEASE_DOWNLOAD_URL: &str = "https://github.com/dkropachev/codex/releases/latest";
+
 mod account_usage;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod app_cmd;
@@ -839,22 +841,8 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
 }
 
 fn run_update_command() -> anyhow::Result<()> {
-    #[cfg(debug_assertions)]
-    {
-        anyhow::bail!(
-            "`codex update` is not available in debug builds. Install a release build of Codex to use this command."
-        );
-    }
-
-    #[cfg(not(debug_assertions))]
-    {
-        let Some(action) = codex_tui::get_update_action() else {
-            anyhow::bail!(
-                "Could not detect the Codex installation method. Please update manually: https://developers.openai.com/codex/cli/"
-            );
-        };
-        run_update_action(action)
-    }
+    println!("Download the latest Codex release from {GITHUB_RELEASE_DOWNLOAD_URL}");
+    Ok(())
 }
 
 fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
