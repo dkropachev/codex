@@ -160,8 +160,6 @@ mod model_migration;
 mod motion;
 mod multi_agents;
 mod notifications;
-#[cfg(any(not(debug_assertions), test))]
-mod npm_registry;
 pub(crate) mod onboarding;
 mod oss_selection;
 mod pager_overlay;
@@ -1370,23 +1368,9 @@ async fn run_ratatui_app(
 
     #[cfg(not(debug_assertions))]
     {
-        use crate::update_prompt::UpdatePromptOutcome;
-
         let skip_update_prompt = cli.prompt.as_ref().is_some_and(|prompt| !prompt.is_empty());
         if !skip_update_prompt {
-            match update_prompt::run_update_prompt_if_needed(&mut tui, &initial_config).await? {
-                UpdatePromptOutcome::Continue => {}
-                UpdatePromptOutcome::RunUpdate(action) => {
-                    terminal_restore_guard.restore()?;
-                    return Ok(AppExitInfo {
-                        token_usage: crate::token_usage::TokenUsage::default(),
-                        thread_id: None,
-                        thread_name: None,
-                        update_action: Some(action),
-                        exit_reason: ExitReason::UserRequested,
-                    });
-                }
-            }
+            update_prompt::run_update_prompt_if_needed(&mut tui, &initial_config).await?;
         }
     }
 

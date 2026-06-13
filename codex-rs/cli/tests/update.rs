@@ -11,14 +11,16 @@ fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
 
 #[cfg(debug_assertions)]
 #[tokio::test]
-async fn update_does_not_start_interactive_prompt() -> Result<()> {
+async fn update_prints_github_download_url() -> Result<()> {
     let codex_home = TempDir::new()?;
 
     codex_command(codex_home.path())?
         .arg("update")
         .assert()
-        .failure()
-        .stderr(contains("`codex update` is not available in debug builds"));
+        .success()
+        .stdout(contains(
+            "Download the latest Codex release from https://github.com/dkropachev/codex/releases/latest",
+        ));
 
     Ok(())
 }

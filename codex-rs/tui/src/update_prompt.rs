@@ -11,7 +11,6 @@ use crate::selection_list::selection_option_row;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
-use crate::update_action::UpdateAction;
 use crate::updates;
 use color_eyre::Result;
 use crossterm::event::KeyCode;
@@ -27,26 +26,14 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 use tokio_stream::StreamExt;
 
-const RELEASE_NOTES_URL: &str = "https://github.com/openai/codex/releases/latest";
+const RELEASE_DOWNLOAD_URL: &str = "https://github.com/dkropachev/codex/releases/latest";
 
-pub(crate) enum UpdatePromptOutcome {
-    Continue,
-    RunUpdate(UpdateAction),
-}
-
-pub(crate) async fn run_update_prompt_if_needed(
-    tui: &mut Tui,
-    config: &Config,
-) -> Result<UpdatePromptOutcome> {
+pub(crate) async fn run_update_prompt_if_needed(tui: &mut Tui, config: &Config) -> Result<()> {
     let Some(latest_version) = updates::get_upgrade_version_for_popup(config) else {
-        return Ok(UpdatePromptOutcome::Continue);
-    };
-    let Some(update_action) = crate::update_action::get_update_action() else {
-        return Ok(UpdatePromptOutcome::Continue);
+        return Ok(());
     };
 
-    let mut screen =
-        UpdatePromptScreen::new(tui.frame_requester(), latest_version.clone(), update_action);
+    let mut screen = UpdatePromptScreen::new(tui.frame_requester(), latest_version);
     tui.draw(u16::MAX, |frame| {
         frame.render_widget_ref(&screen, frame.area());
     })?;
@@ -71,23 +58,19 @@ pub(crate) async fn run_update_prompt_if_needed(
     }
 
     match screen.selection() {
-        Some(UpdateSelection::UpdateNow) => {
-            tui.terminal.clear()?;
-            Ok(UpdatePromptOutcome::RunUpdate(update_action))
-        }
-        Some(UpdateSelection::NotNow) | None => Ok(UpdatePromptOutcome::Continue),
+        Some(UpdateSelection::DownloadFromGithub) | Some(UpdateSelection::NotNow) | None => Ok(()),
         Some(UpdateSelection::DontRemind) => {
             if let Err(err) = updates::dismiss_version(config, screen.latest_version()).await {
                 tracing::error!("Failed to persist update dismissal: {err}");
             }
-            Ok(UpdatePromptOutcome::Continue)
+            Ok(())
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UpdateSelection {
-    UpdateNow,
+    DownloadFromGithub,
     NotNow,
     DontRemind,
 }
@@ -96,23 +79,17 @@ struct UpdatePromptScreen {
     request_frame: FrameRequester,
     latest_version: String,
     current_version: String,
-    update_action: UpdateAction,
     highlighted: UpdateSelection,
     selection: Option<UpdateSelection>,
 }
 
 impl UpdatePromptScreen {
-    fn new(
-        request_frame: FrameRequester,
-        latest_version: String,
-        update_action: UpdateAction,
-    ) -> Self {
+    fn new(request_frame: FrameRequester, latest_version: String) -> Self {
         Self {
             request_frame,
             latest_version,
             current_version: env!("CARGO_PKG_VERSION").to_string(),
-            update_action,
-            highlighted: UpdateSelection::UpdateNow,
+            highlighted: UpdateSelection::DownloadFromGithub,
             selection: None,
         }
     }
@@ -130,7 +107,7 @@ impl UpdatePromptScreen {
         match key_event.code {
             KeyCode::Up | KeyCode::Char('k') => self.set_highlight(self.highlighted.prev()),
             KeyCode::Down | KeyCode::Char('j') => self.set_highlight(self.highlighted.next()),
-            KeyCode::Char('1') => self.select(UpdateSelection::UpdateNow),
+            KeyCode::Char('1') => self.select(UpdateSelection::DownloadFromGithub),
             KeyCode::Char('2') => self.select(UpdateSelection::NotNow),
             KeyCode::Char('3') => self.select(UpdateSelection::DontRemind),
             KeyCode::Enter => self.select(self.highlighted),
@@ -168,16 +145,16 @@ impl UpdatePromptScreen {
 impl UpdateSelection {
     fn next(self) -> Self {
         match self {
-            UpdateSelection::UpdateNow => UpdateSelection::NotNow,
+            UpdateSelection::DownloadFromGithub => UpdateSelection::NotNow,
             UpdateSelection::NotNow => UpdateSelection::DontRemind,
-            UpdateSelection::DontRemind => UpdateSelection::UpdateNow,
+            UpdateSelection::DontRemind => UpdateSelection::DownloadFromGithub,
         }
     }
 
     fn prev(self) -> Self {
         match self {
-            UpdateSelection::UpdateNow => UpdateSelection::DontRemind,
-            UpdateSelection::NotNow => UpdateSelection::UpdateNow,
+            UpdateSelection::DownloadFromGithub => UpdateSelection::DontRemind,
+            UpdateSelection::NotNow => UpdateSelection::DownloadFromGithub,
             UpdateSelection::DontRemind => UpdateSelection::NotNow,
         }
     }
@@ -187,8 +164,6 @@ impl WidgetRef for &UpdatePromptScreen {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
         let mut column = ColumnRenderable::new();
-
-        let update_command = self.update_action.command_str();
 
         column.push("");
         column.push(Line::from(vec![
@@ -205,16 +180,16 @@ impl WidgetRef for &UpdatePromptScreen {
         column.push("");
         column.push(
             Line::from(vec![
-                "Release notes: ".dim(),
-                RELEASE_NOTES_URL.dim().underlined(),
+                "Download: ".dim(),
+                RELEASE_DOWNLOAD_URL.dim().underlined(),
             ])
             .inset(Insets::tlbr(0, 2, 0, 0)),
         );
         column.push("");
         column.push(selection_option_row(
             0,
-            format!("Update now (runs `{update_command}`)"),
-            self.highlighted == UpdateSelection::UpdateNow,
+            "Download from GitHub".to_string(),
+            self.highlighted == UpdateSelection::DownloadFromGithub,
         ));
         column.push(selection_option_row(
             1,
@@ -236,7 +211,7 @@ impl WidgetRef for &UpdatePromptScreen {
             .inset(Insets::tlbr(0, 2, 0, 0)),
         );
         column.render(area, buf);
-        crate::terminal_hyperlinks::mark_underlined_hyperlink(buf, area, RELEASE_NOTES_URL);
+        crate::terminal_hyperlinks::mark_underlined_hyperlink(buf, area, RELEASE_DOWNLOAD_URL);
     }
 }
 
@@ -251,11 +226,7 @@ mod tests {
     use ratatui::Terminal;
 
     fn new_prompt() -> UpdatePromptScreen {
-        UpdatePromptScreen::new(
-            FrameRequester::test_dummy(),
-            "9.9.9".into(),
-            UpdateAction::NpmGlobalLatest,
-        )
+        UpdatePromptScreen::new(FrameRequester::test_dummy(), "9.9.9".into())
     }
 
     #[test]
@@ -269,11 +240,14 @@ mod tests {
     }
 
     #[test]
-    fn update_prompt_confirm_selects_update() {
+    fn update_prompt_confirm_selects_github_download() {
         let mut screen = new_prompt();
         screen.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(screen.is_done());
-        assert_eq!(screen.selection(), Some(UpdateSelection::UpdateNow));
+        assert_eq!(
+            screen.selection(),
+            Some(UpdateSelection::DownloadFromGithub)
+        );
     }
 
     #[test]
@@ -309,6 +283,6 @@ mod tests {
         screen.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(screen.highlighted, UpdateSelection::DontRemind);
         screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        assert_eq!(screen.highlighted, UpdateSelection::UpdateNow);
+        assert_eq!(screen.highlighted, UpdateSelection::DownloadFromGithub);
     }
 }

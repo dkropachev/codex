@@ -822,7 +822,7 @@ fn installation_check(show_details: bool) -> DoctorCheck {
     if doctor_managed_by_npm(current_exe.as_deref()) {
         match npm_global_root_check() {
             NpmRootCheck::Match { package_root } => {
-                details.push(format!("npm update target: {}", package_root.display()));
+                details.push(format!("npm package root: {}", package_root.display()));
             }
             NpmRootCheck::Mismatch {
                 running_package_root,
@@ -830,7 +830,7 @@ fn installation_check(show_details: bool) -> DoctorCheck {
             } => {
                 status = CheckStatus::Fail;
                 summary =
-                    "npm install -g @openai/codex would update a different install".to_string();
+                    "npm-managed launch points at a different global package root".to_string();
                 remediation = Some(format!(
                     "Fix PATH or npm prefix so the running package root ({}) matches the npm global package root ({}).",
                     running_package_root.display(),
