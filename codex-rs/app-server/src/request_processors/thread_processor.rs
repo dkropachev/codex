@@ -16,6 +16,7 @@ struct ThreadListFilters {
     cwd_filters: Option<Vec<PathBuf>>,
     search_term: Option<String>,
     use_state_db_only: bool,
+    parent_thread_id: Option<ThreadId>,
 }
 
 fn collect_resume_override_mismatches(
@@ -1924,8 +1925,14 @@ impl ThreadRequestProcessor {
             cwd,
             use_state_db_only,
             search_term,
+            parent_thread_id,
         } = params;
         let cwd_filters = normalize_thread_list_cwd_filters(cwd)?;
+        let parent_thread_id = parent_thread_id
+            .as_deref()
+            .map(ThreadId::from_string)
+            .transpose()
+            .map_err(|err| invalid_request(format!("invalid parent thread id: {err}")))?;
 
         let requested_page_size = limit
             .map(|value| value as usize)
@@ -1949,6 +1956,7 @@ impl ThreadRequestProcessor {
                     cwd_filters,
                     search_term,
                     use_state_db_only,
+                    parent_thread_id,
                 },
             )
             .await?;
@@ -3615,6 +3623,7 @@ impl ThreadRequestProcessor {
             cwd_filters,
             search_term,
             use_state_db_only,
+            parent_thread_id,
         } = filters;
         let mut cursor_obj = cursor;
         let mut last_cursor = cursor_obj.clone();
@@ -3630,9 +3639,15 @@ impl ThreadRequestProcessor {
                     Some(providers)
                 }
             }
+            None if parent_thread_id.is_some() => None,
             None => Some(vec![self.config.model_provider_id.clone()]),
         };
-        let (allowed_sources_vec, source_kind_filter) = compute_source_filters(source_kinds);
+        let (allowed_sources_vec, source_kind_filter) =
+            if parent_thread_id.is_some() && source_kinds.is_none() {
+                (Vec::new(), None)
+            } else {
+                compute_source_filters(source_kinds)
+            };
         let allowed_sources = allowed_sources_vec.as_slice();
         let source_filter_mode = source_filter_mode(allowed_sources, source_kind_filter.as_deref());
         let store_sort_direction = match sort_direction {
@@ -3655,6 +3670,7 @@ impl ThreadRequestProcessor {
                     archived,
                     search_term: search_term.clone(),
                     use_state_db_only,
+                    parent_thread_id,
                 })
                 .await
                 .map_err(thread_store_list_error)?;
