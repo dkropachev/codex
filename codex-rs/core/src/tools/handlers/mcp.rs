@@ -254,7 +254,7 @@ fn create_tool_spec(tool_info: &ToolInfo) -> Result<ToolSpec, serde_json::Error>
     }))
 }
 
-const ARTIFACT_FIELD_STYLE_GUIDANCE: &str = "Write generated commit, pull request, issue, or review prose in normal style with complete detail, even when ordinary responses are terse.";
+const ARTIFACT_FIELD_STYLE_GUIDANCE: &str = "Write generated commit, pull request, issue, or review prose in normal style with complete detail, regardless of response style.";
 
 fn add_artifact_style_guidance(tool_info: &ToolInfo, tool: &mut ResponsesApiTool) {
     if !is_artifact_style_guidance_tool(tool_info) {

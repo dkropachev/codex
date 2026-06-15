@@ -2321,7 +2321,8 @@ async fn default_response_style_omits_terse_prompt_and_forced_verbosity() -> any
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn terse_response_style_adds_prompt_and_low_verbosity() -> anyhow::Result<()> {
+async fn terse_response_style_uses_low_verbosity_without_prompt_when_supported()
+-> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
@@ -2360,12 +2361,59 @@ async fn terse_response_style_adds_prompt_and_low_verbosity() -> anyhow::Result<
     let request = resp_mock.single_request();
     let request_body = request.body_json();
 
-    assert!(message_input_text_contains(
+    assert!(!message_input_text_contains(
         &request,
         "developer",
         "<response_style>"
     ));
     assert_eq!(request_text_verbosity(&request_body), Some("low"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terse_response_style_omits_prompt_without_verbosity_support() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_model("test-response-style-terse-no-verbosity")
+        .with_config(|config| {
+            config.response_style = ResponseStyle::Terse;
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert!(!message_input_text_contains(
+        &request,
+        "developer",
+        "<response_style>"
+    ));
+    assert_eq!(request_text_verbosity(&request_body), None);
 
     Ok(())
 }
@@ -2450,7 +2498,7 @@ async fn artifact_style_follow_response_allows_structured_artifact_terse() -> an
     let request = resp_mock.single_request();
     let request_body = request.body_json();
 
-    assert!(message_input_text_contains(
+    assert!(!message_input_text_contains(
         &request,
         "developer",
         "<response_style>"
