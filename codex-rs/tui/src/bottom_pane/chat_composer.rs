@@ -189,6 +189,7 @@ use super::mentions_v2::MentionV2Popup;
 use super::mentions_v2::MentionV2Selection;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
+use super::prompt_args::parse_slash_name;
 use super::skill_popup::MentionItem;
 use super::skill_popup::SkillPopup;
 use super::slash_commands::BuiltinCommandFlags;
@@ -3620,9 +3621,18 @@ impl ChatComposer {
             && self
                 .slash_input()
                 .is_editing_command_name(first_line, cursor);
-        let command_filter_text = caret_on_first_line
-            .then(|| slash_input::command_popup_filter_text(first_line, cursor))
-            .flatten();
+        let is_workflow_argument_context = caret_on_first_line
+            && cursor == first_line_end
+            && self
+                .workflow_command_for_line(first_line)
+                .is_some_and(|command| !command.option_hints.is_empty());
+        let command_filter_text = if is_workflow_argument_context {
+            Some(first_line.to_string())
+        } else {
+            caret_on_first_line
+                .then(|| slash_input::command_popup_filter_text(first_line, cursor))
+                .flatten()
+        };
 
         // If the cursor is currently positioned within an `@token`, prefer the
         // file-search popup over the slash popup so users can insert a file path
@@ -3635,7 +3645,7 @@ impl ChatComposer {
         }
         match &mut self.popups.active {
             ActivePopup::Command(popup) => {
-                if is_editing_slash_command_name {
+                if is_editing_slash_command_name || is_workflow_argument_context {
                     if let Some(command_filter_text) = command_filter_text.as_deref() {
                         popup.on_composer_text_change(command_filter_text.to_string());
                     }
@@ -3644,7 +3654,7 @@ impl ChatComposer {
                 }
             }
             _ => {
-                if is_editing_slash_command_name
+                if (is_editing_slash_command_name || is_workflow_argument_context)
                     && let Some(command_filter_text) = command_filter_text.as_deref()
                 {
                     let command_popup = self.slash_input().command_popup(command_filter_text);
@@ -3652,6 +3662,19 @@ impl ChatComposer {
                 }
             }
         }
+    }
+
+    fn workflow_command_for_line(&self, first_line: &str) -> Option<&WorkflowCommand> {
+        if !self.workflow_commands_enabled {
+            return None;
+        }
+        let (name, _rest, _rest_offset) = parse_slash_name(first_line)?;
+        if name.contains('/') {
+            return None;
+        }
+        self.workflow_commands
+            .iter()
+            .find(|command| command.command == name)
     }
 
     /// Synchronize the legacy file-search popup with the current `@` token.
@@ -7897,6 +7920,9 @@ mod tests {
                 Some(CommandItem::Workflow(command)) => {
                     panic!("expected model command, got workflow {command:?}")
                 }
+                Some(CommandItem::WorkflowOption(option)) => {
+                    panic!("expected model command, got workflow option {option:?}")
+                }
                 None => panic!("no selected command for '/mo'"),
             },
             _ => panic!("slash popup not active after typing '/mo'"),
@@ -7982,6 +8008,9 @@ mod tests {
                 Some(CommandItem::Workflow(command)) => {
                     panic!("expected resume command, got workflow {command:?}")
                 }
+                Some(CommandItem::WorkflowOption(option)) => {
+                    panic!("expected resume command, got workflow option {option:?}")
+                }
                 None => panic!("no selected command for '/res'"),
             },
             _ => panic!("slash popup not active after typing '/res'"),
@@ -8038,6 +8067,9 @@ mod tests {
                 }
                 Some(CommandItem::Workflow(command)) => {
                     panic!("expected pets command, got workflow {command:?}")
+                }
+                Some(CommandItem::WorkflowOption(option)) => {
+                    panic!("expected pets command, got workflow option {option:?}")
                 }
                 None => panic!("no selected command for '/pet'"),
             },
@@ -8096,6 +8128,9 @@ mod tests {
                 Some(CommandItem::Workflow(command)) => {
                     panic!("expected btw command, got workflow {command:?}")
                 }
+                Some(CommandItem::WorkflowOption(option)) => {
+                    panic!("expected btw command, got workflow option {option:?}")
+                }
                 None => panic!("no selected command for '/bt'"),
             },
             _ => panic!("slash popup not active after typing '/bt'"),
@@ -8152,6 +8187,9 @@ mod tests {
                 }
                 Some(CommandItem::Workflow(command)) => {
                     panic!("expected side command, got workflow {command:?}")
+                }
+                Some(CommandItem::WorkflowOption(option)) => {
+                    panic!("expected side command, got workflow option {option:?}")
                 }
                 None => panic!("no selected command for '/si'"),
             },

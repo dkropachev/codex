@@ -107,6 +107,26 @@ fn write_workflow_source(workflow_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn assert_code_review_autocomplete_metadata(workflow_dir: &Path) -> Result<()> {
+    let workflow_yaml = fs::read_to_string(workflow_dir.join("workflow.yaml"))?;
+    assert!(
+        workflow_yaml.contains("id: code-review") || workflow_yaml.contains("id: \"code-review\"")
+    );
+    assert!(
+        workflow_yaml.contains("command: code-review")
+            || workflow_yaml.contains("command: \"code-review\"")
+    );
+    assert!(workflow_yaml.contains("usage:"));
+    assert!(workflow_yaml.contains("options:"));
+    assert!(workflow_yaml.contains("flag: --action"));
+    assert!(
+        workflow_yaml.contains("valueHint: <review|read-report|list-reports|incremental|resume>")
+    );
+    assert!(workflow_yaml.contains("flag: --review-id"));
+    assert!(workflow_yaml.contains("flag: --include-skipped-by-limit"));
+    Ok(())
+}
+
 #[test]
 fn workflow_list_requires_workflows_feature() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -625,12 +645,12 @@ fn workflow_fix_repairs_workflow_without_running_unsupported_fix_action() -> Res
         .stdout(contains(
             "Repairing workflow code-review with compatibility mode.",
         ))
-        .stdout(contains(
-            "No compatibility repairs were needed for code-review.",
-        ))
+        .stdout(contains("Updated "))
+        .stdout(contains("with code-review autocomplete metadata"))
         .stdout(contains("code-review repair check completed."));
 
     assert!(!fake_bun.was_invoked());
+    assert_code_review_autocomplete_metadata(&workflow_dir)?;
 
     Ok(())
 }
@@ -676,12 +696,12 @@ fn workflow_fix_tolerates_broken_metadata_and_source_without_running_workflow() 
         .stdout(contains(
             "Repairing workflow code-review with compatibility mode.",
         ))
-        .stdout(contains(
-            "No compatibility repairs were needed for code-review.",
-        ))
+        .stdout(contains("Updated "))
+        .stdout(contains("with code-review autocomplete metadata"))
         .stdout(contains("code-review repair check completed."));
 
     assert!(!fake_bun.was_invoked());
+    assert_code_review_autocomplete_metadata(&workflow_dir)?;
 
     Ok(())
 }
@@ -710,6 +730,7 @@ fn workflow_fix_scaffolds_missing_workflow_source_for_discovery_fallback() -> Re
         .stdout(contains("code-review repair check completed."));
 
     assert!(workflow_dir.join("src").join("workflow.ts").is_file());
+    assert_code_review_autocomplete_metadata(&workflow_dir)?;
 
     Ok(())
 }
@@ -736,12 +757,12 @@ fn workflow_repair_alias_repairs_workflow_without_running_workflow_runtime() -> 
         .stdout(contains(
             "Repairing workflow code-review with compatibility mode.",
         ))
-        .stdout(contains(
-            "No compatibility repairs were needed for code-review.",
-        ))
+        .stdout(contains("Updated "))
+        .stdout(contains("with code-review autocomplete metadata"))
         .stdout(contains("code-review repair check completed."));
 
     assert!(!fake_bun.was_invoked());
+    assert_code_review_autocomplete_metadata(&workflow_dir)?;
 
     Ok(())
 }

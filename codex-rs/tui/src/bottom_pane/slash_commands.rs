@@ -378,6 +378,7 @@ mod tests {
             id: "code-review".to_string(),
             command: "code-review".to_string(),
             description: "Run review".to_string(),
+            option_hints: Vec::new(),
             workflow_dir: PathBuf::from("/tmp/code-review"),
         };
 
@@ -393,6 +394,7 @@ mod tests {
             id: "code-review".to_string(),
             command: "code-review".to_string(),
             description: "Run review".to_string(),
+            option_hints: Vec::new(),
             workflow_dir: PathBuf::from("/tmp/code-review"),
         };
 
@@ -408,6 +410,7 @@ mod tests {
             id: "code-review".to_string(),
             command: "code-review".to_string(),
             description: "Run review".to_string(),
+            option_hints: Vec::new(),
             workflow_dir: PathBuf::from("/tmp/code-review"),
         };
         let flags = BuiltinCommandFlags {

@@ -69,7 +69,19 @@ trust_level = "trusted"
     std::fs::create_dir_all(&workflow_dir)?;
     std::fs::write(
         workflow_dir.join("workflow.yaml"),
-        "id: review/fix\ncommand: code-review\ntitle: /code-review\nuserDescription: Run a code review workflow.\n",
+        r#"id: review/fix
+command: code-review
+title: /code-review
+userDescription: Run a code review workflow.
+usage:
+  options:
+    - flag: --action
+      valueHint: <review|list-reports>
+      description: Run mode.
+    - flag: --allowed-areas
+      valueHint: <Test|Code>
+      description: Allowed areas.
+"#,
     )?;
 
     let env = HashMap::from([
@@ -127,17 +139,35 @@ trust_level = "trusted"
         &mut screen,
         "completed workflow command",
         |contents| {
-            contents.contains("/code-review") && !contents.contains("Run a code review workflow.")
+            contents.contains("/code-review")
+                && contents.contains("--action <review|list-reports>")
+                && contents.contains("Run mode.")
         },
     )
     .await?;
 
-    writer.send(b"x".to_vec()).await?;
+    for byte in b"--acti" {
+        writer.send(vec![*byte]).await?;
+        tokio::time::sleep(Duration::from_millis(/*millis*/ 20)).await;
+    }
     wait_for_screen(
         &mut output_rx,
         &mut screen,
-        "workflow command argument",
-        |contents| contents.contains("/code-review x"),
+        "workflow command option popup",
+        |contents| {
+            contents.contains("/code-review --acti")
+                && contents.contains("--action <review|list-reports>")
+                && contents.contains("Run mode.")
+        },
+    )
+    .await?;
+
+    writer.send(b"\t".to_vec()).await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "completed workflow command option",
+        |contents| contents.contains("/code-review --action"),
     )
     .await?;
 

@@ -43,12 +43,14 @@ userDescription: Build a project report.
                 id: "code-review".to_string(),
                 command: "code-review".to_string(),
                 description: "Run a code review workflow.".to_string(),
+                option_hints: Vec::new(),
                 workflow_dir: home_dir,
             },
             WorkflowCommand {
                 id: "report".to_string(),
                 command: "report".to_string(),
                 description: "Build a project report.".to_string(),
+                option_hints: Vec::new(),
                 workflow_dir: project_dir,
             },
         ]
@@ -79,6 +81,7 @@ fn project_workflow_overrides_home_command_name() {
             id: "review".to_string(),
             command: "review".to_string(),
             description: "Project review".to_string(),
+            option_hints: Vec::new(),
             workflow_dir: project_dir,
         }]
     );
@@ -103,6 +106,57 @@ fn discovers_nested_workflow_ids() {
             id: "review/fix".to_string(),
             command: "code-review".to_string(),
             description: "Review fix".to_string(),
+            option_hints: Vec::new(),
+            workflow_dir,
+        }]
+    );
+}
+
+#[test]
+fn discovers_workflow_usage_option_hints() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let codex_home = temp.path().join("home");
+    let cwd = temp.path().join("project");
+    let workflow_dir = write_workflow(
+        &codex_home.join("workflows"),
+        "code-review",
+        r#"
+id: code-review
+command: code-review
+userDescription: Run review
+usage:
+  options:
+    - flag: --action
+      valueHint: <review|list-reports>
+      description: Run mode.
+    - flag: --include-preexisting
+      description: Keep preexisting findings.
+    - --output <json|md>
+"#,
+    );
+
+    let commands = discover_workflow_commands(&codex_home, &cwd);
+
+    assert_eq!(
+        commands,
+        vec![WorkflowCommand {
+            id: "code-review".to_string(),
+            command: "code-review".to_string(),
+            description: "Run review".to_string(),
+            option_hints: vec![
+                WorkflowCommandOptionHint {
+                    display: "--action <review|list-reports>".to_string(),
+                    description: Some("Run mode.".to_string()),
+                },
+                WorkflowCommandOptionHint {
+                    display: "--include-preexisting".to_string(),
+                    description: Some("Keep preexisting findings.".to_string()),
+                },
+                WorkflowCommandOptionHint {
+                    display: "--output <json|md>".to_string(),
+                    description: None,
+                },
+            ],
             workflow_dir,
         }]
     );
@@ -205,6 +259,7 @@ fn builds_shell_command_for_workflow_directory() {
         id: "code-review".to_string(),
         command: "code-review".to_string(),
         description: "Run review".to_string(),
+        option_hints: Vec::new(),
         workflow_dir: PathBuf::from("/tmp/codex home/workflows/code-review"),
     };
 

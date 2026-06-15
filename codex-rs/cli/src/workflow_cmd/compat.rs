@@ -675,6 +675,18 @@ fn apply_compatibility_repairs(target: &RepairWorkflowTarget) -> anyhow::Result<
         )?;
         repairs.push(format!("Created {}", workflow_yaml.display()));
     }
+    if is_code_review_repair_target(target) {
+        let contents = fs::read_to_string(&workflow_yaml)
+            .with_context(|| format!("failed to read {}", workflow_yaml.display()))?;
+        let repaired = repair_code_review_workflow_metadata(&contents);
+        if repaired != contents {
+            fs::write(&workflow_yaml, repaired)?;
+            repairs.push(format!(
+                "Updated {} with code-review autocomplete metadata",
+                workflow_yaml.display()
+            ));
+        }
+    }
 
     let workflow_ts = target.workflow_dir.join("src").join("workflow.ts");
     if !workflow_ts.is_file() {
@@ -689,6 +701,97 @@ fn apply_compatibility_repairs(target: &RepairWorkflowTarget) -> anyhow::Result<
 
     Ok(repairs)
 }
+
+fn is_code_review_repair_target(target: &RepairWorkflowTarget) -> bool {
+    target.id == "code-review"
+        || target
+            .workflow_dir
+            .file_name()
+            .is_some_and(|name| name == "code-review")
+}
+
+fn repair_code_review_workflow_metadata(contents: &str) -> String {
+    let mut repaired = set_top_level_yaml_scalar_if_needed(contents, "id", "code-review");
+    repaired = set_top_level_yaml_scalar_if_needed(&repaired, "command", "code-review");
+    repaired = set_top_level_yaml_scalar_if_missing(&repaired, "title", "/code-review");
+    repaired = set_top_level_yaml_scalar_if_missing(
+        &repaired,
+        "userDescription",
+        "Run a code review and repro workflow on the current branch.",
+    );
+    if !has_workflow_usage_options(&repaired) {
+        if !repaired.ends_with('\n') {
+            repaired.push('\n');
+        }
+        repaired.push_str(CODE_REVIEW_USAGE_OPTIONS_YAML);
+    }
+    repaired
+}
+
+const CODE_REVIEW_USAGE_OPTIONS_YAML: &str = r#"usage:
+  options:
+    - flag: --action
+      valueHint: <review|read-report|list-reports|incremental|resume>
+      description: Run mode: review, read-report, list-reports, incremental, or resume.
+    - flag: --working-directory
+      valueHint: <string>
+      description: Repository path or report-list directory filter.
+    - flag: --target-ref
+      valueHint: <string>
+      description: Branch or commit to review.
+    - flag: --base-ref
+      valueHint: <string>
+      description: Upstream/base reference for branch comparison.
+    - flag: --scope
+      valueHint: <branch|repo>
+      description: Review branch changes or the whole repository.
+    - flag: --review-id
+      valueHint: <string>
+      description: Existing review ID for read-report, incremental, or resume.
+    - flag: --review-model
+      valueHint: <string>
+      description: Model override for initial review agents.
+    - flag: --repro-model
+      valueHint: <string>
+      description: Model override for reproduction agents.
+    - flag: --limit
+      valueHint: <integer>
+      description: Maximum kept findings sent to reproduction.
+    - flag: --chunk-size-bytes
+      valueHint: <integer>
+      description: Maximum chunk size in bytes.
+    - flag: --module-depth
+      valueHint: <integer>
+      description: Directory depth used for chunk grouping.
+    - flag: --severity-threshold
+      valueHint: <number>
+      description: Minimum severity from 0 to 10.
+    - flag: --confidence-threshold
+      valueHint: <number>
+      description: Minimum confidence from 0 to 100.
+    - flag: --include-preexisting
+      description: Keep preexisting findings in branch scope.
+    - flag: --include-skipped-by-limit
+      description: Incremental mode also replays findings skipped by the previous limit.
+    - flag: --allowed-areas
+      valueHint: <Test|Code|Docs|Comment|Else>
+      description: Allowed finding areas.
+    - flag: --database-path
+      valueHint: <string>
+      description: SQLite audit store path.
+    - flag: --artifacts-dir
+      valueHint: <string>
+      description: Artifact root directory.
+    - flag: --output
+      valueHint: <json|md>
+      description: Return json or markdown wrapper output.
+    - flag: --report-type
+      valueHint: <default|github-review>
+      description: Render default markdown or a GitHub review draft.
+    - flag: --findings
+      valueHint: <confirmed|filtered|both>
+      description: Return confirmed, filtered, or both finding sets.
+"#;
 
 fn default_command_from_id(id: &str) -> String {
     slugify(id.rsplit('/').next().unwrap_or(id))
@@ -1011,6 +1114,111 @@ fn title_from_id(id: &str) -> String {
 
 fn yaml_scalar(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+fn set_top_level_yaml_scalar_if_needed(contents: &str, key: &str, value: &str) -> String {
+    if top_level_yaml_scalar(contents, key).as_deref() == Some(value) {
+        contents.to_string()
+    } else {
+        set_top_level_yaml_scalar(contents, key, value)
+    }
+}
+
+fn set_top_level_yaml_scalar_if_missing(contents: &str, key: &str, value: &str) -> String {
+    if top_level_yaml_scalar(contents, key).is_some() {
+        contents.to_string()
+    } else {
+        set_top_level_yaml_scalar(contents, key, value)
+    }
+}
+
+fn top_level_yaml_scalar(contents: &str, key: &str) -> Option<String> {
+    for line in contents.lines() {
+        if line.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let Some((line_key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if line_key.trim() != key {
+            continue;
+        }
+        return parse_yaml_scalar(value.trim());
+    }
+    None
+}
+
+fn parse_yaml_scalar(value: &str) -> Option<String> {
+    if value.is_empty() {
+        return None;
+    }
+    let value = strip_inline_comment(value).trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Some(quoted) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+        serde_json::from_str::<String>(value)
+            .ok()
+            .or_else(|| Some(quoted.to_string()))
+    } else if let Some(quoted) = value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')) {
+        Some(quoted.replace("''", "'"))
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn strip_inline_comment(value: &str) -> &str {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    for (idx, ch) in value.char_indices() {
+        if in_double && escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_double => escaped = true,
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            '#' if !in_single
+                && !in_double
+                && value[..idx]
+                    .chars()
+                    .next_back()
+                    .is_none_or(char::is_whitespace) =>
+            {
+                return &value[..idx];
+            }
+            _ => {}
+        }
+    }
+    value
+}
+
+fn has_workflow_usage_options(contents: &str) -> bool {
+    let mut in_usage = false;
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len().saturating_sub(line.trim_start().len());
+        if indent == 0 {
+            in_usage = trimmed
+                .split_once(':')
+                .is_some_and(|(line_key, _)| line_key.trim() == "usage");
+            continue;
+        }
+        if in_usage
+            && indent == 2
+            && trimmed
+                .split_once(':')
+                .is_some_and(|(line_key, _)| line_key.trim() == "options")
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn set_top_level_yaml_scalar(contents: &str, key: &str, value: &str) -> String {
