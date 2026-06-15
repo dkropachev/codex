@@ -439,7 +439,12 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     assert_eq!(initial_json, expected_initial_json);
 
     // 2) Submit new input; the request body must include the prior items, then initial context, then new user input.
-    codex.submit(user_text_input("hello", None)).await.unwrap();
+    codex
+        .submit(user_text_input(
+            "hello", /*final_output_json_schema*/ None,
+        ))
+        .await
+        .unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
@@ -795,7 +800,12 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
     let expected_session_id = test.session_configured.session_id;
     let expected_thread_id = test.session_configured.thread_id;
 
-    codex.submit(user_text_input("hello", None)).await.unwrap();
+    codex
+        .submit(user_text_input(
+            "hello", /*final_output_json_schema*/ None,
+        ))
+        .await
+        .unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 

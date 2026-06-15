@@ -184,6 +184,8 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,
+        response_style: Default::default(),
+        artifact_style: Default::default(),
         user_instructions: None,
         base_instructions: None,
         developer_instructions: None,
