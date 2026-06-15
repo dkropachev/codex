@@ -208,7 +208,7 @@ mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;
 mod width;
-mod workflow_commands;
+pub mod workflow_commands;
 mod workspace_command;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]

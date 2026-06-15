@@ -61,6 +61,7 @@ mod remote_control_cmd;
 #[cfg(target_os = "windows")]
 mod sandbox_setup;
 mod state_db_recovery;
+mod workflow_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
@@ -68,11 +69,13 @@ use crate::mcp_cmd::McpCli;
 use crate::plugin_cmd::PluginCli;
 use crate::plugin_cmd::PluginSubcommand;
 use crate::remote_control_cmd::RemoteControlCommand;
+use crate::workflow_cmd::WorkflowCli;
 use doctor::DoctorCommand;
 use state_db_recovery as local_state_db;
 
 use codex_config::LoaderOverrides;
 use codex_core::build_models_manager;
+use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
@@ -146,6 +149,9 @@ enum Subcommand {
 
     /// Manage Codex plugins.
     Plugin(PluginCli),
+
+    /// Run configured workflow commands.
+    Workflow(WorkflowCli),
 
     /// Start Codex as an MCP server (stdio).
     McpServer(McpServerCommand),
@@ -1112,6 +1118,21 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 }
             }
         }
+        Some(Subcommand::Workflow(workflow_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "workflow",
+            )?;
+            let config = load_workflow_config(
+                &root_config_overrides,
+                &interactive,
+                &arg0_paths,
+                root_strict_config,
+            )
+            .await?;
+            workflow_cmd::run(workflow_cli, &config)?;
+        }
         Some(Subcommand::AppServer(app_server_cli)) => {
             let AppServerCommand {
                 subcommand,
@@ -1711,14 +1732,41 @@ fn profile_v2_for_subcommand<'a>(
         | Subcommand::Unarchive(_)
         | Subcommand::Fork(_)
         | Subcommand::Mcp(_)
+        | Subcommand::Workflow(_)
         | Subcommand::Sandbox(_)
         | Subcommand::Debug(DebugCommand {
             subcommand: DebugSubcommand::PromptInput(_),
         }) => Ok(Some(profile_v2)),
         _ => anyhow::bail!(
-            "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex archive`, `codex unarchive`, `codex fork`, `codex mcp`, `codex sandbox`, and `codex debug prompt-input`."
+            "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex archive`, `codex unarchive`, `codex fork`, `codex mcp`, `codex workflow`, `codex sandbox`, and `codex debug prompt-input`."
         ),
     }
+}
+
+async fn load_workflow_config(
+    root_config_overrides: &CliConfigOverrides,
+    interactive: &TuiCli,
+    arg0_paths: &Arg0DispatchPaths,
+    strict_config: bool,
+) -> anyhow::Result<Config> {
+    let loader_overrides = loader_overrides_for_profile(interactive.config_profile_v2.as_ref())?;
+    let cli_kv_overrides = root_config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    Ok(ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides)
+        .harness_overrides(ConfigOverrides {
+            cwd: interactive.shared.cwd.clone(),
+            codex_self_exe: arg0_paths.codex_self_exe.clone(),
+            codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
+            main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
+            bypass_hook_trust: interactive.shared.bypass_hook_trust.then_some(true),
+            ..Default::default()
+        })
+        .loader_overrides(loader_overrides)
+        .strict_config(strict_config)
+        .build()
+        .await?)
 }
 
 async fn run_exec_server_command(
@@ -2139,7 +2187,8 @@ fn unsupported_subcommand_name_for_strict_config(
         | Some(Subcommand::Archive(_))
         | Some(Subcommand::Unarchive(_))
         | Some(Subcommand::Fork(_))
-        | Some(Subcommand::Doctor(_)) => None,
+        | Some(Subcommand::Doctor(_))
+        | Some(Subcommand::Workflow(_)) => None,
         Some(Subcommand::AppServer(app_server)) if app_server.subcommand.is_none() => None,
         Some(Subcommand::AppServer(app_server)) => {
             Some(app_server_subcommand_name(app_server.subcommand.as_ref()))

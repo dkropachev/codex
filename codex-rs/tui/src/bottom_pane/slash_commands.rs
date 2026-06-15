@@ -375,6 +375,7 @@ mod tests {
         let mut flags = all_enabled_flags();
         flags.workflow_commands_enabled = false;
         let command = WorkflowCommand {
+            id: "code-review".to_string(),
             command: "code-review".to_string(),
             description: "Run review".to_string(),
             workflow_dir: PathBuf::from("/tmp/code-review"),
@@ -389,6 +390,7 @@ mod tests {
     #[test]
     fn workflow_commands_resolve_and_support_inline_args() {
         let command = WorkflowCommand {
+            id: "code-review".to_string(),
             command: "code-review".to_string(),
             description: "Run review".to_string(),
             workflow_dir: PathBuf::from("/tmp/code-review"),
@@ -403,6 +405,7 @@ mod tests {
     #[test]
     fn side_conversation_exact_lookup_still_resolves_workflow_commands_for_dispatch_error() {
         let command = WorkflowCommand {
+            id: "code-review".to_string(),
             command: "code-review".to_string(),
             description: "Run review".to_string(),
             workflow_dir: PathBuf::from("/tmp/code-review"),
