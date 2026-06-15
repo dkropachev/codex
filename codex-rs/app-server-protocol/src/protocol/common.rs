@@ -836,6 +836,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadRealtimeAppendTextResponse,
     },
+    #[experimental("thread/realtime/appendSpeech")]
+    ThreadRealtimeAppendSpeech => "thread/realtime/appendSpeech" {
+        params: v2::ThreadRealtimeAppendSpeechParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadRealtimeAppendSpeechResponse,
+    },
     #[experimental("thread/realtime/stop")]
     ThreadRealtimeStop => "thread/realtime/stop" {
         params: v2::ThreadRealtimeStopParams,
@@ -3037,6 +3043,8 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 architecture: Some(RealtimeConversationArchitecture::Avas),
+                codex_responses_as_items: None,
+                codex_response_item_prefix: None,
                 thread_id: "thr_123".to_string(),
                 model: Some("realtime-treatment-model".to_string()),
                 output_modality: RealtimeOutputModality::Audio,
@@ -3054,6 +3062,8 @@ mod tests {
                 "params": {
                     "architecture": "avas",
                     "threadId": "thr_123",
+                    "codexResponsesAsItems": null,
+                    "codexResponseItemPrefix": null,
                     "model": "realtime-treatment-model",
                     "outputModality": "audio",
                     "prompt": "You are on a call",
@@ -3074,6 +3084,8 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 architecture: None,
+                codex_responses_as_items: None,
+                codex_response_item_prefix: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -3091,6 +3103,8 @@ mod tests {
                 "params": {
                     "architecture": null,
                     "threadId": "thr_123",
+                    "codexResponsesAsItems": null,
+                    "codexResponseItemPrefix": null,
                     "model": null,
                     "outputModality": "audio",
                     "realtimeSessionId": null,
@@ -3106,6 +3120,8 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 architecture: None,
+                codex_responses_as_items: None,
+                codex_response_item_prefix: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -3123,6 +3139,8 @@ mod tests {
                 "params": {
                     "architecture": null,
                     "threadId": "thr_123",
+                    "codexResponsesAsItems": null,
+                    "codexResponseItemPrefix": null,
                     "model": null,
                     "outputModality": "audio",
                     "prompt": null,
@@ -3168,6 +3186,29 @@ mod tests {
             null_prompt_request,
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_realtime_append_speech() -> Result<()> {
+        let request = ClientRequest::ThreadRealtimeAppendSpeech {
+            request_id: RequestId::Integer(10),
+            params: v2::ThreadRealtimeAppendSpeechParams {
+                thread_id: "thr_123".to_string(),
+                text: "Short voice update".to_string(),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/realtime/appendSpeech",
+                "id": 10,
+                "params": {
+                    "threadId": "thr_123",
+                    "text": "Short voice update"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
         Ok(())
     }
 
@@ -3281,6 +3322,8 @@ mod tests {
             request_id: RequestId::Integer(1),
             params: v2::ThreadRealtimeStartParams {
                 architecture: None,
+                codex_responses_as_items: None,
+                codex_response_item_prefix: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
