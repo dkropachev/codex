@@ -206,6 +206,7 @@ use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
+use crate::workflow_commands::WorkflowCommand;
 use codex_protocol::ThreadId;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
@@ -287,12 +288,16 @@ pub enum InputResult {
     Command(SlashCommand),
     /// A bare model service-tier command parsed by the composer.
     ServiceTierCommand(ServiceTierCommand),
+    /// A bare workflow command parsed by the composer.
+    WorkflowCommand(WorkflowCommand),
     /// An inline slash command and its trimmed argument text.
     ///
     /// The `TextElement` ranges are rebased into the argument string, while any pending local
     /// command-history entry still represents the original command invocation that should be
     /// committed only if dispatch accepts it.
     CommandWithArgs(SlashCommand, String, Vec<TextElement>),
+    /// An inline workflow command and its trimmed argument text.
+    WorkflowCommandWithArgs(WorkflowCommand, String, Vec<TextElement>),
     None,
 }
 
@@ -370,6 +375,8 @@ pub(crate) struct ChatComposer {
     plugins_command_enabled: bool,
     service_tier_commands_enabled: bool,
     service_tier_commands: Vec<ServiceTierCommand>,
+    workflow_commands_enabled: bool,
+    workflow_commands: Vec<WorkflowCommand>,
     mentions_v2_enabled: bool,
     goal_command_enabled: bool,
     personality_command_enabled: bool,
@@ -430,6 +437,7 @@ impl ChatComposer {
             self.draft.is_bash_mode,
             self.builtin_command_flags(),
             &self.service_tier_commands,
+            &self.workflow_commands,
         )
     }
 
@@ -439,6 +447,7 @@ impl ChatComposer {
             connectors_enabled: self.connectors_enabled,
             plugins_command_enabled: self.plugins_command_enabled,
             service_tier_commands_enabled: self.service_tier_commands_enabled,
+            workflow_commands_enabled: self.workflow_commands_enabled,
             goal_command_enabled: self.goal_command_enabled,
             personality_command_enabled: self.personality_command_enabled,
             realtime_conversation_enabled: self.realtime_conversation_enabled,
@@ -538,6 +547,8 @@ impl ChatComposer {
             plugins_command_enabled: false,
             service_tier_commands_enabled: false,
             service_tier_commands: Vec::new(),
+            workflow_commands_enabled: false,
+            workflow_commands: Vec::new(),
             mentions_v2_enabled: false,
             goal_command_enabled: false,
             personality_command_enabled: false,
@@ -639,6 +650,16 @@ impl ChatComposer {
 
     pub fn set_service_tier_commands(&mut self, commands: Vec<ServiceTierCommand>) {
         self.service_tier_commands = commands;
+        self.sync_popups();
+    }
+
+    pub fn set_workflow_commands_enabled(&mut self, enabled: bool) {
+        self.workflow_commands_enabled = enabled;
+        self.sync_popups();
+    }
+
+    pub fn set_workflow_commands(&mut self, commands: Vec<WorkflowCommand>) {
+        self.workflow_commands = commands;
         self.sync_popups();
     }
 
@@ -2748,7 +2769,9 @@ impl ChatComposer {
                 | InputResult::Queued { .. }
                 | InputResult::Command(_)
                 | InputResult::ServiceTierCommand(_)
+                | InputResult::WorkflowCommand(_)
                 | InputResult::CommandWithArgs(_, _, _)
+                | InputResult::WorkflowCommandWithArgs(_, _, _)
         ) {
             self.draft.textarea.enter_vim_normal_mode();
         }
@@ -2894,6 +2917,7 @@ impl ChatComposer {
         Some(match command {
             SlashCommandItem::Builtin(cmd) => InputResult::Command(cmd),
             SlashCommandItem::ServiceTier(command) => InputResult::ServiceTierCommand(command),
+            SlashCommandItem::Workflow(command) => InputResult::WorkflowCommand(command),
         })
     }
 
@@ -2918,14 +2942,17 @@ impl ChatComposer {
         );
         let trimmed_rest = inline_command.rest.trim();
         args_elements = Self::trim_text_elements(inline_command.rest, trimmed_rest, args_elements);
-        let SlashCommandItem::Builtin(cmd) = command else {
-            return None;
-        };
-        Some(InputResult::CommandWithArgs(
-            cmd,
-            trimmed_rest.to_string(),
-            args_elements,
-        ))
+        Some(match command {
+            SlashCommandItem::Builtin(cmd) => {
+                InputResult::CommandWithArgs(cmd, trimmed_rest.to_string(), args_elements)
+            }
+            SlashCommandItem::Workflow(command) => InputResult::WorkflowCommandWithArgs(
+                command,
+                trimmed_rest.to_string(),
+                args_elements,
+            ),
+            SlashCommandItem::ServiceTier(_) => return None,
+        })
     }
 
     /// Expand pending placeholders and extract normalized inline-command args.
@@ -7867,6 +7894,9 @@ mod tests {
                 Some(CommandItem::ServiceTier(command)) => {
                     panic!("expected model command, got service tier {command:?}")
                 }
+                Some(CommandItem::Workflow(command)) => {
+                    panic!("expected model command, got workflow {command:?}")
+                }
                 None => panic!("no selected command for '/mo'"),
             },
             _ => panic!("slash popup not active after typing '/mo'"),
@@ -7949,6 +7979,9 @@ mod tests {
                 Some(CommandItem::ServiceTier(command)) => {
                     panic!("expected resume command, got service tier {command:?}")
                 }
+                Some(CommandItem::Workflow(command)) => {
+                    panic!("expected resume command, got workflow {command:?}")
+                }
                 None => panic!("no selected command for '/res'"),
             },
             _ => panic!("slash popup not active after typing '/res'"),
@@ -8002,6 +8035,9 @@ mod tests {
                 }
                 Some(CommandItem::ServiceTier(command)) => {
                     panic!("expected pets command, got service tier {command:?}")
+                }
+                Some(CommandItem::Workflow(command)) => {
+                    panic!("expected pets command, got workflow {command:?}")
                 }
                 None => panic!("no selected command for '/pet'"),
             },
@@ -8057,6 +8093,9 @@ mod tests {
                 Some(CommandItem::ServiceTier(command)) => {
                     panic!("expected btw command, got service tier {command:?}")
                 }
+                Some(CommandItem::Workflow(command)) => {
+                    panic!("expected btw command, got workflow {command:?}")
+                }
                 None => panic!("no selected command for '/bt'"),
             },
             _ => panic!("slash popup not active after typing '/bt'"),
@@ -8110,6 +8149,9 @@ mod tests {
                 }
                 Some(CommandItem::ServiceTier(command)) => {
                     panic!("expected side command, got service tier {command:?}")
+                }
+                Some(CommandItem::Workflow(command)) => {
+                    panic!("expected side command, got workflow {command:?}")
                 }
                 None => panic!("no selected command for '/si'"),
             },
@@ -8209,11 +8251,17 @@ mod tests {
             InputResult::ServiceTierCommand(command) => {
                 panic!("expected init command, got service tier {command:?}")
             }
+            InputResult::WorkflowCommand(command) => {
+                panic!("expected init command, got workflow {command:?}")
+            }
             InputResult::Submitted { text, .. } => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch, but composer queued literal text")
+            }
+            InputResult::WorkflowCommandWithArgs(_, _, _) => {
+                panic!("expected command dispatch without args for '/init'")
             }
             InputResult::None => panic!("expected Command result for '/init'"),
         }
@@ -8713,11 +8761,17 @@ mod tests {
             InputResult::ServiceTierCommand(command) => {
                 panic!("expected diff command, got service tier {command:?}")
             }
+            InputResult::WorkflowCommand(command) => {
+                panic!("expected diff command, got workflow {command:?}")
+            }
             InputResult::Submitted { text, .. } => {
                 panic!("expected command dispatch after Tab completion, got literal submit: {text}")
             }
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch after Tab completion, got literal queue")
+            }
+            InputResult::WorkflowCommandWithArgs(_, _, _) => {
+                panic!("expected command dispatch without args for '/diff'")
             }
             InputResult::None => panic!("expected Command result for '/diff'"),
         }
@@ -8910,11 +8964,17 @@ mod tests {
             InputResult::ServiceTierCommand(command) => {
                 panic!("expected mention command, got service tier {command:?}")
             }
+            InputResult::WorkflowCommand(command) => {
+                panic!("expected mention command, got workflow {command:?}")
+            }
             InputResult::Submitted { text, .. } => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch, but composer queued literal text")
+            }
+            InputResult::WorkflowCommandWithArgs(_, _, _) => {
+                panic!("expected command dispatch without args for '/mention'")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
         }

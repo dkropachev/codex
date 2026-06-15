@@ -93,6 +93,9 @@ impl ChatWidget {
             self.refresh_effective_service_tier();
             self.sync_service_tier_commands();
         }
+        if feature == Feature::Workflows {
+            self.sync_workflow_commands();
+        }
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
         }

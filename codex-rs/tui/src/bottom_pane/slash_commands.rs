@@ -9,6 +9,7 @@ use codex_utils_fuzzy_match::fuzzy_match;
 
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
+use crate::workflow_commands::WorkflowCommand;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ServiceTierCommand {
@@ -21,6 +22,7 @@ pub(crate) struct ServiceTierCommand {
 pub(crate) enum SlashCommandItem {
     Builtin(SlashCommand),
     ServiceTier(ServiceTierCommand),
+    Workflow(WorkflowCommand),
 }
 
 impl SlashCommandItem {
@@ -28,6 +30,7 @@ impl SlashCommandItem {
         match self {
             Self::Builtin(cmd) => cmd.command(),
             Self::ServiceTier(command) => &command.name,
+            Self::Workflow(command) => &command.command,
         }
     }
 
@@ -35,6 +38,7 @@ impl SlashCommandItem {
         match self {
             Self::Builtin(cmd) => cmd.supports_inline_args(),
             Self::ServiceTier(_) => false,
+            Self::Workflow(_) => true,
         }
     }
 
@@ -42,6 +46,7 @@ impl SlashCommandItem {
         match self {
             Self::Builtin(cmd) => cmd.available_in_side_conversation(),
             Self::ServiceTier(_) => false,
+            Self::Workflow(_) => false,
         }
     }
 
@@ -49,6 +54,7 @@ impl SlashCommandItem {
         match self {
             Self::Builtin(cmd) => cmd.available_during_task(),
             Self::ServiceTier(_) => false,
+            Self::Workflow(_) => false,
         }
     }
 }
@@ -59,6 +65,7 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) connectors_enabled: bool,
     pub(crate) plugins_command_enabled: bool,
     pub(crate) service_tier_commands_enabled: bool,
+    pub(crate) workflow_commands_enabled: bool,
     pub(crate) goal_command_enabled: bool,
     pub(crate) personality_command_enabled: bool,
     pub(crate) realtime_conversation_enabled: bool,
@@ -89,6 +96,7 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
 pub(crate) fn commands_for_input(
     flags: BuiltinCommandFlags,
     service_tier_commands: &[ServiceTierCommand],
+    workflow_commands: &[WorkflowCommand],
 ) -> Vec<SlashCommandItem> {
     let mut commands = Vec::new();
     let tiers_enabled = flags.service_tier_commands_enabled;
@@ -102,6 +110,14 @@ pub(crate) fn commands_for_input(
                     .map(SlashCommandItem::ServiceTier),
             );
         }
+    }
+    if flags.workflow_commands_enabled {
+        commands.extend(
+            workflow_commands
+                .iter()
+                .cloned()
+                .map(SlashCommandItem::Workflow),
+        );
     }
     commands
         .into_iter()
@@ -128,12 +144,27 @@ pub(crate) fn find_slash_command(
     name: &str,
     flags: BuiltinCommandFlags,
     service_tier_commands: &[ServiceTierCommand],
+    workflow_commands: &[WorkflowCommand],
 ) -> Option<SlashCommandItem> {
     if let Some(cmd) = find_builtin_command(name, flags) {
         return Some(SlashCommandItem::Builtin(cmd));
     }
 
     let tiers_enabled = flags.service_tier_commands_enabled;
+    if let Some(command) = flags
+        .workflow_commands_enabled
+        .then(|| {
+            workflow_commands
+                .iter()
+                .find(|command| command.command == name)
+                .cloned()
+                .map(SlashCommandItem::Workflow)
+        })
+        .flatten()
+    {
+        return Some(command);
+    }
+
     tiers_enabled
         .then(|| {
             service_tier_commands
@@ -149,8 +180,9 @@ pub(crate) fn has_slash_command_prefix(
     name: &str,
     flags: BuiltinCommandFlags,
     service_tier_commands: &[ServiceTierCommand],
+    workflow_commands: &[WorkflowCommand],
 ) -> bool {
-    commands_for_input(flags, service_tier_commands)
+    commands_for_input(flags, service_tier_commands, workflow_commands)
         .into_iter()
         .any(|command| fuzzy_match(command.command(), name).is_some())
 }
@@ -159,6 +191,7 @@ pub(crate) fn has_slash_command_prefix(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
     use std::slice::from_ref;
 
     fn all_enabled_flags() -> BuiltinCommandFlags {
@@ -167,6 +200,7 @@ mod tests {
             connectors_enabled: true,
             plugins_command_enabled: true,
             service_tier_commands_enabled: true,
+            workflow_commands_enabled: true,
             goal_command_enabled: true,
             personality_command_enabled: true,
             realtime_conversation_enabled: true,
@@ -216,7 +250,7 @@ mod tests {
             description: "fastest inference".to_string(),
         }];
 
-        assert_eq!(find_slash_command("fast", flags, &commands), None);
+        assert_eq!(find_slash_command("fast", flags, &commands, &[]), None);
     }
 
     #[test]
@@ -234,7 +268,7 @@ mod tests {
             },
         ];
 
-        let items = commands_for_input(all_enabled_flags(), &commands);
+        let items = commands_for_input(all_enabled_flags(), &commands, &[]);
         let model_idx = items
             .iter()
             .position(|item| matches!(item, SlashCommandItem::Builtin(SlashCommand::Model)))
@@ -331,8 +365,56 @@ mod tests {
         };
 
         assert_eq!(
-            find_slash_command("fast", flags, from_ref(&command)),
+            find_slash_command("fast", flags, from_ref(&command), &[]),
             Some(SlashCommandItem::ServiceTier(command))
+        );
+    }
+
+    #[test]
+    fn workflow_commands_are_hidden_when_disabled() {
+        let mut flags = all_enabled_flags();
+        flags.workflow_commands_enabled = false;
+        let command = WorkflowCommand {
+            command: "code-review".to_string(),
+            description: "Run review".to_string(),
+            workflow_dir: PathBuf::from("/tmp/code-review"),
+        };
+
+        assert_eq!(
+            find_slash_command("code-review", flags, &[], from_ref(&command)),
+            None
+        );
+    }
+
+    #[test]
+    fn workflow_commands_resolve_and_support_inline_args() {
+        let command = WorkflowCommand {
+            command: "code-review".to_string(),
+            description: "Run review".to_string(),
+            workflow_dir: PathBuf::from("/tmp/code-review"),
+        };
+
+        let item = find_slash_command("code-review", all_enabled_flags(), &[], from_ref(&command));
+
+        assert_eq!(item, Some(SlashCommandItem::Workflow(command)));
+        assert!(item.as_ref().expect("workflow").supports_inline_args());
+    }
+
+    #[test]
+    fn side_conversation_exact_lookup_still_resolves_workflow_commands_for_dispatch_error() {
+        let command = WorkflowCommand {
+            command: "code-review".to_string(),
+            description: "Run review".to_string(),
+            workflow_dir: PathBuf::from("/tmp/code-review"),
+        };
+        let flags = BuiltinCommandFlags {
+            side_conversation_active: true,
+            ..all_enabled_flags()
+        };
+
+        assert_eq!(
+            find_slash_command("code-review", flags, &[], from_ref(&command)),
+            Some(SlashCommandItem::Workflow(command))
         );
     }
 }

@@ -57,8 +57,14 @@ impl ChatWidget {
             InputResult::ServiceTierCommand(command) => {
                 self.handle_service_tier_command_dispatch(command);
             }
+            InputResult::WorkflowCommand(command) => {
+                self.handle_workflow_command_dispatch(command);
+            }
             InputResult::CommandWithArgs(cmd, args, text_elements) => {
                 self.handle_slash_command_with_args_dispatch(cmd, args, text_elements);
+            }
+            InputResult::WorkflowCommandWithArgs(command, args, text_elements) => {
+                self.handle_workflow_command_with_args_dispatch(command, args, text_elements);
             }
             InputResult::None => {}
         }
