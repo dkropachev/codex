@@ -28,9 +28,7 @@ pub use write_stdin::WriteStdinHandler;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ExecCommandArgs {
-    cmd: String,
-    #[serde(default)]
-    pub(crate) workdir: Option<String>,
+    pub(crate) cmd: String,
     #[serde(default)]
     shell: Option<String>,
     #[serde(default)]
