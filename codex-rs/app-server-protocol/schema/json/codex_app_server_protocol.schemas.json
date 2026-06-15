@@ -14757,6 +14757,16 @@
                 ],
                 "writeOnly": true
               },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "phase": {
                 "anyOf": [
                   {
@@ -14797,6 +14807,16 @@
                 },
                 "type": "array"
               },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "recipient": {
                 "type": "string"
               },
@@ -14833,6 +14853,16 @@
                 "type": [
                   "string",
                   "null"
+                ]
+              },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "summary": {
@@ -14876,6 +14906,16 @@
                 ],
                 "writeOnly": true
               },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "status": {
                 "$ref": "#/definitions/v2/LocalShellStatus"
               },
@@ -14909,6 +14949,16 @@
                   "null"
                 ],
                 "writeOnly": true
+              },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "name": {
                 "type": "string"
@@ -14955,6 +15005,16 @@
                 ],
                 "writeOnly": true
               },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "status": {
                 "type": [
                   "string",
@@ -14981,6 +15041,16 @@
             "properties": {
               "call_id": {
                 "type": "string"
+              },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "output": {
                 "$ref": "#/definitions/v2/FunctionCallOutputBody"
@@ -15016,6 +15086,16 @@
               "input": {
                 "type": "string"
               },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "name": {
                 "type": "string"
               },
@@ -15046,6 +15126,16 @@
             "properties": {
               "call_id": {
                 "type": "string"
+              },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "name": {
                 "type": [
@@ -15082,6 +15172,16 @@
               },
               "execution": {
                 "type": "string"
+              },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "status": {
                 "type": "string"
@@ -15126,6 +15226,16 @@
                 ],
                 "writeOnly": true
               },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "status": {
                 "type": [
                   "string",
@@ -15150,6 +15260,16 @@
             "properties": {
               "id": {
                 "type": "string"
+              },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "result": {
                 "type": "string"
@@ -15185,6 +15305,16 @@
               "encrypted_content": {
                 "type": "string"
               },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "type": {
                 "enum": [
                   "compaction"
@@ -15202,6 +15332,16 @@
           },
           {
             "properties": {
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "type": {
                 "enum": [
                   "compaction_trigger"
@@ -15222,6 +15362,16 @@
                 "type": [
                   "string",
                   "null"
+                ]
+              },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "type": {
@@ -15255,6 +15405,17 @@
             "type": "object"
           }
         ]
+      },
+      "ResponseItemMetadata": {
+        "properties": {
+          "turn_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
       },
       "ResponsesApiWebSearchAction": {
         "oneOf": [

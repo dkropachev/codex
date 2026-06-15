@@ -253,6 +253,7 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
         namespace: Some("mcp__codex_apps__calendar".to_string()),
         arguments: "{}".to_string(),
         call_id: "call-namespace".to_string(),
+        metadata: None,
     })?
     .expect("function_call should produce a tool call");
 
@@ -435,6 +436,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
             text: "extension history".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     session
         .record_conversation_items(&turn, std::slice::from_ref(&history_item))
@@ -464,7 +466,15 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         "expected extension-provided tool to be visible to the model"
     );
 
-    let call = extension_echo_call("call-extension")?;
+    let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+        id: None,
+        name: "echo".to_string(),
+        namespace: Some("extension/".to_string()),
+        arguments: json!({ "message": "hello" }).to_string(),
+        call_id: "call-extension".to_string(),
+        metadata: None,
+    })?
+    .expect("function_call should produce a tool call");
     let result = router
         .dispatch_tool_call_with_code_mode_result(
             Arc::new(session),
