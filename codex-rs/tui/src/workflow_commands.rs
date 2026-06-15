@@ -9,14 +9,14 @@ use serde_json::Value;
 const MAX_WORKFLOW_YAML_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct WorkflowCommand {
-    pub(crate) command: String,
-    pub(crate) description: String,
-    pub(crate) workflow_dir: PathBuf,
+pub struct WorkflowCommand {
+    pub command: String,
+    pub description: String,
+    pub workflow_dir: PathBuf,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct WorkflowInvocationError {
+pub struct WorkflowInvocationError {
     message: String,
 }
 
@@ -27,19 +27,19 @@ impl WorkflowInvocationError {
         }
     }
 
-    pub(crate) fn message(&self) -> &str {
+    pub fn message(&self) -> &str {
         &self.message
     }
 }
 
-pub(crate) fn discover_workflow_commands(codex_home: &Path, cwd: &Path) -> Vec<WorkflowCommand> {
+pub fn discover_workflow_commands(codex_home: &Path, cwd: &Path) -> Vec<WorkflowCommand> {
     let mut commands = BTreeMap::new();
     discover_workflow_commands_in_root(&codex_home.join("workflows"), &mut commands);
     discover_workflow_commands_in_root(&cwd.join(".codex").join("workflows"), &mut commands);
     commands.into_values().collect()
 }
 
-pub(crate) fn build_workflow_shell_command(
+pub fn build_workflow_shell_command(
     command: &WorkflowCommand,
     cwd: &Path,
     args: &str,
@@ -57,9 +57,16 @@ pub(crate) fn build_workflow_shell_command(
     Ok(format!("cd {quoted_workflow_dir} && {invocation}"))
 }
 
-pub(crate) fn workflow_invocation_input(
+pub fn workflow_invocation_input(cwd: &Path, args: &str) -> Result<Value, WorkflowInvocationError> {
+    let tokens = shlex::split(args).ok_or_else(|| {
+        WorkflowInvocationError::new("Invalid workflow arguments: unmatched quote.")
+    })?;
+    workflow_invocation_input_from_args(cwd, &tokens)
+}
+
+pub fn workflow_invocation_input_from_args(
     cwd: &Path,
-    args: &str,
+    args: &[String],
 ) -> Result<Value, WorkflowInvocationError> {
     let mut input = parse_workflow_args(args)?;
     input
@@ -194,12 +201,7 @@ fn is_valid_workflow_command(command: &str) -> bool {
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_'))
 }
 
-fn parse_workflow_args(args: &str) -> Result<Map<String, Value>, WorkflowInvocationError> {
-    let Some(tokens) = shlex::split(args) else {
-        return Err(WorkflowInvocationError::new(
-            "Invalid workflow arguments: unmatched quote.",
-        ));
-    };
+fn parse_workflow_args(tokens: &[String]) -> Result<Map<String, Value>, WorkflowInvocationError> {
     let mut input = Map::new();
     let mut input_seen = false;
     let mut index = 0;
