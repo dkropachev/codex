@@ -86,6 +86,10 @@ fn enable_workflows(codex_home: &Path) -> Result<()> {
     Ok(())
 }
 
+fn existing_path_display(path: &Path) -> Result<String> {
+    Ok(path.canonicalize()?.display().to_string())
+}
+
 fn write_workflow(root: &Path, dirname: &str, yaml: &str) -> Result<PathBuf> {
     let workflow_dir = root.join(dirname);
     fs::create_dir_all(&workflow_dir)?;
@@ -149,13 +153,13 @@ userDescription: Build a project report.
                 "id": "code-review",
                 "command": "code-review",
                 "description": "Run a code review workflow.",
-                "workflowDir": home_workflow_dir.display().to_string(),
+                "workflowDir": existing_path_display(&home_workflow_dir)?,
             },
             {
                 "id": "report",
                 "command": "report",
                 "description": "Build a project report.",
-                "workflowDir": project_workflow_dir.display().to_string(),
+                "workflowDir": existing_path_display(&project_workflow_dir)?,
             },
         ])
     );
@@ -211,7 +215,7 @@ fn workflow_alias_invokes_bun_like_old_cli_surface() -> Result<()> {
             "argv": ["--scope", "repo"],
             "scope": "repo",
             "text": "--scope repo",
-            "workingDirectory": project.path().display().to_string(),
+            "workingDirectory": existing_path_display(project.path())?,
         })
     );
 
@@ -243,7 +247,7 @@ fn workflow_alias_positional_args_use_legacy_payload() -> Result<()> {
         json!({
             "argv": ["current", "sprint"],
             "text": "current sprint",
-            "workingDirectory": project.path().display().to_string(),
+            "workingDirectory": existing_path_display(project.path())?,
         })
     );
 
@@ -280,7 +284,10 @@ fn workflow_run_invokes_bun_with_structured_input() -> Result<()> {
     .success();
 
     let captured_cwd = fake_bun.captured_cwd()?;
-    assert_eq!(captured_cwd.trim_end(), workflow_dir.display().to_string());
+    assert_eq!(
+        captured_cwd.trim_end(),
+        existing_path_display(&workflow_dir)?
+    );
 
     let args = fake_bun.captured_args()?;
     assert_eq!(args.len(), 3);
@@ -292,7 +299,7 @@ fn workflow_run_invokes_bun_with_structured_input() -> Result<()> {
             "action": "list-reports",
             "allowedAreas": "tui",
             "maxCount": 3,
-            "workingDirectory": project.path().display().to_string(),
+            "workingDirectory": existing_path_display(project.path())?,
         })
     );
 
@@ -327,7 +334,10 @@ fn workflow_run_by_nested_id_merges_json_input_and_flags() -> Result<()> {
     .success();
 
     let captured_cwd = fake_bun.captured_cwd()?;
-    assert_eq!(captured_cwd.trim_end(), workflow_dir.display().to_string());
+    assert_eq!(
+        captured_cwd.trim_end(),
+        existing_path_display(&workflow_dir)?
+    );
 
     let args = fake_bun.captured_args()?;
     assert_eq!(
@@ -372,7 +382,7 @@ fn workflow_management_commands_match_old_surface() -> Result<()> {
     cmd.args(["workflow", "where", "review/fix"])
         .assert()
         .success()
-        .stdout(contains(workflow_dir.display().to_string()));
+        .stdout(contains(existing_path_display(&workflow_dir)?));
 
     let mut cmd = codex_command(codex_home.path(), project.path())?;
     cmd.args(["workflow", "show", "review/fix"])
@@ -469,7 +479,7 @@ fn workflow_show_json_and_root_status_cover_management_outputs() -> Result<()> {
                 "id": "review/fix",
                 "command": "code-review",
                 "description": "Run a code review workflow.",
-                "workflowDir": workflow_dir.display().to_string(),
+                "workflowDir": existing_path_display(&workflow_dir)?,
             },
             "workflowYaml": "id: review/fix\ncommand: code-review\nuserDescription: Run a code review workflow.\n",
         })
@@ -494,6 +504,7 @@ fn workflow_validate_reports_invalid_workflow_at_cli_boundary() -> Result<()> {
         "review/fix",
         "id: review/fix\ncommand: code-review\nuserDescription: Run a code review workflow.\n",
     )?;
+    let workflow_ts = workflow_dir.canonicalize()?.join("src").join("workflow.ts");
 
     let mut cmd = codex_command(codex_home.path(), project.path())?;
     cmd.args(["workflow", "validate", "review/fix"])
@@ -501,7 +512,7 @@ fn workflow_validate_reports_invalid_workflow_at_cli_boundary() -> Result<()> {
         .failure()
         .stdout(contains(format!(
             "review/fix is invalid: missing {}",
-            workflow_dir.join("src").join("workflow.ts").display()
+            workflow_ts.display()
         )));
 
     Ok(())
@@ -609,7 +620,7 @@ fn workflow_fix_invokes_bun_with_fix_action() -> Result<()> {
         json!({
             "action": "fix",
             "scope": "repo",
-            "workingDirectory": project.path().display().to_string(),
+            "workingDirectory": existing_path_display(project.path())?,
         })
     );
 
@@ -640,7 +651,7 @@ fn workflow_repair_alias_invokes_bun_with_fix_action() -> Result<()> {
         serde_json::from_str::<Value>(&args[2])?,
         json!({
             "action": "fix",
-            "workingDirectory": project.path().display().to_string(),
+            "workingDirectory": existing_path_display(project.path())?,
         })
     );
 
@@ -672,7 +683,7 @@ fn workflow_recover_invokes_bun_with_recover_action() -> Result<()> {
         json!({
             "action": "recover",
             "failureId": "abc",
-            "workingDirectory": project.path().display().to_string(),
+            "workingDirectory": existing_path_display(project.path())?,
         })
     );
 
