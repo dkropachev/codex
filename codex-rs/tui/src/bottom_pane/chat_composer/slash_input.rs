@@ -411,9 +411,13 @@ impl ChatComposer {
                 let selected_cmd = popup.selected_item();
                 let has_inline_args = {
                     let text = self.draft.textarea.text();
+                    let cursor = self.draft.textarea.cursor();
                     self.slash_input()
                         .inline_command(text)
-                        .is_some_and(|command| !command.rest.trim().is_empty())
+                        .is_some_and(|command| {
+                            !command.rest.trim().is_empty()
+                                && cursor > command.command.command().len()
+                        })
                 };
                 if has_inline_args && let Some(result) = self.try_dispatch_slash_command_with_args()
                 {
@@ -480,10 +484,16 @@ impl ChatComposer {
             .unwrap_or(first_line_end);
         let typed_command_name = &text[1..command_token_end];
         let rest_after_token_is_empty = text[command_token_end..].trim().is_empty();
-        if typed_command_name.starts_with(command_name) && typed_command_name != command_name {
+        if matches!(selected_cmd, CommandItem::Workflow(_))
+            && typed_command_name.starts_with(command_name)
+            && typed_command_name != command_name
+        {
             return false;
         }
-        if typed_command_name == command_name && !rest_after_token_is_empty {
+        if typed_command_name == command_name
+            && !rest_after_token_is_empty
+            && cursor >= command_token_end
+        {
             return false;
         }
         if rest_after_token_is_empty && (cursor <= 1 || cursor >= command_token_end) {
