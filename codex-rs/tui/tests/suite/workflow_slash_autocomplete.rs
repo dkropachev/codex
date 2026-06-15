@@ -77,6 +77,10 @@ trust_level = "trusted"
         ("OPENAI_API_KEY".to_string(), "dummy".to_string()),
         ("RUST_LOG".to_string(), "trace".to_string()),
         ("TERM".to_string(), "xterm-256color".to_string()),
+        (
+            "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT".to_string(),
+            "1".to_string(),
+        ),
     ]);
     let args = vec![
         "-c".to_string(),
@@ -103,9 +107,13 @@ trust_level = "trusted"
     })
     .await?;
 
-    writer.send(b"/code".to_vec()).await?;
+    for byte in b"/code-review" {
+        writer.send(vec![*byte]).await?;
+        tokio::time::sleep(Duration::from_millis(/*millis*/ 20)).await;
+    }
     wait_for_screen(&mut output_rx, &mut screen, "workflow popup", |contents| {
-        contents.contains("/code-review") && contents.contains("Run a code review workflow.")
+        contents.matches("/code-review").count() >= 2
+            && contents.contains("Run a code review workflow.")
     })
     .await?;
 
@@ -117,6 +125,15 @@ trust_level = "trusted"
         |contents| {
             contents.contains("/code-review") && !contents.contains("Run a code review workflow.")
         },
+    )
+    .await?;
+
+    writer.send(b"x".to_vec()).await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "workflow command argument",
+        |contents| contents.contains("/code-review x"),
     )
     .await?;
 
@@ -148,9 +165,22 @@ async fn wait_for_screen(
             );
         }
 
-        let chunk = tokio::time::timeout(deadline.saturating_duration_since(now), output_rx.recv())
-            .await
-            .with_context(|| format!("timed out waiting for {label} output"))??;
+        let chunk =
+            match tokio::time::timeout(deadline.saturating_duration_since(now), output_rx.recv())
+                .await
+            {
+                Ok(Ok(chunk)) => chunk,
+                Ok(Err(err)) => {
+                    return Err(err).with_context(|| format!("failed waiting for {label} output"));
+                }
+                Err(_) => {
+                    anyhow::bail!(
+                        "timed out waiting for {label} output; screen:\n{}\nraw:\n{}",
+                        screen.screen().contents(),
+                        String::from_utf8_lossy(&raw)
+                    );
+                }
+            };
         screen.write_all(&chunk)?;
         raw.extend_from_slice(&chunk);
     }

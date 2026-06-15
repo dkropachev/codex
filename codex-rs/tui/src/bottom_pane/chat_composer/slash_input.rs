@@ -277,6 +277,11 @@ impl ChatComposer {
             }
             KeyEvent {
                 code: KeyCode::Tab, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('\t'),
+                modifiers: KeyModifiers::NONE,
+                ..
             } => {
                 // Ensure popup filtering/selection reflects the latest composer text
                 // before applying completion.
@@ -515,8 +520,10 @@ pub(super) fn selected_command_completion(
     command: &CommandItem,
 ) -> Option<String> {
     let selected_command_text = format!("/{}", command.command());
-    (!first_line.trim_start().starts_with(&selected_command_text))
-        .then(|| format!("{selected_command_text} "))
+    let trimmed_first_line = first_line.trim_start();
+    ((trimmed_first_line == selected_command_text && matches!(command, CommandItem::Workflow(_)))
+        || !trimmed_first_line.starts_with(&selected_command_text))
+    .then(|| format!("{selected_command_text} "))
 }
 
 pub(super) fn prepared_args(prepared_text: &str) -> Option<(&str, usize)> {
@@ -623,6 +630,108 @@ mod tests {
 
     fn composer_with_draft_tail(prefix: &str, draft: &str) -> ChatComposer {
         composer_with_text_at_cursor(&format!("{prefix}{draft}"), prefix.len())
+    }
+
+    fn code_review_workflow() -> WorkflowCommand {
+        use std::path::PathBuf;
+
+        WorkflowCommand {
+            command: "code-review".to_string(),
+            description: "Run a code review workflow.".to_string(),
+            workflow_dir: PathBuf::from("/tmp/code-review"),
+        }
+    }
+
+    #[test]
+    fn exact_workflow_command_completion_adds_argument_boundary() {
+        use crate::bottom_pane::command_popup::CommandItem;
+        let workflow = CommandItem::Workflow(code_review_workflow());
+
+        assert_eq!(
+            selected_command_completion("/code-review", &workflow),
+            Some("/code-review ".to_string())
+        );
+        assert_eq!(
+            selected_command_completion("/code-review ", &workflow),
+            None
+        );
+    }
+
+    #[test]
+    fn exact_non_inline_command_completion_does_not_add_argument_boundary() {
+        use crate::bottom_pane::command_popup::CommandItem;
+        let model = CommandItem::Builtin(SlashCommand::Model);
+
+        assert_eq!(selected_command_completion("/model", &model), None);
+    }
+
+    #[test]
+    fn exact_builtin_inline_command_completion_does_not_add_argument_boundary() {
+        use crate::bottom_pane::command_popup::CommandItem;
+        let rename = CommandItem::Builtin(SlashCommand::Rename);
+
+        assert_eq!(selected_command_completion("/rename", &rename), None);
+    }
+
+    #[test]
+    fn tab_on_exact_workflow_command_hides_popup() {
+        let mut composer = test_composer();
+        composer.set_workflow_commands_enabled(/*enabled*/ true);
+        composer.set_workflow_commands(vec![code_review_workflow()]);
+        composer
+            .draft
+            .textarea
+            .set_text_clearing_elements("/code-review");
+        composer.draft.textarea.set_cursor("/code-review".len());
+        composer.sync_popups();
+        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
+
+        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
+
+        assert_eq!(composer.draft.textarea.text(), "/code-review ");
+        assert!(matches!(composer.popups.active, ActivePopup::None));
+    }
+
+    #[test]
+    fn character_after_exact_workflow_completion_becomes_argument() {
+        let mut composer = test_composer();
+        composer.set_disable_paste_burst(/*disabled*/ true);
+        composer.set_workflow_commands_enabled(/*enabled*/ true);
+        composer.set_workflow_commands(vec![code_review_workflow()]);
+        composer
+            .draft
+            .textarea
+            .set_text_clearing_elements("/code-review");
+        composer.draft.textarea.set_cursor("/code-review".len());
+        composer.sync_popups();
+
+        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.draft.textarea.text(), "/code-review x");
+    }
+
+    #[test]
+    fn literal_tab_on_exact_workflow_command_hides_popup() {
+        let mut composer = test_composer();
+        composer.set_workflow_commands_enabled(/*enabled*/ true);
+        composer.set_workflow_commands(vec![code_review_workflow()]);
+        composer
+            .draft
+            .textarea
+            .set_text_clearing_elements("/code-review");
+        composer.draft.textarea.set_cursor("/code-review".len());
+        composer.sync_popups();
+        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('\t'), KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.draft.textarea.text(), "/code-review ");
+        assert!(matches!(composer.popups.active, ActivePopup::None));
     }
 
     #[test]
