@@ -131,6 +131,8 @@ fn save_config_resolved_fields(
     lock_config.model_provider = Some(config.model_provider_id.clone());
     lock_config.plan_mode_reasoning_effort = config.plan_mode_reasoning_effort.clone();
     lock_config.model_verbosity = config.model_verbosity;
+    lock_config.response_style = Some(config.response_style);
+    lock_config.artifact_style = Some(config.artifact_style);
     lock_config.include_permissions_instructions = Some(config.include_permissions_instructions);
     lock_config.include_apps_instructions = Some(config.include_apps_instructions);
     lock_config.include_collaboration_mode_instructions =

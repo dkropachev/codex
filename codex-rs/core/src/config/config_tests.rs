@@ -34,6 +34,7 @@ use codex_config::permissions_toml::PermissionsToml;
 use codex_config::permissions_toml::WorkspaceRootsToml;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
+use codex_config::types::ArtifactStyle;
 use codex_config::types::BundledSkillsConfig;
 use codex_config::types::FeedbackConfigToml;
 use codex_config::types::HistoryPersistence;
@@ -50,6 +51,7 @@ use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
+use codex_config::types::ResponseStyle;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SessionPickerViewMode;
 use codex_config::types::SkillsConfig;
@@ -3604,6 +3606,53 @@ async fn runtime_config_resolves_session_picker_view_default_and_override() {
         cfg.tui_session_picker_view,
         SessionPickerViewMode::Comfortable
     );
+}
+
+#[tokio::test]
+async fn runtime_config_resolves_response_and_artifact_style_defaults() {
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load default config");
+
+    assert_eq!(cfg.response_style, ResponseStyle::Normal);
+    assert_eq!(cfg.artifact_style, ArtifactStyle::Normal);
+}
+
+#[test]
+fn response_and_artifact_style_load_from_toml() {
+    let toml = r#"
+response_style = "terse"
+artifact_style = "follow_response"
+"#;
+
+    let cfg: ConfigToml = toml::from_str(toml).expect("TOML deserialization should succeed");
+
+    assert_eq!(cfg.response_style, Some(ResponseStyle::Terse));
+    assert_eq!(cfg.artifact_style, Some(ArtifactStyle::FollowResponse));
+}
+
+#[test]
+fn invalid_response_style_fails_clearly() {
+    let err = toml::from_str::<ConfigToml>(r#"response_style = "brief""#)
+        .expect_err("invalid response style should fail");
+    let message = err.to_string();
+
+    assert!(message.contains("response_style"));
+    assert!(message.contains("brief"));
+}
+
+#[test]
+fn invalid_artifact_style_fails_clearly() {
+    let err = toml::from_str::<ConfigToml>(r#"artifact_style = "terse""#)
+        .expect_err("invalid artifact style should fail");
+    let message = err.to_string();
+
+    assert!(message.contains("artifact_style"));
+    assert!(message.contains("terse"));
 }
 
 #[tokio::test]

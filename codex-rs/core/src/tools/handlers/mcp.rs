@@ -16,8 +16,12 @@ use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolTelemetryTags;
 use codex_mcp::ToolInfo;
+use codex_tools::JsonSchema;
+use codex_tools::JsonSchemaPrimitiveType;
+use codex_tools::JsonSchemaType;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSearchSourceInfo;
@@ -225,7 +229,8 @@ impl CoreToolRuntime for McpHandler {
 
 fn create_tool_spec(tool_info: &ToolInfo) -> Result<ToolSpec, serde_json::Error> {
     let tool_name = tool_info.canonical_tool_name();
-    let tool = mcp_tool_to_responses_api_tool(&tool_name, &tool_info.tool)?;
+    let mut tool = mcp_tool_to_responses_api_tool(&tool_name, &tool_info.tool)?;
+    add_artifact_style_guidance(tool_info, &mut tool);
     let description = tool_info
         .namespace_description
         .as_deref()
@@ -247,6 +252,107 @@ fn create_tool_spec(tool_info: &ToolInfo) -> Result<ToolSpec, serde_json::Error>
         description,
         tools: vec![ResponsesApiNamespaceTool::Function(tool)],
     }))
+}
+
+const ARTIFACT_FIELD_STYLE_GUIDANCE: &str = "Write generated commit, pull request, issue, or review prose in normal style with complete detail, even when ordinary responses are terse.";
+
+fn add_artifact_style_guidance(tool_info: &ToolInfo, tool: &mut ResponsesApiTool) {
+    if !is_artifact_style_guidance_tool(tool_info) {
+        return;
+    }
+
+    add_artifact_style_guidance_to_schema(&mut tool.parameters);
+}
+
+fn is_artifact_style_guidance_tool(tool_info: &ToolInfo) -> bool {
+    let tool_name = tool_info.tool.name.to_ascii_lowercase();
+    let server_name = tool_info.server_name.to_ascii_lowercase();
+    let connector_name = tool_info
+        .connector_name
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    [
+        "github",
+        "pull_request",
+        "pull request",
+        "review",
+        "commit",
+        "issue",
+    ]
+    .into_iter()
+    .any(|marker| {
+        tool_name.contains(marker)
+            || server_name.contains(marker)
+            || connector_name.contains(marker)
+    })
+}
+
+fn add_artifact_style_guidance_to_schema(schema: &mut JsonSchema) {
+    if let Some(properties) = schema.properties.as_mut() {
+        for (field_name, property) in properties {
+            if is_artifact_text_field(field_name, property) {
+                append_artifact_style_guidance(&mut property.description);
+            }
+            add_artifact_style_guidance_to_schema(property);
+        }
+    }
+
+    if let Some(items) = schema.items.as_mut() {
+        add_artifact_style_guidance_to_schema(items);
+    }
+    for variants in [
+        schema.any_of.as_mut(),
+        schema.one_of.as_mut(),
+        schema.all_of.as_mut(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        for variant in variants {
+            add_artifact_style_guidance_to_schema(variant);
+        }
+    }
+}
+
+fn is_artifact_text_field(field_name: &str, schema: &JsonSchema) -> bool {
+    is_string_schema(schema)
+        && matches!(
+            field_name,
+            "body"
+                | "message"
+                | "commit_message"
+                | "commit_title"
+                | "title"
+                | "description"
+                | "review"
+                | "summary"
+        )
+}
+
+fn is_string_schema(schema: &JsonSchema) -> bool {
+    match schema.schema_type.as_ref() {
+        Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::String)) => true,
+        Some(JsonSchemaType::Multiple(types)) => types.contains(&JsonSchemaPrimitiveType::String),
+        Some(JsonSchemaType::Single(_)) | None => false,
+    }
+}
+
+fn append_artifact_style_guidance(description: &mut Option<String>) {
+    match description {
+        Some(description) if description.contains(ARTIFACT_FIELD_STYLE_GUIDANCE) => {}
+        Some(description) if description.trim().is_empty() => {
+            *description = ARTIFACT_FIELD_STYLE_GUIDANCE.to_string();
+        }
+        Some(description) => {
+            description.push(' ');
+            description.push_str(ARTIFACT_FIELD_STYLE_GUIDANCE);
+        }
+        None => {
+            *description = Some(ARTIFACT_FIELD_STYLE_GUIDANCE.to_string());
+        }
+    }
 }
 
 fn mcp_hook_tool_input(raw_arguments: &str) -> Value {
@@ -512,6 +618,54 @@ mod tests {
                 .expect("MCP tool spec should build")
                 .supports_parallel_tool_calls()
         );
+    }
+
+    #[test]
+    fn mcp_artifact_tool_adds_normal_style_guidance_to_artifact_fields() {
+        let mut info = tool_info("github", "mcp__github", "create_pull_request");
+        info.tool = rmcp::model::Tool::new_with_raw(
+            "create_pull_request".to_string(),
+            None,
+            Arc::new(rmcp::model::object(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "body": {
+                        "type": "string",
+                        "description": "PR body."
+                    },
+                    "message": {
+                        "type": "string"
+                    },
+                    "count": {
+                        "type": "integer"
+                    }
+                }
+            }))),
+        );
+
+        let handler = McpHandler::new(info).expect("MCP tool spec should build");
+        let ToolSpec::Namespace(namespace) = handler.spec() else {
+            panic!("MCP handler should expose a namespace tool");
+        };
+        let ResponsesApiNamespaceTool::Function(tool) = &namespace.tools[0];
+        let properties = tool
+            .parameters
+            .properties
+            .as_ref()
+            .expect("properties should be preserved");
+
+        assert!(
+            properties["body"]
+                .description
+                .as_deref()
+                .expect("body should have a description")
+                .contains(ARTIFACT_FIELD_STYLE_GUIDANCE)
+        );
+        assert_eq!(
+            properties["message"].description.as_deref(),
+            Some(ARTIFACT_FIELD_STYLE_GUIDANCE)
+        );
+        assert_eq!(properties["count"].description, None);
     }
 
     fn tool_info(server_name: &str, callable_namespace: &str, tool_name: &str) -> ToolInfo {

@@ -1,5 +1,6 @@
 pub use codex_api::ResponseEvent;
 use codex_config::types::Personality;
+use codex_protocol::config_types::Verbosity;
 use codex_protocol::error::Result;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
@@ -36,6 +37,10 @@ pub struct Prompt {
 
     /// Whether the Responses API should strictly validate `output_schema`.
     pub output_schema_strict: bool,
+
+    /// Optional per-turn verbosity control for models that support Responses
+    /// API `text.verbosity`.
+    pub verbosity: Option<Verbosity>,
 }
 
 impl Default for Prompt {
@@ -48,6 +53,7 @@ impl Default for Prompt {
             personality: None,
             output_schema: None,
             output_schema_strict: true,
+            verbosity: None,
         }
     }
 }

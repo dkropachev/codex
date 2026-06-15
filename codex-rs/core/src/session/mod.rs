@@ -28,6 +28,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
+use crate::context::TerseResponseStyleInstructions;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use crate::exec_policy::ExecPolicyManager;
@@ -2840,6 +2841,9 @@ impl Session {
                 developer_sections
                     .push(PersonalitySpecInstructions::new(personality_message).render());
             }
+        }
+        if turn_context.terse_response_style_enabled() {
+            developer_sections.push(TerseResponseStyleInstructions.render());
         }
         if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;

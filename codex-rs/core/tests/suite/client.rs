@@ -1,5 +1,7 @@
 use codex_config::ConfigLayerStack;
+use codex_config::types::ArtifactStyle;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_config::types::ResponseStyle;
 use codex_core::LoadedAgentsMd;
 use codex_core::ModelClient;
 use codex_core::NewThread;
@@ -40,6 +42,7 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -111,6 +114,57 @@ fn message_input_text_contains(request: &ResponsesRequest, role: &str, needle: &
         .message_input_texts(role)
         .iter()
         .any(|text| text.contains(needle))
+}
+
+fn request_text_verbosity(request_body: &serde_json::Value) -> Option<&str> {
+    request_body
+        .get("text")
+        .and_then(|text| text.get("verbosity"))
+        .and_then(|verbosity| verbosity.as_str())
+}
+
+fn model_catalog_with_verbosity_model(model_slug: &str) -> ModelsResponse {
+    let model_catalog = bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    let mut model = model_catalog
+        .models
+        .into_iter()
+        .find(|model| model.slug == "gpt-5.4")
+        .unwrap_or_else(|| panic!("gpt-5.4 exists in bundled models.json"));
+    model.slug = model_slug.to_string();
+    model.display_name = model_slug.to_string();
+    model.support_verbosity = true;
+    model.default_verbosity = None;
+
+    ModelsResponse {
+        models: vec![model],
+    }
+}
+
+fn user_text_input(text: &str, final_output_json_schema: Option<serde_json::Value>) -> Op {
+    Op::UserInput {
+        items: vec![UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }],
+        final_output_json_schema,
+        responsesapi_client_metadata: None,
+        additional_context: Default::default(),
+        thread_settings: Default::default(),
+    }
+}
+
+fn response_style_artifact_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "summary": {
+                "type": "string"
+            }
+        },
+        "required": ["summary"],
+        "additionalProperties": false
+    })
 }
 
 /// Writes an `auth.json` into the provided `codex_home` with the specified parameters.
@@ -385,19 +439,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     assert_eq!(initial_json, expected_initial_json);
 
     // 2) Submit new input; the request body must include the prior items, then initial context, then new user input.
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
-        .await
-        .unwrap();
+    codex.submit(user_text_input("hello", None)).await.unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
@@ -753,19 +795,7 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
     let expected_session_id = test.session_configured.session_id;
     let expected_thread_id = test.session_configured.thread_id;
 
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
-        .await
-        .unwrap();
+    codex.submit(user_text_input("hello", None)).await.unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
@@ -905,7 +935,6 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         provider,
         SessionSource::Exec,
         /*parent_thread_id*/ None,
-        config.model_verbosity,
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
@@ -2233,6 +2262,195 @@ async fn configured_verbosity_is_sent() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn default_response_style_omits_terse_prompt_and_forced_verbosity() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let model_slug = "test-response-style-default";
+    let model_catalog = model_catalog_with_verbosity_model(model_slug);
+    let TestCodex { codex, .. } = test_codex()
+        .with_model(model_slug)
+        .with_config(move |config| {
+            config.model_catalog = Some(model_catalog);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert!(!message_input_text_contains(
+        &request,
+        "developer",
+        "<response_style>"
+    ));
+    assert_eq!(request_text_verbosity(&request_body), None);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terse_response_style_adds_prompt_and_low_verbosity() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let model_slug = "test-response-style-terse";
+    let model_catalog = model_catalog_with_verbosity_model(model_slug);
+    let TestCodex { codex, .. } = test_codex()
+        .with_model(model_slug)
+        .with_config(move |config| {
+            config.model_catalog = Some(model_catalog);
+            config.response_style = ResponseStyle::Terse;
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert!(message_input_text_contains(
+        &request,
+        "developer",
+        "<response_style>"
+    ));
+    assert_eq!(request_text_verbosity(&request_body), Some("low"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terse_response_style_is_suppressed_for_structured_artifacts_by_default()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let model_slug = "test-response-style-artifact-normal";
+    let model_catalog = model_catalog_with_verbosity_model(model_slug);
+    let TestCodex { codex, .. } = test_codex()
+        .with_model(model_slug)
+        .with_config(move |config| {
+            config.model_catalog = Some(model_catalog);
+            config.response_style = ResponseStyle::Terse;
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(user_text_input(
+            "write the artifact",
+            Some(response_style_artifact_schema()),
+        ))
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert!(!message_input_text_contains(
+        &request,
+        "developer",
+        "<response_style>"
+    ));
+    assert_eq!(request_text_verbosity(&request_body), None);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn artifact_style_follow_response_allows_structured_artifact_terse() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let model_slug = "test-response-style-artifact-follow";
+    let model_catalog = model_catalog_with_verbosity_model(model_slug);
+    let TestCodex { codex, .. } = test_codex()
+        .with_model(model_slug)
+        .with_config(move |config| {
+            config.model_catalog = Some(model_catalog);
+            config.response_style = ResponseStyle::Terse;
+            config.artifact_style = ArtifactStyle::FollowResponse;
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(user_text_input(
+            "write the artifact",
+            Some(response_style_artifact_schema()),
+        ))
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert!(message_input_text_contains(
+        &request,
+        "developer",
+        "<response_style>"
+    ));
+    assert_eq!(request_text_verbosity(&request_body), Some("low"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn includes_developer_instructions_message_in_request() {
     skip_if_no_network!();
     let server = MockServer::start().await;
@@ -2394,7 +2612,6 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         provider.clone(),
         SessionSource::Exec,
         /*parent_thread_id*/ None,
-        config.model_verbosity,
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,

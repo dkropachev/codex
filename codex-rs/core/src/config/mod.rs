@@ -40,6 +40,7 @@ use codex_config::loader::project_trust_key;
 use codex_config::permissions_toml::PermissionsToml;
 use codex_config::sandbox_mode_requirement_for_permission_profile;
 use codex_config::types::ApprovalsReviewer;
+use codex_config::types::ArtifactStyle;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::History;
 use codex_config::types::McpServerConfig;
@@ -49,6 +50,7 @@ use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_config::types::ResponseStyle;
 use codex_config::types::SessionPickerViewMode;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDisabledTool;
@@ -944,6 +946,12 @@ pub struct Config {
 
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
+
+    /// Preferred response length for ordinary Codex chat and status messages.
+    pub response_style: ResponseStyle,
+
+    /// Whether artifact-like generated text should follow `response_style`.
+    pub artifact_style: ArtifactStyle,
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
@@ -3588,6 +3596,8 @@ impl Config {
             model_supports_reasoning_summaries: cfg.model_supports_reasoning_summaries,
             model_catalog,
             model_verbosity: cfg.model_verbosity,
+            response_style: cfg.response_style.unwrap_or_default(),
+            artifact_style: cfg.artifact_style.unwrap_or_default(),
             chatgpt_base_url: cfg
                 .chatgpt_base_url
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),

@@ -7,6 +7,7 @@ use crate::context::PersonalitySpecInstructions;
 use crate::context::RealtimeEndInstructions;
 use crate::context::RealtimeStartInstructions;
 use crate::context::RealtimeStartWithInstructions;
+use crate::context::TerseResponseStyleInstructions;
 use crate::session::PreviousTurnSettings;
 use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
@@ -180,6 +181,11 @@ pub(crate) fn build_model_instructions_update_item(
     Some(ModelSwitchInstructions::new(model_instructions).render())
 }
 
+pub(crate) fn build_response_style_update_item(next: &TurnContext) -> Option<String> {
+    next.terse_response_style_enabled()
+        .then(|| TerseResponseStyleInstructions.render())
+}
+
 pub(crate) fn build_developer_update_item(text_sections: Vec<String>) -> Option<ResponseItem> {
     build_text_message("developer", text_sections)
 }
@@ -227,6 +233,7 @@ pub(crate) fn build_settings_update_items(
         build_collaboration_mode_update_item(previous, next),
         build_realtime_update_item(previous, previous_turn_settings, next),
         build_personality_update_item(previous, next, personality_feature_enabled),
+        build_response_style_update_item(next),
     ]
     .into_iter()
     .flatten()

@@ -74,7 +74,6 @@ use codex_otel::current_span_w3c_trace_context;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::config_types::Verbosity as VerbosityConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -178,7 +177,6 @@ struct ModelClientState {
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
     parent_thread_id: Option<ThreadId>,
-    model_verbosity: Option<VerbosityConfig>,
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
@@ -327,7 +325,6 @@ impl ModelClient {
         provider_info: ModelProviderInfo,
         session_source: SessionSource,
         parent_thread_id: Option<ThreadId>,
-        model_verbosity: Option<VerbosityConfig>,
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
@@ -351,7 +348,6 @@ impl ModelClient {
                 auth_env_telemetry,
                 session_source,
                 parent_thread_id,
-                model_verbosity,
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
@@ -389,7 +385,6 @@ impl ModelClient {
             provider_info,
             self.state.session_source.clone(),
             self.state.parent_thread_id,
-            self.state.model_verbosity,
             self.state.enable_request_compression,
             self.state.include_timing_metrics,
             self.state.beta_features_header.clone(),
@@ -806,11 +801,11 @@ impl ModelClient {
             Vec::new()
         };
         let verbosity = if model_info.support_verbosity {
-            self.state.model_verbosity.or(model_info.default_verbosity)
+            prompt.verbosity.or(model_info.default_verbosity)
         } else {
-            if self.state.model_verbosity.is_some() {
+            if prompt.verbosity.is_some() {
                 warn!(
-                    "model_verbosity is set but ignored as the model does not support verbosity: {}",
+                    "text verbosity is set but ignored as the model does not support verbosity: {}",
                     model_info.slug
                 );
             }

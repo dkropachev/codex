@@ -2074,7 +2074,6 @@ async fn websocket_harness_with_provider_options(
         provider.clone(),
         SessionSource::Exec,
         /*parent_thread_id*/ None,
-        config.model_verbosity,
         /*enable_request_compression*/ false,
         runtime_metrics_enabled,
         /*beta_features_header*/ None,
