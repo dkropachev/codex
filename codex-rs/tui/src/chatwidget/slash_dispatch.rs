@@ -14,6 +14,10 @@ use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
 use crate::goal_display::GOAL_USAGE;
+use crate::workflow_commands::WorkflowCommand;
+use crate::workflow_commands::build_workflow_shell_command;
+use crate::workflow_commands::discover_workflow_commands;
+use crate::workflow_commands::workflow_invocation_input;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -64,6 +68,22 @@ impl ChatWidget {
         self.bottom_pane.record_pending_slash_command_history();
     }
 
+    pub(super) fn handle_workflow_command_dispatch(&mut self, command: WorkflowCommand) {
+        if !self.ensure_workflow_command_allowed(&command) {
+            self.bottom_pane.record_pending_slash_command_history();
+            return;
+        }
+        let cwd = self.workflow_invocation_cwd();
+        match build_workflow_shell_command(&command, &cwd, "") {
+            Ok(shell_command) => {
+                self.submit_op(AppCommand::run_user_shell_command(shell_command));
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            Err(err) => self.add_error_message(err.message().to_string()),
+        }
+        self.bottom_pane.record_pending_slash_command_history();
+    }
+
     /// Dispatch an inline slash command and record its staged local-history entry.
     ///
     /// Inline command arguments may later be prepared through the normal submission pipeline, but
@@ -76,6 +96,40 @@ impl ChatWidget {
         text_elements: Vec<TextElement>,
     ) {
         self.dispatch_command_with_args(cmd, args, text_elements);
+        self.bottom_pane.record_pending_slash_command_history();
+    }
+
+    pub(super) fn handle_workflow_command_with_args_dispatch(
+        &mut self,
+        command: WorkflowCommand,
+        args: String,
+        text_elements: Vec<TextElement>,
+    ) {
+        if !self.ensure_workflow_command_allowed(&command) {
+            self.bottom_pane.record_pending_slash_command_history();
+            return;
+        }
+
+        let cwd = self.workflow_invocation_cwd();
+        if let Err(err) = workflow_invocation_input(&cwd, &args) {
+            self.add_error_message(err.message().to_string());
+            self.bottom_pane.record_pending_slash_command_history();
+            return;
+        }
+        let Some((prepared_args, _prepared_elements)) =
+            self.prepare_live_inline_args(args, text_elements)
+        else {
+            self.bottom_pane.record_pending_slash_command_history();
+            return;
+        };
+
+        match build_workflow_shell_command(&command, &cwd, &prepared_args) {
+            Ok(shell_command) => {
+                self.submit_op(AppCommand::run_user_shell_command(shell_command));
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            Err(err) => self.add_error_message(err.message().to_string()),
+        }
         self.bottom_pane.record_pending_slash_command_history();
     }
 
@@ -924,9 +978,13 @@ impl ChatWidget {
         }
 
         let service_tier_commands = self.current_model_service_tier_commands();
-        let Some(command) =
-            find_slash_command(name, self.builtin_command_flags(), &service_tier_commands)
-        else {
+        let workflow_commands = self.current_workflow_commands();
+        let Some(command) = find_slash_command(
+            name,
+            self.builtin_command_flags(),
+            &service_tier_commands,
+            &workflow_commands,
+        ) else {
             self.add_info_message(
                 format!(
                     r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
@@ -946,6 +1004,10 @@ impl ChatWidget {
                     self.handle_service_tier_command_dispatch(command);
                     QueueDrain::Continue
                 }
+                SlashCommandItem::Workflow(command) => {
+                    self.handle_workflow_command_dispatch(command);
+                    QueueDrain::Stop
+                }
             };
         }
 
@@ -959,17 +1021,6 @@ impl ChatWidget {
             });
             return QueueDrain::Stop;
         }
-        let SlashCommandItem::Builtin(cmd) = command else {
-            self.submit_user_message(UserMessage {
-                text,
-                local_images,
-                remote_image_urls,
-                text_elements,
-                mention_bindings,
-            });
-            return QueueDrain::Stop;
-        };
-
         let trimmed_start = rest.trim_start();
         let leading_trimmed = rest.len().saturating_sub(trimmed_start.len());
         let trimmed_rest = trimmed_start.trim_end();
@@ -978,23 +1029,56 @@ impl ChatWidget {
             rest_offset + leading_trimmed,
             &text_elements,
         );
-        if cmd == SlashCommand::Goal
-            && !self.goal_objective_is_allowed(trimmed_rest, GoalObjectiveValidationSource::Queued)
-        {
-            return QueueDrain::Continue;
+        match command {
+            SlashCommandItem::Builtin(cmd) => {
+                if cmd == SlashCommand::Goal
+                    && !self.goal_objective_is_allowed(
+                        trimmed_rest,
+                        GoalObjectiveValidationSource::Queued,
+                    )
+                {
+                    return QueueDrain::Continue;
+                }
+                self.dispatch_prepared_command_with_args(
+                    cmd,
+                    PreparedSlashCommandArgs {
+                        args: trimmed_rest.to_string(),
+                        text_elements: args_elements,
+                        local_images,
+                        remote_image_urls,
+                        mention_bindings,
+                        source: SlashCommandDispatchSource::Queued,
+                    },
+                );
+                self.queued_command_drain_result(cmd)
+            }
+            SlashCommandItem::Workflow(command) => {
+                if !self.ensure_workflow_command_allowed(&command) {
+                    return QueueDrain::Continue;
+                }
+                let cwd = self.workflow_invocation_cwd();
+                match build_workflow_shell_command(&command, &cwd, trimmed_rest) {
+                    Ok(shell_command) => {
+                        self.submit_op(AppCommand::run_user_shell_command(shell_command));
+                        QueueDrain::Stop
+                    }
+                    Err(err) => {
+                        self.add_error_message(err.message().to_string());
+                        QueueDrain::Continue
+                    }
+                }
+            }
+            SlashCommandItem::ServiceTier(_) => {
+                self.submit_user_message(UserMessage {
+                    text,
+                    local_images,
+                    remote_image_urls,
+                    text_elements,
+                    mention_bindings,
+                });
+                QueueDrain::Stop
+            }
         }
-        self.dispatch_prepared_command_with_args(
-            cmd,
-            PreparedSlashCommandArgs {
-                args: trimmed_rest.to_string(),
-                text_elements: args_elements,
-                local_images,
-                remote_image_urls,
-                mention_bindings,
-                source: SlashCommandDispatchSource::Queued,
-            },
-        );
-        self.queued_command_drain_result(cmd)
     }
 
     fn builtin_command_flags(&self) -> BuiltinCommandFlags {
@@ -1012,12 +1096,30 @@ impl ChatWidget {
             plugins_command_enabled: self.config.features.enabled(Feature::Plugins),
             goal_command_enabled: self.config.features.enabled(Feature::Goals),
             service_tier_commands_enabled: self.fast_mode_enabled(),
+            workflow_commands_enabled: self.config.features.enabled(Feature::Workflows),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
             realtime_conversation_enabled: self.realtime_conversation_enabled(),
             audio_device_selection_enabled: self.realtime_audio_device_selection_enabled(),
             allow_elevate_sandbox,
             side_conversation_active: self.active_side_conversation,
         }
+    }
+
+    pub(super) fn sync_workflow_commands(&mut self) {
+        self.bottom_pane
+            .set_workflow_commands_enabled(self.config.features.enabled(Feature::Workflows));
+        self.bottom_pane
+            .set_workflow_commands(self.current_workflow_commands());
+    }
+
+    fn current_workflow_commands(&self) -> Vec<WorkflowCommand> {
+        discover_workflow_commands(&self.config.codex_home, &self.config.cwd)
+    }
+
+    fn workflow_invocation_cwd(&self) -> PathBuf {
+        self.current_cwd
+            .clone()
+            .unwrap_or_else(|| self.config.cwd.to_path_buf())
     }
 
     fn queued_command_drain_result(&self, cmd: SlashCommand) -> QueueDrain {
@@ -1106,6 +1208,28 @@ impl ChatWidget {
                 (start < end).then_some(elem.map_range(|_| ByteRange { start, end }))
             })
             .collect()
+    }
+
+    fn ensure_workflow_command_allowed(&mut self, command: &WorkflowCommand) -> bool {
+        if self.active_side_conversation {
+            self.add_error_message(format!(
+                "'/{}' is unavailable in side conversations. {SIDE_SLASH_COMMAND_UNAVAILABLE_HINT}",
+                command.command
+            ));
+            self.bottom_pane.drain_pending_submission_state();
+            return false;
+        }
+        if self.bottom_pane.is_task_running() {
+            let message = format!(
+                "'/{}' is disabled while a task is in progress.",
+                command.command
+            );
+            self.add_to_history(history_cell::new_error_event(message));
+            self.bottom_pane.drain_pending_submission_state();
+            self.request_redraw();
+            return false;
+        }
+        true
     }
 
     fn ensure_slash_command_allowed_in_side_conversation(&mut self, cmd: SlashCommand) -> bool {

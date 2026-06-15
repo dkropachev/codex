@@ -32,6 +32,7 @@ use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
+use crate::workflow_commands::WorkflowCommand;
 pub(crate) use bottom_pane_view::BottomPaneView;
 pub(crate) use bottom_pane_view::ViewCompletion;
 use codex_app_server_protocol::ToolRequestUserInputParams;
@@ -419,6 +420,16 @@ impl BottomPane {
 
     pub fn set_service_tier_commands(&mut self, commands: Vec<ServiceTierCommand>) {
         self.composer.set_service_tier_commands(commands);
+        self.request_redraw();
+    }
+
+    pub fn set_workflow_commands_enabled(&mut self, enabled: bool) {
+        self.composer.set_workflow_commands_enabled(enabled);
+        self.request_redraw();
+    }
+
+    pub fn set_workflow_commands(&mut self, commands: Vec<WorkflowCommand>) {
+        self.composer.set_workflow_commands(commands);
         self.request_redraw();
     }
 
