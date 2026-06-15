@@ -636,6 +636,7 @@ mod tests {
         use std::path::PathBuf;
 
         WorkflowCommand {
+            id: "code-review".to_string(),
             command: "code-review".to_string(),
             description: "Run a code review workflow.".to_string(),
             workflow_dir: PathBuf::from("/tmp/code-review"),

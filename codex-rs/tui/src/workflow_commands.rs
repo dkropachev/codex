@@ -10,6 +10,7 @@ const MAX_WORKFLOW_YAML_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkflowCommand {
+    pub id: String,
     pub command: String,
     pub description: String,
     pub workflow_dir: PathBuf,
@@ -79,7 +80,15 @@ fn discover_workflow_commands_in_root(
     workflows_root: &Path,
     commands: &mut BTreeMap<String, WorkflowCommand>,
 ) {
-    let Ok(entries) = fs::read_dir(workflows_root) else {
+    discover_workflow_commands_in_dir(workflows_root, workflows_root, commands);
+}
+
+fn discover_workflow_commands_in_dir(
+    workflows_root: &Path,
+    dir: &Path,
+    commands: &mut BTreeMap<String, WorkflowCommand>,
+) {
+    let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
@@ -89,23 +98,34 @@ fn discover_workflow_commands_in_root(
         if !file_type.is_dir() {
             continue;
         }
-        if let Some(command) = load_workflow_command(&entry.path()) {
-            commands.insert(command.command.clone(), command);
+        let workflow_dir = entry.path();
+        if let Some(command) = load_workflow_command(workflows_root, &workflow_dir) {
+            commands.insert(command.id.clone(), command);
         }
+        discover_workflow_commands_in_dir(workflows_root, &workflow_dir, commands);
     }
 }
 
-fn load_workflow_command(workflow_dir: &Path) -> Option<WorkflowCommand> {
+fn load_workflow_command(workflows_root: &Path, workflow_dir: &Path) -> Option<WorkflowCommand> {
     let workflow_yaml = workflow_dir.join("workflow.yaml");
     let metadata = fs::metadata(&workflow_yaml).ok()?;
     if metadata.len() > MAX_WORKFLOW_YAML_BYTES {
         return None;
     }
     let contents = fs::read_to_string(workflow_yaml).ok()?;
-    parse_workflow_metadata(&contents, workflow_dir)
+    let fallback_id = workflow_dir
+        .strip_prefix(workflows_root)
+        .ok()
+        .and_then(normalize_workflow_id_path)?;
+    parse_workflow_metadata(&contents, workflow_dir, &fallback_id)
 }
 
-fn parse_workflow_metadata(contents: &str, workflow_dir: &Path) -> Option<WorkflowCommand> {
+fn parse_workflow_metadata(
+    contents: &str,
+    workflow_dir: &Path,
+    fallback_id: &str,
+) -> Option<WorkflowCommand> {
+    let mut id = None;
     let mut command = None;
     let mut title = None;
     let mut user_description = None;
@@ -125,6 +145,7 @@ fn parse_workflow_metadata(contents: &str, workflow_dir: &Path) -> Option<Workfl
             continue;
         };
         match key.trim() {
+            "id" => id = Some(value),
             "command" => command = Some(value),
             "title" => title = Some(value),
             "userDescription" => user_description = Some(value),
@@ -132,6 +153,8 @@ fn parse_workflow_metadata(contents: &str, workflow_dir: &Path) -> Option<Workfl
         }
     }
 
+    let id = id.unwrap_or_else(|| fallback_id.to_string());
+    normalize_workflow_id(&id)?;
     let command = command?;
     if !is_valid_workflow_command(&command) {
         return None;
@@ -140,6 +163,7 @@ fn parse_workflow_metadata(contents: &str, workflow_dir: &Path) -> Option<Workfl
         .or(title)
         .unwrap_or_else(|| "Workflow command".to_string());
     Some(WorkflowCommand {
+        id,
         command,
         description,
         workflow_dir: workflow_dir.to_path_buf(),
@@ -199,6 +223,40 @@ fn is_valid_workflow_command(command: &str) -> bool {
         && command
             .chars()
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_'))
+}
+
+fn normalize_workflow_id_path(path: &Path) -> Option<String> {
+    let mut components = Vec::new();
+    for component in path.components() {
+        let std::path::Component::Normal(component) = component else {
+            return None;
+        };
+        components.push(component.to_str()?.to_string());
+    }
+    let id = components.join("/");
+    normalize_workflow_id(&id)
+}
+
+fn normalize_workflow_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.contains('\\') {
+        return None;
+    }
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return None;
+    }
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(component) => {
+                components.push(component.to_str()?.to_string());
+            }
+            std::path::Component::CurDir | std::path::Component::ParentDir => return None,
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => return None,
+        }
+    }
+    (!components.is_empty()).then(|| components.join("/"))
 }
 
 fn parse_workflow_args(tokens: &[String]) -> Result<Map<String, Value>, WorkflowInvocationError> {

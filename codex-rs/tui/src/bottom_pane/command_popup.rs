@@ -396,6 +396,7 @@ mod tests {
     #[test]
     fn workflow_command_uses_manifest_name_and_description() {
         let workflow = WorkflowCommand {
+            id: "code-review".to_string(),
             command: "code-review".to_string(),
             description: "Run a code review workflow.".to_string(),
             workflow_dir: PathBuf::from("/tmp/code-review"),
@@ -435,6 +436,7 @@ mod tests {
             CommandPopupFlags::default(),
             Vec::new(),
             vec![WorkflowCommand {
+                id: "code-review".to_string(),
                 command: "code-review".to_string(),
                 description: "Run a code review workflow.".to_string(),
                 workflow_dir: PathBuf::from("/tmp/code-review"),

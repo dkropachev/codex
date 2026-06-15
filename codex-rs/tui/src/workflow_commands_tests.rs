@@ -40,11 +40,13 @@ userDescription: Build a project report.
         commands,
         vec![
             WorkflowCommand {
+                id: "code-review".to_string(),
                 command: "code-review".to_string(),
                 description: "Run a code review workflow.".to_string(),
                 workflow_dir: home_dir,
             },
             WorkflowCommand {
+                id: "report".to_string(),
                 command: "report".to_string(),
                 description: "Build a project report.".to_string(),
                 workflow_dir: project_dir,
@@ -74,9 +76,34 @@ fn project_workflow_overrides_home_command_name() {
     assert_eq!(
         commands,
         vec![WorkflowCommand {
+            id: "review".to_string(),
             command: "review".to_string(),
             description: "Project review".to_string(),
             workflow_dir: project_dir,
+        }]
+    );
+}
+
+#[test]
+fn discovers_nested_workflow_ids() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let codex_home = temp.path().join("home");
+    let cwd = temp.path().join("project");
+    let workflow_dir = write_workflow(
+        &codex_home.join("workflows").join("review"),
+        "fix",
+        "id: review/fix\ncommand: code-review\nuserDescription: Review fix\n",
+    );
+
+    let commands = discover_workflow_commands(&codex_home, &cwd);
+
+    assert_eq!(
+        commands,
+        vec![WorkflowCommand {
+            id: "review/fix".to_string(),
+            command: "code-review".to_string(),
+            description: "Review fix".to_string(),
+            workflow_dir,
         }]
     );
 }
@@ -175,6 +202,7 @@ fn rejects_malformed_workflow_args() {
 #[test]
 fn builds_shell_command_for_workflow_directory() {
     let command = WorkflowCommand {
+        id: "code-review".to_string(),
         command: "code-review".to_string(),
         description: "Run review".to_string(),
         workflow_dir: PathBuf::from("/tmp/codex home/workflows/code-review"),
