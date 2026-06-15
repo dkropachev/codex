@@ -207,6 +207,20 @@ impl<'a> SlashInput<'a> {
             self.workflow_commands,
         )
     }
+
+    fn exact_workflow_boundary_completion(&self, first_line: &str) -> Option<String> {
+        if !self.enabled || self.is_bash_mode {
+            return None;
+        }
+        let (name, rest, _rest_offset) = parse_slash_name(first_line.trim_start())?;
+        if !rest.is_empty() || name.contains('/') {
+            return None;
+        }
+        self.workflow_commands
+            .iter()
+            .any(|command| command.command == name)
+            .then(|| format!("/{name} "))
+    }
 }
 
 pub(super) fn queued_input_action(
@@ -291,7 +305,23 @@ impl ChatComposer {
                 let filter_text = command_popup_filter_text(&first_line, cursor)
                     .unwrap_or_else(|| first_line.clone());
                 popup.on_composer_text_change(filter_text);
-                if let Some(selected_cmd) = popup.selected_item() {
+                let option_value = popup.unique_workflow_option_value_completion();
+                let option_name = popup.unique_workflow_option_name_completion();
+                let selected_cmd = popup.selected_item();
+                let exact_workflow_boundary_completion = self
+                    .slash_input()
+                    .exact_workflow_boundary_completion(&first_line);
+                if let Some(option_value) = option_value
+                    && self.replace_workflow_command_current_argument_token(&option_value)
+                {
+                    return (InputResult::None, true);
+                }
+                if let Some(option_name) = option_name
+                    && self.replace_workflow_command_current_argument_token(&option_name)
+                {
+                    return (InputResult::None, true);
+                }
+                if let Some(selected_cmd) = selected_cmd {
                     if selected_command_dispatches_immediately_on_tab(&selected_cmd)
                         && let CommandItem::Builtin(cmd) = &selected_cmd
                     {
@@ -322,6 +352,13 @@ impl ChatComposer {
                         }
                         return (InputResult::None, true);
                     }
+                }
+                if let Some(completed_text) = exact_workflow_boundary_completion {
+                    self.draft
+                        .textarea
+                        .set_text_clearing_elements(&completed_text);
+                    self.draft.textarea.set_cursor(completed_text.len());
+                    return (InputResult::None, true);
                 }
                 if self.is_task_running {
                     return self.handle_submission(/*should_queue*/ true);
@@ -371,7 +408,23 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                if let Some(sel) = popup.selected_item() {
+                let selected_cmd = popup.selected_item();
+                let has_inline_args = {
+                    let text = self.draft.textarea.text();
+                    let cursor = self.draft.textarea.cursor();
+                    self.slash_input()
+                        .inline_command(text)
+                        .is_some_and(|command| {
+                            !command.rest.trim().is_empty()
+                                && cursor > command.command.command().len()
+                        })
+                };
+                if has_inline_args && let Some(result) = self.try_dispatch_slash_command_with_args()
+                {
+                    return (result, true);
+                }
+
+                if let Some(sel) = selected_cmd {
                     if self
                         .complete_selected_slash_command_preserving_existing_draft_tail_as_inline_args(
                             &sel,
@@ -391,6 +444,7 @@ impl ChatComposer {
                                 InputResult::ServiceTierCommand(command)
                             }
                             CommandItem::Workflow(command) => InputResult::WorkflowCommand(command),
+                            CommandItem::WorkflowOption(_) => InputResult::None,
                         },
                         true,
                     );
@@ -411,6 +465,7 @@ impl ChatComposer {
             CommandItem::Builtin(cmd) => cmd.supports_inline_args(),
             CommandItem::ServiceTier(_) => false,
             CommandItem::Workflow(_) => true,
+            CommandItem::WorkflowOption(_) => false,
         };
         if !supports_inline_args {
             return false;
@@ -429,6 +484,18 @@ impl ChatComposer {
             .unwrap_or(first_line_end);
         let typed_command_name = &text[1..command_token_end];
         let rest_after_token_is_empty = text[command_token_end..].trim().is_empty();
+        if matches!(selected_cmd, CommandItem::Workflow(_))
+            && typed_command_name.starts_with(command_name)
+            && typed_command_name != command_name
+        {
+            return false;
+        }
+        if typed_command_name == command_name
+            && !rest_after_token_is_empty
+            && cursor >= command_token_end
+        {
+            return false;
+        }
         if rest_after_token_is_empty && (cursor <= 1 || cursor >= command_token_end) {
             return false;
         }
@@ -467,6 +534,39 @@ impl ChatComposer {
         self.draft
             .textarea
             .set_cursor(self.draft.textarea.text().len());
+        true
+    }
+
+    fn replace_workflow_command_current_argument_token(&mut self, option_name: &str) -> bool {
+        let text = self.draft.textarea.text().to_string();
+        let first_line_end = text.find('\n').unwrap_or(text.len());
+        let cursor = self.draft.textarea.cursor();
+        if cursor != first_line_end {
+            return false;
+        }
+        let first_line = &text[..first_line_end];
+        let Some((_name, rest_after_name, rest_offset)) = parse_slash_name(first_line) else {
+            return false;
+        };
+        let (token_start_in_rest, current_token) = rest_after_name
+            .char_indices()
+            .rev()
+            .find_map(|(idx, ch)| {
+                ch.is_whitespace()
+                    .then(|| (idx + ch.len_utf8(), &rest_after_name[idx + ch.len_utf8()..]))
+            })
+            .unwrap_or((0, rest_after_name));
+        if current_token.is_empty() || !option_name.starts_with(current_token) {
+            return false;
+        }
+
+        let token_start = rest_offset + token_start_in_rest;
+        let inserted = format!("{option_name} ");
+        self.draft
+            .textarea
+            .replace_range(token_start..first_line_end, &inserted);
+        self.draft.textarea.set_cursor(token_start + inserted.len());
+        self.draft.is_bash_mode = false;
         true
     }
 
@@ -639,7 +739,26 @@ mod tests {
             id: "code-review".to_string(),
             command: "code-review".to_string(),
             description: "Run a code review workflow.".to_string(),
+            option_hints: Vec::new(),
             workflow_dir: PathBuf::from("/tmp/code-review"),
+        }
+    }
+
+    fn code_review_workflow_with_option_hints() -> WorkflowCommand {
+        use crate::workflow_commands::WorkflowCommandOptionHint;
+
+        WorkflowCommand {
+            option_hints: vec![
+                WorkflowCommandOptionHint {
+                    display: "--action <review|list-reports>".to_string(),
+                    description: Some("Run mode.".to_string()),
+                },
+                WorkflowCommandOptionHint {
+                    display: "--allowed-areas <Test|Code>".to_string(),
+                    description: Some("Allowed areas.".to_string()),
+                },
+            ],
+            ..code_review_workflow()
         }
     }
 
@@ -694,6 +813,25 @@ mod tests {
     }
 
     #[test]
+    fn tab_on_exact_workflow_command_with_option_hints_adds_argument_boundary() {
+        let mut composer = test_composer();
+        composer.set_workflow_commands_enabled(/*enabled*/ true);
+        composer.set_workflow_commands(vec![code_review_workflow_with_option_hints()]);
+        composer
+            .draft
+            .textarea
+            .set_text_clearing_elements("/code-review");
+        composer.draft.textarea.set_cursor("/code-review".len());
+        composer.sync_popups();
+        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
+
+        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
+
+        assert_eq!(composer.draft.textarea.text(), "/code-review ");
+        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
+    }
+
+    #[test]
     fn character_after_exact_workflow_completion_becomes_argument() {
         let mut composer = test_composer();
         composer.set_disable_paste_burst(/*disabled*/ true);
@@ -712,6 +850,77 @@ mod tests {
 
         assert_eq!(result, InputResult::None);
         assert_eq!(composer.draft.textarea.text(), "/code-review x");
+    }
+
+    #[test]
+    fn workflow_argument_popup_completes_unique_option_name_prefix() {
+        let mut composer = test_composer();
+        composer.set_workflow_commands_enabled(/*enabled*/ true);
+        composer.set_workflow_commands(vec![code_review_workflow_with_option_hints()]);
+        composer
+            .draft
+            .textarea
+            .set_text_clearing_elements("/code-review --acti");
+        composer
+            .draft
+            .textarea
+            .set_cursor("/code-review --acti".len());
+        composer.sync_popups();
+        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
+
+        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
+
+        assert_eq!(composer.draft.textarea.text(), "/code-review --action ");
+    }
+
+    #[test]
+    fn workflow_argument_popup_completes_unique_option_value_prefix() {
+        let mut composer = test_composer();
+        composer.set_workflow_commands_enabled(/*enabled*/ true);
+        composer.set_workflow_commands(vec![code_review_workflow_with_option_hints()]);
+        composer
+            .draft
+            .textarea
+            .set_text_clearing_elements("/code-review --action li");
+        composer
+            .draft
+            .textarea
+            .set_cursor("/code-review --action li".len());
+        composer.sync_popups();
+        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
+
+        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
+
+        assert_eq!(
+            composer.draft.textarea.text(),
+            "/code-review --action list-reports "
+        );
+    }
+
+    #[test]
+    fn workflow_argument_enter_dispatches_with_args_while_popup_is_open() {
+        let mut composer = test_composer();
+        composer.set_workflow_commands_enabled(/*enabled*/ true);
+        composer.set_workflow_commands(vec![code_review_workflow_with_option_hints()]);
+        composer
+            .draft
+            .textarea
+            .set_text_clearing_elements("/code-review --action list-reports");
+        composer
+            .draft
+            .textarea
+            .set_cursor("/code-review --action list-reports".len());
+        composer.sync_popups();
+        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
+
+        assert_eq!(
+            press(&mut composer, KeyCode::Enter),
+            InputResult::WorkflowCommandWithArgs(
+                code_review_workflow_with_option_hints(),
+                "--action list-reports".to_string(),
+                Vec::new(),
+            )
+        );
     }
 
     #[test]

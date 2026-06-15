@@ -43,7 +43,6 @@ enum ParsedWorkflowCommand {
     },
     Fix {
         target: String,
-        args: Vec<String>,
     },
     Recover {
         target: String,
@@ -106,6 +105,12 @@ struct WorkflowDevelopRequest {
     location: Option<WorkflowDevelopLocation>,
 }
 
+#[derive(Debug)]
+struct RepairWorkflowTarget {
+    id: String,
+    workflow_dir: PathBuf,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum WorkflowDevelopLocation {
     Project,
@@ -135,7 +140,6 @@ impl From<&WorkflowCommand> for JsonWorkflowCommand {
 #[derive(Debug, Clone, Copy)]
 enum WorkflowAction {
     Run,
-    Fix,
     Recover,
 }
 
@@ -143,8 +147,7 @@ impl WorkflowAction {
     fn input_action(self) -> Option<&'static str> {
         match self {
             WorkflowAction::Run => None,
-            WorkflowAction::Fix => Some("fix"),
-            WorkflowAction::Recover => Some("recover"),
+            WorkflowAction::Recover => Some("resume"),
         }
     }
 }
@@ -168,14 +171,7 @@ pub fn run(cli: WorkflowCli, config: &Config) -> anyhow::Result<()> {
             config,
             &commands,
         ),
-        ParsedWorkflowCommand::Fix { target, args } => run_workflow(
-            target,
-            args,
-            WorkflowInvocationKind::Explicit,
-            WorkflowAction::Fix,
-            config,
-            &commands,
-        ),
+        ParsedWorkflowCommand::Fix { target } => repair_workflow(&target, config, &commands),
         ParsedWorkflowCommand::Recover { target, args } => run_workflow(
             target,
             args,
@@ -240,10 +236,13 @@ fn parse_workflow_command(
             target: required(args, /*index*/ 1, "edit", "a workflow id")?.to_string(),
             instruction: joined_tail(args, /*start*/ 2, "edit", "an instruction")?,
         }),
-        "repair" | "fix" => Ok(ParsedWorkflowCommand::Fix {
-            target: required(args, /*index*/ 1, command, "a workflow id")?.to_string(),
-            args: args.get(2..).unwrap_or_default().to_vec(),
-        }),
+        "repair" | "fix" => {
+            let target = required(args, /*index*/ 1, command, "a workflow id")?.to_string();
+            if args.len() > 2 {
+                bail!("unexpected argument '{}'", args[2]);
+            }
+            Ok(ParsedWorkflowCommand::Fix { target })
+        }
         "recover" => Ok(ParsedWorkflowCommand::Recover {
             target: required(args, /*index*/ 1, "recover", "a workflow id")?.to_string(),
             args: args.get(2..).unwrap_or_default().to_vec(),
@@ -521,6 +520,9 @@ fn run_workflow(
         let Some(input) = input.as_object_mut() else {
             bail!("workflow input must be a JSON object");
         };
+        if let Some(failure_id) = input.remove("failureId") {
+            input.entry("reviewId".to_string()).or_insert(failure_id);
+        }
         input.insert("action".to_string(), Value::String(action.to_string()));
     }
     run_workflow_process(command, input)
@@ -543,14 +545,7 @@ fn workflow_alias_input_from_args(
 ) -> Result<Value, codex_tui::workflow_commands::WorkflowInvocationError> {
     let legacy_input = legacy_alias_input(args);
     if args.iter().any(|arg| arg.starts_with("--")) {
-        let mut input = workflow_invocation_input_from_args(cwd, args)?;
-        if !args
-            .iter()
-            .any(|arg| arg == "--input" || arg.starts_with("--input="))
-        {
-            merge_legacy_alias_input(&mut input, legacy_input);
-        }
-        return Ok(input);
+        return workflow_invocation_input_from_args(cwd, args);
     }
 
     let mut input = legacy_input;
@@ -568,17 +563,6 @@ fn legacy_alias_input(args: &[String]) -> Value {
         "argv": args,
         "text": args.join(" "),
     })
-}
-
-fn merge_legacy_alias_input(input: &mut Value, legacy_input: Value) {
-    let Some(input) = input.as_object_mut() else {
-        return;
-    };
-    if let Value::Object(legacy_input) = legacy_input {
-        for (key, value) in legacy_input {
-            input.entry(key).or_insert(value);
-        }
-    }
 }
 
 fn run_workflow_process(command: &WorkflowCommand, input: Value) -> anyhow::Result<()> {
@@ -605,18 +589,231 @@ fn run_workflow_process(command: &WorkflowCommand, input: Value) -> anyhow::Resu
 
 fn validate_workflow(target: &str, commands: &[WorkflowCommand]) -> anyhow::Result<()> {
     let command = find_workflow_command(commands, target)?;
-    let workflow_ts = command.workflow_dir.join("src").join("workflow.ts");
-    if workflow_ts.is_file() {
-        println!("{} is valid", command.id);
-        Ok(())
-    } else {
-        println!(
-            "{} is invalid: missing {}",
-            command.id,
-            workflow_ts.display()
-        );
+    if let Some(error) = workflow_validation_error(command) {
+        println!("{} is invalid: {error}", command.id);
         std::process::exit(1);
     }
+    println!("{} is valid", command.id);
+    Ok(())
+}
+
+fn repair_workflow(
+    target: &str,
+    config: &Config,
+    commands: &[WorkflowCommand],
+) -> anyhow::Result<()> {
+    let target = resolve_repair_workflow_target(target, config, commands)?;
+    println!("Repairing workflow {} with compatibility mode.", target.id);
+
+    let repairs = apply_compatibility_repairs(&target)?;
+    if repairs.is_empty() {
+        println!("No compatibility repairs were needed for {}.", target.id);
+    } else {
+        for repair in repairs {
+            println!("{repair}");
+        }
+    }
+    println!("{} repair check completed.", target.id);
+    Ok(())
+}
+
+fn workflow_validation_error(command: &WorkflowCommand) -> Option<String> {
+    let workflow_ts = command.workflow_dir.join("src").join("workflow.ts");
+    (!workflow_ts.is_file()).then(|| format!("missing {}", workflow_ts.display()))
+}
+
+fn resolve_repair_workflow_target(
+    target: &str,
+    config: &Config,
+    commands: &[WorkflowCommand],
+) -> anyhow::Result<RepairWorkflowTarget> {
+    if let Some(command) = commands
+        .iter()
+        .find(|command| command.id == target || command.command == target)
+    {
+        return Ok(RepairWorkflowTarget {
+            id: command.id.clone(),
+            workflow_dir: command.workflow_dir.clone(),
+        });
+    }
+
+    let id = normalize_workflow_id(target)?;
+    for root in repair_workflow_roots(config) {
+        let workflow_dir = workflow_path(&root, &id)?;
+        if workflow_dir.is_dir() {
+            return Ok(RepairWorkflowTarget { id, workflow_dir });
+        }
+    }
+
+    find_workflow_command(commands, target)?;
+    unreachable!("find_workflow_command returns on successful lookup only");
+}
+
+fn repair_workflow_roots(config: &Config) -> [PathBuf; 2] {
+    [
+        config.cwd.join(".codex").join("workflows").to_path_buf(),
+        config.codex_home.join("workflows").to_path_buf(),
+    ]
+}
+
+fn apply_compatibility_repairs(target: &RepairWorkflowTarget) -> anyhow::Result<Vec<String>> {
+    let mut repairs = Vec::new();
+    fs::create_dir_all(&target.workflow_dir)?;
+
+    let workflow_yaml = target.workflow_dir.join("workflow.yaml");
+    if !workflow_yaml.is_file() {
+        let command = default_command_from_id(&target.id);
+        fs::write(
+            &workflow_yaml,
+            format!(
+                "id: {}\ncommand: {}\ntitle: {}\nuserDescription: {}\n",
+                yaml_scalar(&target.id),
+                yaml_scalar(&command),
+                yaml_scalar(&title_from_id(&target.id)),
+                yaml_scalar(&format!("Workflow {}", target.id))
+            ),
+        )?;
+        repairs.push(format!("Created {}", workflow_yaml.display()));
+    }
+    if is_code_review_repair_target(target) {
+        let contents = fs::read_to_string(&workflow_yaml)
+            .with_context(|| format!("failed to read {}", workflow_yaml.display()))?;
+        let repaired = repair_code_review_workflow_metadata(&contents);
+        if repaired != contents {
+            fs::write(&workflow_yaml, repaired)?;
+            repairs.push(format!(
+                "Updated {} with code-review autocomplete metadata",
+                workflow_yaml.display()
+            ));
+        }
+    }
+
+    let workflow_ts = target.workflow_dir.join("src").join("workflow.ts");
+    if !workflow_ts.is_file() {
+        fs::create_dir_all(
+            workflow_ts
+                .parent()
+                .context("workflow source should have parent")?,
+        )?;
+        fs::write(&workflow_ts, scaffold_workflow_source())?;
+        repairs.push(format!("Created {}", workflow_ts.display()));
+    }
+
+    Ok(repairs)
+}
+
+fn is_code_review_repair_target(target: &RepairWorkflowTarget) -> bool {
+    target.id == "code-review"
+        || target
+            .workflow_dir
+            .file_name()
+            .is_some_and(|name| name == "code-review")
+}
+
+fn repair_code_review_workflow_metadata(contents: &str) -> String {
+    let mut repaired = set_top_level_yaml_scalar_if_needed(contents, "id", "code-review");
+    repaired = set_top_level_yaml_scalar_if_needed(&repaired, "command", "code-review");
+    repaired = set_top_level_yaml_scalar_if_missing(&repaired, "title", "/code-review");
+    repaired = set_top_level_yaml_scalar_if_missing(
+        &repaired,
+        "userDescription",
+        "Run a code review and repro workflow on the current branch.",
+    );
+    if !has_workflow_usage_options(&repaired) {
+        if !repaired.ends_with('\n') {
+            repaired.push('\n');
+        }
+        repaired.push_str(CODE_REVIEW_USAGE_OPTIONS_YAML);
+    }
+    repaired
+}
+
+const CODE_REVIEW_USAGE_OPTIONS_YAML: &str = r#"usage:
+  options:
+    - flag: --action
+      valueHint: <review|read-report|list-reports|incremental|resume>
+      description: Run mode: review, read-report, list-reports, incremental, or resume.
+    - flag: --working-directory
+      valueHint: <string>
+      description: Repository path or report-list directory filter.
+    - flag: --target-ref
+      valueHint: <string>
+      description: Branch or commit to review.
+    - flag: --base-ref
+      valueHint: <string>
+      description: Upstream/base reference for branch comparison.
+    - flag: --scope
+      valueHint: <branch|repo>
+      description: Review branch changes or the whole repository.
+    - flag: --review-id
+      valueHint: <string>
+      description: Existing review ID for read-report, incremental, or resume.
+    - flag: --review-model
+      valueHint: <string>
+      description: Model override for initial review agents.
+    - flag: --repro-model
+      valueHint: <string>
+      description: Model override for reproduction agents.
+    - flag: --limit
+      valueHint: <integer>
+      description: Maximum kept findings sent to reproduction.
+    - flag: --chunk-size-bytes
+      valueHint: <integer>
+      description: Maximum chunk size in bytes.
+    - flag: --module-depth
+      valueHint: <integer>
+      description: Directory depth used for chunk grouping.
+    - flag: --severity-threshold
+      valueHint: <number>
+      description: Minimum severity from 0 to 10.
+    - flag: --confidence-threshold
+      valueHint: <number>
+      description: Minimum confidence from 0 to 100.
+    - flag: --include-preexisting
+      description: Keep preexisting findings in branch scope.
+    - flag: --include-skipped-by-limit
+      description: Incremental mode also replays findings skipped by the previous limit.
+    - flag: --allowed-areas
+      valueHint: <Test|Code|Docs|Comment|Else>
+      description: Allowed finding areas.
+    - flag: --database-path
+      valueHint: <string>
+      description: SQLite audit store path.
+    - flag: --artifacts-dir
+      valueHint: <string>
+      description: Artifact root directory.
+    - flag: --output
+      valueHint: <json|md>
+      description: Return json or markdown wrapper output.
+    - flag: --report-type
+      valueHint: <default|github-review>
+      description: Render default markdown or a GitHub review draft.
+    - flag: --findings
+      valueHint: <confirmed|filtered|both>
+      description: Return confirmed, filtered, or both finding sets.
+"#;
+
+fn default_command_from_id(id: &str) -> String {
+    slugify(id.rsplit('/').next().unwrap_or(id))
+}
+
+fn scaffold_workflow_source() -> &'static str {
+    r#"export interface WorkflowInput {
+  [key: string]: unknown;
+}
+
+export interface WorkflowOutput {
+  ok: boolean;
+  input: WorkflowInput;
+}
+
+export default async function workflow(
+  _ctx: unknown,
+  input: WorkflowInput = {},
+): Promise<WorkflowOutput> {
+  return { ok: true, input };
+}
+"#
 }
 
 fn impact_workflow(target: &str, commands: &[WorkflowCommand]) -> anyhow::Result<()> {
@@ -917,6 +1114,111 @@ fn title_from_id(id: &str) -> String {
 
 fn yaml_scalar(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+fn set_top_level_yaml_scalar_if_needed(contents: &str, key: &str, value: &str) -> String {
+    if top_level_yaml_scalar(contents, key).as_deref() == Some(value) {
+        contents.to_string()
+    } else {
+        set_top_level_yaml_scalar(contents, key, value)
+    }
+}
+
+fn set_top_level_yaml_scalar_if_missing(contents: &str, key: &str, value: &str) -> String {
+    if top_level_yaml_scalar(contents, key).is_some() {
+        contents.to_string()
+    } else {
+        set_top_level_yaml_scalar(contents, key, value)
+    }
+}
+
+fn top_level_yaml_scalar(contents: &str, key: &str) -> Option<String> {
+    for line in contents.lines() {
+        if line.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let Some((line_key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if line_key.trim() != key {
+            continue;
+        }
+        return parse_yaml_scalar(value.trim());
+    }
+    None
+}
+
+fn parse_yaml_scalar(value: &str) -> Option<String> {
+    if value.is_empty() {
+        return None;
+    }
+    let value = strip_inline_comment(value).trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Some(quoted) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+        serde_json::from_str::<String>(value)
+            .ok()
+            .or_else(|| Some(quoted.to_string()))
+    } else if let Some(quoted) = value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')) {
+        Some(quoted.replace("''", "'"))
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn strip_inline_comment(value: &str) -> &str {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    for (idx, ch) in value.char_indices() {
+        if in_double && escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_double => escaped = true,
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            '#' if !in_single
+                && !in_double
+                && value[..idx]
+                    .chars()
+                    .next_back()
+                    .is_none_or(char::is_whitespace) =>
+            {
+                return &value[..idx];
+            }
+            _ => {}
+        }
+    }
+    value
+}
+
+fn has_workflow_usage_options(contents: &str) -> bool {
+    let mut in_usage = false;
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len().saturating_sub(line.trim_start().len());
+        if indent == 0 {
+            in_usage = trimmed
+                .split_once(':')
+                .is_some_and(|(line_key, _)| line_key.trim() == "usage");
+            continue;
+        }
+        if in_usage
+            && indent == 2
+            && trimmed
+                .split_once(':')
+                .is_some_and(|(line_key, _)| line_key.trim() == "options")
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn set_top_level_yaml_scalar(contents: &str, key: &str, value: &str) -> String {

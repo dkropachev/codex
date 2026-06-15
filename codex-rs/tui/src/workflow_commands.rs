@@ -13,7 +13,14 @@ pub struct WorkflowCommand {
     pub id: String,
     pub command: String,
     pub description: String,
+    pub option_hints: Vec<WorkflowCommandOptionHint>,
     pub workflow_dir: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkflowCommandOptionHint {
+    pub display: String,
+    pub description: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -162,12 +169,121 @@ fn parse_workflow_metadata(
     let description = user_description
         .or(title)
         .unwrap_or_else(|| "Workflow command".to_string());
+    let option_hints = parse_workflow_option_hints(contents);
     Some(WorkflowCommand {
         id,
         command,
         description,
+        option_hints,
         workflow_dir: workflow_dir.to_path_buf(),
     })
+}
+
+fn parse_workflow_option_hints(contents: &str) -> Vec<WorkflowCommandOptionHint> {
+    let mut hints = Vec::new();
+    let mut in_usage = false;
+    let mut in_options = false;
+    let mut current = None;
+
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let indent = line.len().saturating_sub(line.trim_start().len());
+        if indent == 0 {
+            push_option_hint(&mut hints, current.take());
+            in_usage = top_level_key(trimmed) == Some("usage");
+            in_options = false;
+            continue;
+        }
+        if !in_usage {
+            continue;
+        }
+        if indent == 2 && top_level_key(trimmed) == Some("options") {
+            in_options = true;
+            continue;
+        }
+        if !in_options || indent < 4 {
+            continue;
+        }
+
+        if let Some(item) = trimmed.strip_prefix("- ") {
+            push_option_hint(&mut hints, current.take());
+            if let Some((key, value)) = item.split_once(':') {
+                let mut builder = WorkflowOptionHintBuilder::default();
+                builder.set(key.trim(), value.trim());
+                current = Some(builder);
+            } else if let Some(display) = parse_yaml_scalar(item) {
+                hints.push(WorkflowCommandOptionHint {
+                    display,
+                    description: None,
+                });
+            }
+            continue;
+        }
+
+        if let Some(builder) = current.as_mut()
+            && let Some((key, value)) = trimmed.split_once(':')
+        {
+            builder.set(key.trim(), value.trim());
+        }
+    }
+
+    push_option_hint(&mut hints, current);
+    hints
+}
+
+fn top_level_key(line: &str) -> Option<&str> {
+    line.split_once(':')
+        .map(|(key, _)| key.trim())
+        .filter(|key| !key.is_empty())
+}
+
+#[derive(Default)]
+struct WorkflowOptionHintBuilder {
+    display: Option<String>,
+    flag: Option<String>,
+    value_hint: Option<String>,
+    description: Option<String>,
+}
+
+impl WorkflowOptionHintBuilder {
+    fn set(&mut self, key: &str, value: &str) {
+        let Some(value) = parse_yaml_scalar(value) else {
+            return;
+        };
+        match key {
+            "display" => self.display = Some(value),
+            "flag" | "name" => self.flag = Some(value),
+            "valueHint" => self.value_hint = Some(value),
+            "description" => self.description = Some(value),
+            _ => {}
+        }
+    }
+
+    fn build(self) -> Option<WorkflowCommandOptionHint> {
+        let display = self.display.or_else(|| {
+            self.flag.map(|flag| match self.value_hint {
+                Some(value_hint) => format!("{flag} {value_hint}"),
+                None => flag,
+            })
+        })?;
+        Some(WorkflowCommandOptionHint {
+            display,
+            description: self.description,
+        })
+    }
+}
+
+fn push_option_hint(
+    hints: &mut Vec<WorkflowCommandOptionHint>,
+    builder: Option<WorkflowOptionHintBuilder>,
+) {
+    if let Some(hint) = builder.and_then(WorkflowOptionHintBuilder::build) {
+        hints.push(hint);
+    }
 }
 
 fn parse_yaml_scalar(value: &str) -> Option<String> {
