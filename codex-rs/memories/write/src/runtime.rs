@@ -181,7 +181,6 @@ impl MemoryStartupContext {
             config.model_provider.clone(),
             session_source,
             config_snapshot.parent_thread_id,
-            config.model_verbosity,
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             /*beta_features_header*/ None,

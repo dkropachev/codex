@@ -288,6 +288,14 @@
       },
       "type": "object"
     },
+    "ArtifactStyle": {
+      "description": "Whether artifact-like generated text should follow the ordinary response style.",
+      "enum": [
+        "normal",
+        "follow_response"
+      ],
+      "type": "string"
+    },
     "AskForApproval": {
       "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
       "oneOf": [
@@ -433,6 +441,9 @@
         },
         "approvals_reviewer": {
           "$ref": "#/definitions/ApprovalsReviewer"
+        },
+        "artifact_style": {
+          "$ref": "#/definitions/ArtifactStyle"
         },
         "chatgpt_base_url": {
           "type": "string"
@@ -773,6 +784,9 @@
         },
         "plan_mode_reasoning_effort": {
           "$ref": "#/definitions/ReasoningEffort"
+        },
+        "response_style": {
+          "$ref": "#/definitions/ResponseStyle"
         },
         "sandbox_mode": {
           "$ref": "#/definitions/SandboxMode"
@@ -3123,6 +3137,14 @@
         }
       ]
     },
+    "ResponseStyle": {
+      "description": "Preferred response length for ordinary Codex chat and status messages.",
+      "enum": [
+        "normal",
+        "terse"
+      ],
+      "type": "string"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -5018,6 +5040,14 @@
       "description": "Optional product SKU forwarded on host-owned Codex Apps MCP requests.",
       "type": "string"
     },
+    "artifact_style": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ArtifactStyle"
+        }
+      ],
+      "description": "Whether artifact-like generated text should follow `response_style`."
+    },
     "audio": {
       "allOf": [
         {
@@ -5740,6 +5770,14 @@
       ],
       "default": null,
       "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
+    },
+    "response_style": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ResponseStyle"
+        }
+      ],
+      "description": "Preferred response length for ordinary Codex chat and status messages."
     },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",

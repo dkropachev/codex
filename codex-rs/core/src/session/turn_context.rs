@@ -3,15 +3,20 @@ use crate::SkillLoadOutcome;
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::ResolvedTurnEnvironments;
+use codex_config::types::ArtifactStyle;
+use codex_config::types::ResponseStyle;
 use codex_core_skills::HostLoadedSkills;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
@@ -146,6 +151,46 @@ impl TurnContext {
         self.effective_reasoning_effort()
             .map(|effort| effort.to_string())
             .unwrap_or_else(|| "default".to_string())
+    }
+
+    pub(crate) fn effective_response_style(&self) -> ResponseStyle {
+        match self.config.response_style {
+            ResponseStyle::Normal => ResponseStyle::Normal,
+            ResponseStyle::Terse
+                if self.response_style_protected_path()
+                    && self.config.artifact_style == ArtifactStyle::Normal =>
+            {
+                ResponseStyle::Normal
+            }
+            ResponseStyle::Terse => ResponseStyle::Terse,
+        }
+    }
+
+    pub(crate) fn terse_response_style_enabled(&self) -> bool {
+        self.effective_response_style() == ResponseStyle::Terse
+    }
+
+    pub(crate) fn effective_model_verbosity(&self) -> Option<Verbosity> {
+        if self.terse_response_style_enabled() {
+            Some(Verbosity::Low)
+        } else {
+            self.config.model_verbosity
+        }
+    }
+
+    fn response_style_protected_path(&self) -> bool {
+        self.final_output_json_schema.is_some()
+            || crate::guardian::is_guardian_reviewer_source(&self.session_source)
+            || matches!(
+                self.session_source,
+                SessionSource::Internal(_)
+                    | SessionSource::SubAgent(
+                        SubAgentSource::Review
+                            | SubAgentSource::Compact
+                            | SubAgentSource::MemoryConsolidation
+                            | SubAgentSource::Other(_)
+                    )
+            )
     }
 
     pub(crate) fn model_context_window(&self) -> Option<i64> {

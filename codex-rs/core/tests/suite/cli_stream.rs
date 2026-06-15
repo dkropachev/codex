@@ -550,10 +550,10 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg(format!("openai_base_url=\"{}/v1\"", server.uri()))
         .arg("-C")
         .arg(&repo_root)
-        .arg(&prompt2)
         .arg("resume")
         .arg("--last")
-        .arg("--include-non-interactive");
+        .arg("--include-non-interactive")
+        .arg(&prompt2);
     cmd2.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
 

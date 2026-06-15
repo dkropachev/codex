@@ -83,6 +83,24 @@ impl fmt::Display for SessionPickerViewMode {
     }
 }
 
+/// Preferred response length for ordinary Codex chat and status messages.
+#[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseStyle {
+    #[default]
+    Normal,
+    Terse,
+}
+
+/// Whether artifact-like generated text should follow the ordinary response style.
+#[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactStyle {
+    #[default]
+    Normal,
+    FollowResponse,
+}
+
 /// Determine where Codex should store CLI auth credentials.
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
