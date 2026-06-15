@@ -61,11 +61,15 @@ trust_level = "trusted"
         r#"{"OPENAI_API_KEY":"dummy","tokens":null,"last_refresh":null}"#,
     )?;
 
-    let workflow_dir = codex_home.path().join("workflows").join("code-review");
+    let workflow_dir = codex_home
+        .path()
+        .join("workflows")
+        .join("review")
+        .join("fix");
     std::fs::create_dir_all(&workflow_dir)?;
     std::fs::write(
         workflow_dir.join("workflow.yaml"),
-        "id: code-review\ncommand: code-review\ntitle: /code-review\nuserDescription: Run a code review workflow.\n",
+        "id: review/fix\ncommand: code-review\ntitle: /code-review\nuserDescription: Run a code review workflow.\n",
     )?;
 
     let env = HashMap::from([

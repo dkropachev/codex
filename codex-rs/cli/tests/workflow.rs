@@ -299,6 +299,49 @@ fn workflow_run_invokes_bun_with_structured_input() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn workflow_run_by_nested_id_merges_json_input_and_flags() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let project = TempDir::new()?;
+    enable_workflows(codex_home.path())?;
+    let workflow_dir = write_workflow(
+        &codex_home.path().join("workflows"),
+        "review/fix",
+        "id: review/fix\ncommand: code-review\nuserDescription: Run a code review workflow.\n",
+    )?;
+    let fake_bun = FakeBun::new(codex_home.path())?;
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    fake_bun.apply_to_command(&mut cmd)?;
+    cmd.args([
+        "workflow",
+        "run",
+        "review/fix",
+        "--input",
+        r#"{"scope":"repo","workingDirectory":"/tmp/custom"}"#,
+        "--max-count",
+        "3",
+    ])
+    .assert()
+    .success();
+
+    let captured_cwd = fake_bun.captured_cwd()?;
+    assert_eq!(captured_cwd.trim_end(), workflow_dir.display().to_string());
+
+    let args = fake_bun.captured_args()?;
+    assert_eq!(
+        serde_json::from_str::<Value>(&args[2])?,
+        json!({
+            "scope": "repo",
+            "maxCount": 3,
+            "workingDirectory": "/tmp/custom",
+        })
+    );
+
+    Ok(())
+}
+
 #[test]
 fn workflow_management_commands_match_old_surface() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -396,6 +439,70 @@ fn workflow_management_commands_match_old_surface() -> Result<()> {
         .assert()
         .success()
         .stdout(contains("Workflow Mode is done."));
+
+    Ok(())
+}
+
+#[test]
+fn workflow_show_json_and_root_status_cover_management_outputs() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let project = TempDir::new()?;
+    enable_workflows(codex_home.path())?;
+    let workflow_dir = write_workflow(
+        &codex_home.path().join("workflows"),
+        "review/fix",
+        "id: review/fix\ncommand: code-review\nuserDescription: Run a code review workflow.\n",
+    )?;
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    let output = cmd
+        .args(["workflow", "show", "review/fix", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output)?,
+        json!({
+            "workflow": {
+                "id": "review/fix",
+                "command": "code-review",
+                "description": "Run a code review workflow.",
+                "workflowDir": workflow_dir.display().to_string(),
+            },
+            "workflowYaml": "id: review/fix\ncommand: code-review\nuserDescription: Run a code review workflow.\n",
+        })
+    );
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    cmd.args(["workflow", "status"])
+        .assert()
+        .success()
+        .stdout(contains("1 workflow(s) discovered"));
+
+    Ok(())
+}
+
+#[test]
+fn workflow_validate_reports_invalid_workflow_at_cli_boundary() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let project = TempDir::new()?;
+    enable_workflows(codex_home.path())?;
+    let workflow_dir = write_workflow(
+        &codex_home.path().join("workflows"),
+        "review/fix",
+        "id: review/fix\ncommand: code-review\nuserDescription: Run a code review workflow.\n",
+    )?;
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    cmd.args(["workflow", "validate", "review/fix"])
+        .assert()
+        .failure()
+        .stdout(contains(format!(
+            "review/fix is invalid: missing {}",
+            workflow_dir.join("src").join("workflow.ts").display()
+        )));
 
     Ok(())
 }
