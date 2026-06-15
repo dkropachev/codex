@@ -10,6 +10,7 @@ pub(super) const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_CLEAR_CONTEXT: &str = "Yes, clear context and implement";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
+const CONFIG_IMPLEMENTATION_NO: &str = "No, stay in Config mode";
 pub(super) const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 pub(super) const PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX: &str = concat!(
     "A previous agent produced the plan below to accomplish the user's task. ",
@@ -29,6 +30,26 @@ pub(super) fn selection_view_params(
     default_mask: Option<CollaborationModeMask>,
     plan_markdown: Option<&str>,
     clear_context_usage_label: Option<&str>,
+) -> SelectionViewParams {
+    selection_view_params_with_copy(
+        default_mask,
+        plan_markdown,
+        clear_context_usage_label,
+        "Switch to Default and start coding.",
+        PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX,
+        PLAN_IMPLEMENTATION_NO,
+        "Continue planning with the model.",
+    )
+}
+
+fn selection_view_params_with_copy(
+    default_mask: Option<CollaborationModeMask>,
+    plan_markdown: Option<&str>,
+    clear_context_usage_label: Option<&str>,
+    implement_description: &'static str,
+    clear_context_prefix: &'static str,
+    stay_in_mode_label: &'static str,
+    stay_in_mode_description: &'static str,
 ) -> SelectionViewParams {
     let (implement_actions, implement_disabled_reason) = match default_mask.clone() {
         Some(mask) => {
@@ -54,8 +75,7 @@ pub(super) fn selection_view_params(
             Some(PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE.to_string()),
         ),
         (Some(_), Some(plan_markdown)) if !plan_markdown.trim().is_empty() => {
-            let user_text =
-                format!("{PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX}\n\n{plan_markdown}");
+            let user_text = format!("{clear_context_prefix}\n\n{plan_markdown}");
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 tx.send(AppEvent::ClearUiAndSubmitUserMessage {
                     text: user_text.clone(),
@@ -81,7 +101,7 @@ pub(super) fn selection_view_params(
         items: vec![
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_YES.to_string(),
-                description: Some("Switch to Default and start coding.".to_string()),
+                description: Some(implement_description.to_string()),
                 selected_description: None,
                 is_current: false,
                 actions: implement_actions,
@@ -100,8 +120,8 @@ pub(super) fn selection_view_params(
                 ..Default::default()
             },
             SelectionItem {
-                name: PLAN_IMPLEMENTATION_NO.to_string(),
-                description: Some("Continue planning with the model.".to_string()),
+                name: stay_in_mode_label.to_string(),
+                description: Some(stay_in_mode_description.to_string()),
                 selected_description: None,
                 is_current: false,
                 actions: Vec::new(),
@@ -111,4 +131,21 @@ pub(super) fn selection_view_params(
         ],
         ..Default::default()
     }
+}
+
+pub(super) fn config_selection_view_params(
+    config_edit_mask: Option<CollaborationModeMask>,
+    plan_markdown: Option<&str>,
+    clear_context_usage_label: Option<&str>,
+    clear_context_prefix: &'static str,
+) -> SelectionViewParams {
+    selection_view_params_with_copy(
+        config_edit_mask,
+        plan_markdown,
+        clear_context_usage_label,
+        "Switch to Config edit mode and apply the plan.",
+        clear_context_prefix,
+        CONFIG_IMPLEMENTATION_NO,
+        "Continue configuring with the model.",
+    )
 }

@@ -5,6 +5,13 @@
 
 use super::*;
 
+const CONFIG_IMPLEMENT_CLEAR_CONTEXT_PREFIX: &str = concat!(
+    "A previous agent produced the Codex configuration plan below. ",
+    "Implement that plan in a fresh context. Treat the plan as the source of ",
+    "user intent, re-read files as needed, write only under the Codex config ",
+    "directory or /tmp, and do not modify the target workspace/repository."
+);
+
 impl ChatWidget {
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
@@ -232,15 +239,33 @@ impl ChatWidget {
     }
 
     pub(super) fn open_plan_implementation_prompt(&mut self) {
-        let default_mask = collaboration_modes::default_mode_mask(self.model_catalog.as_ref());
+        let config_mode =
+            crate::config_mode::is_config_mask(self.active_collaboration_mask.as_ref());
+        let default_mask = if config_mode {
+            Some(crate::config_mode::config_edit_mask(
+                &self.config.cwd,
+                &self.config.codex_home,
+            ))
+        } else {
+            collaboration_modes::default_mode_mask(self.model_catalog.as_ref())
+        };
         let context_usage_label = self.plan_implementation_context_usage_label();
 
-        self.bottom_pane
-            .show_selection_view(plan_implementation::selection_view_params(
+        let params = if config_mode {
+            plan_implementation::config_selection_view_params(
                 default_mask,
                 self.transcript.latest_proposed_plan_markdown.as_deref(),
                 context_usage_label.as_deref(),
-            ));
+                CONFIG_IMPLEMENT_CLEAR_CONTEXT_PREFIX,
+            )
+        } else {
+            plan_implementation::selection_view_params(
+                default_mask,
+                self.transcript.latest_proposed_plan_markdown.as_deref(),
+                context_usage_label.as_deref(),
+            )
+        };
+        self.bottom_pane.show_selection_view(params);
         self.notify(Notification::PlanModePrompt {
             title: PLAN_IMPLEMENTATION_TITLE.to_string(),
         });

@@ -336,10 +336,17 @@ impl ChatWidget {
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
         let service_tier = self.service_tier_update_for_core();
+        let config_mode_turn =
+            crate::config_mode::is_config_mask(self.active_collaboration_mask.as_ref());
+        let turn_cwd = if config_mode_turn {
+            self.config.codex_home.as_path().to_path_buf()
+        } else {
+            self.config.cwd.to_path_buf()
+        };
         let active_permission_profile = self.config.permissions.active_permission_profile();
         let op = AppCommand::user_turn(
             items,
-            self.config.cwd.to_path_buf(),
+            turn_cwd,
             AskForApproval::from(self.config.permissions.approval_policy.value()),
             active_permission_profile,
             effective_mode.model().to_string(),

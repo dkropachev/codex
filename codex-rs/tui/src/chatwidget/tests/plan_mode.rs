@@ -158,6 +158,26 @@ async fn plan_implementation_popup_no_selected_snapshot() {
 }
 
 #[tokio::test]
+async fn config_implementation_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    chat.set_collaboration_mask(CollaborationModeMask {
+        name: crate::config_mode::CONFIG_MODE_NAME.to_string(),
+        mode: Some(ModeKind::Plan),
+        model: None,
+        reasoning_effort: None,
+        developer_instructions: None,
+    });
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+    chat.open_plan_implementation_prompt();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(popup.contains("No, stay in Config mode"));
+    assert!(popup.contains("Continue configuring with the model."));
+    assert_chatwidget_snapshot!("config_implementation_popup", popup);
+}
+
+#[tokio::test]
 async fn plan_implementation_popup_yes_emits_submit_message_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.open_plan_implementation_prompt();
@@ -1434,6 +1454,78 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
             text_elements: Vec::new(),
         }
     );
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
+async fn config_slash_command_with_args_submits_prompt_with_proposed_diff_policy() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id: ThreadId::new(),
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_path_buf("/home/user/project").abs(),
+        runtime_workspace_roots: Vec::new(),
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
+        network_proxy: None,
+        rollout_path: None,
+    };
+    chat.handle_thread_session(configured);
+
+    chat.bottom_pane.set_composer_text(
+        "/config change my default model".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            items,
+            cwd,
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Plan,
+                    settings,
+                }),
+            ..
+        } => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(
+                items[0],
+                UserInput::Text {
+                    text: "change my default model".to_string(),
+                    text_elements: Vec::new(),
+                }
+            );
+            assert_eq!(cwd, chat.config.codex_home.to_path_buf());
+            let instructions = settings
+                .developer_instructions
+                .expect("expected Config developer instructions");
+            assert!(instructions.contains("Proposed diffs"));
+            assert!(instructions.contains("one unified diff code block for each config file"));
+        }
+        other => panic!("expected Config Op::UserTurn, got {other:?}"),
+    }
+    let active_mask = chat
+        .active_collaboration_mask
+        .as_ref()
+        .expect("expected active Config collaboration mask");
+    assert_eq!(active_mask.name, crate::config_mode::CONFIG_MODE_NAME);
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
 }
 

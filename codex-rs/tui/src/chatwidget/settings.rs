@@ -612,6 +612,9 @@ impl ChatWidget {
         if !self.collaboration_modes_enabled() {
             return None;
         }
+        if crate::config_mode::is_config_mask(self.active_collaboration_mask.as_ref()) {
+            return Some(crate::config_mode::CONFIG_MODE_NAME);
+        }
         let active_mode = self.active_mode_kind();
         active_mode
             .is_tui_visible()
@@ -621,6 +624,9 @@ impl ChatWidget {
     fn collaboration_mode_indicator(&self) -> Option<CollaborationModeIndicator> {
         if !self.collaboration_modes_enabled() {
             return None;
+        }
+        if crate::config_mode::is_config_mask(self.active_collaboration_mask.as_ref()) {
+            return Some(CollaborationModeIndicator::Config);
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),

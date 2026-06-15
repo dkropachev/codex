@@ -99,6 +99,34 @@ impl ChatWidget {
         }
     }
 
+    fn apply_config_slash_command(&mut self) -> bool {
+        if !self.collaboration_modes_enabled() {
+            self.add_info_message(
+                "Collaboration modes are disabled.".to_string(),
+                Some("Enable collaboration modes to use /config.".to_string()),
+            );
+            return false;
+        }
+        let mask = crate::config_mode::config_plan_mask(&self.config.cwd, &self.config.codex_home);
+        self.set_collaboration_mask_from_user_action(mask);
+        true
+    }
+
+    fn disable_config_slash_command(&mut self) -> bool {
+        let Some(default_mask) =
+            collaboration_modes::default_mode_mask(self.model_catalog.as_ref())
+        else {
+            self.add_info_message(
+                "Default mode unavailable right now.".to_string(),
+                /*hint*/ None,
+            );
+            return false;
+        };
+        self.set_collaboration_mask_from_user_action(default_mask);
+        self.add_info_message("Config mode disabled.".to_string(), /*hint*/ None);
+        true
+    }
+
     fn request_side_conversation(
         &mut self,
         parent_thread_id: ThreadId,
@@ -263,6 +291,9 @@ impl ChatWidget {
             }
             SlashCommand::Plan => {
                 self.apply_plan_slash_command();
+            }
+            SlashCommand::Config => {
+                self.apply_config_slash_command();
             }
             SlashCommand::Goal => {
                 if !self.config.features.enabled(Feature::Goals) {
@@ -689,6 +720,31 @@ impl ChatWidget {
                     self.queue_user_message(user_message);
                 }
             }
+            SlashCommand::Config if !trimmed.is_empty() => {
+                if trimmed.eq_ignore_ascii_case("off") {
+                    self.disable_config_slash_command();
+                    return;
+                }
+                if !self.apply_config_slash_command() {
+                    return;
+                }
+                let user_message = self.prepared_inline_user_message(
+                    args,
+                    text_elements,
+                    local_images,
+                    remote_image_urls,
+                    mention_bindings,
+                    source,
+                );
+                if self.is_session_configured() {
+                    self.reasoning_buffer.clear();
+                    self.full_reasoning_buffer.clear();
+                    self.set_status_header(String::from("Working"));
+                    self.submit_user_message(user_message);
+                } else {
+                    self.queue_user_message(user_message);
+                }
+            }
             SlashCommand::Goal if !trimmed.is_empty() => {
                 if !self.config.features.enabled(Feature::Goals) {
                     return;
@@ -1001,6 +1057,7 @@ impl ChatWidget {
             | SlashCommand::Settings
             | SlashCommand::Personality
             | SlashCommand::Plan
+            | SlashCommand::Config
             | SlashCommand::Goal
             | SlashCommand::Side
             | SlashCommand::Btw
