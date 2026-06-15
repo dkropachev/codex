@@ -12,6 +12,9 @@ use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::PermissionProfile;
@@ -3290,6 +3293,7 @@ text(JSON.stringify(tool));
         serde_json::json!({
             "name": "mcp__rmcp__echo",
             "description": concat!(
+                "Use these tools to exercise the rmcp test server.\n\n",
                 "Echo back the provided message and include environment data.\n\n",
                 "exec tool declaration:\n",
                 "```ts\n",
@@ -3316,20 +3320,25 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
         .thread_manager
         .start_thread_with_tools(
             base_test.config.clone(),
-            vec![DynamicToolSpec {
-                namespace: Some("codex_app".to_string()),
-                name: "hidden_dynamic_tool".to_string(),
-                description: "A hidden dynamic tool.".to_string(),
-                input_schema: serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "city": { "type": "string" }
-                        },
-                    "required": ["city"],
-                    "additionalProperties": false,
-                }),
-                defer_loading: true,
-            }],
+            vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+                name: "codex_app".to_string(),
+                description: "Codex app tools.".to_string(),
+                tools: vec![DynamicToolNamespaceTool::Function(
+                    DynamicToolFunctionSpec {
+                        name: "hidden_dynamic_tool".to_string(),
+                        description: "A hidden dynamic tool.".to_string(),
+                        input_schema: serde_json::json!({
+                                "type": "object",
+                                "properties": {
+                                    "city": { "type": "string" }
+                                },
+                            "required": ["city"],
+                            "additionalProperties": false,
+                        }),
+                        defer_loading: true,
+                    },
+                )],
+            })],
         )
         .await?;
     let mut test = base_test;
@@ -3456,7 +3465,8 @@ text(
             .get("description")
             .and_then(Value::as_str)
             .is_some_and(|description| {
-                description.contains("A hidden dynamic tool.")
+                description.contains("Codex app tools.")
+                    && description.contains("A hidden dynamic tool.")
                     && description.contains("declare const tools:")
                     && description.contains("codex_app__hidden_dynamic_tool(args:")
             })
@@ -3479,17 +3489,22 @@ async fn code_mode_excludes_configured_nested_tool_namespaces() -> Result<()> {
         .thread_manager
         .start_thread_with_tools(
             base_test.config.clone(),
-            vec![DynamicToolSpec {
-                namespace: Some("excluded".to_string()),
-                name: "lookup".to_string(),
-                description: "An excluded dynamic tool.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false,
-                }),
-                defer_loading: false,
-            }],
+            vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+                name: "excluded".to_string(),
+                description: "Excluded tools.".to_string(),
+                tools: vec![DynamicToolNamespaceTool::Function(
+                    DynamicToolFunctionSpec {
+                        name: "lookup".to_string(),
+                        description: "An excluded dynamic tool.".to_string(),
+                        input_schema: serde_json::json!({
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": false,
+                        }),
+                        defer_loading: false,
+                    },
+                )],
+            })],
         )
         .await?;
     let mut test = base_test;
