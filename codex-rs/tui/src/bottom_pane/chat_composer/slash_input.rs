@@ -898,6 +898,54 @@ mod tests {
     }
 
     #[test]
+    fn workflow_argument_popup_completes_second_option_name_prefix() {
+        let mut composer = test_composer();
+        composer.set_workflow_commands_enabled(/*enabled*/ true);
+        composer.set_workflow_commands(vec![code_review_workflow_with_option_hints()]);
+        composer
+            .draft
+            .textarea
+            .set_text_clearing_elements("/code-review --action list-reports --allo");
+        composer
+            .draft
+            .textarea
+            .set_cursor("/code-review --action list-reports --allo".len());
+        composer.sync_popups();
+        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
+
+        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
+
+        assert_eq!(
+            composer.draft.textarea.text(),
+            "/code-review --action list-reports --allowed-areas "
+        );
+    }
+
+    #[test]
+    fn workflow_argument_popup_completes_second_option_value_prefix() {
+        let mut composer = test_composer();
+        composer.set_workflow_commands_enabled(/*enabled*/ true);
+        composer.set_workflow_commands(vec![code_review_workflow_with_option_hints()]);
+        composer
+            .draft
+            .textarea
+            .set_text_clearing_elements("/code-review --action list-reports --allowed-areas T");
+        composer
+            .draft
+            .textarea
+            .set_cursor("/code-review --action list-reports --allowed-areas T".len());
+        composer.sync_popups();
+        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
+
+        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
+
+        assert_eq!(
+            composer.draft.textarea.text(),
+            "/code-review --action list-reports --allowed-areas Test "
+        );
+    }
+
+    #[test]
     fn workflow_argument_enter_dispatches_with_args_while_popup_is_open() {
         let mut composer = test_composer();
         composer.set_workflow_commands_enabled(/*enabled*/ true);

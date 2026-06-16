@@ -171,6 +171,52 @@ usage:
     )
     .await?;
 
+    for byte in b"list-reports --allo" {
+        writer.send(vec![*byte]).await?;
+        tokio::time::sleep(Duration::from_millis(/*millis*/ 20)).await;
+    }
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "workflow second option popup",
+        |contents| {
+            contents.contains("/code-review --action list-reports --allo")
+                && contents.contains("--allowed-areas <Test|Code>")
+                && contents.contains("Allowed areas.")
+        },
+    )
+    .await?;
+
+    writer.send(b"\t".to_vec()).await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "completed workflow second option",
+        |contents| contents.contains("/code-review --action list-reports --allowed-areas"),
+    )
+    .await?;
+
+    writer.send(b"T".to_vec()).await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "workflow second option value popup",
+        |contents| {
+            contents.contains("/code-review --action list-reports --allowed-areas T")
+                && contents.contains("--allowed-areas Test")
+        },
+    )
+    .await?;
+
+    writer.send(b"\t".to_vec()).await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "completed workflow second option value",
+        |contents| contents.contains("/code-review --action list-reports --allowed-areas Test"),
+    )
+    .await?;
+
     spawned.session.terminate();
     Ok(())
 }

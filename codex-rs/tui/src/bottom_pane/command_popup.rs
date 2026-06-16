@@ -225,10 +225,26 @@ impl CommandPopup {
             }
             let option_rows = workflow_value_hint_rows(command, workflow_filter)
                 .unwrap_or_else(|| {
+                    let current_token = current_workflow_argument_token(workflow_filter);
+                    let option_hint_filter = if current_token.starts_with('-') {
+                        current_token
+                    } else if workflow_filter
+                        .chars()
+                        .last()
+                        .is_some_and(char::is_whitespace)
+                    {
+                        workflow_filter
+                            .split_whitespace()
+                            .last()
+                            .filter(|token| token.starts_with("--"))
+                            .unwrap_or("")
+                    } else {
+                        workflow_filter.trim()
+                    };
                     command
                         .option_hints
                         .iter()
-                        .filter(|option| option.display.starts_with(workflow_filter.trim()))
+                        .filter(|option| option.display.starts_with(option_hint_filter))
                         .cloned()
                         .collect()
                 })
@@ -303,12 +319,7 @@ impl CommandPopup {
     }
 
     pub(crate) fn unique_workflow_option_name_completion(&self) -> Option<String> {
-        let current_token = self
-            .workflow_argument_filter
-            .rsplit(char::is_whitespace)
-            .next()
-            .unwrap_or("")
-            .trim();
+        let current_token = current_workflow_argument_token(&self.workflow_argument_filter);
         if current_token.is_empty() || !current_token.starts_with('-') {
             return None;
         }
@@ -415,6 +426,14 @@ fn workflow_value_context(workflow_filter: &str) -> Option<(&str, &str)> {
     option_name
         .starts_with("--")
         .then_some((*option_name, *value_prefix))
+}
+
+fn current_workflow_argument_token(workflow_filter: &str) -> &str {
+    workflow_filter
+        .rsplit(char::is_whitespace)
+        .next()
+        .unwrap_or("")
+        .trim()
 }
 
 fn option_name_from_display(display: &str) -> Option<&str> {
@@ -700,6 +719,50 @@ mod tests {
 
         popup.on_composer_text_change("/code-review --a".to_string());
         assert_eq!(popup.unique_workflow_option_name_completion(), None);
+
+        popup.on_composer_text_change("/code-review --action list-reports --allo".to_string());
+        assert_eq!(
+            popup.unique_workflow_option_name_completion(),
+            Some("--allowed-areas".to_string())
+        );
+    }
+
+    #[test]
+    fn workflow_option_hint_rows_use_current_argument_token_after_existing_args() {
+        let workflow = WorkflowCommand {
+            id: "code-review".to_string(),
+            command: "code-review".to_string(),
+            description: "Run a code review workflow.".to_string(),
+            option_hints: vec![
+                WorkflowCommandOptionHint {
+                    display: "--action <review|list-reports>".to_string(),
+                    description: Some("Run mode.".to_string()),
+                },
+                WorkflowCommandOptionHint {
+                    display: "--allowed-areas <Test|Code>".to_string(),
+                    description: Some("Allowed areas.".to_string()),
+                },
+            ],
+            workflow_dir: PathBuf::from("/tmp/code-review"),
+        };
+        let mut popup = CommandPopup::new_with_workflows(
+            CommandPopupFlags {
+                workflow_commands_enabled: true,
+                ..CommandPopupFlags::default()
+            },
+            Vec::new(),
+            vec![workflow],
+        );
+        popup.on_composer_text_change("/code-review --action list-reports --allo".to_string());
+
+        let rows = popup.rows_from_matches(popup.filtered());
+        assert_eq!(
+            rows.into_iter().map(|row| row.name).collect::<Vec<_>>(),
+            vec![
+                "/code-review".to_string(),
+                "--allowed-areas <Test|Code>".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -708,10 +771,16 @@ mod tests {
             id: "code-review".to_string(),
             command: "code-review".to_string(),
             description: "Run a code review workflow.".to_string(),
-            option_hints: vec![WorkflowCommandOptionHint {
-                display: "--action <review|list-reports>".to_string(),
-                description: Some("Run mode.".to_string()),
-            }],
+            option_hints: vec![
+                WorkflowCommandOptionHint {
+                    display: "--action <review|list-reports>".to_string(),
+                    description: Some("Run mode.".to_string()),
+                },
+                WorkflowCommandOptionHint {
+                    display: "--allowed-areas <Test|Code>".to_string(),
+                    description: Some("Allowed areas.".to_string()),
+                },
+            ],
             workflow_dir: PathBuf::from("/tmp/code-review"),
         };
         let mut popup = CommandPopup::new_with_workflows(
@@ -734,6 +803,23 @@ mod tests {
             vec![
                 "/code-review".to_string(),
                 "--action list-reports".to_string(),
+            ]
+        );
+
+        popup.on_composer_text_change(
+            "/code-review --action list-reports --allowed-areas T".to_string(),
+        );
+
+        assert_eq!(
+            popup.unique_workflow_option_value_completion(),
+            Some("Test".to_string())
+        );
+        let rows = popup.rows_from_matches(popup.filtered());
+        assert_eq!(
+            rows.into_iter().map(|row| row.name).collect::<Vec<_>>(),
+            vec![
+                "/code-review".to_string(),
+                "--allowed-areas Test".to_string(),
             ]
         );
     }
