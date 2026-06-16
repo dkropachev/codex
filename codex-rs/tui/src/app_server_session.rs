@@ -306,7 +306,45 @@ impl AppServerSession {
         self.default_model = Some(default_model.clone());
         self.available_models = available_models.clone();
 
-        let account_ui = account_ui_state_from_response(&account);
+        let (
+            account_email,
+            auth_mode,
+            status_account_display,
+            plan_type,
+            feedback_audience,
+            has_chatgpt_account,
+        ) = match account.account {
+            Some(Account::ApiKey {}) => (
+                None,
+                Some(TelemetryAuthMode::ApiKey),
+                Some(StatusAccountDisplay::ApiKey),
+                None,
+                FeedbackAudience::External,
+                false,
+            ),
+            Some(Account::Chatgpt { email, plan_type }) => {
+                let feedback_audience = if email.ends_with("@openai.com") {
+                    FeedbackAudience::OpenAiEmployee
+                } else {
+                    FeedbackAudience::External
+                };
+                (
+                    Some(email.clone()),
+                    Some(TelemetryAuthMode::Chatgpt),
+                    Some(StatusAccountDisplay::ChatGpt {
+                        email: Some(email),
+                        plan: Some(plan_type_display_name(plan_type)),
+                    }),
+                    Some(plan_type),
+                    feedback_audience,
+                    true,
+                )
+            }
+            Some(Account::AmazonBedrock { .. }) => {
+                (None, None, None, None, FeedbackAudience::External, false)
+            }
+            None => (None, None, None, None, FeedbackAudience::External, false),
+        };
         Ok(AppServerBootstrap {
             duration: started_at.elapsed(),
             account_email: account_ui.account_email,

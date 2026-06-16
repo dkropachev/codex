@@ -38,12 +38,17 @@ pub enum ProviderAccount {
         email: String,
         plan_type: PlanType,
     },
-    ChatgptPool {
-        id: String,
-        active_account_id: Option<String>,
-        members: Vec<ProviderAccountPoolMember>,
+    AmazonBedrock {
+        credential_source: AmazonBedrockCredentialSource,
     },
-    AmazonBedrock,
+}
+
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum AmazonBedrockCredentialSource {
+    CodexManaged,
+    AwsManaged,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
