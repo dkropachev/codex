@@ -67,6 +67,7 @@ mod review;
 mod safety_check_downgrade;
 #[path = "skills__list.rs"]
 mod skills_list;
+mod sleep;
 mod thread_archive;
 mod thread_delete;
 mod thread_fork;
