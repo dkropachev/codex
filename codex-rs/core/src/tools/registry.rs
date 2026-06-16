@@ -196,6 +196,10 @@ impl ToolOutput for PostToolUseFeedbackOutput {
         self.original.success_for_logging()
     }
 
+    fn token_usage_hint(&self) -> codex_tools::ToolOutputTokenUsage {
+        self.original.token_usage_hint()
+    }
+
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
         self.model_visible.to_response_item(call_id, payload)
     }

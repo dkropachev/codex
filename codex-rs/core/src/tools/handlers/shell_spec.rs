@@ -151,6 +151,61 @@ pub fn create_write_stdin_tool() -> ToolSpec {
     })
 }
 
+pub fn create_read_exec_output_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "chunk_id".to_string(),
+            JsonSchema::string(Some(
+                "Chunk identifier from a completed exec_command or write_stdin response."
+                    .to_string(),
+            )),
+        ),
+        (
+            "max_output_tokens".to_string(),
+            JsonSchema::number(Some(
+                "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy.".to_string(),
+            )),
+        ),
+        (
+            "line_start".to_string(),
+            JsonSchema::number(Some(
+                "One-based first line to return from the archived raw output.".to_string(),
+            )),
+        ),
+        (
+            "line_count".to_string(),
+            JsonSchema::number(Some(
+                "Maximum number of lines to return from the archived raw output.".to_string(),
+            )),
+        ),
+        (
+            "pattern".to_string(),
+            JsonSchema::string(Some(
+                "Regex pattern to search for in the archived raw output.".to_string(),
+            )),
+        ),
+        (
+            "context_lines".to_string(),
+            JsonSchema::number(Some(
+                "Lines of context around each search match. Defaults to 2.".to_string(),
+            )),
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "read_exec_output".to_string(),
+        description: "Reads raw archived output for a completed unified exec chunk.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec!["chunk_id".to_string()]),
+            Some(false.into()),
+        ),
+        output_schema: None,
+    })
+}
+
 pub fn create_shell_command_tool(options: CommandToolOptions) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
@@ -282,9 +337,21 @@ fn unified_exec_output_schema() -> Value {
                 "type": "number",
                 "description": "Approximate token count before output truncation."
             },
+            "compaction_filter": {
+                "type": "string",
+                "description": "Identifier of the compaction filter applied to model-facing output."
+            },
+            "compacted_token_count": {
+                "type": "number",
+                "description": "Approximate token count after compaction and before output truncation."
+            },
+            "output_compacted": {
+                "type": "boolean",
+                "description": "True when output was compacted before being returned."
+            },
             "output": {
                 "type": "string",
-                "description": "Command output text, possibly truncated."
+                "description": "Command output text, possibly compacted and truncated."
             }
         },
         "required": ["wall_time_seconds", "output"],

@@ -62,6 +62,7 @@ pub struct ToolRouterLedgerEntry {
     pub returned_output_tokens: i64,
     pub original_output_tokens: i64,
     pub truncated_output_tokens: i64,
+    pub output_compaction_filter: Option<String>,
     pub outcome: Option<String>,
     pub request_shape_json: Option<String>,
     pub tool_call_source: Option<String>,
@@ -248,6 +249,7 @@ impl StateRuntime {
                 returned_output_tokens,
                 original_output_tokens,
                 truncated_output_tokens,
+                output_compaction_filter,
                 outcome,
                 request_shape_json,
                 tool_call_source,
@@ -260,7 +262,7 @@ impl StateRuntime {
                 previous_prompt_json,
                 dialog_locator_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(now_ms)
@@ -285,6 +287,7 @@ impl StateRuntime {
         .bind(entry.returned_output_tokens)
         .bind(entry.original_output_tokens)
         .bind(entry.truncated_output_tokens)
+        .bind(entry.output_compaction_filter)
         .bind(entry.outcome)
         .bind(entry.request_shape_json)
         .bind(entry.tool_call_source)
@@ -938,6 +941,7 @@ mod tests {
             returned_output_tokens: 7,
             original_output_tokens: 7,
             truncated_output_tokens: 0,
+            output_compaction_filter: None,
             outcome: outcome.map(str::to_string),
             request_shape_json: None,
             tool_call_source: Some("direct".to_string()),

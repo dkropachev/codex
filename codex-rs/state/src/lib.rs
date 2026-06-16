@@ -95,6 +95,8 @@ pub use runtime::ToolRouterGuidanceKey;
 pub use runtime::ToolRouterGuidanceRecord;
 pub use runtime::ToolRouterLearnedRule;
 pub use runtime::ToolRouterLedgerEntry;
+pub use runtime::ToolRouterOutputOptimizationRecord;
+pub use runtime::ToolRouterOutputOptimizationStatus;
 pub use runtime::ToolRouterRememberedToolKey;
 pub use runtime::ToolRouterRememberedToolRecord;
 pub use runtime::ToolRouterRememberedToolSelector;

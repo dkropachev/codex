@@ -466,7 +466,13 @@ async fn shell_command_enforces_glob_deny_read_policy() -> Result<()> {
     Ok(())
 }
 
-async fn collect_tools(use_unified_exec: bool) -> Result<Vec<String>> {
+#[derive(Clone, Copy)]
+struct CollectToolOptions {
+    unified_exec: bool,
+    exec_output_compaction: bool,
+}
+
+async fn collect_tools(options: CollectToolOptions) -> Result<Vec<String>> {
     let server = start_mock_server().await;
 
     let responses = vec![sse(vec![
@@ -477,7 +483,7 @@ async fn collect_tools(use_unified_exec: bool) -> Result<Vec<String>> {
     let mock = mount_sse_sequence(&server, responses).await;
 
     let mut builder = test_codex().with_config(move |config| {
-        if use_unified_exec {
+        if options.unified_exec {
             config
                 .features
                 .enable(Feature::UnifiedExec)
@@ -486,6 +492,12 @@ async fn collect_tools(use_unified_exec: bool) -> Result<Vec<String>> {
             config
                 .features
                 .disable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+        }
+        if options.exec_output_compaction {
+            config
+                .features
+                .enable(Feature::ExecOutputCompaction)
                 .expect("test config should allow feature update");
         }
     });
@@ -506,7 +518,11 @@ async fn collect_tools(use_unified_exec: bool) -> Result<Vec<String>> {
 async fn unified_exec_spec_toggle_end_to_end() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let tools_disabled = collect_tools(/*use_unified_exec*/ false).await?;
+    let tools_disabled = collect_tools(CollectToolOptions {
+        unified_exec: false,
+        exec_output_compaction: false,
+    })
+    .await?;
     assert!(
         !tools_disabled.iter().any(|name| name == "exec_command"),
         "tools list should not include exec_command when disabled: {tools_disabled:?}"
@@ -516,7 +532,11 @@ async fn unified_exec_spec_toggle_end_to_end() -> Result<()> {
         "tools list should not include write_stdin when disabled: {tools_disabled:?}"
     );
 
-    let tools_enabled = collect_tools(/*use_unified_exec*/ true).await?;
+    let tools_enabled = collect_tools(CollectToolOptions {
+        unified_exec: true,
+        exec_output_compaction: false,
+    })
+    .await?;
     assert!(
         tools_enabled.iter().any(|name| name == "exec_command"),
         "tools list should include exec_command when enabled: {tools_enabled:?}"
@@ -524,6 +544,22 @@ async fn unified_exec_spec_toggle_end_to_end() -> Result<()> {
     assert!(
         tools_enabled.iter().any(|name| name == "write_stdin"),
         "tools list should include write_stdin when enabled: {tools_enabled:?}"
+    );
+    assert!(
+        !tools_enabled.iter().any(|name| name == "read_exec_output"),
+        "tools list should not include read_exec_output when compaction is disabled: {tools_enabled:?}"
+    );
+
+    let tools_with_compaction = collect_tools(CollectToolOptions {
+        unified_exec: true,
+        exec_output_compaction: true,
+    })
+    .await?;
+    assert!(
+        tools_with_compaction
+            .iter()
+            .any(|name| name == "read_exec_output"),
+        "tools list should include read_exec_output when compaction is enabled: {tools_with_compaction:?}"
     );
 
     Ok(())

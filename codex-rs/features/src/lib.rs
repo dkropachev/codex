@@ -97,6 +97,8 @@ pub enum Feature {
     /// on either `unified_exec` or `shell_zsh_fork` because those features have
     /// separate rollout and enterprise controls.
     UnifiedExecZshFork,
+    /// Compact completed unified exec output before returning it to the model.
+    ExecOutputCompaction,
     /// Reflow transcript scrollback when the terminal is resized.
     TerminalResizeReflow,
     /// Add terminal-specific visualization guidance to TUI developer instructions.
@@ -762,6 +764,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::UnifiedExecZshFork,
         key: "unified_exec_zsh_fork",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ExecOutputCompaction,
+        key: "exec_output_compaction",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

@@ -16,7 +16,9 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ToolExecutor;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_protocol::models::ResponseInputItem;
 use tokio::sync::Mutex;
 
 const TEST_TRUNCATION_POLICY: TruncationPolicy = TruncationPolicy::Tokens(10_000);
@@ -36,6 +38,19 @@ async fn invocation_for_payload(
         tool_name: codex_tools::ToolName::plain(tool_name),
         source: ToolCallSource::Direct,
         payload,
+    }
+}
+
+fn function_output_text(
+    output: &dyn crate::tools::context::ToolOutput,
+    payload: &ToolPayload,
+) -> String {
+    match output.to_response_item("call-read-output", payload) {
+        ResponseInputItem::FunctionCallOutput { output, .. } => output
+            .body
+            .to_text()
+            .expect("function output should be text"),
+        other => panic!("expected FunctionCallOutput, got {other:?}"),
     }
 }
 
@@ -289,6 +304,7 @@ async fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_s
         chunk_id: "chunk-1".to_string(),
         wall_time: std::time::Duration::from_millis(498),
         raw_output: b"three".to_vec(),
+        compaction: None,
         truncation_policy: TEST_TRUNCATION_POLICY,
         max_output_tokens: None,
         process_id: None,
@@ -319,6 +335,7 @@ async fn exec_command_post_tool_use_payload_uses_output_for_interactive_completi
         chunk_id: "chunk-1".to_string(),
         wall_time: std::time::Duration::from_millis(498),
         raw_output: b"three".to_vec(),
+        compaction: None,
         truncation_policy: TEST_TRUNCATION_POLICY,
         max_output_tokens: None,
         process_id: None,
@@ -350,6 +367,7 @@ async fn exec_command_post_tool_use_payload_skips_running_sessions() {
         chunk_id: "chunk-1".to_string(),
         wall_time: std::time::Duration::from_millis(498),
         raw_output: b"three".to_vec(),
+        compaction: None,
         truncation_policy: TEST_TRUNCATION_POLICY,
         max_output_tokens: None,
         process_id: Some(45),
@@ -376,6 +394,7 @@ async fn write_stdin_post_tool_use_payload_uses_original_exec_call_id_and_comman
         chunk_id: "chunk-2".to_string(),
         wall_time: std::time::Duration::from_millis(498),
         raw_output: b"finished\n".to_vec(),
+        compaction: None,
         truncation_policy: TEST_TRUNCATION_POLICY,
         max_output_tokens: None,
         process_id: None,
@@ -407,6 +426,7 @@ async fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separ
         chunk_id: "chunk-a".to_string(),
         wall_time: std::time::Duration::from_millis(498),
         raw_output: b"alpha\n".to_vec(),
+        compaction: None,
         truncation_policy: TEST_TRUNCATION_POLICY,
         max_output_tokens: None,
         process_id: None,
@@ -419,6 +439,7 @@ async fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separ
         chunk_id: "chunk-b".to_string(),
         wall_time: std::time::Duration::from_millis(498),
         raw_output: b"beta\n".to_vec(),
+        compaction: None,
         truncation_policy: TEST_TRUNCATION_POLICY,
         max_output_tokens: None,
         process_id: None,
@@ -451,5 +472,110 @@ async fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separ
                 tool_response: serde_json::json!("alpha\n"),
             }),
         ]
+    );
+}
+
+#[tokio::test]
+async fn read_exec_output_returns_archived_raw_lines() -> anyhow::Result<()> {
+    let (session, turn) = make_session_and_context().await;
+    session
+        .services
+        .unified_exec_manager
+        .archive_completed_output(
+            "chunk-raw",
+            b"line 1\nline 2 hidden by compaction\nline 3\nline 4",
+        )
+        .await;
+    let payload = ToolPayload::Function {
+        arguments: serde_json::json!({
+            "chunk_id": "chunk-raw",
+            "line_start": 2,
+            "line_count": 2,
+        })
+        .to_string(),
+    };
+
+    let output = ReadExecOutputHandler
+        .handle(ToolInvocation {
+            session: Arc::new(session),
+            turn: Arc::new(turn),
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
+            tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+            call_id: "call-read-output".to_string(),
+            tool_name: codex_tools::ToolName::plain("read_exec_output"),
+            source: ToolCallSource::Direct,
+            payload: payload.clone(),
+        })
+        .await?;
+
+    assert_eq!(
+        function_output_text(output.as_ref(), &payload),
+        "Chunk ID: chunk-raw\nOutput:\nline 2 hidden by compaction\nline 3"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_exec_output_search_returns_context() -> anyhow::Result<()> {
+    let (session, turn) = make_session_and_context().await;
+    session
+        .services
+        .unified_exec_manager
+        .archive_completed_output("chunk-search", b"before\nmatch: needle\nafter\nfar\n")
+        .await;
+    let payload = ToolPayload::Function {
+        arguments: serde_json::json!({
+            "chunk_id": "chunk-search",
+            "pattern": "needle",
+            "context_lines": 1,
+        })
+        .to_string(),
+    };
+
+    let output = ReadExecOutputHandler
+        .handle(ToolInvocation {
+            session: Arc::new(session),
+            turn: Arc::new(turn),
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
+            tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+            call_id: "call-read-output".to_string(),
+            tool_name: codex_tools::ToolName::plain("read_exec_output"),
+            source: ToolCallSource::Direct,
+            payload: payload.clone(),
+        })
+        .await?;
+
+    assert_eq!(
+        function_output_text(output.as_ref(), &payload),
+        "Chunk ID: chunk-search\nOutput:\nbefore\nmatch: needle\nafter"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_exec_output_rejects_search_plus_line_slicing() {
+    let invocation = invocation_for_payload(
+        "read_exec_output",
+        "call-read-output",
+        ToolPayload::Function {
+            arguments: serde_json::json!({
+                "chunk_id": "chunk-raw",
+                "pattern": "needle",
+                "line_start": 1,
+            })
+            .to_string(),
+        },
+    )
+    .await;
+
+    let err = match ReadExecOutputHandler.handle(invocation).await {
+        Ok(_) => panic!("mixed search and slicing should fail"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.to_string()
+            .contains("cannot combine `pattern` search with `line_start`/`line_count` slicing"),
+        "unexpected error: {err}"
     );
 }

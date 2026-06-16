@@ -18,10 +18,12 @@ use std::sync::Arc;
 use crate::tools::handlers::parse_arguments;
 
 mod exec_command;
+mod read_exec_output;
 mod write_stdin;
 
 pub use exec_command::ExecCommandHandler;
 pub(crate) use exec_command::ExecCommandHandlerOptions;
+pub use read_exec_output::ReadExecOutputHandler;
 pub use write_stdin::WriteStdinHandler;
 
 #[derive(Debug, Deserialize)]

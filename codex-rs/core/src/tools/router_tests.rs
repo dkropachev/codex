@@ -16,12 +16,15 @@ use codex_features::Feature;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_state::ToolRouterDiagnosticsWindow;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
+use codex_tools::ToolOutput;
+use codex_tools::ToolOutputTokenUsage;
 use codex_tools::ToolSpec;
 use codex_tools::default_namespace_description;
 use pretty_assertions::assert_eq;
@@ -29,6 +32,8 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
+use super::AnyToolResult;
+use super::DirectToolDiagnosticsInput;
 use super::ToolCall;
 use super::ToolCallSource;
 use super::ToolRouter;
@@ -90,6 +95,35 @@ impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
             "conversationHistory": call.conversation_history.items(),
             "ok": true,
         }))))
+    }
+}
+
+struct TokenHintOutput;
+
+impl ToolOutput for TokenHintOutput {
+    fn log_preview(&self) -> String {
+        "compacted output".to_string()
+    }
+
+    fn success_for_logging(&self) -> bool {
+        true
+    }
+
+    fn token_usage_hint(&self) -> ToolOutputTokenUsage {
+        ToolOutputTokenUsage {
+            original_output_tokens: Some(1_000),
+            output_compaction_filter: Some("cargo-test-v1".to_string()),
+        }
+    }
+
+    fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
+        ResponseInputItem::FunctionCallOutput {
+            call_id: call_id.to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("compacted output".to_string()),
+                success: Some(true),
+            },
+        }
     }
 }
 
@@ -547,6 +581,56 @@ async fn tool_router_records_direct_dispatch_diagnostics() -> anyhow::Result<()>
             tool_name: "echo".to_string(),
         }]
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_router_diagnostics_use_original_output_token_hint() -> anyhow::Result<()> {
+    let state_home = TempDir::new().expect("temp dir");
+    let state_db =
+        codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
+            .await?;
+    let (mut session, mut turn) = make_session_and_context().await;
+    turn.features.enable(Feature::ToolRouter)?;
+    session.services.state_db = Some(Arc::clone(&state_db));
+    session.services.extensions = extension_tool_test_registry();
+
+    let router = extension_echo_router(&session, &turn);
+    let payload = ToolPayload::Function {
+        arguments: "{}".to_string(),
+    };
+    let result = Ok(AnyToolResult {
+        call_id: "call-token-hint".to_string(),
+        payload: payload.clone(),
+        result: Box::new(TokenHintOutput),
+        post_tool_use_payload: None,
+    });
+
+    let diagnostics = router
+        .build_direct_tool_diagnostics(DirectToolDiagnosticsInput {
+            session: &session,
+            turn: &turn,
+            call_id: "call-token-hint",
+            tool_name: &ToolName::plain("exec_command"),
+            payload: &payload,
+            source: &ToolCallSource::Direct,
+            result: &result,
+        })
+        .expect("diagnostics should be built");
+
+    assert_eq!(diagnostics.ledger_entry.original_output_tokens, 1_000);
+    assert_eq!(
+        diagnostics.ledger_entry.output_compaction_filter.as_deref(),
+        Some("cargo-test-v1")
+    );
+    assert!(
+        diagnostics.ledger_entry.returned_output_tokens
+            < diagnostics.ledger_entry.original_output_tokens,
+        "returned output should be smaller than original hint: {:?}",
+        diagnostics.ledger_entry
+    );
+    assert_eq!(diagnostics.ledger_entry.truncated_output_tokens, 0);
 
     Ok(())
 }

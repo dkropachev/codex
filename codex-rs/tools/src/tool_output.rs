@@ -18,6 +18,12 @@ pub trait ToolOutput: Send {
 
     fn success_for_logging(&self) -> bool;
 
+    /// Optional token counts for diagnostics that cannot be inferred from the
+    /// model-facing response item.
+    fn token_usage_hint(&self) -> ToolOutputTokenUsage {
+        ToolOutputTokenUsage::default()
+    }
+
     /// Whether this output contains external context that should disable memory generation when
     /// `memories.disable_on_external_context` is enabled.
     fn contains_external_context(&self) -> bool {
@@ -64,6 +70,10 @@ where
         (**self).success_for_logging()
     }
 
+    fn token_usage_hint(&self) -> ToolOutputTokenUsage {
+        (**self).token_usage_hint()
+    }
+
     fn contains_external_context(&self) -> bool {
         (**self).contains_external_context()
     }
@@ -87,6 +97,12 @@ where
     fn code_mode_result(&self, payload: &ToolPayload) -> JsonValue {
         (**self).code_mode_result(payload)
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolOutputTokenUsage {
+    pub original_output_tokens: Option<usize>,
+    pub output_compaction_filter: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -255,6 +255,8 @@ mod tests {
     use std::io;
     use std::path::PathBuf;
 
+    use base64::Engine as _;
+
     use super::image_protocol::ImageProtocol;
     use super::*;
 
@@ -323,7 +325,8 @@ mod tests {
     fn kitty_local_file_pet_image_uses_file_reference_without_inline_payload() {
         let dir = tempfile::tempdir().unwrap();
         let frame = dir.path().join("frame.png");
-        std::fs::write(&frame, b"png").unwrap();
+        let file_contents = b"local-file-protocol-should-not-inline-this-payload";
+        std::fs::write(&frame, file_contents).unwrap();
         let request = AmbientPetDraw {
             frame,
             protocol: ImageProtocol::KittyLocalFile,
@@ -344,7 +347,8 @@ mod tests {
         assert!(output.contains("a=d,d=I,i=49374,q=2;"));
         assert!(output.contains("\x1b[4;3H"));
         assert!(output.contains("a=T,t=f,f=100,c=4,r=2,q=2,i=49374;"));
-        assert!(!output.contains("cG5n"));
+        let inline_payload = base64::engine::general_purpose::STANDARD.encode(file_contents);
+        assert!(!output.contains(&inline_payload));
         assert!(output.contains("\x1b8"));
     }
 

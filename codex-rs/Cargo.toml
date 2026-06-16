@@ -32,6 +32,7 @@ members = [
     "connectors",
     "config",
     "context-fragments",
+    "exec-output-compaction",
     "shell-command",
     "shell-escalation",
     "skills",
@@ -170,6 +171,7 @@ codex-core-api = { path = "core-api" }
 codex-core-plugins = { path = "core-plugins" }
 codex-core-skills = { path = "core-skills" }
 codex-exec = { path = "exec" }
+codex-exec-output-compaction = { path = "exec-output-compaction" }
 codex-file-system = { path = "file-system" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }

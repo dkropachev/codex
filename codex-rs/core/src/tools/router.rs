@@ -301,6 +301,15 @@ impl ToolRouter {
             .as_deref()
             .map(estimate_text_tokens)
             .unwrap_or_default();
+        let token_usage_hint = result
+            .as_ref()
+            .ok()
+            .map(|tool_result| tool_result.result.token_usage_hint())
+            .unwrap_or_default();
+        let original_output_tokens = token_usage_hint
+            .original_output_tokens
+            .and_then(|tokens| i64::try_from(tokens).ok())
+            .unwrap_or(output_tokens);
         let tool_success = result
             .as_ref()
             .ok()
@@ -331,8 +340,9 @@ impl ToolRouter {
             spark_completion_tokens: 0,
             fanout_call_count: 1,
             returned_output_tokens: output_tokens,
-            original_output_tokens: output_tokens,
+            original_output_tokens,
             truncated_output_tokens: 0,
+            output_compaction_filter: token_usage_hint.output_compaction_filter,
             outcome,
             request_shape_json: None,
             tool_call_source: Some(tool_call_source_label(source).to_string()),
@@ -371,11 +381,17 @@ impl ToolRouter {
 
 async fn record_direct_tool_diagnostics(diagnostics: DirectToolDiagnostics) {
     let state_db = diagnostics.state_db;
+    let ledger_entry = diagnostics.ledger_entry;
     if let Err(err) = state_db
-        .record_tool_router_ledger_entry(diagnostics.ledger_entry)
+        .record_tool_router_ledger_entry(ledger_entry.clone())
         .await
     {
         warn!("failed to record tool router ledger entry: {err:#}");
+    } else if let Err(err) = state_db
+        .record_tool_router_output_optimization_observation(ledger_entry)
+        .await
+    {
+        warn!("failed to record tool router output optimization observation: {err:#}");
     }
 
     if let Err(err) = state_db

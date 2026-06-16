@@ -161,6 +161,68 @@ fn write_stdin_tool_matches_expected_spec() {
 }
 
 #[test]
+fn read_exec_output_tool_matches_expected_spec() {
+    let tool = create_read_exec_output_tool();
+
+    let properties = BTreeMap::from([
+        (
+            "chunk_id".to_string(),
+            JsonSchema::string(Some(
+                "Chunk identifier from a completed exec_command or write_stdin response."
+                    .to_string(),
+            )),
+        ),
+        (
+            "max_output_tokens".to_string(),
+            JsonSchema::number(Some(
+                "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy.".to_string(),
+            )),
+        ),
+        (
+            "line_start".to_string(),
+            JsonSchema::number(Some(
+                "One-based first line to return from the archived raw output.".to_string(),
+            )),
+        ),
+        (
+            "line_count".to_string(),
+            JsonSchema::number(Some(
+                "Maximum number of lines to return from the archived raw output.".to_string(),
+            )),
+        ),
+        (
+            "pattern".to_string(),
+            JsonSchema::string(Some(
+                "Regex pattern to search for in the archived raw output.".to_string(),
+            )),
+        ),
+        (
+            "context_lines".to_string(),
+            JsonSchema::number(Some(
+                "Lines of context around each search match. Defaults to 2.".to_string(),
+            )),
+        ),
+    ]);
+
+    assert_eq!(
+        tool,
+        ToolSpec::Function(ResponsesApiTool {
+            name: "read_exec_output".to_string(),
+            description: "Reads raw archived output for a completed unified exec chunk."
+                .to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: JsonSchema::object(
+                properties,
+                Some(vec!["chunk_id".to_string()]),
+                Some(false.into())
+            ),
+            output_schema: None,
+        })
+    );
+}
+
+#[test]
 fn request_permissions_tool_includes_full_permission_schema() {
     let tool =
         create_request_permissions_tool("Request extra permissions for this turn.".to_string());

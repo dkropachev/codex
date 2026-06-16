@@ -510,6 +510,7 @@ mod tests {
             returned_output_tokens: 7,
             original_output_tokens: 7,
             truncated_output_tokens: 0,
+            output_compaction_filter: None,
             outcome: outcome.map(str::to_string),
             request_shape_json: None,
             tool_call_source: None,

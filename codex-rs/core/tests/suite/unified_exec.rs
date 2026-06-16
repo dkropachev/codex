@@ -63,6 +63,8 @@ struct ParsedUnifiedExecOutput {
     process_id: Option<String>,
     exit_code: Option<i32>,
     original_token_count: Option<usize>,
+    compaction_filter: Option<String>,
+    compacted_token_count: Option<usize>,
     output: String,
 }
 
@@ -77,6 +79,8 @@ fn parse_unified_exec_output(raw: &str) -> Result<ParsedUnifiedExecOutput> {
             r#"(?:Process exited with code (?P<exit_code>-?\d+)\n)?"#,
             r#"(?:Process running with session ID (?P<process_id>-?\d+)\n)?"#,
             r#"(?:Original token count: (?P<original_token_count>\d+)\n)?"#,
+            r#"(?:Compaction: (?P<compaction_filter>[^\n]+)\n)?"#,
+            r#"(?:Compacted token count: (?P<compacted_token_count>\d+)\n)?"#,
             r#"Output:\n?(?P<output>.*)$"#,
         ))
         .expect("valid unified exec output regex")
@@ -127,6 +131,18 @@ fn parse_unified_exec_output(raw: &str) -> Result<ParsedUnifiedExecOutput> {
         .expect("output group present")
         .as_str()
         .to_string();
+    let compaction_filter = captures
+        .name("compaction_filter")
+        .map(|value| value.as_str().to_string());
+    let compacted_token_count = captures
+        .name("compacted_token_count")
+        .map(|value| {
+            value
+                .as_str()
+                .parse::<usize>()
+                .context("failed to parse compacted token count from unified exec output")
+        })
+        .transpose()?;
 
     Ok(ParsedUnifiedExecOutput {
         chunk_id,
@@ -134,6 +150,8 @@ fn parse_unified_exec_output(raw: &str) -> Result<ParsedUnifiedExecOutput> {
         process_id,
         exit_code,
         original_token_count,
+        compaction_filter,
+        compacted_token_count,
         output,
     })
 }
@@ -162,6 +180,67 @@ fn collect_tool_outputs(bodies: &[Value]) -> Result<HashMap<String, ParsedUnifie
         }
     }
     Ok(outputs)
+}
+
+fn cargo_test_success_script(pass_count: usize) -> String {
+    format!(
+        r#"python3 - <<'PY'
+for idx in range({pass_count}):
+    print(f"test crate::module::passes_{{idx}} ... ok")
+print("test result: ok. {pass_count} passed; 0 failed; 0 ignored; finished in 1.23s")
+PY
+"#
+    )
+}
+
+fn rg_output_for_tool_router_candidate(lines: usize) -> String {
+    (0..lines)
+        .map(|idx| format!("src/module_{}.rs:{idx}:fn target_{idx}() {{}}\n", idx % 8))
+        .collect()
+}
+
+fn tool_router_exec_ledger_entry(
+    thread_id: &str,
+    call_id: &str,
+    tool_input_json: &str,
+    output: &str,
+) -> codex_state::ToolRouterLedgerEntry {
+    let output_tokens = i64::try_from(output.len().div_ceil(4)).unwrap_or(i64::MAX);
+    codex_state::ToolRouterLedgerEntry {
+        thread_id: thread_id.to_string(),
+        turn_id: "seed-turn".to_string(),
+        call_id: call_id.to_string(),
+        model_slug: "gpt-test".to_string(),
+        model_provider: "openai".to_string(),
+        toolset_hash: "abc123".to_string(),
+        router_schema_version: 1,
+        model_response_ordinal: 0,
+        guidance_version: 0,
+        guidance_tokens: 0,
+        format_description_tokens: 0,
+        route_kind: "deterministic".to_string(),
+        selected_tools: vec!["exec_command".to_string()],
+        visible_router_schema_tokens: 10,
+        hidden_tool_schema_tokens: 0,
+        spark_prompt_tokens: 0,
+        spark_completion_tokens: 0,
+        fanout_call_count: 1,
+        returned_output_tokens: output_tokens,
+        original_output_tokens: output_tokens,
+        truncated_output_tokens: 0,
+        output_compaction_filter: None,
+        outcome: Some("ok".to_string()),
+        request_shape_json: None,
+        tool_call_source: Some("direct".to_string()),
+        tool_name: Some("exec_command".to_string()),
+        tool_namespace: None,
+        tool_input_json: Some(tool_input_json.to_string()),
+        tool_output_json: Some(serde_json::json!({ "output": output }).to_string()),
+        tool_success: Some(true),
+        prompt_json: None,
+        previous_prompt_json: None,
+        dialog_locator_json: None,
+    }
 }
 
 async fn wait_for_raw_unified_exec_output(
@@ -1469,6 +1548,325 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
         original_tokens > 6,
         "original token count should exceed max_output_tokens"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_output_compaction_compacts_completed_unified_exec_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::ExecOutputCompaction)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_with_remote_env(&server).await?;
+
+    let script = cargo_test_success_script(600);
+    let call_id = "uexec-compacted";
+    let args = serde_json::json!({
+        "cmd": script,
+        "yield_time_ms": 3_000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    submit_unified_exec_turn(
+        &test,
+        "run compacted output test",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    assert!(!requests.is_empty(), "expected at least one POST request");
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+
+    let outputs = collect_tool_outputs(&bodies)?;
+    let compacted = outputs
+        .get(call_id)
+        .expect("missing compacted exec_command output");
+
+    assert_eq!(
+        compacted.compaction_filter.as_deref(),
+        Some("cargo-test-v1")
+    );
+    let original_tokens = compacted
+        .original_token_count
+        .expect("missing original token count");
+    let compacted_tokens = compacted
+        .compacted_token_count
+        .expect("missing compacted token count");
+    assert!(
+        compacted_tokens < original_tokens,
+        "expected compaction savings, got original={original_tokens} compacted={compacted_tokens}"
+    );
+    assert!(compacted.output.contains("test result: ok"));
+    assert!(
+        !compacted.output.contains("passes_599"),
+        "passing-test noise should be hidden from model output: {:?}",
+        compacted.output
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn builtin_exec_output_compaction_skips_tool_router_optimizer() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::ExecOutputCompaction)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::ToolRouter)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_with_remote_env(&server).await?;
+
+    let call_id = "uexec-builtin-compacted";
+    let args = serde_json::json!({
+        "cmd": cargo_test_success_script(600),
+        "yield_time_ms": 3_000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    submit_unified_exec_turn(
+        &test,
+        "run builtin compacted output with tool-router enabled",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let bodies = request_log
+        .requests()
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+    let outputs = collect_tool_outputs(&bodies)?;
+    let compacted = outputs
+        .get(call_id)
+        .expect("missing compacted exec_command output");
+    assert_eq!(
+        compacted.compaction_filter.as_deref(),
+        Some("cargo-test-v1")
+    );
+    assert!(compacted.output.contains("test result: ok"));
+    assert!(!compacted.output.contains("passes_599"));
+
+    let state_db = test.codex.state_db().context("state db enabled")?;
+    let records = state_db.list_tool_router_output_optimizations(None).await?;
+    assert_eq!(records, Vec::new());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn builtin_exec_output_raw_recovery_keeps_learned_optimizer_candidate() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::ExecOutputCompaction)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::ToolRouter)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_with_remote_env(&server).await?;
+    let state_db = test.codex.state_db().context("state db enabled")?;
+    let thread_id = test.session_configured.thread_id.to_string();
+    let rg_output = rg_output_for_tool_router_candidate(80);
+    state_db
+        .record_tool_router_output_optimization_observation(tool_router_exec_ledger_entry(
+            thread_id.as_str(),
+            "seed-rg-candidate",
+            r#"{"cmd":"rg -n target src"}"#,
+            rg_output.as_str(),
+        ))
+        .await?;
+
+    let exec_call_id = "uexec-builtin-for-recovery";
+    let exec_args = serde_json::json!({
+        "cmd": cargo_test_success_script(600),
+        "yield_time_ms": 3_000,
+    });
+    let first_request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    exec_call_id,
+                    "exec_command",
+                    &serde_json::to_string(&exec_args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "first turn done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_unified_exec_turn(
+        &test,
+        "run builtin compacted output before raw recovery",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let first_bodies = first_request_log
+        .requests()
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+    let first_outputs = collect_tool_outputs(&first_bodies)?;
+    let compacted = first_outputs
+        .get(exec_call_id)
+        .expect("missing compacted exec output");
+    assert_eq!(
+        compacted.compaction_filter.as_deref(),
+        Some("cargo-test-v1")
+    );
+    let chunk_id = compacted
+        .chunk_id
+        .as_deref()
+        .expect("compacted exec output should include chunk_id");
+
+    let read_call_id = "read-builtin-raw";
+    let read_args = serde_json::json!({
+        "chunk_id": chunk_id,
+        "pattern": "passes_599",
+        "context_lines": 0,
+        "max_output_tokens": 1_000,
+    });
+    let second_request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_function_call(
+                    read_call_id,
+                    "read_exec_output",
+                    &serde_json::to_string(&read_args)?,
+                ),
+                ev_completed("resp-3"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-2", "second turn done"),
+                ev_completed("resp-4"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_unified_exec_turn(
+        &test,
+        "recover raw output for the previous compacted command",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let recovered_raw = second_request_log
+        .function_call_output_text(read_call_id)
+        .expect("missing read_exec_output result");
+    assert!(recovered_raw.contains("passes_599"));
+
+    let declined_records = state_db
+        .list_tool_router_output_optimizations(Some(
+            codex_state::ToolRouterOutputOptimizationStatus::Declined,
+        ))
+        .await?;
+    assert_eq!(declined_records, Vec::new());
+
+    let candidate_records = state_db
+        .list_tool_router_output_optimizations(Some(
+            codex_state::ToolRouterOutputOptimizationStatus::Candidate,
+        ))
+        .await?;
+    assert_eq!(candidate_records.len(), 1);
+    assert_eq!(candidate_records[0].suggestion_key, "exec.rg-summary-v1");
+    assert_eq!(candidate_records[0].recovery_count, 0);
 
     Ok(())
 }

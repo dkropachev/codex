@@ -66,6 +66,7 @@ pub use test_sync::TestSyncHandler;
 pub use tool_search::ToolSearchHandler;
 pub use unified_exec::ExecCommandHandler;
 pub(crate) use unified_exec::ExecCommandHandlerOptions;
+pub use unified_exec::ReadExecOutputHandler;
 pub use unified_exec::WriteStdinHandler;
 pub use view_image::ViewImageHandler;
 

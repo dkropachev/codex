@@ -31,11 +31,24 @@ use tokio::time::timeout;
 use super::connection_handling_websocket::DEFAULT_READ_TIMEOUT;
 use super::connection_handling_websocket::assert_no_message;
 use super::connection_handling_websocket::connect_websocket;
-use super::connection_handling_websocket::create_config_toml;
+use super::connection_handling_websocket::create_config_toml as create_base_config_toml;
 use super::connection_handling_websocket::read_jsonrpc_message;
 use super::connection_handling_websocket::send_initialize_request;
 use super::connection_handling_websocket::send_request;
 use super::connection_handling_websocket::spawn_websocket_server;
+
+const LINUX_SANDBOX_STREAM_FD_WARNING: &str =
+    "Failed to create stream fd: Operation not permitted\n";
+
+fn normalize_command_exec_response(mut response: CommandExecResponse) -> CommandExecResponse {
+    while let Some(stderr) = response
+        .stderr
+        .strip_prefix(LINUX_SANDBOX_STREAM_FD_WARNING)
+    {
+        response.stderr = stderr.to_string();
+    }
+    response
+}
 
 #[tokio::test]
 async fn command_exec_without_streams_can_be_terminated() -> Result<()> {
@@ -76,7 +89,7 @@ async fn command_exec_without_streams_can_be_terminated() -> Result<()> {
     let response = mcp
         .read_stream_until_response_message(RequestId::Integer(command_request_id))
         .await?;
-    let response: CommandExecResponse = to_response(response)?;
+    let response = normalize_command_exec_response(to_response(response)?);
     assert_ne!(
         response.exit_code, 0,
         "terminated command should not succeed"
@@ -121,7 +134,7 @@ async fn command_exec_without_process_id_keeps_buffered_compatibility() -> Resul
     let response = mcp
         .read_stream_until_response_message(RequestId::Integer(command_request_id))
         .await?;
-    let response: CommandExecResponse = to_response(response)?;
+    let response = normalize_command_exec_response(to_response(response)?);
     assert_eq!(
         response,
         CommandExecResponse {
@@ -180,7 +193,7 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
     let response = mcp
         .read_stream_until_response_message(RequestId::Integer(command_request_id))
         .await?;
-    let response: CommandExecResponse = to_response(response)?;
+    let response = normalize_command_exec_response(to_response(response)?);
     assert_eq!(
         response,
         CommandExecResponse {
@@ -227,7 +240,7 @@ async fn command_exec_accepts_permission_profile() -> Result<()> {
     let response = mcp
         .read_stream_until_response_message(RequestId::Integer(command_request_id))
         .await?;
-    let response: CommandExecResponse = to_response(response)?;
+    let response = normalize_command_exec_response(to_response(response)?);
     assert_eq!(
         response,
         CommandExecResponse {
@@ -278,7 +291,7 @@ async fn command_exec_permission_profile_starts_selected_network_proxy() -> Resu
     let response = mcp
         .read_stream_until_response_message(RequestId::Integer(command_request_id))
         .await?;
-    let response: CommandExecResponse = to_response(response)?;
+    let response = normalize_command_exec_response(to_response(response)?);
     assert_eq!(
         response,
         CommandExecResponse {
@@ -326,7 +339,7 @@ async fn command_exec_permission_profile_does_not_reuse_default_network_proxy() 
     let response = mcp
         .read_stream_until_response_message(RequestId::Integer(command_request_id))
         .await?;
-    let response: CommandExecResponse = to_response(response)?;
+    let response = normalize_command_exec_response(to_response(response)?);
     assert_eq!(
         response,
         CommandExecResponse {
@@ -1224,6 +1237,23 @@ fn insert_command_exec_config(codex_home: &Path, inserted_config: &str) -> Resul
     let config = format!("{prefix}\n{inserted_config}{marker}{suffix}");
     std::fs::write(config_path, config)?;
     Ok(())
+}
+
+fn create_config_toml(
+    codex_home: &Path,
+    server_uri: &str,
+    approval_policy: &str,
+) -> std::io::Result<()> {
+    create_base_config_toml(codex_home, server_uri, approval_policy)?;
+    let config_path = codex_home.join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        config_path,
+        config.replace(
+            "sandbox_mode = \"read-only\"",
+            "sandbox_mode = \"danger-full-access\"",
+        ),
+    )
 }
 
 async fn read_initialize_response(

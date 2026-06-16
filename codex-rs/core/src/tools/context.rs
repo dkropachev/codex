@@ -15,6 +15,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_tools::LoadableToolSpec;
 use codex_tools::ToolName;
+use codex_tools::ToolOutputTokenUsage;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_string::take_bytes_at_char_boundary;
@@ -311,12 +312,20 @@ pub struct ExecCommandToolOutput {
     pub wall_time: Duration,
     /// Raw bytes returned for this unified exec call before any truncation.
     pub raw_output: Vec<u8>,
+    pub compaction: Option<ExecOutputCompaction>,
     pub truncation_policy: TruncationPolicy,
     pub max_output_tokens: Option<usize>,
     pub process_id: Option<i32>,
     pub exit_code: Option<i32>,
     pub original_token_count: Option<usize>,
     pub hook_command: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecOutputCompaction {
+    pub filter_id: String,
+    pub compacted_output: String,
+    pub compacted_token_count: usize,
 }
 
 impl ToolOutput for ExecCommandToolOutput {
@@ -326,6 +335,16 @@ impl ToolOutput for ExecCommandToolOutput {
 
     fn success_for_logging(&self) -> bool {
         true
+    }
+
+    fn token_usage_hint(&self) -> ToolOutputTokenUsage {
+        ToolOutputTokenUsage {
+            original_output_tokens: self.original_token_count,
+            output_compaction_filter: self
+                .compaction
+                .as_ref()
+                .map(|compaction| compaction.filter_id.clone()),
+        }
     }
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
@@ -375,19 +394,26 @@ impl ToolOutput for ExecCommandToolOutput {
             session_id: Option<i32>,
             #[serde(skip_serializing_if = "Option::is_none")]
             original_token_count: Option<usize>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            compaction_filter: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            compacted_token_count: Option<usize>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            output_compacted: Option<bool>,
             output: String,
         }
 
+        let compaction = self.compaction.as_ref();
         let result = UnifiedExecCodeModeResult {
             chunk_id: (!self.chunk_id.is_empty()).then(|| self.chunk_id.clone()),
             wall_time_seconds: self.wall_time.as_secs_f64(),
             exit_code: self.exit_code,
             session_id: self.process_id,
             original_token_count: self.original_token_count,
-            output: match self.max_output_tokens {
-                Some(max_tokens) => self.truncated_output(max_tokens),
-                None => String::from_utf8_lossy(&self.raw_output).to_string(),
-            },
+            compaction_filter: compaction.map(|compaction| compaction.filter_id.clone()),
+            compacted_token_count: compaction.map(|compaction| compaction.compacted_token_count),
+            output_compacted: compaction.map(|_| true),
+            output: self.output_for_model(self.max_output_tokens),
         };
 
         serde_json::to_value(result).unwrap_or_else(|err| {
@@ -402,8 +428,22 @@ impl ExecCommandToolOutput {
     }
 
     pub(crate) fn truncated_output(&self, max_tokens: usize) -> String {
-        let text = String::from_utf8_lossy(&self.raw_output).to_string();
+        let text = self.model_output_text();
         formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens))
+    }
+
+    fn output_for_model(&self, max_output_tokens: Option<usize>) -> String {
+        match max_output_tokens {
+            Some(max_tokens) => self.truncated_output(max_tokens),
+            None => self.model_output_text(),
+        }
+    }
+
+    fn model_output_text(&self) -> String {
+        self.compaction.as_ref().map_or_else(
+            || String::from_utf8_lossy(&self.raw_output).to_string(),
+            |compaction| compaction.compacted_output.clone(),
+        )
     }
 
     fn response_text(&self) -> String {
@@ -426,6 +466,14 @@ impl ExecCommandToolOutput {
 
         if let Some(original_token_count) = self.original_token_count {
             sections.push(format!("Original token count: {original_token_count}"));
+        }
+
+        if let Some(compaction) = &self.compaction {
+            sections.push(format!("Compaction: {}", compaction.filter_id));
+            sections.push(format!(
+                "Compacted token count: {}",
+                compaction.compacted_token_count
+            ));
         }
 
         sections.push("Output:".to_string());

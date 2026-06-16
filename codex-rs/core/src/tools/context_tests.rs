@@ -429,6 +429,7 @@ fn exec_command_tool_output_formats_truncated_response() {
         chunk_id: "abc123".to_string(),
         wall_time: std::time::Duration::from_millis(1250),
         raw_output: b"token one token two token three token four token five".to_vec(),
+        compaction: None,
         truncation_policy: TruncationPolicy::Tokens(10_000),
         max_output_tokens: Some(4),
         process_id: None,
@@ -460,4 +461,99 @@ fn exec_command_tool_output_formats_truncated_response() {
         }
         other => panic!("expected FunctionCallOutput, got {other:?}"),
     }
+}
+
+#[test]
+fn exec_command_tool_output_uses_compacted_model_output_and_metadata() {
+    let payload = ToolPayload::Function {
+        arguments: "{}".to_string(),
+    };
+    let output = ExecCommandToolOutput {
+        event_call_id: "call-42".to_string(),
+        chunk_id: "abc123".to_string(),
+        wall_time: std::time::Duration::from_millis(1250),
+        raw_output: b"raw hidden line\nraw hidden line 2".to_vec(),
+        compaction: Some(ExecOutputCompaction {
+            filter_id: "cargo-test-v1".to_string(),
+            compacted_output: "compacted summary".to_string(),
+            compacted_token_count: 3,
+        }),
+        truncation_policy: TruncationPolicy::Tokens(10_000),
+        max_output_tokens: None,
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: Some(500),
+        hook_command: None,
+    };
+
+    let response = output.to_response_item("call-42", &payload);
+    match response {
+        ResponseInputItem::FunctionCallOutput { output, .. } => {
+            let text = output
+                .body
+                .to_text()
+                .expect("exec output should serialize as text");
+            assert!(text.contains("Original token count: 500"));
+            assert!(text.contains("Compaction: cargo-test-v1"));
+            assert!(text.contains("Compacted token count: 3"));
+            assert!(text.contains("compacted summary"));
+            assert!(!text.contains("raw hidden line"));
+        }
+        other => panic!("expected FunctionCallOutput, got {other:?}"),
+    }
+
+    let code_mode_result = output.code_mode_result(&payload);
+    assert_eq!(
+        code_mode_result,
+        json!({
+            "chunk_id": "abc123",
+            "wall_time_seconds": 1.25,
+            "exit_code": 0,
+            "original_token_count": 500,
+            "compaction_filter": "cargo-test-v1",
+            "compacted_token_count": 3,
+            "output_compacted": true,
+            "output": "compacted summary",
+        })
+    );
+    assert_eq!(
+        output.token_usage_hint(),
+        codex_tools::ToolOutputTokenUsage {
+            original_output_tokens: Some(500),
+            output_compaction_filter: Some("cargo-test-v1".to_string()),
+        }
+    );
+}
+
+#[test]
+fn exec_command_tool_output_truncates_compacted_response_output() {
+    let payload = ToolPayload::Function {
+        arguments: "{}".to_string(),
+    };
+    let output = ExecCommandToolOutput {
+        event_call_id: "call-42".to_string(),
+        chunk_id: "abc123".to_string(),
+        wall_time: std::time::Duration::from_millis(1250),
+        raw_output: b"raw hidden line\nraw hidden line 2".to_vec(),
+        compaction: Some(ExecOutputCompaction {
+            filter_id: "cargo-test-v1".to_string(),
+            compacted_output: "token one token two token three token four token five".to_string(),
+            compacted_token_count: 10,
+        }),
+        truncation_policy: TruncationPolicy::Tokens(10_000),
+        max_output_tokens: Some(4),
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: Some(500),
+        hook_command: None,
+    };
+
+    let response = output.to_response_item("call-42", &payload);
+    let ResponseInputItem::FunctionCallOutput { output, .. } = response else {
+        panic!("expected FunctionCallOutput");
+    };
+    let text = output.body.to_text().expect("exec output should be text");
+
+    assert!(text.contains("tokens truncated"));
+    assert!(!text.contains("raw hidden line"));
 }
