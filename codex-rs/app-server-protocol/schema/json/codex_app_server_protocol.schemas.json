@@ -6154,7 +6154,7 @@
           "read": {
             "description": "This will be removed in favor of `entries`.",
             "items": {
-              "$ref": "#/definitions/v2/ApiPathString"
+              "$ref": "#/definitions/v2/LegacyAppPathString"
             },
             "type": [
               "array",
@@ -6164,7 +6164,7 @@
           "write": {
             "description": "This will be removed in favor of `entries`.",
             "items": {
-              "$ref": "#/definitions/v2/ApiPathString"
+              "$ref": "#/definitions/v2/LegacyAppPathString"
             },
             "type": [
               "array",
@@ -6275,9 +6275,6 @@
           }
         },
         "type": "object"
-      },
-      "ApiPathString": {
-        "type": "string"
       },
       "AppBranding": {
         "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
@@ -9588,7 +9585,7 @@
           {
             "properties": {
               "path": {
-                "$ref": "#/definitions/v2/ApiPathString"
+                "$ref": "#/definitions/v2/LegacyAppPathString"
               },
               "type": {
                 "enum": [
@@ -11266,6 +11263,9 @@
         ],
         "title": "ItemStartedNotification",
         "type": "object"
+      },
+      "LegacyAppPathString": {
+        "type": "string"
       },
       "ListMcpServerStatusParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
