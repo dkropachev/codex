@@ -59,6 +59,7 @@ use tracing::warn;
 
 mod agent_jobs;
 mod backfill;
+mod external_agent_config_imports;
 mod goals;
 mod logs;
 mod memories;
@@ -72,6 +73,10 @@ mod tool_router;
 mod tool_router_output_optimization;
 mod tool_router_tune;
 
+pub use external_agent_config_imports::ExternalAgentConfigImportDetailsRecord;
+pub use external_agent_config_imports::ExternalAgentConfigImportFailureRecord;
+pub use external_agent_config_imports::ExternalAgentConfigImportHistoryRecord;
+pub use external_agent_config_imports::ExternalAgentConfigImportSuccessRecord;
 pub use goals::GoalAccountingMode;
 pub use goals::GoalAccountingOutcome;
 pub use goals::GoalStore;
