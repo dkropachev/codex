@@ -29,8 +29,6 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
 
-use codex_exec_server::Environment;
-use codex_features::Feature;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_tools::UnifiedExecShellMode;
@@ -46,6 +44,7 @@ use tracing::warn;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnEnvironment;
 use crate::shell::ShellType;
 use crate::tools::network_approval::DeferredNetworkApproval;
 
@@ -107,7 +106,7 @@ pub(crate) struct ExecCommandRequest {
     pub max_output_tokens: Option<usize>,
     pub cwd: AbsolutePathBuf,
     pub sandbox_cwd: AbsolutePathBuf,
-    pub environment: Arc<Environment>,
+    pub turn_environment: TurnEnvironment,
     pub shell_mode: UnifiedExecShellMode,
     pub network: Option<NetworkProxy>,
     pub tty: bool,
