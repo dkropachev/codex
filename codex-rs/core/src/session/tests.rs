@@ -1876,7 +1876,8 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
-        .await;
+        .await
+        .expect("context updates should hydrate");
     let initial_context = session.build_initial_context(&turn_context).await;
     expected.extend(initial_context);
     let history_after_seed = session.clone_history().await;
@@ -1884,7 +1885,8 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
-        .await;
+        .await
+        .expect("context updates should hydrate");
     let history_after_second_seed = session.clone_history().await;
     assert_eq!(
         history_after_seed.raw_items(),
@@ -2675,7 +2677,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         #[allow(deprecated)]
-        cwd: turn_context.cwd.to_path_buf(),
+        cwd: PathUri::from_abs_path(&turn_context.cwd),
         workspace_roots: None,
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
@@ -7294,7 +7296,8 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
     let reference_context_item = previous_context.to_turn_context_item();
     let update_items = session
         .build_settings_update_items(Some(&reference_context_item), &current_context)
-        .await;
+        .await
+        .expect("settings updates should hydrate");
 
     let environment_update = user_input_texts(&update_items)
         .into_iter()
@@ -7364,7 +7367,8 @@ async fn build_settings_update_items_emits_environment_item_for_time_changes() {
     let reference_context_item = previous_context.to_turn_context_item();
     let update_items = session
         .build_settings_update_items(Some(&reference_context_item), &current_context)
-        .await;
+        .await
+        .expect("settings updates should hydrate");
 
     let environment_update = user_input_texts(&update_items)
         .into_iter()
@@ -7392,7 +7396,8 @@ async fn build_settings_update_items_omits_environment_item_when_disabled() {
     let reference_context_item = previous_context.to_turn_context_item();
     let update_items = session
         .build_settings_update_items(Some(&reference_context_item), &current_context)
-        .await;
+        .await
+        .expect("settings updates should hydrate");
 
     let user_texts = user_input_texts(&update_items);
     assert!(
@@ -7420,7 +7425,8 @@ async fn build_settings_update_items_emits_realtime_start_when_session_becomes_l
             Some(&previous_context.to_turn_context_item()),
             &current_context,
         )
-        .await;
+        .await
+        .expect("settings updates should hydrate");
 
     let developer_texts = developer_input_texts(&update_items);
     assert!(
@@ -7448,7 +7454,8 @@ async fn build_settings_update_items_emits_realtime_end_when_session_stops_being
             Some(&previous_context.to_turn_context_item()),
             &current_context,
         )
-        .await;
+        .await
+        .expect("settings updates should hydrate");
 
     let developer_texts = developer_input_texts(&update_items);
     assert!(
@@ -7482,7 +7489,8 @@ async fn build_settings_update_items_uses_previous_turn_settings_for_realtime_en
         .await;
     let update_items = session
         .build_settings_update_items(Some(&previous_context_item), &current_context)
-        .await;
+        .await
+        .expect("settings updates should hydrate");
 
     let developer_texts = developer_input_texts(&update_items);
     assert!(
@@ -8135,6 +8143,21 @@ async fn turn_context_item_uses_turn_context_comp_hash_snapshot() {
 }
 
 #[tokio::test]
+async fn turn_context_item_stores_primary_environment_cwd_uri() {
+    let (_session, mut turn_context) = make_session_and_context().await;
+    let environment = turn_context.environments.turn_environments[0].clone();
+    let cwd = PathUri::parse("file:///C:/windows").expect("Windows cwd URI");
+    turn_context.environments.turn_environments[0] = TurnEnvironment::new(
+        "remote".to_string(),
+        environment.environment,
+        cwd.clone(),
+        environment.shell,
+    );
+
+    assert_eq!(turn_context.to_turn_context_item().cwd, cwd);
+}
+
+#[tokio::test]
 async fn turn_context_item_omits_legacy_equivalent_file_system_sandbox_policy() {
     let (_session, turn_context) = make_session_and_context().await;
 
@@ -8175,7 +8198,8 @@ async fn record_context_updates_and_set_reference_context_item_injects_full_cont
     let (session, turn_context) = make_session_and_context().await;
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
-        .await;
+        .await
+        .expect("context updates should hydrate");
     let history = session.clone_history().await;
     let initial_context = session.build_initial_context(&turn_context).await;
     assert_eq!(history.raw_items().to_vec(), initial_context);
@@ -8206,7 +8230,8 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
         .await;
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
-        .await;
+        .await
+        .expect("context updates should hydrate");
     {
         let mut state = session.state.lock().await;
         state.set_reference_context_item(/*item*/ None);
@@ -8220,7 +8245,8 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
-        .await;
+        .await
+        .expect("context updates should hydrate");
 
     let history = session.clone_history().await;
     let mut expected_history = vec![compacted_summary];
@@ -8250,12 +8276,14 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
 
     let update_items = session
         .build_settings_update_items(Some(&previous_context_item), &turn_context)
-        .await;
+        .await
+        .expect("settings updates should hydrate");
     assert_eq!(update_items, Vec::new());
 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
-        .await;
+        .await
+        .expect("context updates should hydrate");
 
     assert_eq!(
         session.clone_history().await.raw_items().to_vec(),
@@ -8302,7 +8330,8 @@ async fn record_context_updates_and_set_reference_context_item_persists_split_fi
 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
-        .await;
+        .await
+        .expect("context updates should hydrate");
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
 
@@ -8386,7 +8415,8 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         .await;
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
-        .await;
+        .await
+        .expect("context updates should hydrate");
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
 
