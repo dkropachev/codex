@@ -7,7 +7,7 @@ async fn accepts_high_savings_rg_summary_after_observations() {
     let runtime = StateRuntime::init(unique_temp_dir(), "test".to_string())
         .await
         .expect("state runtime");
-    let output = rg_output(80);
+    let output = rg_output(/*lines*/ 80);
 
     for idx in 0..3 {
         let entry = ledger_entry(
@@ -52,7 +52,7 @@ async fn accepts_high_savings_nextest_filter_after_observations() {
     let runtime = StateRuntime::init(unique_temp_dir(), "test".to_string())
         .await
         .expect("state runtime");
-    let output = nextest_output(900);
+    let output = nextest_output(/*pass_lines*/ 900);
 
     for idx in 0..3 {
         runtime
@@ -88,7 +88,7 @@ async fn ignores_builtin_compacted_outputs_for_output_optimization() {
     let mut entry = ledger_entry(
         "call-builtin",
         r#"{"cmd":"just test"}"#,
-        nextest_output(900).as_str(),
+        nextest_output(/*pass_lines*/ 900).as_str(),
     );
     entry.output_compaction_filter = Some("nextest-v1".to_string());
     entry.returned_output_tokens = 80;
@@ -99,7 +99,7 @@ async fn ignores_builtin_compacted_outputs_for_output_optimization() {
         .expect("record builtin compacted output");
 
     let records = runtime
-        .list_tool_router_output_optimizations(None)
+        .list_tool_router_output_optimizations(/*status*/ None)
         .await
         .expect("list optimizations");
     assert_eq!(records, Vec::new());
@@ -110,7 +110,7 @@ async fn raw_recovery_for_builtin_compacted_chunk_does_not_decline_learned_candi
     let runtime = StateRuntime::init(unique_temp_dir(), "test".to_string())
         .await
         .expect("state runtime");
-    let output = rg_output(80);
+    let output = rg_output(/*lines*/ 80);
     runtime
         .record_tool_router_output_optimization_observation(ledger_entry(
             "call-candidate",
@@ -164,7 +164,7 @@ async fn declines_candidate_after_raw_output_recovery() {
     let runtime = StateRuntime::init(unique_temp_dir(), "test".to_string())
         .await
         .expect("state runtime");
-    let output = rg_output(80);
+    let output = rg_output(/*lines*/ 80);
     runtime
         .record_tool_router_output_optimization_observation(ledger_entry(
             "call-candidate",
@@ -241,7 +241,7 @@ async fn detects_recent_duplicate_source_read_for_command() {
         .record_tool_router_ledger_entry(ledger_entry(
             "call-source-read",
             r#"{"cmd":"sed -n '10,120p' src/lib.rs"}"#,
-            source_read_output(10, 111).as_str(),
+            source_read_output(/*start_line*/ 10, /*line_count*/ 111).as_str(),
         ))
         .await
         .expect("record source read");

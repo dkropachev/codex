@@ -228,7 +228,7 @@ fn compact_cargo_test(output: &str) -> String {
             continue;
         }
         if in_failures || is_cargo_test_signal(trimmed) {
-            add_context(&mut keep, idx, lines.len(), 2);
+            add_context(&mut keep, idx, lines.len(), /*context*/ 2);
         }
     }
 
@@ -254,7 +254,7 @@ fn compact_cargo_build(output: &str) -> String {
         let trimmed = line.trim_start();
         if is_compiler_diagnostic_start(trimmed) {
             in_diagnostic = true;
-            add_context(&mut keep, idx, lines.len(), 1);
+            add_context(&mut keep, idx, lines.len(), /*context*/ 1);
             continue;
         }
         if in_diagnostic {
@@ -378,7 +378,7 @@ fn compact_pytest(output: &str) -> String {
             || trimmed.starts_with("XPASS ")
             || looks_like_pytest_summary(trimmed)
         {
-            add_context(&mut keep, idx, lines.len(), 1);
+            add_context(&mut keep, idx, lines.len(), /*context*/ 1);
         }
     }
 
@@ -427,7 +427,7 @@ fn compact_tsc(output: &str) -> String {
         {
             diagnostic
                 .context
-                .push(truncate_chars(lines[idx].trim(), 160));
+                .push(truncate_chars(lines[idx].trim(), /*max_chars*/ 160));
             idx += 1;
         }
         diagnostics.push(diagnostic);
@@ -473,7 +473,7 @@ fn compact_tsc(output: &str) -> String {
                 diagnostic.column,
                 diagnostic.severity,
                 diagnostic.code,
-                truncate_chars(diagnostic.message.as_str(), 180)
+                truncate_chars(diagnostic.message.as_str(), /*max_chars*/ 180)
             ));
             for context in diagnostic.context.iter().take(3) {
                 sections.push(format!("    {context}"));
@@ -547,14 +547,14 @@ fn compact_gradle(output: &str) -> String {
             omitted += 1;
             continue;
         }
-        kept.push(truncate_chars(line, 180));
+        kept.push(truncate_chars(line, /*max_chars*/ 180));
     }
 
     let mut sections = vec![format!(
         "Compacted gradle output: kept {} lines, omitted {omitted} noisy lines.",
         kept.len()
     )];
-    sections.extend(limit_lines(kept, 80, "gradle output"));
+    sections.extend(limit_lines(kept, /*max_lines*/ 80, "gradle output"));
     sections.join("\n")
 }
 
@@ -596,7 +596,7 @@ fn compact_plan(output: &str, label: &str) -> Option<String> {
         "Compacted {label} output: kept {} lines, omitted {omitted} refresh/lock/no-change lines.",
         kept.len()
     )];
-    sections.extend(limit_lines(kept, 120, label));
+    sections.extend(limit_lines(kept, /*max_lines*/ 120, label));
     Some(sections.join("\n"))
 }
 
@@ -627,7 +627,7 @@ fn compact_uv_sync(output: &str) -> String {
             omitted += 1;
             continue;
         }
-        kept.push(truncate_chars(line, 180));
+        kept.push(truncate_chars(line, /*max_chars*/ 180));
     }
 
     if kept.is_empty() {
@@ -637,7 +637,7 @@ fn compact_uv_sync(output: &str) -> String {
         "Compacted uv output: kept {} lines, omitted {omitted} download/cache lines.",
         kept.len()
     )];
-    sections.extend(limit_lines(kept, 60, "uv output"));
+    sections.extend(limit_lines(kept, /*max_lines*/ 60, "uv output"));
     sections.join("\n")
 }
 
@@ -675,7 +675,7 @@ fn compact_go_test(output: &str) -> String {
             continue;
         }
         if trimmed.starts_with("FAIL\t") || trimmed == "FAIL" || is_log_signal(trimmed) {
-            add_context(&mut keep, idx, lines.len(), 2);
+            add_context(&mut keep, idx, lines.len(), /*context*/ 2);
         }
     }
 
@@ -776,7 +776,7 @@ fn compact_maven_output(output: &str) -> String {
                     keep.insert(line_idx);
                 }
             }
-            add_context(&mut keep, idx, lines.len(), 2);
+            add_context(&mut keep, idx, lines.len(), /*context*/ 2);
         }
     }
 
@@ -972,7 +972,7 @@ fn compact_generic_log(output: &str) -> String {
     let mut counts = BTreeMap::<String, usize>::new();
     for (idx, line) in lines.iter().enumerate() {
         if is_log_signal(line) {
-            add_context(&mut keep, idx, lines.len(), 1);
+            add_context(&mut keep, idx, lines.len(), /*context*/ 1);
             *counts.entry(line.trim().to_string()).or_insert(0) += 1;
         }
     }

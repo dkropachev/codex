@@ -1572,7 +1572,7 @@ async fn exec_output_compaction_compacts_completed_unified_exec_output() -> Resu
     });
     let test = builder.build_with_remote_env(&server).await?;
 
-    let script = cargo_test_success_script(600);
+    let script = cargo_test_success_script(/*pass_count*/ 600);
     let call_id = "uexec-compacted";
     let args = serde_json::json!({
         "cmd": script,
@@ -1666,7 +1666,7 @@ async fn builtin_exec_output_compaction_skips_tool_router_optimizer() -> Result<
 
     let call_id = "uexec-builtin-compacted";
     let args = serde_json::json!({
-        "cmd": cargo_test_success_script(600),
+        "cmd": cargo_test_success_script(/*pass_count*/ 600),
         "yield_time_ms": 3_000,
     });
 
@@ -1712,7 +1712,9 @@ async fn builtin_exec_output_compaction_skips_tool_router_optimizer() -> Result<
     assert!(!compacted.output.contains("passes_599"));
 
     let state_db = test.codex.state_db().context("state db enabled")?;
-    let records = state_db.list_tool_router_output_optimizations(None).await?;
+    let records = state_db
+        .list_tool_router_output_optimizations(/*status*/ None)
+        .await?;
     assert_eq!(records, Vec::new());
 
     Ok(())
@@ -1743,7 +1745,7 @@ async fn builtin_exec_output_raw_recovery_keeps_learned_optimizer_candidate() ->
     let test = builder.build_with_remote_env(&server).await?;
     let state_db = test.codex.state_db().context("state db enabled")?;
     let thread_id = test.session_configured.thread_id.to_string();
-    let rg_output = rg_output_for_tool_router_candidate(80);
+    let rg_output = rg_output_for_tool_router_candidate(/*lines*/ 80);
     state_db
         .record_tool_router_output_optimization_observation(tool_router_exec_ledger_entry(
             thread_id.as_str(),
@@ -1755,7 +1757,7 @@ async fn builtin_exec_output_raw_recovery_keeps_learned_optimizer_candidate() ->
 
     let exec_call_id = "uexec-builtin-for-recovery";
     let exec_args = serde_json::json!({
-        "cmd": cargo_test_success_script(600),
+        "cmd": cargo_test_success_script(/*pass_count*/ 600),
         "yield_time_ms": 3_000,
     });
     let first_request_log = mount_sse_sequence(

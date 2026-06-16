@@ -12,7 +12,7 @@ fn repeated_passing_tests(count: usize) -> String {
 
 #[test]
 fn cargo_success_output_collapses_passing_noise() {
-    let output = repeated_passing_tests(500);
+    let output = repeated_passing_tests(/*count*/ 500);
     let compacted = compact_output(&["cargo test".to_string()], output.as_str())
         .expect("cargo test output should compact");
 
@@ -24,7 +24,7 @@ fn cargo_success_output_collapses_passing_noise() {
 
 #[test]
 fn cargo_test_failure_keeps_failing_details() {
-    let mut output = repeated_passing_tests(450);
+    let mut output = repeated_passing_tests(/*count*/ 450);
     output.push_str(
         r#"
 failures:

@@ -296,7 +296,7 @@ async fn accepted_rg_output_optimization_compacts_completed_exec_output() -> any
     let state_db =
         codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
             .await?;
-    let output = learned_rg_output(240);
+    let output = learned_rg_output(/*lines*/ 240);
     for idx in 0..3 {
         state_db
             .record_tool_router_output_optimization_observation(tool_router_exec_ledger_entry(
@@ -347,7 +347,7 @@ async fn write_stdin_completion_uses_exec_command_output_optimization() -> anyho
     let state_db =
         codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
             .await?;
-    let output = learned_rg_output(240);
+    let output = learned_rg_output(/*lines*/ 240);
     for idx in 0..3 {
         state_db
             .record_tool_router_output_optimization_observation(tool_router_exec_ledger_entry(
@@ -387,7 +387,7 @@ async fn accepted_source_read_dedupe_requires_recent_duplicate_read() -> anyhow:
     let state_db =
         codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
             .await?;
-    let output = learned_source_read_output(10, 250);
+    let output = learned_source_read_output(/*start_line*/ 10, /*line_count*/ 250);
     let command_json = r#"{"cmd":"sed -n '10,259p' src/lib.rs"}"#;
 
     state_db
