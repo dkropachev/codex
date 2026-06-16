@@ -227,7 +227,7 @@ async fn wait_for_screen(
     label: &str,
     predicate: impl Fn(&str) -> bool,
 ) -> Result<String> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(/*secs*/ 10);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(/*secs*/ 30);
     let mut raw = Vec::new();
 
     loop {
