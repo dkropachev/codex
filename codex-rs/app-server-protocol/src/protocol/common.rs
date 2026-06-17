@@ -2506,7 +2506,6 @@ mod tests {
                     model_provider: "openai".to_string(),
                     created_at: 1,
                     updated_at: 2,
-                    recency_at: Some(3),
                     status: v2::ThreadStatus::Idle,
                     path: None,
                     cwd: cwd.clone(),
@@ -2550,7 +2549,6 @@ mod tests {
                         "modelProvider": "openai",
                         "createdAt": 1,
                         "updatedAt": 2,
-                        "recencyAt": 3,
                         "status": {
                             "type": "idle"
                         },
