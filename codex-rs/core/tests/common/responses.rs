@@ -1234,9 +1234,27 @@ pub async fn start_websocket_server_with_headers(
         let mut connection_tasks = JoinSet::new();
 
         loop {
-            let has_pending_connections = !pending_connections.lock().unwrap().is_empty();
-            if !has_pending_connections && connection_tasks.is_empty() {
-                return;
+            let accept_res = tokio::select! {
+                _ = &mut shutdown_rx => return,
+                accept_res = listener.accept() => accept_res,
+            };
+            let (stream, _) = match accept_res {
+                Ok(value) => value,
+                Err(_) => return,
+            };
+            // Ordinary HTTP probes can share this listener with websocket tests. Only a
+            // successful websocket handshake should consume a scripted connection.
+            let connection = {
+                let pending = connections.lock().unwrap();
+                pending.front().cloned()
+            };
+
+            let Some(connection) = connection else {
+                continue;
+            };
+
+            if let Some(delay) = connection.accept_delay {
+                tokio::time::sleep(delay).await;
             }
 
             tokio::select! {
@@ -1256,7 +1274,82 @@ pub async fn start_websocket_server_with_headers(
                         pending.pop_front()
                     };
 
-                    let Some(connection) = connection else {
+                Ok(response)
+            };
+
+            let mut ws_stream = match accept_hdr_async_with_config(
+                stream,
+                callback,
+                Some(websocket_accept_config()),
+            )
+            .await
+            {
+                Ok(ws) => ws,
+                Err(_) => continue,
+            };
+            connections.lock().unwrap().pop_front();
+
+            let connection_index = {
+                let mut log = requests.lock().unwrap();
+                log.push(Vec::new());
+                log.len() - 1
+            };
+            let close_after_requests = connection.close_after_requests;
+            for request_events in connection.requests {
+                let Some(Ok(message)) = ws_stream.next().await else {
+                    break;
+                };
+                if let Some(body) = parse_ws_request_body(message) {
+                    let mut log = requests.lock().unwrap();
+                    if let Some(connection_log) = log.get_mut(connection_index) {
+                        connection_log.push(WebSocketRequest { body });
+                        let request_index = connection_log.len() - 1;
+                        let request = &connection_log[request_index];
+                        let request_body = request.body_json();
+                        eprintln!(
+                            "[ws test server +{}ms] connection={} received request={} type={:?} role={:?} text={:?} data={:?}",
+                            start.elapsed().as_millis(),
+                            connection_index,
+                            request_index,
+                            request_body.get("type").and_then(Value::as_str),
+                            request_body
+                                .get("item")
+                                .and_then(|item| item.get("role"))
+                                .and_then(Value::as_str),
+                            request_body
+                                .get("item")
+                                .and_then(|item| item.get("content"))
+                                .and_then(Value::as_array)
+                                .and_then(|content| content.first())
+                                .and_then(|content| content.get("text"))
+                                .and_then(Value::as_str),
+                            request_body
+                                .get("item")
+                                .and_then(|item| item.get("content"))
+                                .and_then(Value::as_array)
+                                .and_then(|content| content.first())
+                                .and_then(|content| content.get("data"))
+                                .and_then(Value::as_str),
+                        );
+                    }
+                    request_log.notify_waiters();
+                }
+
+                eprintln!(
+                    "[ws test server +{}ms] connection={} sending batch_size={} event_types={:?} audio_data={:?}",
+                    start.elapsed().as_millis(),
+                    connection_index,
+                    request_events.len(),
+                    request_events
+                        .iter()
+                        .map(|event| event.get("type").and_then(Value::as_str))
+                        .collect::<Vec<_>>(),
+                    request_events
+                        .iter()
+                        .find_map(|event| event.get("delta").and_then(Value::as_str)),
+                );
+                for event in &request_events {
+                    let Ok(payload) = serde_json::to_string(event) else {
                         continue;
                     };
 
