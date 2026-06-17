@@ -63,6 +63,8 @@ pub struct FileSystemSandboxContext {
     pub permissions: PermissionProfile<PathUri>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathUri>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspace_roots: Vec<PathUri>,
     pub windows_sandbox_level: WindowsSandboxLevel,
     #[serde(default)]
     pub windows_sandbox_private_desktop: bool,
@@ -110,6 +112,7 @@ impl FileSystemSandboxContext {
         Self {
             permissions: permissions.into(),
             cwd,
+            workspace_roots: Vec::new(),
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
             use_legacy_landlock: false,
@@ -152,6 +155,7 @@ impl FileSystemSandboxContext {
     pub fn drop_cwd_if_unused(mut self) -> Self {
         if !self.has_cwd_dependent_permissions() {
             self.cwd = None;
+            self.workspace_roots.clear();
         }
         self
     }
