@@ -685,8 +685,7 @@ impl UnifiedExecProcessManager {
             chunk_id,
             wall_time,
             raw_output: collected,
-            compaction,
-            truncation_policy: context.turn.truncation_policy,
+            truncation_policy: context.turn.model_info.truncation_policy.into(),
             max_output_tokens: request.max_output_tokens,
             process_id: response_process_id,
             exit_code,
@@ -1163,7 +1162,7 @@ impl UnifiedExecProcessManager {
         context: &UnifiedExecContext,
     ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
         let local_policy_env = create_env(
-            &context.turn.shell_environment_policy,
+            &context.turn.config.permissions.shell_environment_policy,
             /*thread_id*/ None,
         );
         let mut env = local_policy_env.clone();
@@ -1173,7 +1172,9 @@ impl UnifiedExecProcessManager {
         );
         let env = apply_unified_exec_env(env);
         let exec_server_env_config = ExecServerEnvConfig {
-            policy: exec_env_policy_from_shell_policy(&context.turn.shell_environment_policy),
+            policy: exec_env_policy_from_shell_policy(
+                &context.turn.config.permissions.shell_environment_policy,
+            ),
             local_policy_env,
         };
         let mut orchestrator = ToolOrchestrator::new();
@@ -1205,7 +1206,13 @@ impl UnifiedExecProcessManager {
             turn_environment: request.turn_environment.clone(),
             env,
             exec_server_env_config: Some(exec_server_env_config),
-            explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
+            explicit_env_overrides: context
+                .turn
+                .config
+                .permissions
+                .shell_environment_policy
+                .r#set
+                .clone(),
             network: request.network.clone(),
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,

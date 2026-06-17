@@ -3532,7 +3532,7 @@ async fn includes_timed_out_message() {
     };
     let (_, turn_context) = make_session_and_context().await;
 
-    let out = format_exec_output_str(&exec, turn_context.truncation_policy);
+    let out = format_exec_output_str(&exec, turn_context.model_info.truncation_policy.into());
 
     assert_eq!(
         out,
@@ -3570,10 +3570,6 @@ async fn turn_context_with_model_updates_model_fields() {
     assert_eq!(
         updated.config.model_reasoning_effort,
         Some(ReasoningEffortConfig::Medium)
-    );
-    assert_eq!(
-        updated.truncation_policy,
-        expected_model_info.truncation_policy.into()
     );
 }
 
@@ -8123,18 +8119,6 @@ fn file_system_policy_with_unreadable_glob(turn_context: &TurnContext) -> FileSy
 }
 
 #[tokio::test]
-async fn turn_context_item_uses_turn_context_comp_hash_snapshot() {
-    let (_session, mut turn_context) = make_session_and_context().await;
-    turn_context.comp_hash = Some("turn-context-hash".to_string());
-    turn_context.model_info.comp_hash = Some("model-info-hash".to_string());
-
-    assert_eq!(
-        turn_context.to_turn_context_item().comp_hash.as_deref(),
-        Some("turn-context-hash")
-    );
-}
-
-#[tokio::test]
 async fn turn_context_item_stores_local_cwd() {
     let (_session, mut turn_context) = make_session_and_context().await;
     let environment = turn_context.environments.turn_environments[0].clone();
@@ -9787,7 +9771,7 @@ async fn sample_rollout(
     }
     live_history.record_items(
         initial_context.iter(),
-        reconstruction_turn.truncation_policy,
+        reconstruction_turn.model_info.truncation_policy.into(),
     );
 
     let user1 = ResponseItem::Message {
@@ -9801,7 +9785,7 @@ async fn sample_rollout(
     };
     live_history.record_items(
         std::iter::once(&user1),
-        reconstruction_turn.truncation_policy,
+        reconstruction_turn.model_info.truncation_policy.into(),
     );
     rollout_items.push(RolloutItem::ResponseItem(user1.clone()));
 
@@ -9816,7 +9800,7 @@ async fn sample_rollout(
     };
     live_history.record_items(
         std::iter::once(&assistant1),
-        reconstruction_turn.truncation_policy,
+        reconstruction_turn.model_info.truncation_policy.into(),
     );
     rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
 
@@ -9844,7 +9828,7 @@ async fn sample_rollout(
     };
     live_history.record_items(
         std::iter::once(&user2),
-        reconstruction_turn.truncation_policy,
+        reconstruction_turn.model_info.truncation_policy.into(),
     );
     rollout_items.push(RolloutItem::ResponseItem(user2.clone()));
 
@@ -9859,7 +9843,7 @@ async fn sample_rollout(
     };
     live_history.record_items(
         std::iter::once(&assistant2),
-        reconstruction_turn.truncation_policy,
+        reconstruction_turn.model_info.truncation_policy.into(),
     );
     rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
 
@@ -9887,7 +9871,7 @@ async fn sample_rollout(
     };
     live_history.record_items(
         std::iter::once(&user3),
-        reconstruction_turn.truncation_policy,
+        reconstruction_turn.model_info.truncation_policy.into(),
     );
     rollout_items.push(RolloutItem::ResponseItem(user3));
 
@@ -9902,7 +9886,7 @@ async fn sample_rollout(
     };
     live_history.record_items(
         std::iter::once(&assistant3),
-        reconstruction_turn.truncation_policy,
+        reconstruction_turn.model_info.truncation_policy.into(),
     );
     rollout_items.push(RolloutItem::ResponseItem(assistant3));
 
