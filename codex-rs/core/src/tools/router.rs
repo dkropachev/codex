@@ -483,6 +483,7 @@ fn tool_dialog_locator_json(
     locator.to_string()
 }
 
+#[instrument(level = "trace", skip_all)]
 pub(crate) fn extension_tool_executors(
     session: &Session,
 ) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {
