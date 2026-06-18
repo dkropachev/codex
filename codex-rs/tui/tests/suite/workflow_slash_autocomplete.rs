@@ -16,18 +16,7 @@ async fn workflow_command_autocompletes_in_live_tui() -> Result<()> {
         return Ok(());
     }
 
-    let repo_root = codex_utils_cargo_bin::repo_root()?;
-    let codex = match codex_utils_cargo_bin::cargo_bin("codex") {
-        Ok(path) => path,
-        Err(_) => {
-            let fallback = repo_root.join("codex-rs/target/debug/codex");
-            anyhow::ensure!(
-                fallback.is_file(),
-                "codex binary is unavailable; run `cargo build -p codex-cli` first"
-            );
-            fallback
-        }
-    };
+    let codex = codex_utils_cargo_bin::cargo_bin("codex-tui")?;
     let codex_home = tempdir()?;
     let workspace = tempdir()?;
 

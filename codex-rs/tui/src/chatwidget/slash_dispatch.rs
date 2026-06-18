@@ -166,6 +166,52 @@ impl ChatWidget {
         true
     }
 
+    fn apply_workflow_slash_command(&mut self) -> bool {
+        if !self.config.features.enabled(Feature::Workflows) {
+            self.add_info_message(
+                "Workflows are disabled.".to_string(),
+                Some("Enable [features].workflows to use /workflow.".to_string()),
+            );
+            return false;
+        }
+        if !self.collaboration_modes_enabled() {
+            self.add_info_message(
+                "Collaboration modes are disabled.".to_string(),
+                Some("Enable collaboration modes to use /workflow.".to_string()),
+            );
+            return false;
+        }
+        if let Some(mask) = collaboration_modes::mask_for_kind_with_config(
+            self.model_catalog.as_ref(),
+            ModeKind::Workflow,
+            self.collaboration_modes_config(),
+        ) {
+            self.set_collaboration_mask_from_user_action(mask);
+            true
+        } else {
+            self.add_info_message(
+                "Workflow mode unavailable right now.".to_string(),
+                /*hint*/ None,
+            );
+            false
+        }
+    }
+
+    fn disable_workflow_slash_command(&mut self) -> bool {
+        let Some(default_mask) =
+            collaboration_modes::default_mode_mask(self.model_catalog.as_ref())
+        else {
+            self.add_info_message(
+                "Default mode unavailable right now.".to_string(),
+                /*hint*/ None,
+            );
+            return false;
+        };
+        self.set_collaboration_mask_from_user_action(default_mask);
+        self.add_info_message("Workflow mode disabled.".to_string(), /*hint*/ None);
+        true
+    }
+
     fn disable_config_slash_command(&mut self) -> bool {
         let Some(default_mask) =
             collaboration_modes::default_mode_mask(self.model_catalog.as_ref())
@@ -345,6 +391,9 @@ impl ChatWidget {
             }
             SlashCommand::Plan => {
                 self.apply_plan_slash_command();
+            }
+            SlashCommand::Workflow => {
+                self.apply_workflow_slash_command();
             }
             SlashCommand::Config => {
                 self.apply_config_slash_command();
@@ -799,6 +848,22 @@ impl ChatWidget {
                     self.queue_user_message(user_message);
                 }
             }
+            SlashCommand::Workflow if !trimmed.is_empty() => {
+                if trimmed.eq_ignore_ascii_case("done") {
+                    self.disable_workflow_slash_command();
+                    return;
+                }
+                if !self.config.features.enabled(Feature::Workflows) {
+                    self.add_info_message(
+                        "Workflows are disabled.".to_string(),
+                        Some("Enable [features].workflows to use /workflow.".to_string()),
+                    );
+                    return;
+                }
+                self.submit_op(AppCommand::run_user_shell_command(format!(
+                    "codex workflow {trimmed}"
+                )));
+            }
             SlashCommand::Goal if !trimmed.is_empty() => {
                 if !self.config.features.enabled(Feature::Goals) {
                     return;
@@ -1159,6 +1224,7 @@ impl ChatWidget {
             | SlashCommand::Settings
             | SlashCommand::Personality
             | SlashCommand::Plan
+            | SlashCommand::Workflow
             | SlashCommand::Config
             | SlashCommand::Goal
             | SlashCommand::Side

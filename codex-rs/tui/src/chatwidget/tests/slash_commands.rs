@@ -241,6 +241,78 @@ async fn workflow_command_is_hidden_and_rejected_when_feature_disabled() {
 }
 
 #[tokio::test]
+async fn bare_workflow_slash_enters_workflow_mode() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let initial = chat.current_collaboration_mode().clone();
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    chat.bottom_pane.set_task_running(/*running*/ false);
+
+    chat.dispatch_command(SlashCommand::Workflow);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Workflow);
+    assert_eq!(chat.current_collaboration_mode(), &initial);
+    assert_no_shell_or_user_turn(&mut op_rx);
+}
+
+#[tokio::test]
+async fn bare_workflow_slash_reports_disabled_when_feature_off() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Workflow);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_no_shell_or_user_turn(&mut op_rx);
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Workflows are disabled."),
+        "expected disabled workflow message, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Enable [features].workflows to use /workflow."),
+        "expected workflow feature hint, got:\n{rendered}"
+    );
+}
+
+#[tokio::test]
+async fn workflow_done_slash_exits_to_default_mode() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+
+    chat.dispatch_command(SlashCommand::Workflow);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Workflow);
+    let _ = drain_insert_history(&mut rx);
+
+    chat.dispatch_command_with_args(SlashCommand::Workflow, "done".to_string(), Vec::new());
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_no_shell_or_user_turn(&mut op_rx);
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Workflow mode disabled."),
+        "expected workflow disabled message, got:\n{rendered}"
+    );
+}
+
+#[tokio::test]
+async fn workflow_slash_with_args_dispatches_workflow_cli_command() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+
+    chat.dispatch_command_with_args(SlashCommand::Workflow, "list".to_string(), Vec::new());
+
+    assert_eq!(next_shell_command(&mut op_rx), "codex workflow list");
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+}
+
+#[tokio::test]
 async fn bare_workflow_command_dispatches_user_shell_workflow() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
