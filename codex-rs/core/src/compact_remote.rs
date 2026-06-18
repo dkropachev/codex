@@ -404,20 +404,24 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
 fn rewritten_output_for_context_window(item: &ResponseItem) -> Option<ResponseItem> {
     Some(match item {
         ResponseItem::FunctionCallOutput {
+            id,
             call_id,
             output,
             metadata,
         } => ResponseItem::FunctionCallOutput {
+            id: id.clone(),
             call_id: call_id.clone(),
             output: truncated_output_payload(output),
             metadata: metadata.clone(),
         },
         ResponseItem::CustomToolCallOutput {
+            id,
             call_id,
             name,
             output,
             metadata,
         } => ResponseItem::CustomToolCallOutput {
+            id: id.clone(),
             call_id: call_id.clone(),
             name: name.clone(),
             output: truncated_output_payload(output),
@@ -430,6 +434,7 @@ fn rewritten_output_for_context_window(item: &ResponseItem) -> Option<ResponseIt
             metadata,
             ..
         } => ResponseItem::ToolSearchOutput {
+            id: item.id().map(str::to_string),
             call_id: call_id.clone(),
             status: status.clone(),
             execution: execution.clone(),
