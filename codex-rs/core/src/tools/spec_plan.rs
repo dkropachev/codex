@@ -14,6 +14,7 @@ use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
 use crate::tools::handlers::McpHandler;
 use crate::tools::handlers::PlanHandler;
+use crate::tools::handlers::ReadExecOutputHandler;
 use crate::tools::handlers::ReadMcpResourceHandler;
 use crate::tools::handlers::RequestPermissionsHandler;
 use crate::tools::handlers::RequestPluginInstallHandler;
@@ -606,6 +607,9 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Planne
                 include_shell_parameter: unified_exec_should_include_shell_parameter(turn_context),
             }));
             planned_tools.add(WriteStdinHandler);
+            if features.enabled(Feature::ExecOutputCompaction) {
+                planned_tools.add(ReadExecOutputHandler);
+            }
 
             // Keep the legacy shell tool registered while unified exec is
             // model-visible.

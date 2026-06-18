@@ -2621,6 +2621,7 @@ dependencies = [
  "codex-context-fragments",
  "codex-core-plugins",
  "codex-core-skills",
+ "codex-exec-output-compaction",
  "codex-exec-server",
  "codex-execpolicy",
  "codex-extension-api",
@@ -2854,6 +2855,15 @@ dependencies = [
  "uuid",
  "walkdir",
  "wiremock",
+]
+
+[[package]]
+name = "codex-exec-output-compaction"
+version = "0.139.0"
+dependencies = [
+ "codex-utils-output-truncation",
+ "pretty_assertions",
+ "serde_json",
 ]
 
 [[package]]

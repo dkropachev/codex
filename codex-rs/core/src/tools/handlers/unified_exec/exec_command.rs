@@ -21,9 +21,11 @@ use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
 use crate::unified_exec::ExecCommandRequest;
+use crate::unified_exec::ExecOutputCompactionTurnRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
+use crate::unified_exec::compact_exec_output_for_turn;
 use crate::unified_exec::generate_chunk_id;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
@@ -245,6 +247,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                 chunk_id: String::new(),
                 wall_time: std::time::Duration::ZERO,
                 raw_output: output.into_text().into_bytes(),
+                compaction: None,
                 truncation_policy: turn.truncation_policy,
                 max_output_tokens,
                 process_id: None,
@@ -285,11 +288,34 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
             Err(UnifiedExecError::SandboxDenied { output, .. }) => {
                 let output_text = output.aggregated_output.text;
                 let original_token_count = approx_token_count(&output_text);
+                let chunk_id = generate_chunk_id();
+                let command = [hook_command.clone()];
+                let compaction = if turn.features.enabled(Feature::ExecOutputCompaction) {
+                    compact_exec_output_for_turn(ExecOutputCompactionTurnRequest {
+                        session: context.session.as_ref(),
+                        turn: turn.as_ref(),
+                        tool_name: "exec_command",
+                        call_id: context.call_id.as_str(),
+                        command: &command,
+                        output: output_text.as_str(),
+                        max_output_tokens,
+                        truncation_policy: turn.truncation_policy,
+                    })
+                    .await
+                } else {
+                    None
+                };
+                if turn.features.enabled(Feature::ExecOutputCompaction) {
+                    manager
+                        .archive_completed_output(chunk_id.as_str(), output_text.as_bytes())
+                        .await;
+                }
                 Ok(boxed_tool_output(ExecCommandToolOutput {
                     event_call_id: context.call_id.clone(),
-                    chunk_id: generate_chunk_id(),
+                    chunk_id,
                     wall_time: output.duration,
                     raw_output: output_text.into_bytes(),
+                    compaction,
                     truncation_policy: turn.truncation_policy,
                     max_output_tokens,
                     // Sandbox denial is terminal, so there is no live

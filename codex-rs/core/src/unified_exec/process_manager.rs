@@ -28,6 +28,10 @@ use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::unified_exec::ExecCommandRequest;
+use crate::unified_exec::ExecOutputCompactionPolicy;
+use crate::unified_exec::ExecOutputCompactionTurnRequest;
+use crate::unified_exec::MAX_ARCHIVED_EXEC_OUTPUT_BYTES;
+use crate::unified_exec::MAX_ARCHIVED_EXEC_OUTPUTS;
 use crate::unified_exec::MAX_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::MAX_YIELD_TIME_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
@@ -43,12 +47,15 @@ use crate::unified_exec::async_watcher::emit_failed_exec_end_for_unified_exec;
 use crate::unified_exec::async_watcher::spawn_exit_watcher;
 use crate::unified_exec::async_watcher::start_streaming_output;
 use crate::unified_exec::clamp_yield_time;
+use crate::unified_exec::compact_exec_output_for_turn;
+use crate::unified_exec::compact_exec_output_with_policy;
 use crate::unified_exec::generate_chunk_id;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
+use codex_features::Feature;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -177,6 +184,10 @@ struct PreparedProcessHandles {
     hook_command: String,
     process_id: i32,
     tty: bool,
+    exec_output_compaction_enabled: bool,
+    tool_router_output_optimization_enabled: bool,
+    model_slug: String,
+    model_provider: String,
 }
 
 fn exec_server_process_id(process_id: i32) -> String {
@@ -364,6 +375,57 @@ impl UnifiedExecProcessManager {
         if let Some(entry) = removed {
             unregister_network_approval_for_entry(&entry).await;
         }
+    }
+
+    pub(crate) async fn archive_completed_output(&self, chunk_id: &str, output: &[u8]) {
+        if chunk_id.is_empty() {
+            return;
+        }
+
+        let mut store = self.process_store.lock().await;
+        if let Some(index) = store
+            .archived_outputs
+            .iter()
+            .position(|entry| entry.chunk_id == chunk_id)
+            && let Some(existing) = store.archived_outputs.remove(index)
+        {
+            store.archived_output_bytes = store
+                .archived_output_bytes
+                .saturating_sub(existing.output.len());
+        }
+
+        if output.len() > MAX_ARCHIVED_EXEC_OUTPUT_BYTES {
+            return;
+        }
+
+        store.archived_output_bytes += output.len();
+        store
+            .archived_outputs
+            .push_back(crate::unified_exec::ArchivedExecOutput {
+                chunk_id: chunk_id.to_string(),
+                output: output.to_vec(),
+            });
+
+        while store.archived_outputs.len() > MAX_ARCHIVED_EXEC_OUTPUTS
+            || store.archived_output_bytes > MAX_ARCHIVED_EXEC_OUTPUT_BYTES
+        {
+            let Some(removed) = store.archived_outputs.pop_front() else {
+                break;
+            };
+            store.archived_output_bytes = store
+                .archived_output_bytes
+                .saturating_sub(removed.output.len());
+        }
+    }
+
+    pub(crate) async fn read_archived_output(&self, chunk_id: &str) -> Option<Vec<u8>> {
+        let store = self.process_store.lock().await;
+        store
+            .archived_outputs
+            .iter()
+            .rev()
+            .find(|entry| entry.chunk_id == chunk_id)
+            .map(|entry| entry.output.clone())
     }
 
     pub(crate) async fn exec_command(
@@ -576,11 +638,33 @@ impl UnifiedExecProcessManager {
         };
 
         let original_token_count = approx_token_count(&text);
+        let exec_output_compaction_enabled =
+            context.turn.features.enabled(Feature::ExecOutputCompaction);
+        let compaction = if response_process_id.is_none() && exec_output_compaction_enabled {
+            compact_exec_output_for_turn(ExecOutputCompactionTurnRequest {
+                session: context.session.as_ref(),
+                turn: context.turn.as_ref(),
+                tool_name: "exec_command",
+                call_id: context.call_id.as_str(),
+                command: &request.command,
+                output: text.as_str(),
+                max_output_tokens: request.max_output_tokens,
+                truncation_policy: context.turn.truncation_policy,
+            })
+            .await
+        } else {
+            None
+        };
+        if response_process_id.is_none() && exec_output_compaction_enabled {
+            self.archive_completed_output(chunk_id.as_str(), collected.as_slice())
+                .await;
+        }
         let response = ExecCommandToolOutput {
             event_call_id: context.call_id.clone(),
             chunk_id,
             wall_time,
             raw_output: collected,
+            compaction,
             truncation_policy: context.turn.truncation_policy,
             max_output_tokens: request.max_output_tokens,
             process_id: response_process_id,
@@ -611,6 +695,10 @@ impl UnifiedExecProcessManager {
             hook_command,
             process_id,
             tty,
+            exec_output_compaction_enabled,
+            tool_router_output_optimization_enabled,
+            model_slug,
+            model_provider,
             ..
         } = self.prepare_process_handles(process_id).await?;
         let mut status_after_write = None;
@@ -699,7 +787,7 @@ impl UnifiedExecProcessManager {
         } else {
             self.refresh_process_state(process_id).await
         };
-        let (process_id, exit_code, event_call_id) = match status {
+        let (response_process_id, exit_code, event_call_id) = match status {
             ProcessStatus::Alive {
                 exit_code,
                 call_id,
@@ -721,14 +809,45 @@ impl UnifiedExecProcessManager {
             }
         };
 
+        let command = [hook_command.clone()];
+        let compaction = if response_process_id.is_none() && exec_output_compaction_enabled {
+            let state_db = session.as_ref().and_then(|session| session.state_db());
+            let thread_id = session
+                .as_ref()
+                .map(|session| session.thread_id.to_string());
+            compact_exec_output_with_policy(
+                ExecOutputCompactionPolicy {
+                    state_db: state_db.as_deref(),
+                    model_slug: model_slug.as_str(),
+                    model_provider: model_provider.as_str(),
+                    tool_name: "write_stdin",
+                    tool_router_output_optimization_enabled,
+                    thread_id: thread_id.as_deref(),
+                    call_id: Some(event_call_id.as_str()),
+                },
+                &command,
+                text.as_str(),
+                request.max_output_tokens,
+                request.truncation_policy,
+            )
+            .await
+        } else {
+            None
+        };
+        if response_process_id.is_none() && exec_output_compaction_enabled {
+            self.archive_completed_output(chunk_id.as_str(), collected.as_slice())
+                .await;
+        }
+
         let response = ExecCommandToolOutput {
             event_call_id,
             chunk_id,
             wall_time,
             raw_output: collected,
+            compaction,
             truncation_policy: request.truncation_policy,
             max_output_tokens: request.max_output_tokens,
-            process_id,
+            process_id: response_process_id,
             exit_code,
             original_token_count: Some(original_token_count),
             hook_command: Some(hook_command),
@@ -801,6 +920,10 @@ impl UnifiedExecProcessManager {
             hook_command: entry.hook_command.clone(),
             process_id: entry.process_id,
             tty: entry.tty,
+            exec_output_compaction_enabled: entry.exec_output_compaction_enabled,
+            tool_router_output_optimization_enabled: entry.tool_router_output_optimization_enabled,
+            model_slug: entry.model_slug.clone(),
+            model_provider: entry.model_provider.clone(),
         })
     }
 
@@ -827,6 +950,16 @@ impl UnifiedExecProcessManager {
             network_approval,
             session: Arc::downgrade(&context.session),
             last_used: started_at,
+            exec_output_compaction_enabled: context
+                .turn
+                .features
+                .enabled(Feature::ExecOutputCompaction),
+            tool_router_output_optimization_enabled: context
+                .turn
+                .features
+                .enabled(Feature::ToolRouter),
+            model_slug: context.turn.model_info.slug.clone(),
+            model_provider: context.turn.config.model_provider_id.clone(),
         };
         let pruned_entry = {
             let mut store = self.process_store.lock().await;

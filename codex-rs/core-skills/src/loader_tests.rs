@@ -27,21 +27,41 @@ struct TestConfig {
 }
 
 async fn make_config(codex_home: &TempDir) -> TestConfig {
-    make_config_for_cwd(codex_home, codex_home.path().to_path_buf()).await
+    make_config_with_project_layers(codex_home, codex_home.path().to_path_buf(), Vec::new()).await
 }
 
 fn config_file(path: PathBuf) -> AbsolutePathBuf {
     path.abs()
 }
 
-fn project_layers_for_cwd(cwd: &Path) -> Vec<ConfigLayerEntry> {
-    let cwd_dir = if cwd.is_dir() {
+fn project_layer_entries_for_dirs(dirs: Vec<PathBuf>) -> Vec<ConfigLayerEntry> {
+    dirs.into_iter()
+        .filter_map(|dir| {
+            let dot_codex = dir.join(REPO_ROOT_CONFIG_DIR_NAME);
+            dot_codex.is_dir().then(|| {
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::Project {
+                        dot_codex_folder: dot_codex.abs(),
+                    },
+                    TomlValue::Table(toml::map::Map::new()),
+                )
+            })
+        })
+        .collect()
+}
+
+fn cwd_dir_for_project_layers(cwd: &Path) -> PathBuf {
+    if cwd.is_dir() {
         cwd.to_path_buf()
     } else {
         cwd.parent()
             .expect("file cwd should have a parent directory")
             .to_path_buf()
-    };
+    }
+}
+
+fn project_layers_for_cwd(cwd: &Path) -> Vec<ConfigLayerEntry> {
+    let cwd_dir = cwd_dir_for_project_layers(cwd);
     let project_root = cwd_dir
         .ancestors()
         .find(|ancestor| ancestor.join(".git").exists())
@@ -63,23 +83,27 @@ fn project_layers_for_cwd(cwd: &Path) -> Vec<ConfigLayerEntry> {
         .collect::<Vec<_>>();
     layers.reverse();
 
-    layers
-        .into_iter()
-        .filter_map(|dir| {
-            let dot_codex = dir.join(REPO_ROOT_CONFIG_DIR_NAME);
-            dot_codex.is_dir().then(|| {
-                ConfigLayerEntry::new(
-                    ConfigLayerSource::Project {
-                        dot_codex_folder: dot_codex.abs(),
-                    },
-                    TomlValue::Table(toml::map::Map::new()),
-                )
-            })
-        })
-        .collect()
+    project_layer_entries_for_dirs(layers)
 }
 
 async fn make_config_for_cwd(codex_home: &TempDir, cwd: PathBuf) -> TestConfig {
+    make_config_with_project_layers(codex_home, cwd.clone(), project_layers_for_cwd(&cwd)).await
+}
+
+async fn make_config_for_non_git_cwd(codex_home: &TempDir, cwd: PathBuf) -> TestConfig {
+    make_config_with_project_layers(
+        codex_home,
+        cwd.clone(),
+        project_layer_entries_for_dirs(vec![cwd_dir_for_project_layers(&cwd)]),
+    )
+    .await
+}
+
+async fn make_config_with_project_layers(
+    codex_home: &TempDir,
+    cwd: PathBuf,
+    project_layers: Vec<ConfigLayerEntry>,
+) -> TestConfig {
     let user_config_path = codex_home.path().join(CONFIG_TOML_FILE);
     let system_config_path = codex_home.path().join("etc/codex/config.toml");
     fs::create_dir_all(
@@ -104,7 +128,7 @@ async fn make_config_for_cwd(codex_home: &TempDir, cwd: PathBuf) -> TestConfig {
             TomlValue::Table(toml::map::Map::new()),
         ),
     ];
-    layers.extend(project_layers_for_cwd(&cwd));
+    layers.extend(project_layers);
 
     let cwd_abs = cwd.abs();
     TestConfig {
@@ -1641,7 +1665,7 @@ async fn loads_skills_from_codex_dir_when_not_git_repo() {
         "from cwd",
     );
 
-    let cfg = make_config_for_cwd(&codex_home, work_dir.path().to_path_buf()).await;
+    let cfg = make_config_for_non_git_cwd(&codex_home, work_dir.path().to_path_buf()).await;
 
     let outcome = load_skills_for_test(&cfg).await;
     assert!(
@@ -1926,7 +1950,7 @@ async fn non_git_repo_skills_search_does_not_walk_parents() {
         "from outer",
     );
 
-    let cfg = make_config_for_cwd(&codex_home, nested_dir).await;
+    let cfg = make_config_for_non_git_cwd(&codex_home, nested_dir).await;
 
     let outcome = load_skills_for_test(&cfg).await;
     assert!(
@@ -1944,7 +1968,7 @@ async fn loads_skills_from_system_cache_when_present() {
 
     let skill_path = write_system_skill(&codex_home, "system", "system-skill", "from system");
 
-    let cfg = make_config_for_cwd(&codex_home, work_dir.path().to_path_buf()).await;
+    let cfg = make_config_for_non_git_cwd(&codex_home, work_dir.path().to_path_buf()).await;
 
     let outcome = load_skills_for_test(&cfg).await;
     assert!(

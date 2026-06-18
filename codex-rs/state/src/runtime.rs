@@ -68,6 +68,7 @@ mod remote_control;
 mod test_support;
 mod threads;
 mod tool_router;
+mod tool_router_output_optimization;
 mod tool_router_tune;
 
 pub use goals::GoalAccountingMode;
@@ -118,6 +119,8 @@ pub use tool_router::ToolRouterRememberedToolRecord;
 pub use tool_router::ToolRouterRememberedToolSelector;
 pub use tool_router::ToolRouterRulePruneOptions;
 pub use tool_router::ToolRouterRulePruneResult;
+pub use tool_router_output_optimization::ToolRouterOutputOptimizationRecord;
+pub use tool_router_output_optimization::ToolRouterOutputOptimizationStatus;
 pub use tool_router_tune::ToolRouterRequestShape;
 pub use tool_router_tune::ToolRouterRequestShapeCluster;
 pub use tool_router_tune::ToolRouterTuneCount;

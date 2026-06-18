@@ -9,6 +9,7 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::process::OutputHandles;
+use codex_features::Feature;
 use codex_sandboxing::SandboxType;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
@@ -19,6 +20,7 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
@@ -121,6 +123,10 @@ async fn exec_command_with_tty(
             network_approval: None,
             session: Arc::downgrade(session),
             last_used: started_at,
+            exec_output_compaction_enabled: turn.features.enabled(Feature::ExecOutputCompaction),
+            tool_router_output_optimization_enabled: turn.features.enabled(Feature::ToolRouter),
+            model_slug: turn.model_info.slug.clone(),
+            model_provider: turn.config.model_provider_id.clone(),
         };
         manager
             .process_store
@@ -164,6 +170,7 @@ async fn exec_command_with_tty(
         chunk_id: generate_chunk_id(),
         wall_time,
         raw_output: collected,
+        compaction: None,
         truncation_policy: turn.truncation_policy,
         max_output_tokens: None,
         process_id: response_process_id,
@@ -234,6 +241,292 @@ fn head_tail_buffer_default_preserves_prefix_and_suffix() {
     let rendered = buffer.to_bytes();
     assert_eq!(rendered.first(), Some(&b'a'));
     assert!(rendered.ends_with(b"bc"));
+}
+
+#[tokio::test]
+async fn completed_output_archive_evicts_oldest_entries() {
+    let manager = UnifiedExecProcessManager::default();
+    for idx in 0..(MAX_ARCHIVED_EXEC_OUTPUTS + 1) {
+        let chunk_id = format!("chunk-{idx}");
+        let output = format!("out-{idx}");
+        manager
+            .archive_completed_output(chunk_id.as_str(), output.as_bytes())
+            .await;
+    }
+
+    assert_eq!(manager.read_archived_output("chunk-0").await, None);
+    assert_eq!(
+        manager.read_archived_output("chunk-1").await,
+        Some(b"out-1".to_vec())
+    );
+    let newest_chunk_id = format!("chunk-{MAX_ARCHIVED_EXEC_OUTPUTS}");
+    let newest_output = format!("out-{MAX_ARCHIVED_EXEC_OUTPUTS}");
+    assert_eq!(
+        manager.read_archived_output(newest_chunk_id.as_str()).await,
+        Some(newest_output.into_bytes())
+    );
+}
+
+#[test]
+fn compaction_skips_when_truncated_raw_output_is_not_larger() {
+    let mut output = String::new();
+    for idx in 0..5_000 {
+        output.push_str(&format!("noise before {idx}\n"));
+        output.push_str(&format!("warning: unique issue {idx}\n"));
+        output.push_str(&format!("noise after {idx}\n"));
+        for filler in 0..8 {
+            output.push_str(&format!("filler {idx}-{filler}\n"));
+        }
+    }
+    let command = vec!["mvn".to_string(), "test".to_string()];
+
+    let compaction = compact_exec_output(
+        &command,
+        output.as_str(),
+        /*max_output_tokens*/ None,
+        TruncationPolicy::Tokens(DEFAULT_MAX_OUTPUT_TOKENS),
+    );
+
+    assert_eq!(compaction, None);
+}
+
+#[tokio::test]
+async fn accepted_rg_output_optimization_compacts_completed_exec_output() -> anyhow::Result<()> {
+    let state_home = TempDir::new().expect("temp dir");
+    let state_db =
+        codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
+            .await?;
+    let output = learned_rg_output(/*lines*/ 240);
+    for idx in 0..3 {
+        state_db
+            .record_tool_router_output_optimization_observation(tool_router_exec_ledger_entry(
+                format!("call-{idx}").as_str(),
+                output.as_str(),
+            ))
+            .await?;
+    }
+
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "rg -n target src".to_string(),
+    ];
+    let compaction = compact_exec_output_with_policy(
+        ExecOutputCompactionPolicy {
+            state_db: Some(state_db.as_ref()),
+            model_slug: "gpt-test",
+            model_provider: "openai",
+            tool_name: "exec_command",
+            tool_router_output_optimization_enabled: true,
+            thread_id: Some("thread"),
+            call_id: Some("call-current"),
+        },
+        &command,
+        output.as_str(),
+        /*max_output_tokens*/ None,
+        TruncationPolicy::Tokens(DEFAULT_MAX_OUTPUT_TOKENS),
+    )
+    .await
+    .expect("accepted rg optimization should compact output");
+
+    assert_eq!(compaction.filter_id, "exec.rg-summary-v1");
+    assert!(
+        compaction
+            .compacted_output
+            .contains("rg summary: 240 matches in 12 files")
+    );
+    assert!(compaction.compacted_output.contains("src/module_0.rs"));
+    assert!(!compaction.compacted_output.contains("target_239"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn write_stdin_completion_uses_exec_command_output_optimization() -> anyhow::Result<()> {
+    let state_home = TempDir::new().expect("temp dir");
+    let state_db =
+        codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
+            .await?;
+    let output = learned_rg_output(/*lines*/ 240);
+    for idx in 0..3 {
+        state_db
+            .record_tool_router_output_optimization_observation(tool_router_exec_ledger_entry(
+                format!("call-{idx}").as_str(),
+                output.as_str(),
+            ))
+            .await?;
+    }
+
+    let command = vec!["rg -n target src".to_string()];
+    let compaction = compact_exec_output_with_policy(
+        ExecOutputCompactionPolicy {
+            state_db: Some(state_db.as_ref()),
+            model_slug: "gpt-test",
+            model_provider: "openai",
+            tool_name: "write_stdin",
+            tool_router_output_optimization_enabled: true,
+            thread_id: Some("thread"),
+            call_id: Some("call-current"),
+        },
+        &command,
+        output.as_str(),
+        /*max_output_tokens*/ None,
+        TruncationPolicy::Tokens(DEFAULT_MAX_OUTPUT_TOKENS),
+    )
+    .await
+    .expect("write_stdin should reuse exec_command accepted output optimization");
+
+    assert_eq!(compaction.filter_id, "exec.rg-summary-v1");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn accepted_source_read_dedupe_requires_recent_duplicate_read() -> anyhow::Result<()> {
+    let state_home = TempDir::new().expect("temp dir");
+    let state_db =
+        codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
+            .await?;
+    let output = learned_source_read_output(/*start_line*/ 10, /*line_count*/ 250);
+    let command_json = r#"{"cmd":"sed -n '10,259p' src/lib.rs"}"#;
+
+    state_db
+        .record_tool_router_ledger_entry(tool_router_exec_ledger_entry_for_command(
+            "call-prior",
+            command_json,
+            output.as_str(),
+        ))
+        .await?;
+    for idx in 0..3 {
+        state_db
+            .record_tool_router_output_optimization_observation(
+                tool_router_exec_ledger_entry_for_command(
+                    format!("call-source-{idx}").as_str(),
+                    command_json,
+                    output.as_str(),
+                ),
+            )
+            .await?;
+    }
+
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "sed -n '10,259p' src/lib.rs".to_string(),
+    ];
+    let compaction = compact_exec_output_with_policy(
+        ExecOutputCompactionPolicy {
+            state_db: Some(state_db.as_ref()),
+            model_slug: "gpt-test",
+            model_provider: "openai",
+            tool_name: "exec_command",
+            tool_router_output_optimization_enabled: true,
+            thread_id: Some("thread"),
+            call_id: Some("call-current"),
+        },
+        &command,
+        output.as_str(),
+        /*max_output_tokens*/ None,
+        TruncationPolicy::Tokens(DEFAULT_MAX_OUTPUT_TOKENS),
+    )
+    .await
+    .expect("duplicate source read should compact");
+
+    assert_eq!(compaction.filter_id, "exec.source-read-dedupe-v1");
+    assert!(
+        compaction
+            .compacted_output
+            .contains("omitted 250 lines from src/lib.rs")
+    );
+
+    let no_duplicate = compact_exec_output_with_policy(
+        ExecOutputCompactionPolicy {
+            state_db: Some(state_db.as_ref()),
+            model_slug: "gpt-test",
+            model_provider: "openai",
+            tool_name: "exec_command",
+            tool_router_output_optimization_enabled: true,
+            thread_id: Some("other-thread"),
+            call_id: Some("call-current"),
+        },
+        &command,
+        output.as_str(),
+        /*max_output_tokens*/ None,
+        TruncationPolicy::Tokens(DEFAULT_MAX_OUTPUT_TOKENS),
+    )
+    .await;
+
+    assert_eq!(no_duplicate, None);
+
+    Ok(())
+}
+
+fn learned_rg_output(lines: usize) -> String {
+    (0..lines)
+        .map(|idx| {
+            format!(
+                "src/module_{}.rs:{}:fn target_{idx}() {{}}\n",
+                idx % 12,
+                idx + 1
+            )
+        })
+        .collect()
+}
+
+fn learned_source_read_output(start_line: usize, line_count: usize) -> String {
+    (start_line..start_line + line_count)
+        .map(|line| format!("{line}:     let value_{line} = compute_value({line});\n"))
+        .collect()
+}
+
+fn tool_router_exec_ledger_entry(
+    call_id: &str,
+    output: &str,
+) -> codex_state::ToolRouterLedgerEntry {
+    tool_router_exec_ledger_entry_for_command(call_id, r#"{"cmd":"rg -n target src"}"#, output)
+}
+
+fn tool_router_exec_ledger_entry_for_command(
+    call_id: &str,
+    tool_input_json: &str,
+    output: &str,
+) -> codex_state::ToolRouterLedgerEntry {
+    let output_tokens = i64::try_from(approx_token_count(output)).unwrap_or(i64::MAX);
+    codex_state::ToolRouterLedgerEntry {
+        thread_id: "thread".to_string(),
+        turn_id: "turn".to_string(),
+        call_id: call_id.to_string(),
+        model_slug: "gpt-test".to_string(),
+        model_provider: "openai".to_string(),
+        toolset_hash: "abc123".to_string(),
+        router_schema_version: 1,
+        model_response_ordinal: 0,
+        guidance_version: 0,
+        guidance_tokens: 0,
+        format_description_tokens: 0,
+        route_kind: "deterministic".to_string(),
+        selected_tools: vec!["exec_command".to_string()],
+        visible_router_schema_tokens: 10,
+        hidden_tool_schema_tokens: 0,
+        spark_prompt_tokens: 0,
+        spark_completion_tokens: 0,
+        fanout_call_count: 1,
+        returned_output_tokens: output_tokens,
+        original_output_tokens: output_tokens,
+        truncated_output_tokens: 0,
+        output_compaction_filter: None,
+        outcome: Some("ok".to_string()),
+        request_shape_json: None,
+        tool_call_source: Some("direct".to_string()),
+        tool_name: Some("exec_command".to_string()),
+        tool_namespace: None,
+        tool_input_json: Some(tool_input_json.to_string()),
+        tool_output_json: Some(serde_json::json!({ "output": output }).to_string()),
+        tool_success: Some(true),
+        prompt_json: None,
+        previous_prompt_json: None,
+        dialog_locator_json: None,
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
