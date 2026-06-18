@@ -138,6 +138,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         state_db,
         installation_id,
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let NewThread {
