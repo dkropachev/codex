@@ -84,7 +84,7 @@ fn usage_limit_switches_account_for_exhausted_weekly_window() {
             )),
             ..rate_limit_snapshot()
         })),
-        ..usage_limit_error(None)
+        ..usage_limit_error(/*primary*/ None)
     };
 
     assert!(usage_limit_should_switch_account(&error));
