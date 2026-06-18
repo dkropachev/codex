@@ -194,6 +194,24 @@ struct CurrentClientSetup {
     auth: Option<CodexAuth>,
     api_provider: ApiProvider,
     api_auth: SharedAuthProvider,
+    websocket_auth_identity: WebsocketAuthIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WebsocketAuthIdentity {
+    auth_mode: Option<AuthMode>,
+    account_id: Option<String>,
+    is_fedramp_account: bool,
+}
+
+impl WebsocketAuthIdentity {
+    fn new(auth: Option<&CodexAuth>) -> Self {
+        Self {
+            auth_mode: auth.map(CodexAuth::auth_mode),
+            account_id: auth.and_then(CodexAuth::get_account_id),
+            is_fedramp_account: auth.is_some_and(CodexAuth::is_fedramp_account),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -262,6 +280,7 @@ struct LastResponse {
 #[derive(Debug, Default)]
 struct WebsocketSession {
     connection: Option<ApiWebSocketConnection>,
+    auth_identity: Option<WebsocketAuthIdentity>,
     last_request: Option<ResponsesApiRequest>,
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
     last_response_from_untraced_warmup: bool,
@@ -872,6 +891,7 @@ impl ModelClient {
             .await?;
         let api_auth = self.state.provider.api_auth_for_auth(auth.as_ref()).await?;
         Ok(CurrentClientSetup {
+            websocket_auth_identity: WebsocketAuthIdentity::new(auth.as_ref()),
             auth,
             api_provider,
             api_auth,
@@ -1018,6 +1038,7 @@ impl Drop for ModelClientSession {
 impl ModelClientSession {
     pub(crate) fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
+        self.websocket_session.auth_identity = None;
         self.websocket_session.last_request = None;
         self.websocket_session.last_response_rx = None;
         self.websocket_session.last_response_from_untraced_warmup = false;
@@ -1154,9 +1175,6 @@ impl ModelClientSession {
         if !self.client.responses_websocket_enabled() {
             return Ok(());
         }
-        if self.websocket_session.connection.is_some() {
-            return Ok(());
-        }
 
         let client_setup = self
             .client
@@ -1167,6 +1185,15 @@ impl ModelClientSession {
                     "failed to build websocket prewarm client setup: {err}"
                 ))
             })?;
+        if self.websocket_session.connection.is_some()
+            && self.websocket_session.auth_identity.as_ref()
+                == Some(&client_setup.websocket_auth_identity)
+        {
+            return Ok(());
+        }
+        if self.websocket_session.connection.is_some() {
+            self.reset_websocket_session();
+        }
         let auth_context = AuthRequestTelemetryContext::new(
             client_setup.auth.as_ref().map(CodexAuth::auth_mode),
             client_setup.api_auth.as_ref(),
@@ -1185,6 +1212,7 @@ impl ModelClientSession {
             )
             .await?;
         self.websocket_session.connection = Some(connection);
+        self.websocket_session.auth_identity = Some(client_setup.websocket_auth_identity);
         self.websocket_session
             .set_connection_reused(/*connection_reused*/ false);
         Ok(())
@@ -1214,9 +1242,12 @@ impl ModelClientSession {
             options,
             auth_context,
             request_route_telemetry,
+            auth_identity,
         } = params;
+        let auth_identity_matches =
+            self.websocket_session.auth_identity.as_ref() == Some(&auth_identity);
         let needs_new = match self.websocket_session.connection.as_ref() {
-            Some(conn) => conn.is_closed().await,
+            Some(conn) => !auth_identity_matches || conn.is_closed().await,
             None => true,
         };
 
@@ -1250,6 +1281,7 @@ impl ModelClientSession {
                 }
             };
             self.websocket_session.connection = Some(new_conn);
+            self.websocket_session.auth_identity = Some(auth_identity);
             self.websocket_session
                 .set_connection_reused(/*connection_reused*/ false);
         } else {
@@ -1484,6 +1516,7 @@ impl ModelClientSession {
                     request_route_telemetry: RequestRouteTelemetry::for_endpoint(
                         RESPONSES_ENDPOINT,
                     ),
+                    auth_identity: client_setup.websocket_auth_identity,
                 })
                 .await
             {
@@ -2056,6 +2089,7 @@ struct WebsocketConnectParams<'a> {
     options: &'a ApiResponsesOptions,
     auth_context: AuthRequestTelemetryContext,
     request_route_telemetry: RequestRouteTelemetry,
+    auth_identity: WebsocketAuthIdentity,
 }
 
 async fn handle_unauthorized(

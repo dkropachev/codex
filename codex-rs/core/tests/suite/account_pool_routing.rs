@@ -34,7 +34,7 @@ use wiremock::matchers::path;
 async fn account_pool_retries_regular_usage_limit_with_next_member() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
-    mount_usage_limit_response(&server, "work-pro", "codex").await;
+    mount_usage_limit_response(&server, "work-pro", "codex", /*window_minutes*/ 300).await;
     mount_success_response(&server, "personal-pro").await;
 
     let codex = build_account_pool_codex(&server).await?.codex;
@@ -48,7 +48,13 @@ async fn account_pool_retries_regular_usage_limit_with_next_member() -> Result<(
 async fn account_pool_retries_spark_usage_limit_with_next_member() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
-    mount_usage_limit_response(&server, "work-pro", "bengalfox").await;
+    mount_usage_limit_response(
+        &server,
+        "work-pro",
+        "bengalfox",
+        /*window_minutes*/ 300,
+    )
+    .await;
     mount_success_response(&server, "personal-pro").await;
 
     let codex = build_account_pool_codex(&server).await?.codex;
@@ -59,39 +65,46 @@ async fn account_pool_retries_spark_usage_limit_with_next_member() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn account_pool_retries_usage_not_included_with_next_regular_member() -> Result<()> {
+async fn account_pool_does_not_retry_short_usage_limit_with_next_member() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    mount_usage_limit_response(&server, "work-pro", "codex", /*window_minutes*/ 15).await;
+
+    let codex = build_account_pool_codex(&server).await?.codex;
+    submit_prompt(&codex, "short usage limit").await?;
+    let error = wait_for_error(&codex).await;
+    wait_for_turn_complete(&codex).await;
+
+    assert!(error.to_lowercase().contains("usage limit"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn account_pool_does_not_retry_usage_not_included_with_next_member() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     let requests = mount_sse_sequence(
         &server,
-        vec![
-            responses::sse_failed(
-                "resp-usage-not-included",
-                "usage_not_included",
-                "Usage is not included for this account.",
-            ),
-            sse(vec![
-                ev_response_created("resp-ok"),
-                ev_assistant_message("msg-ok", "done"),
-                ev_completed("resp-ok"),
-            ]),
-        ],
+        vec![responses::sse_failed(
+            "resp-usage-not-included",
+            "usage_not_included",
+            "Usage is not included for this account.",
+        )],
     )
     .await;
 
     let codex = build_account_pool_codex(&server).await?.codex;
     submit_prompt(&codex, "use included account").await?;
+    let error = wait_for_error(&codex).await;
     wait_for_turn_complete(&codex).await;
 
+    assert!(error.to_lowercase().contains("upgrade to plus"));
     let requests = requests.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].header("ChatGPT-Account-ID").as_deref(),
         Some("work-pro")
-    );
-    assert_eq!(
-        requests[1].header("ChatGPT-Account-ID").as_deref(),
-        Some("personal-pro")
     );
 
     Ok(())
@@ -143,7 +156,7 @@ async fn usage_limit_without_account_pool_surfaces_original_error() -> Result<()
 
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
-        .respond_with(usage_limit_response("codex"))
+        .respond_with(usage_limit_response("codex", /*window_minutes*/ 15))
         .expect(1)
         .mount(&server)
         .await;
@@ -186,11 +199,16 @@ async fn build_account_pool_codex(
     builder.build(server).await
 }
 
-async fn mount_usage_limit_response(server: &MockServer, account_id: &str, limit_id: &str) {
+async fn mount_usage_limit_response(
+    server: &MockServer,
+    account_id: &str,
+    limit_id: &str,
+    window_minutes: i64,
+) {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(header("ChatGPT-Account-ID", account_id))
-        .respond_with(usage_limit_response(limit_id))
+        .respond_with(usage_limit_response(limit_id, window_minutes))
         .up_to_n_times(1)
         .expect(1)
         .mount(server)
@@ -216,11 +234,11 @@ async fn mount_success_response(server: &MockServer, account_id: &str) {
         .await;
 }
 
-fn usage_limit_response(limit_id: &str) -> ResponseTemplate {
+fn usage_limit_response(limit_id: &str, window_minutes: i64) -> ResponseTemplate {
     let mut response = ResponseTemplate::new(429)
         .insert_header("x-codex-active-limit", limit_id)
         .insert_header("x-codex-primary-used-percent", "100.0")
-        .insert_header("x-codex-primary-window-minutes", "15")
+        .insert_header("x-codex-primary-window-minutes", window_minutes.to_string())
         .set_body_json(json!({
             "error": {
                 "type": "usage_limit_reached",
@@ -232,7 +250,10 @@ fn usage_limit_response(limit_id: &str) -> ResponseTemplate {
     if limit_id != "codex" {
         response = response
             .insert_header(format!("x-{limit_id}-primary-used-percent"), "100.0")
-            .insert_header(format!("x-{limit_id}-primary-window-minutes"), "15");
+            .insert_header(
+                format!("x-{limit_id}-primary-window-minutes"),
+                window_minutes.to_string(),
+            );
     }
     response
 }
