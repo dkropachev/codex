@@ -706,7 +706,7 @@ impl ChatWidget {
         }
     }
 
-    fn collaboration_modes_config(
+    pub(super) fn collaboration_modes_config(
         &self,
     ) -> codex_models_manager::collaboration_mode_presets::CollaborationModesConfig {
         codex_models_manager::collaboration_mode_presets::CollaborationModesConfig {

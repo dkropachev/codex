@@ -81,7 +81,10 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
         .filter(|(_, cmd)| {
             flags.collaboration_modes_enabled
-                || !matches!(*cmd, SlashCommand::Plan | SlashCommand::Config)
+                || !matches!(
+                    *cmd,
+                    SlashCommand::Plan | SlashCommand::Workflow | SlashCommand::Config
+                )
         })
         .filter(|(_, cmd)| flags.connectors_enabled || *cmd != SlashCommand::Apps)
         .filter(|(_, cmd)| flags.plugins_command_enabled || *cmd != SlashCommand::Plugins)
@@ -89,6 +92,7 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
         .filter(|(_, cmd)| flags.audio_device_selection_enabled || *cmd != SlashCommand::Settings)
+        .filter(|(_, cmd)| flags.workflow_commands_enabled || *cmd != SlashCommand::Workflow)
         .filter(|(_, cmd)| !flags.side_conversation_active || cmd.available_in_side_conversation())
         .collect()
 }
@@ -131,6 +135,9 @@ pub(crate) fn commands_for_input(
 /// typed command can produce a side-specific unavailable message while the popup still hides it.
 pub(crate) fn find_builtin_command(name: &str, flags: BuiltinCommandFlags) -> Option<SlashCommand> {
     let cmd = SlashCommand::from_str(name).ok()?;
+    if cmd == SlashCommand::Workflow && !flags.workflow_commands_enabled {
+        return Some(cmd);
+    }
     builtins_for_input(BuiltinCommandFlags {
         side_conversation_active: false,
         ..flags
@@ -291,6 +298,30 @@ mod tests {
         let mut flags = all_enabled_flags();
         flags.goal_command_enabled = false;
         assert_eq!(find_builtin_command("goal", flags), None);
+    }
+
+    #[test]
+    fn workflow_command_is_hidden_from_popup_when_disabled() {
+        let mut flags = all_enabled_flags();
+        flags.workflow_commands_enabled = false;
+
+        assert!(
+            !builtins_for_input(flags)
+                .into_iter()
+                .any(|(_, command)| command == SlashCommand::Workflow)
+        );
+        assert!(!has_slash_command_prefix("workflow", flags, &[], &[]));
+    }
+
+    #[test]
+    fn workflow_command_resolves_for_disabled_feature_message() {
+        let mut flags = all_enabled_flags();
+        flags.workflow_commands_enabled = false;
+
+        assert_eq!(
+            find_builtin_command("workflow", flags),
+            Some(SlashCommand::Workflow)
+        );
     }
 
     #[test]
