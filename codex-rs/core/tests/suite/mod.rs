@@ -65,14 +65,7 @@ mod image_rollout;
 mod items;
 mod json_result;
 mod live_cli;
-#[path = "mcp__client_tool_calls.rs"]
-mod mcp_client_tool_calls;
-#[cfg(not(target_os = "windows"))]
-#[path = "mcp__hooks.rs"]
-mod mcp_hooks;
-#[path = "mcp__openai_file.rs"]
-mod mcp_openai_file;
-#[path = "mcp__turn_metadata.rs"]
+mod mcp_tool_exposure;
 mod mcp_turn_metadata;
 mod model_overrides;
 mod model_router;
