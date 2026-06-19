@@ -102,6 +102,7 @@ use codex_app_server_protocol::ThreadTurnsItemsListParams;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
+use codex_app_server_protocol::ThreadWorkflowCommandParams;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
@@ -517,6 +518,15 @@ impl TestAppServer {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/shellCommand", params).await
+    }
+
+    /// Send a `thread/workflowCommand` JSON-RPC request.
+    pub async fn send_thread_workflow_command_request(
+        &mut self,
+        params: ThreadWorkflowCommandParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/workflowCommand", params).await
     }
 
     /// Send a `thread/rollback` JSON-RPC request.

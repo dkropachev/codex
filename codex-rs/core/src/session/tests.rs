@@ -43,6 +43,7 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelServiceTier;
@@ -66,6 +67,7 @@ use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::execute_user_shell_command;
+use crate::tasks::record_workflow_output;
 use crate::tools::ToolRouter;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -8255,6 +8257,82 @@ async fn run_user_shell_command_does_not_set_reference_context_item() {
         session.reference_context_item().await.is_none(),
         "standalone shell tasks should not mutate previous context"
     );
+}
+
+#[tokio::test]
+async fn workflow_output_records_assistant_message_for_next_context() {
+    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+    let markdown = "# Workflow report\n\nBody".to_string();
+    let expected_item = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: markdown.clone(),
+        }],
+        phase: Some(MessagePhase::FinalAnswer),
+    };
+
+    let recorded = record_workflow_output(
+        Arc::clone(&session),
+        Arc::clone(&turn_context),
+        markdown.clone(),
+    )
+    .await;
+
+    assert_eq!(recorded, markdown);
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        std::slice::from_ref(&expected_item)
+    );
+
+    let first = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("expected raw response item event")
+        .expect("channel open");
+    assert!(matches!(
+        first.msg,
+        EventMsg::RawResponseItem(RawResponseItemEvent { item }) if item == expected_item
+    ));
+
+    let second = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("expected item started event")
+        .expect("channel open");
+    assert!(matches!(
+        second.msg,
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::AgentMessage(agent_message),
+            ..
+        }) if agent_message.phase == Some(MessagePhase::FinalAnswer)
+            && agent_message
+                .content
+                .iter()
+                .any(|content| matches!(
+                    content,
+                    codex_protocol::items::AgentMessageContent::Text { text }
+                        if text == "# Workflow report\n\nBody"
+                ))
+    ));
+
+    let third = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("expected item completed event")
+        .expect("channel open");
+    assert!(matches!(
+        third.msg,
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::AgentMessage(agent_message),
+            ..
+        }) if agent_message.phase == Some(MessagePhase::FinalAnswer)
+            && agent_message
+                .content
+                .iter()
+                .any(|content| matches!(
+                    content,
+                    codex_protocol::items::AgentMessageContent::Text { text }
+                        if text == "# Workflow report\n\nBody"
+                ))
+    ));
 }
 
 #[tokio::test]

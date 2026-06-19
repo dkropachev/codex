@@ -683,6 +683,19 @@ impl App {
                     .await?;
                 Ok(true)
             }
+            AppCommand::RunWorkflowCommand {
+                workflow_dir,
+                input,
+            } => {
+                app_server
+                    .thread_workflow_command(
+                        thread_id,
+                        workflow_dir.to_string_lossy().to_string(),
+                        input.clone(),
+                    )
+                    .await?;
+                Ok(true)
+            }
             AppCommand::ReloadUserConfig => {
                 app_server.reload_user_config().await?;
                 Ok(true)

@@ -563,6 +563,11 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadShellCommandResponse,
     },
+    ThreadWorkflowCommand => "thread/workflowCommand" {
+        params: v2::ThreadWorkflowCommandParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadWorkflowCommandResponse,
+    },
     ThreadApproveGuardianDeniedAction => "thread/approveGuardianDeniedAction" {
         params: v2::ThreadApproveGuardianDeniedActionParams,
         serialization: thread_id(params.thread_id),

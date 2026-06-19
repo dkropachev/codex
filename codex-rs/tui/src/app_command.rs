@@ -39,6 +39,10 @@ pub(crate) enum AppCommand {
     RunUserShellCommand {
         command: String,
     },
+    RunWorkflowCommand {
+        workflow_dir: PathBuf,
+        input: Value,
+    },
     UserTurn {
         items: Vec<UserInput>,
         cwd: PathBuf,
@@ -153,6 +157,13 @@ impl AppCommand {
 
     pub(crate) fn run_user_shell_command(command: String) -> Self {
         Self::RunUserShellCommand { command }
+    }
+
+    pub(crate) fn run_workflow_command(workflow_dir: PathBuf, input: Value) -> Self {
+        Self::RunWorkflowCommand {
+            workflow_dir,
+            input,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

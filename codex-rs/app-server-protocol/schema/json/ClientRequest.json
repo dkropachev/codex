@@ -3969,6 +3969,26 @@
       ],
       "type": "object"
     },
+    "ThreadWorkflowCommandParams": {
+      "properties": {
+        "input": {
+          "description": "Structured workflow input. Must be a JSON object."
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "workflowDir": {
+          "description": "Directory containing the workflow package.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input",
+        "threadId",
+        "workflowDir"
+      ],
+      "type": "object"
+    },
     "TurnEnvironmentParams": {
       "properties": {
         "cwd": {
@@ -4675,6 +4695,30 @@
         "params"
       ],
       "title": "Thread/shellCommandRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/workflowCommand"
+          ],
+          "title": "Thread/workflowCommandRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadWorkflowCommandParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/workflowCommandRequest",
       "type": "object"
     },
     {

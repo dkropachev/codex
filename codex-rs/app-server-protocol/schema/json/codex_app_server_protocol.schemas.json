@@ -547,6 +547,30 @@
             },
             "method": {
               "enum": [
+                "thread/workflowCommand"
+              ],
+              "title": "Thread/workflowCommandRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadWorkflowCommandParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/workflowCommandRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/approveGuardianDeniedAction"
               ],
               "title": "Thread/approveGuardianDeniedActionRequestMethod",
@@ -18555,6 +18579,33 @@
           "unsubscribed"
         ],
         "type": "string"
+      },
+      "ThreadWorkflowCommandParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "input": {
+            "description": "Structured workflow input. Must be a JSON object."
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "workflowDir": {
+            "description": "Directory containing the workflow package.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "input",
+          "threadId",
+          "workflowDir"
+        ],
+        "title": "ThreadWorkflowCommandParams",
+        "type": "object"
+      },
+      "ThreadWorkflowCommandResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadWorkflowCommandResponse",
+        "type": "object"
       },
       "TokenUsageBreakdown": {
         "properties": {

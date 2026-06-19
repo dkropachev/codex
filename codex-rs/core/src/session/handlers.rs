@@ -24,6 +24,7 @@ use crate::session::spawn_review_thread;
 use crate::tasks::CompactTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
+use crate::tasks::WorkflowCommandTask;
 use crate::tasks::execute_user_shell_command;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -356,6 +357,21 @@ pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command
         Arc::clone(&turn_context),
         Vec::new(),
         UserShellCommandTask::new(command),
+    )
+    .await;
+}
+
+pub async fn run_workflow_command(
+    sess: &Arc<Session>,
+    sub_id: String,
+    workflow_dir: std::path::PathBuf,
+    input: Value,
+) {
+    let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+    sess.spawn_task(
+        Arc::clone(&turn_context),
+        Vec::new(),
+        WorkflowCommandTask::new(workflow_dir, input),
     )
     .await;
 }
@@ -844,6 +860,13 @@ pub(super) async fn submission_loop(
                 }
                 Op::RunUserShellCommand { command } => {
                     run_user_shell_command(&sess, sub.id.clone(), command).await;
+                    false
+                }
+                Op::RunWorkflowCommand {
+                    workflow_dir,
+                    input,
+                } => {
+                    run_workflow_command(&sess, sub.id.clone(), workflow_dir, input).await;
                     false
                 }
                 Op::ResolveElicitation {

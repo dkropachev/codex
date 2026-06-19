@@ -626,6 +626,15 @@ pub enum Op {
         /// The raw command string after '!'
         command: String,
     },
+
+    /// Run a locally installed workflow and record its formatted TUI output as
+    /// assistant-visible conversation history.
+    RunWorkflowCommand {
+        /// Directory containing the workflow package.
+        workflow_dir: PathBuf,
+        /// Structured workflow input.
+        input: Value,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
@@ -760,6 +769,7 @@ impl Op {
             Self::ApproveGuardianDeniedAction { .. } => "approve_guardian_denied_action",
             Self::Shutdown => "shutdown",
             Self::RunUserShellCommand { .. } => "run_user_shell_command",
+            Self::RunWorkflowCommand { .. } => "run_workflow_command",
         }
     }
 }

@@ -906,6 +906,22 @@ pub struct ThreadShellCommandResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadWorkflowCommandParams {
+    pub thread_id: String,
+    /// Directory containing the workflow package.
+    pub workflow_dir: String,
+    /// Structured workflow input. Must be a JSON object.
+    pub input: JsonValue,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadWorkflowCommandResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadApproveGuardianDeniedActionParams {
     pub thread_id: String,
     /// Serialized `codex_protocol::protocol::GuardianAssessmentEvent`.
