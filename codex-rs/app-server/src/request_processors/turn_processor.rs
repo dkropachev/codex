@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -60,6 +61,7 @@ struct ThreadSettingsBuildParams {
     effort: Option<ReasoningEffort>,
     summary: Option<ReasoningSummary>,
     collaboration_mode: Option<CollaborationMode>,
+    multi_agent_mode: Option<MultiAgentMode>,
     personality: Option<Personality>,
 }
 
@@ -456,6 +458,7 @@ impl TurnRequestProcessor {
                     effort: params.effort,
                     summary: params.summary,
                     collaboration_mode: params.collaboration_mode,
+                    multi_agent_mode: params.multi_agent_mode,
                     personality: params.personality,
                 },
             )
@@ -562,6 +565,7 @@ impl TurnRequestProcessor {
             effort,
             summary,
             collaboration_mode,
+            multi_agent_mode,
             personality,
         } = params;
 
@@ -595,6 +599,7 @@ impl TurnRequestProcessor {
             || effort.is_some()
             || summary.is_some()
             || collaboration_mode.is_some()
+            || multi_agent_mode.is_some()
             || personality.is_some();
 
         let runtime_workspace_roots =
@@ -671,6 +676,7 @@ impl TurnRequestProcessor {
                     summary,
                     service_tier: service_tier.clone(),
                     collaboration_mode: collaboration_mode.clone(),
+                    multi_agent_mode,
                     personality,
                 })
                 .await
@@ -694,6 +700,7 @@ impl TurnRequestProcessor {
             summary,
             service_tier,
             collaboration_mode,
+            multi_agent_mode,
             personality,
         })
     }
@@ -724,6 +731,7 @@ impl TurnRequestProcessor {
                     effort: params.effort,
                     summary: params.summary,
                     collaboration_mode: params.collaboration_mode,
+                    multi_agent_mode: None,
                     personality: params.personality,
                 },
             )

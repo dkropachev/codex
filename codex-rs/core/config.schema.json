@@ -621,6 +621,9 @@
             "multi_agent": {
               "type": "boolean"
             },
+            "multi_agent_mode": {
+              "type": "boolean"
+            },
             "multi_agent_v2": {
               "$ref": "#/definitions/FeatureToml_for_MultiAgentV2ConfigToml"
             },
@@ -5428,6 +5431,9 @@
           "type": "boolean"
         },
         "multi_agent": {
+          "type": "boolean"
+        },
+        "multi_agent_mode": {
           "type": "boolean"
         },
         "multi_agent_v2": {
