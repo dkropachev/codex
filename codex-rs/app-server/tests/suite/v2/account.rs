@@ -1793,13 +1793,13 @@ accounts = ["work-pro", "personal-pro"]
     let expected = GetAccountResponse {
         account: Some(Account::ChatgptPool {
             id: "codex-pro".to_string(),
-            active_account_id: Some("work-pro".to_string()),
+            active_account_id: None,
             members: vec![
                 AccountPoolMember {
                     id: "work-pro".to_string(),
                     email: Some("work@example.com".to_string()),
                     plan_type: Some(AccountPlanType::Pro),
-                    active: true,
+                    active: false,
                     unavailable_reason: None,
                     regular_remaining: None,
                     spark_remaining: None,
@@ -1881,13 +1881,13 @@ accounts = ["work-pro", "api-key-pro", "missing-pro"]
     let expected = GetAccountResponse {
         account: Some(Account::ChatgptPool {
             id: "codex-pro".to_string(),
-            active_account_id: Some("work-pro".to_string()),
+            active_account_id: None,
             members: vec![
                 AccountPoolMember {
                     id: "work-pro".to_string(),
                     email: Some("work@example.com".to_string()),
                     plan_type: Some(AccountPlanType::Pro),
-                    active: true,
+                    active: false,
                     unavailable_reason: None,
                     regular_remaining: None,
                     spark_remaining: None,
