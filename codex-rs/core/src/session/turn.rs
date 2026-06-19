@@ -82,6 +82,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::error::UsageLimitReachedError;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::build_hook_prompt_message;
@@ -96,6 +97,8 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::PlanDeltaEvent;
+use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::ReasoningContentDeltaEvent;
 use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::TokenUsage;
@@ -121,6 +124,9 @@ use tracing::instrument;
 use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
+
+const FIVE_HOUR_LIMIT_WINDOW_MINUTES: i64 = 5 * 60;
+const WEEKLY_LIMIT_WINDOW_MINUTES: i64 = 7 * 24 * 60;
 
 /// Takes initial turn input and runs a loop where, at each sampling request,
 /// the model replies with either:
@@ -1214,7 +1220,7 @@ pub(crate) async fn built_tools(
 
 fn mark_active_pool_member_exhausted_for_usage_limit(sess: &Session, err: &CodexErr) -> bool {
     let bucket = match err {
-        CodexErr::UsageLimitReached(error) => error
+        CodexErr::UsageLimitReached(error) if usage_limit_should_switch_account(error) => error
             .rate_limits
             .as_ref()
             .and_then(|snapshot| snapshot.limit_id.as_deref())
@@ -1226,12 +1232,35 @@ fn mark_active_pool_member_exhausted_for_usage_limit(sess: &Session, err: &Codex
                 }
             })
             .unwrap_or(AccountPoolBucket::Regular),
-        CodexErr::UsageNotIncluded => AccountPoolBucket::Regular,
         _ => return false,
     };
     sess.services
         .auth_manager
         .mark_active_account_pool_member_exhausted(bucket, err.to_string())
+}
+
+fn usage_limit_should_switch_account(error: &UsageLimitReachedError) -> bool {
+    error
+        .rate_limits
+        .as_deref()
+        .is_some_and(rate_limit_has_exhausted_pool_switch_window)
+}
+
+fn rate_limit_has_exhausted_pool_switch_window(snapshot: &RateLimitSnapshot) -> bool {
+    [snapshot.primary.as_ref(), snapshot.secondary.as_ref()]
+        .into_iter()
+        .flatten()
+        .any(rate_limit_window_allows_pool_switch)
+}
+
+fn rate_limit_window_allows_pool_switch(window: &RateLimitWindow) -> bool {
+    window.used_percent >= 100.0
+        && window.window_minutes.is_some_and(|minutes| {
+            matches!(
+                minutes,
+                FIVE_HOUR_LIMIT_WINDOW_MINUTES | WEEKLY_LIMIT_WINDOW_MINUTES
+            )
+        })
 }
 
 fn response_item_starts_visible_output(item: &ResponseItem) -> bool {

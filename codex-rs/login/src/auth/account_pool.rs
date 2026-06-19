@@ -17,7 +17,7 @@ use crate::CodexAuth;
 use super::manager::AuthManager;
 use super::manager::RefreshTokenError;
 
-const USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountPoolStatus {
@@ -93,6 +93,7 @@ struct AccountPool {
     members: Vec<AccountPoolMember>,
     chatgpt_base_url: Option<String>,
     active_account_id: RwLock<Option<String>>,
+    last_usage_refresh_attempt: RwLock<Option<Instant>>,
     state: RwLock<HashMap<String, MemberRuntimeState>>,
 }
 
@@ -142,6 +143,7 @@ impl AccountPoolManager {
                     members,
                     chatgpt_base_url: chatgpt_base_url.clone(),
                     active_account_id: RwLock::new(None),
+                    last_usage_refresh_attempt: RwLock::new(None),
                     state: RwLock::new(HashMap::new()),
                 },
             );
@@ -268,6 +270,16 @@ impl AccountPool {
     }
 
     fn select_cached_auth(&self, bucket: AccountPoolBucket) -> Option<CodexAuth> {
+        self.cached_member_auth(bucket).map(|(_, auth)| auth)
+    }
+
+    fn activate_cached_auth(&self, bucket: AccountPoolBucket) -> Option<CodexAuth> {
+        let (account_id, auth) = self.cached_member_auth(bucket)?;
+        self.set_active_account_id(account_id);
+        Some(auth)
+    }
+
+    fn cached_member_auth(&self, bucket: AccountPoolBucket) -> Option<(String, CodexAuth)> {
         for member in self.select_members(bucket) {
             let Some(auth) = member.manager.auth_cached_unpooled() else {
                 continue;
@@ -275,8 +287,7 @@ impl AccountPool {
             if !auth.is_chatgpt_auth() {
                 continue;
             }
-            self.set_active_account_id(member.account_id.clone());
-            return Some(auth);
+            return Some((member.account_id.clone(), auth));
         }
         None
     }
@@ -287,6 +298,15 @@ impl AccountPool {
             .iter()
             .filter(|member| !self.is_exhausted(&member.account_id, bucket))
             .collect();
+        if let Some(active_account_id) = self.active_account_id()
+            && let Some(active_index) = members
+                .iter()
+                .position(|member| member.account_id == active_account_id)
+        {
+            let active_member = members.remove(active_index);
+            members.insert(0, active_member);
+            return members;
+        }
         if self.definition.policy == AccountPoolPolicyToml::LoadBalance {
             members.sort_by_key(|member| {
                 std::cmp::Reverse(self.remaining(&member.account_id, bucket))
@@ -302,10 +322,14 @@ impl AccountPool {
         if !self.has_stale_usage() {
             return;
         }
+        if !self.should_start_usage_refresh_attempt() {
+            return;
+        }
         self.refresh_usage().await;
     }
 
     async fn refresh_usage(&self) -> AccountPoolUsageRefreshPoolReport {
+        self.record_usage_refresh_attempt();
         let Some(base_url) = self.chatgpt_base_url.as_deref() else {
             for member in &self.members {
                 self.set_last_error(
@@ -408,6 +432,23 @@ impl AccountPool {
                 .and_then(|state| state.usage)
                 .is_none_or(|usage| usage.last_refreshed.elapsed() > USAGE_REFRESH_INTERVAL)
         })
+    }
+
+    fn should_start_usage_refresh_attempt(&self) -> bool {
+        let Ok(mut guard) = self.last_usage_refresh_attempt.write() else {
+            return true;
+        };
+        if guard.is_none_or(|last_attempt| last_attempt.elapsed() > USAGE_REFRESH_INTERVAL) {
+            *guard = Some(Instant::now());
+            return true;
+        }
+        false
+    }
+
+    fn record_usage_refresh_attempt(&self) {
+        if let Ok(mut guard) = self.last_usage_refresh_attempt.write() {
+            *guard = Some(Instant::now());
+        }
     }
 
     fn status(&self) -> AccountPoolStatus {
@@ -552,7 +593,7 @@ impl AccountPool {
 
     async fn refresh_active_token(&self) -> Result<(), RefreshTokenError> {
         if self.active_account_id().is_none() {
-            let _ = self.select_cached_auth(AccountPoolBucket::Regular);
+            let _ = self.activate_cached_auth(AccountPoolBucket::Regular);
         }
         let Some(account_id) = self.active_account_id() else {
             return Ok(());
@@ -848,7 +889,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cached_auth_does_not_activate_pool_member() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        write_chatgpt_auth(codex_home.path(), "work-pro", "work@example.com");
+        write_chatgpt_auth(codex_home.path(), "personal-pro", "personal@example.com");
+
+        let pool = pool_manager(
+            codex_home.path(),
+            AccountPoolPolicyToml::Drain,
+            vec!["work-pro", "personal-pro"],
+        )
+        .await;
+
+        let auth = pool.auth_cached().expect("pool should select cached auth");
+        assert_eq!(
+            auth.get_account_email().as_deref(),
+            Some("work@example.com")
+        );
+        assert_eq!(
+            pool.status().expect("status").active_account_id.as_deref(),
+            None
+        );
+    }
+
+    #[tokio::test]
     async fn load_balance_selects_largest_fresh_remaining_bucket() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        write_chatgpt_auth(codex_home.path(), "work-pro", "work@example.com");
+        write_chatgpt_auth(codex_home.path(), "personal-pro", "personal@example.com");
+
+        let regular_pool = pool_manager(
+            codex_home.path(),
+            AccountPoolPolicyToml::LoadBalance,
+            vec!["work-pro", "personal-pro"],
+        )
+        .await;
+        regular_pool.set_usage_for_testing("work-pro", Some(10), Some(100), Instant::now());
+        regular_pool.set_usage_for_testing("personal-pro", Some(90), Some(1), Instant::now());
+
+        let regular = regular_pool
+            .auth_for_bucket(AccountPoolBucket::Regular)
+            .await
+            .expect("regular auth");
+        assert_eq!(
+            regular.get_account_email().as_deref(),
+            Some("personal@example.com")
+        );
+
+        let spark_pool = pool_manager(
+            codex_home.path(),
+            AccountPoolPolicyToml::LoadBalance,
+            vec!["work-pro", "personal-pro"],
+        )
+        .await;
+        spark_pool.set_usage_for_testing("work-pro", Some(10), Some(100), Instant::now());
+        spark_pool.set_usage_for_testing("personal-pro", Some(90), Some(1), Instant::now());
+
+        let spark = spark_pool
+            .auth_for_bucket(AccountPoolBucket::Spark)
+            .await
+            .expect("spark auth");
+        assert_eq!(
+            spark.get_account_email().as_deref(),
+            Some("work@example.com")
+        );
+    }
+
+    #[tokio::test]
+    async fn load_balance_keeps_active_member_when_available() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         write_chatgpt_auth(codex_home.path(), "work-pro", "work@example.com");
         write_chatgpt_auth(codex_home.path(), "personal-pro", "personal@example.com");
@@ -859,26 +967,58 @@ mod tests {
             vec!["work-pro", "personal-pro"],
         )
         .await;
-        pool.set_usage_for_testing("work-pro", Some(10), Some(100), Instant::now());
-        pool.set_usage_for_testing("personal-pro", Some(90), Some(1), Instant::now());
+        pool.set_usage_for_testing("work-pro", Some(10), Some(10), Instant::now());
+        pool.set_usage_for_testing("personal-pro", Some(90), Some(90), Instant::now());
 
-        let regular = pool
+        let account_pool = pool.pools.get("codex-pro").expect("pool");
+        account_pool.set_active_account_id("work-pro".to_string());
+
+        let auth = pool
             .auth_for_bucket(AccountPoolBucket::Regular)
             .await
             .expect("regular auth");
         assert_eq!(
-            regular.get_account_email().as_deref(),
-            Some("personal@example.com")
-        );
-
-        let spark = pool
-            .auth_for_bucket(AccountPoolBucket::Spark)
-            .await
-            .expect("spark auth");
-        assert_eq!(
-            spark.get_account_email().as_deref(),
+            auth.get_account_email().as_deref(),
             Some("work@example.com")
         );
+    }
+
+    #[tokio::test]
+    async fn load_balance_throttles_stale_usage_refresh_attempts() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        write_chatgpt_auth(codex_home.path(), "work-pro", "work@example.com");
+        write_chatgpt_auth(codex_home.path(), "personal-pro", "personal@example.com");
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/codex/usage"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let pool = pool_manager_with_base_url(
+            codex_home.path(),
+            AccountPoolPolicyToml::LoadBalance,
+            vec!["work-pro", "personal-pro"],
+            Some(server.uri()),
+        )
+        .await;
+
+        let first_auth = pool
+            .auth_for_bucket(AccountPoolBucket::Regular)
+            .await
+            .expect("first auth should still select credentials");
+        let second_auth = pool
+            .auth_for_bucket(AccountPoolBucket::Regular)
+            .await
+            .expect("second auth should still select credentials");
+
+        assert_eq!(
+            first_auth.get_account_email(),
+            second_auth.get_account_email()
+        );
+        server.verify().await;
     }
 
     #[tokio::test]
