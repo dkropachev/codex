@@ -26,6 +26,22 @@ jobs:
       - name: Verify Bazel clippy flags match Cargo workspace lints
         run: python3 .github/scripts/verify_bazel_clippy_lints.py
 
+      - name: Verify feature specs
+        env:
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "+refs/heads/${PR_BASE_REF}:refs/remotes/origin/${PR_BASE_REF}"
+            python3 .github/scripts/verify_feature_specs.py --base "origin/${PR_BASE_REF}" --head HEAD
+          else
+            python3 .github/scripts/verify_feature_specs.py
+          fi
+
+      - name: Test GitHub scripts
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+
       - name: Test Codex package builder
         run: python3 -m unittest discover -s scripts/codex_package -p 'test_*.py'
 

@@ -1763,6 +1763,12 @@ impl AuthManager {
         self.account_pool.as_ref().and_then(|pool| pool.status())
     }
 
+    pub fn activate_cached_account_pool_auth(&self) -> Option<CodexAuth> {
+        self.account_pool
+            .as_deref()
+            .and_then(AccountPoolManager::activate_cached_auth)
+    }
+
     pub fn active_account_pool_member_id(&self) -> Option<String> {
         self.account_pool
             .as_ref()

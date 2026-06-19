@@ -5,6 +5,7 @@ mod apply_patch;
 mod approval_policy;
 mod auth_env;
 mod ephemeral;
+#[path = "mcp__required_exit.rs"]
 mod mcp_required_exit;
 mod originator;
 mod output_schema;

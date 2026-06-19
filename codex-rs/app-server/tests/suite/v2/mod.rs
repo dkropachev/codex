@@ -1,4 +1,6 @@
 mod account;
+#[path = "account_pool__app_server_account.rs"]
+mod account_pool_app_server_account;
 mod analytics;
 mod app_list;
 mod attestation;
@@ -19,12 +21,13 @@ mod fs;
 mod hooks_list;
 mod imagegen_extension;
 mod initialize;
-mod marketplace_add;
-mod marketplace_remove;
-mod marketplace_upgrade;
+#[path = "mcp__resource.rs"]
 mod mcp_resource;
+#[path = "mcp__server_elicitation.rs"]
 mod mcp_server_elicitation;
+#[path = "mcp__server_status.rs"]
 mod mcp_server_status;
+#[path = "mcp__tool.rs"]
 mod mcp_tool;
 mod memory_reset;
 mod model_list;
@@ -32,11 +35,22 @@ mod model_provider_capabilities_read;
 mod output_schema;
 mod permission_profile_list;
 mod plan_item;
+#[path = "plugins__install.rs"]
 mod plugin_install;
+#[path = "plugins__list.rs"]
 mod plugin_list;
+#[path = "plugins__read.rs"]
 mod plugin_read;
+#[path = "plugins__share.rs"]
 mod plugin_share;
+#[path = "plugins__uninstall.rs"]
 mod plugin_uninstall;
+#[path = "plugins__marketplace_add.rs"]
+mod plugins_marketplace_add;
+#[path = "plugins__marketplace_remove.rs"]
+mod plugins_marketplace_remove;
+#[path = "plugins__marketplace_upgrade.rs"]
+mod plugins_marketplace_upgrade;
 mod process_exec;
 mod rate_limits;
 mod realtime_conversation;
@@ -47,6 +61,7 @@ mod request_permissions;
 mod request_user_input;
 mod review;
 mod safety_check_downgrade;
+#[path = "skills__list.rs"]
 mod skills_list;
 mod thread_archive;
 mod thread_fork;

@@ -227,6 +227,7 @@ mod goal_validation;
 mod guardian;
 mod helpers;
 mod history_replay;
+#[path = "tests/mcp__startup.rs"]
 mod mcp_startup;
 mod permissions;
 mod plan_mode;

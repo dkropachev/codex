@@ -516,5 +516,5 @@ fn insert_arg(input: &mut Map<String, Value>, key: String, value: Value) {
 }
 
 #[cfg(test)]
-#[path = "workflow_commands_tests.rs"]
+#[path = "workflows__commands_tests.rs"]
 mod tests;
