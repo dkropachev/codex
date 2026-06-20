@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import subprocess
+import sys
 import textwrap
 import unittest
 from pathlib import Path
@@ -242,11 +243,16 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md test place `agent-e2e` target "
-            "`codex-rs/core/tests/suite/account_pool__routing.rs` does not define "
-            "test function `missing_test`",
+        self.assertEqual(
             failures,
+            [
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` target "
+                "`codex-rs/core/tests/suite/account_pool__routing.rs` does not define "
+                "test function `missing_test`",
+                "codex-rs/core/tests/suite/account_pool__routing.rs:routing_test maps "
+                "to feature `account-pool` and test place `agent-e2e` but is not listed "
+                "in `codex-rs/feature-specs/account-pool.md` Test cases",
+            ],
         )
 
     def test_test_case_targets_must_use_matching_feature_filename(self) -> None:
@@ -417,11 +423,13 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertIn(
-            "codex-rs/core/tests/suite/account_pool__unlisted.rs:unlisted_test maps "
-            "to feature `account-pool` and test place `agent-e2e` but is not listed "
-            "in `codex-rs/feature-specs/account-pool.md` Test cases",
+        self.assertEqual(
             failures,
+            [
+                "codex-rs/core/tests/suite/account_pool__unlisted.rs:unlisted_test maps "
+                "to feature `account-pool` and test place `agent-e2e` but is not listed "
+                "in `codex-rs/feature-specs/account-pool.md` Test cases",
+            ],
         )
 
     def test_applicable_test_place_requires_concrete_or_missing_backlog(self) -> None:
@@ -444,47 +452,221 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
-            "Test cases must include at least one concrete target or `missing` "
-            "backlog item",
+        self.assertEqual(
             failures,
+            [
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
+                "test case `- Routing behavior is covered: todo` must target "
+                "`repo/path.rs:test_name[,test_name]` or `missing`",
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
+                "test case `- Missing routing edge case: todo` must target "
+                "`repo/path.rs:test_name[,test_name]` or `missing`",
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
+                "Test cases must include at least one concrete target or `missing` "
+                "backlog item",
+                "codex-rs/core/tests/suite/account_pool__routing.rs:routing_test maps "
+                "to feature `account-pool` and test place `agent-e2e` but is not listed "
+                "in `codex-rs/feature-specs/account-pool.md` Test cases",
+            ],
         )
 
     def test_feature_coverage_report_counts_targets_and_missing_backlog(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             self.write_valid_repo(root)
+            self.write_file(
+                root / "codex-rs/cli/tests/account_pool__list.rs",
+                "#[test]\nfn list_test() {}\n",
+            )
+            spec = root / "codex-rs/feature-specs/account-pool.md"
+            text = spec.read_text(encoding="utf-8")
+            text = self.replace_test_place_block(
+                text,
+                "cli",
+                """
+                ### cli (main CLI command behavior)
+
+                #### Description
+
+                CLI routing behavior should be tested through the main CLI path.
+
+                #### Test cases
+
+                - Account list behavior is covered: codex-rs/cli/tests/account_pool__list.rs:list_test
+                """,
+            )
+            text = self.replace_test_place_block(
+                text,
+                "tui-e2e",
+                """
+                ### tui-e2e (full terminal TUI behavior)
+
+                #### Description
+
+                Full terminal TUI behavior still needs coverage.
+
+                #### Test cases
+
+                - Live account list behavior is covered: missing
+                """,
+            )
+            spec.write_text(text, encoding="utf-8")
 
             rows = verify_feature_specs.feature_coverage_report(root)
 
-        self.assertIn(
+        expected_rows_by_place = {
+            "agent-e2e": (
+                verify_feature_specs.COVERAGE_STATUS_PARTIAL,
+                1,
+                1,
+                1,
+            ),
+            "cli": (
+                verify_feature_specs.COVERAGE_STATUS_COVERED,
+                1,
+                1,
+                0,
+            ),
+            "tui-e2e": (
+                verify_feature_specs.COVERAGE_STATUS_MISSING_BACKLOG,
+                0,
+                0,
+                1,
+            ),
+        }
+
+        def expected_row(test_place: str) -> verify_feature_specs.CoverageReportRow:
+            status, discovered_count, concrete_count, missing_count = (
+                expected_rows_by_place.get(
+                    test_place,
+                    (
+                        verify_feature_specs.COVERAGE_STATUS_NOT_COVERED,
+                        0,
+                        0,
+                        0,
+                    ),
+                )
+            )
+            return verify_feature_specs.CoverageReportRow(
+                feature_id="account-pool",
+                test_place=test_place,
+                status=status,
+                discovered_mapped_test_count=discovered_count,
+                concrete_declared_target_count=concrete_count,
+                missing_test_case_count=missing_count,
+            )
+
+        self.assertEqual(
+            rows,
+            [expected_row(test_place) for test_place in verify_feature_specs.TEST_PLACE_IDS],
+        )
+        self.assertEqual(
+            verify_feature_specs.format_coverage_report(rows),
+            textwrap.dedent(
+                """
+                Feature coverage report
+
+                | Feature | Test place | Status | Discovered mapped tests | Concrete declared targets | Missing test cases |
+                | --- | --- | --- | ---: | ---: | ---: |
+                | account-pool | agent-e2e | partial | 1 | 1 | 1 |
+                | account-pool | app-server-api | not-covered | 0 | 0 | 0 |
+                | account-pool | cli | covered | 1 | 1 | 0 |
+                | account-pool | tui-e2e | missing-backlog | 0 | 0 | 1 |
+                | account-pool | tui-component | not-covered | 0 | 0 | 0 |
+                | account-pool | login-auth | not-covered | 0 | 0 | 0 |
+                | account-pool | mcp-server | not-covered | 0 | 0 | 0 |
+                | account-pool | rmcp-client | not-covered | 0 | 0 | 0 |
+                | account-pool | codex-api | not-covered | 0 | 0 | 0 |
+                | account-pool | exec-cli | not-covered | 0 | 0 | 0 |
+                | account-pool | otel | not-covered | 0 | 0 | 0 |
+                | account-pool | exec-server | not-covered | 0 | 0 | 0 |
+                """
+            ).lstrip(),
+        )
+
+    def test_feature_coverage_report_excludes_invalid_declared_targets(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self.write_valid_repo(root)
+            test_file = root / "codex-rs/core/tests/suite/account_pool__routing.rs"
+            test_file.write_text("fn helper_only() {}\n", encoding="utf-8")
+            spec = root / "codex-rs/feature-specs/account-pool.md"
+            text = spec.read_text(encoding="utf-8")
+            spec.write_text(
+                text.replace(
+                    "codex-rs/core/tests/suite/account_pool__routing.rs:routing_test",
+                    "codex-rs/core/tests/suite/account_pool__routing.rs:helper_only",
+                ),
+                encoding="utf-8",
+            )
+
+            rows = verify_feature_specs.feature_coverage_report(root)
+
+        self.assertEqual(
+            rows[0],
             verify_feature_specs.CoverageReportRow(
                 feature_id="account-pool",
                 test_place="agent-e2e",
-                status=verify_feature_specs.COVERAGE_STATUS_PARTIAL,
-                discovered_mapped_test_count=1,
-                concrete_declared_target_count=1,
-                missing_test_case_count=1,
-            ),
-            rows,
-        )
-        self.assertIn(
-            verify_feature_specs.CoverageReportRow(
-                feature_id="account-pool",
-                test_place="cli",
-                status=verify_feature_specs.COVERAGE_STATUS_NOT_COVERED,
+                status=verify_feature_specs.COVERAGE_STATUS_MISSING_BACKLOG,
                 discovered_mapped_test_count=0,
                 concrete_declared_target_count=0,
-                missing_test_case_count=0,
+                missing_test_case_count=1,
             ),
-            rows,
         )
 
-        report = verify_feature_specs.format_coverage_report(rows)
+    def test_cli_coverage_report_prints_after_successful_validation(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self.write_valid_repo(root)
+
+            result = self.run_feature_specs_cli(root, "--coverage-report")
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(
+            result.stdout,
+            textwrap.dedent(
+                """
+                Feature coverage report
+
+                | Feature | Test place | Status | Discovered mapped tests | Concrete declared targets | Missing test cases |
+                | --- | --- | --- | ---: | ---: | ---: |
+                | account-pool | agent-e2e | partial | 1 | 1 | 1 |
+                | account-pool | app-server-api | not-covered | 0 | 0 | 0 |
+                | account-pool | cli | not-covered | 0 | 0 | 0 |
+                | account-pool | tui-e2e | not-covered | 0 | 0 | 0 |
+                | account-pool | tui-component | not-covered | 0 | 0 | 0 |
+                | account-pool | login-auth | not-covered | 0 | 0 | 0 |
+                | account-pool | mcp-server | not-covered | 0 | 0 | 0 |
+                | account-pool | rmcp-client | not-covered | 0 | 0 | 0 |
+                | account-pool | codex-api | not-covered | 0 | 0 | 0 |
+                | account-pool | exec-cli | not-covered | 0 | 0 | 0 |
+                | account-pool | otel | not-covered | 0 | 0 | 0 |
+                | account-pool | exec-server | not-covered | 0 | 0 | 0 |
+                """
+            ).lstrip(),
+        )
+
+    def test_cli_coverage_report_is_not_printed_after_validation_failure(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self.write_valid_repo(root)
+            spec = root / "codex-rs/feature-specs/account-pool.md"
+            text = spec.read_text(encoding="utf-8")
+            spec.write_text(text.replace("routing_test", "missing_test", 1))
+
+            result = self.run_feature_specs_cli(root, "--coverage-report")
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr, "")
+        self.assertNotIn("Feature coverage report", result.stdout)
         self.assertIn(
-            "| account-pool | agent-e2e | partial | 1 | 1 | 1 |",
-            report,
+            "Feature specs must be indexed, deterministic, and linked to test ownership.",
+            result.stdout,
+        )
+        self.assertIn(
+            "does not define test function `missing_test`",
+            result.stdout,
         )
 
     def test_discovered_helper_functions_do_not_require_spec_targets(self) -> None:
@@ -520,11 +702,13 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
-            "target `codex-rs/core/tests/suite/account_pool__routing.rs` "
-            "does not define test function `helper_only`",
+        self.assertEqual(
             failures,
+            [
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
+                "target `codex-rs/core/tests/suite/account_pool__routing.rs` "
+                "does not define test function `helper_only`",
+            ],
         )
 
     def test_not_covered_place_cannot_have_discovered_mapped_tests(self) -> None:
@@ -538,11 +722,16 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md test place `cli` is "
-            "`Not covered` but discovered mapped test "
-            "`codex-rs/cli/tests/account_pool__list.rs:list_test`",
+        self.assertEqual(
             failures,
+            [
+                "codex-rs/feature-specs/account-pool.md test place `cli` is "
+                "`Not covered` but discovered mapped test "
+                "`codex-rs/cli/tests/account_pool__list.rs:list_test`",
+                "codex-rs/cli/tests/account_pool__list.rs:list_test maps "
+                "to feature `account-pool` and test place `cli` but is not listed "
+                "in `codex-rs/feature-specs/account-pool.md` Test cases",
+            ],
         )
 
     def test_name_status_parses_renamed_target(self) -> None:
@@ -580,6 +769,44 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
             changed_files = verify_feature_specs.changed_files_from_working_tree(root)
 
         self.assertEqual(sorted(changed_files), ["tracked.rs", "untracked.rs"])
+
+    def run_feature_specs_cli(
+        self,
+        root: Path,
+        *args: str,
+    ) -> subprocess.CompletedProcess[str]:
+        script = textwrap.dedent(
+            """
+            import sys
+            from pathlib import Path
+
+            import verify_feature_specs
+
+            verify_feature_specs.ROOT = Path(sys.argv[1])
+            sys.argv = ["verify_feature_specs.py", *sys.argv[2:]]
+            raise SystemExit(verify_feature_specs.main())
+            """
+        )
+        return subprocess.run(
+            [sys.executable, "-c", script, str(root), *args],
+            cwd=Path(__file__).parent,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    def replace_test_place_block(self, text: str, test_place: str, replacement: str) -> str:
+        start = text.index(f"### {test_place} (")
+        next_starts = []
+        for catalog_test_place in verify_feature_specs.TEST_PLACE_IDS:
+            next_start = text.find(f"\n### {catalog_test_place} (", start + 1)
+            if next_start != -1:
+                next_starts.append(next_start)
+        test_generation_notes = text.find("\n## Test Generation Notes", start)
+        if test_generation_notes != -1:
+            next_starts.append(test_generation_notes)
+        end = min(next_starts)
+        return text[:start] + textwrap.dedent(replacement).strip() + text[end:]
 
     def write_valid_repo(self, root: Path) -> None:
         self.write_file(
