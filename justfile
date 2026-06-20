@@ -87,6 +87,11 @@ test *args:
 test-github-scripts:
     {{ python }} -m unittest discover -s {{ justfile_directory() }}/.github/scripts -p 'test_*.py'
 
+# Verify feature specs against the current branch's merge-base with origin/main.
+[no-cd]
+verify-feature-specs *args:
+    {{ python }} {{ justfile_directory() }}/.github/scripts/verify_feature_specs.py --base-ref origin/main --head HEAD --include-working-tree --coverage-report {args}
+
 # Run explicit workspace benchmark targets.
 bench *args:
     cargo bench --workspace --bench '*' {args}
