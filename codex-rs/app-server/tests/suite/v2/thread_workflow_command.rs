@@ -55,7 +55,7 @@ async fn thread_workflow_command_records_assistant_output_and_next_turn_context(
         &server.uri(),
         &BTreeMap::default(),
         i64::MAX,
-        None,
+        /*requires_openai_auth*/ None,
         "mock_provider",
         "Summarize the conversation.",
     )?;
