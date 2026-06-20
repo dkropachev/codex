@@ -170,6 +170,11 @@ impl AccountPoolManager {
         pool.select_cached_auth(AccountPoolBucket::Regular)
     }
 
+    pub fn activate_cached_auth(&self) -> Option<CodexAuth> {
+        let pool = self.pools.get(&self.default_pool)?;
+        pool.activate_cached_auth(AccountPoolBucket::Regular)
+    }
+
     pub fn status(&self) -> Option<AccountPoolStatus> {
         self.pools.get(&self.default_pool).map(AccountPool::status)
     }
@@ -854,10 +859,7 @@ mod tests {
             auth.get_account_email().as_deref(),
             Some("work@example.com")
         );
-        assert_eq!(
-            pool.status().expect("status").active_account_id.as_deref(),
-            Some("work-pro")
-        );
+        assert_eq!(pool.status(), Some(active_work_pool_status()));
     }
 
     #[tokio::test]
@@ -910,6 +912,29 @@ mod tests {
             pool.status().expect("status").active_account_id.as_deref(),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn explicit_cached_activation_selects_pool_member() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        write_chatgpt_auth(codex_home.path(), "work-pro", "work@example.com");
+        write_chatgpt_auth(codex_home.path(), "personal-pro", "personal@example.com");
+
+        let pool = pool_manager(
+            codex_home.path(),
+            AccountPoolPolicyToml::Drain,
+            vec!["work-pro", "personal-pro"],
+        )
+        .await;
+
+        let auth = pool
+            .activate_cached_auth()
+            .expect("pool should activate cached auth");
+        assert_eq!(
+            auth.get_account_email().as_deref(),
+            Some("work@example.com")
+        );
+        assert_eq!(pool.status(), Some(active_work_pool_status()));
     }
 
     #[tokio::test]
@@ -1273,6 +1298,36 @@ mod tests {
         )
         .await
         .expect("account pool should be enabled")
+    }
+
+    fn active_work_pool_status() -> AccountPoolStatus {
+        AccountPoolStatus {
+            pool_id: "codex-pro".to_string(),
+            policy: AccountPoolPolicyToml::Drain,
+            active_account_id: Some("work-pro".to_string()),
+            members: vec![
+                AccountPoolMemberStatus {
+                    account_id: "work-pro".to_string(),
+                    email: Some("work@example.com".to_string()),
+                    plan_type: Some(PlanType::Pro),
+                    active: true,
+                    unavailable_reason: None,
+                    regular_remaining: None,
+                    spark_remaining: None,
+                    last_error: None,
+                },
+                AccountPoolMemberStatus {
+                    account_id: "personal-pro".to_string(),
+                    email: Some("personal@example.com".to_string()),
+                    plan_type: Some(PlanType::Pro),
+                    active: false,
+                    unavailable_reason: None,
+                    regular_remaining: None,
+                    spark_remaining: None,
+                    last_error: None,
+                },
+            ],
+        }
     }
 
     fn write_chatgpt_auth(codex_home: &Path, account_id: &str, email: &str) {

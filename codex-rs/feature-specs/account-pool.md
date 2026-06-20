@@ -1,21 +1,5 @@
 # Account Pool
 
-## Metadata
-
-- Status: implemented
-- Primary crates: `codex-login`, `codex-core`, `codex-model-provider`, `codex-app-server-protocol`, `codex-app-server`, `codex-tui`, `codex-cli`
-- Core implementation:
-  - `login/src/auth/account_pool.rs`
-  - `login/src/auth/manager.rs`
-  - `core/src/session/turn.rs`
-  - `core/src/client.rs`
-- TUI/app-server integration:
-  - `app-server-protocol/src/protocol/v2/account.rs`
-  - `app-server/src/request_processors/account_processor.rs`
-  - `tui/src/app_server_session.rs`
-  - `tui/src/app/background_requests.rs`
-  - `tui/src/app/event_dispatch.rs`
-
 ## Summary
 
 Account pool lets a ChatGPT-backed Codex session choose from a configured set of account IDs. It is
@@ -23,7 +7,12 @@ for continuity after hard usage exhaustion, not for opportunistic account churn.
 can lose prompt-cache/token-cache benefit, so the active account must remain sticky until it reaches
 an allowed hard limit.
 
-## Configuration
+## Behavior
+
+The account-pool behavior is defined by the configuration, selection, switching, refresh,
+WebSocket, and status contracts below.
+
+### Configuration
 
 Account pool is enabled by `[account_pool]` config. A pool contains:
 
@@ -34,7 +23,7 @@ Account pool is enabled by `[account_pool]` config. A pool contains:
 
 Without enabled account-pool config, Codex uses the normal single-account auth path.
 
-## Default Behavior
+### Default Behavior
 
 - Normal model requests use the `Regular` bucket.
 - Models whose name selects Spark routing use the `Spark` bucket.
@@ -47,7 +36,7 @@ Without enabled account-pool config, Codex uses the normal single-account auth p
 - Missing credentials and non-ChatGPT credentials make a member unavailable for selection and
   should be surfaced in pool status.
 
-## Switching Rules
+### Switching Rules
 
 The active account may switch only when all of these are true:
 
@@ -70,7 +59,7 @@ The pool must not switch for:
 When a Spark bucket limit exhausts the active member, both Spark and Regular availability for that
 member are marked exhausted to avoid immediately reusing the same account on a regular retry path.
 
-## Usage Refresh Behavior
+### Usage Refresh Behavior
 
 For `load_balance`, Codex can refresh usage snapshots before auth selection when cached usage is
 stale. This refresh is metadata for choosing an initial account; it must not displace an active
@@ -83,18 +72,18 @@ auth selection.
 Manual refresh entry points may refresh all members and report partial failures. Manual refresh
 does not by itself switch the active account.
 
-## WebSocket Behavior
+### WebSocket Behavior
 
 Responses WebSocket connections are opened with auth headers for the selected account. A live
 connection may be reused only while the selected auth identity matches the identity used to open the
 connection. If a permitted account-pool failover changes the selected account, the WebSocket session
 must drop incremental state and reconnect with the new account headers.
 
-## TUI And App-Server API
+### TUI And App-Server API
 
 The TUI observes account-pool state through app-server v2 APIs and notifications.
 
-### `account/read`
+#### `account/read`
 
 Returns the current provider account. For account pools, the account shape is:
 
@@ -121,12 +110,12 @@ Returns the current provider account. For account pools, the account shape is:
 `activeAccountId` may be null before the first mutating auth selection. Member emails, plans, and
 remaining usage values may be null when unavailable.
 
-### `account/updated`
+#### `account/updated`
 
 Notifies auth mode and plan type changes. This notification does not carry full pool member state;
 clients should use `account/read` for detailed pool display.
 
-### `account/rateLimits/read`
+#### `account/rateLimits/read`
 
 Returns:
 
@@ -136,13 +125,13 @@ Returns:
 The TUI fetches this during startup/status refresh and converts the response into status snapshots.
 This read must not switch the active pool member.
 
-### `account/rateLimits/updated`
+#### `account/rateLimits/updated`
 
 Carries sparse rolling rate-limit updates. The TUI should merge available values into the latest
 known rate-limit state or refetch. Nullable metadata in an update does not clear previously observed
 metadata.
 
-## TUI Default Display Behavior
+### TUI Default Display Behavior
 
 - A ChatGPT pool appears as a ChatGPT account status with pool metadata.
 - The active member is displayed when known.
@@ -150,6 +139,225 @@ metadata.
 - Member count and unavailable count should be available to status surfaces.
 - Rate-limit status uses `account/rateLimits/read` and update notifications; it should not imply
   account switching.
+
+## Entry Points
+
+- [codex-rs/login/src/auth/account_pool.rs](../login/src/auth/account_pool.rs)
+- [codex-rs/login/src/auth/manager.rs](../login/src/auth/manager.rs)
+- [codex-rs/core/src/session/turn.rs](../core/src/session/turn.rs)
+- [codex-rs/core/src/client.rs](../core/src/client.rs)
+- [codex-rs/app-server-protocol/src/protocol/v2/account.rs](../app-server-protocol/src/protocol/v2/account.rs)
+- [codex-rs/app-server/src/request_processors/account_processor.rs](../app-server/src/request_processors/account_processor.rs)
+- [codex-rs/tui/src/app_server_session.rs](../tui/src/app_server_session.rs)
+- [codex-rs/tui/src/app/background_requests.rs](../tui/src/app/background_requests.rs)
+- [codex-rs/tui/src/app/event_dispatch.rs](../tui/src/app/event_dispatch.rs)
+- [codex-rs/cli/src/account_list.rs](../cli/src/account_list.rs)
+
+## Subfeatures
+
+### Account Selection And Failover
+
+#### Entry Points
+
+- [codex-rs/login/src/auth/account_pool.rs](../login/src/auth/account_pool.rs)
+- [codex-rs/core/src/session/turn.rs](../core/src/session/turn.rs)
+- [codex-rs/core/src/client.rs](../core/src/client.rs)
+
+#### Invariants
+
+- Mutating model requests select a pool member according to the configured policy.
+- Cached account/status reads do not activate or switch pool members.
+- Allowed hard-limit failover retries with another member for the same bucket before visible
+  assistant output starts.
+- Disallowed usage errors surface without retrying another member.
+
+### Usage Refresh
+
+#### Entry Points
+
+- [codex-rs/login/src/auth/account_pool.rs](../login/src/auth/account_pool.rs)
+- [codex-rs/app-server/src/request_processors/account_processor.rs](../app-server/src/request_processors/account_processor.rs)
+
+#### Invariants
+
+- Automatic refresh is throttled per pool.
+- Refresh metadata can influence initial selection but does not displace an available active
+  account.
+- Manual refresh reports partial failures without switching the active account by itself.
+
+### TUI And App-Server Status
+
+#### Entry Points
+
+- [codex-rs/app-server-protocol/src/protocol/v2/account.rs](../app-server-protocol/src/protocol/v2/account.rs)
+- [codex-rs/app-server/src/request_processors/account_processor.rs](../app-server/src/request_processors/account_processor.rs)
+- [codex-rs/tui/src/app_server_session.rs](../tui/src/app_server_session.rs)
+- [codex-rs/tui/src/app/background_requests.rs](../tui/src/app/background_requests.rs)
+- [codex-rs/tui/src/app/event_dispatch.rs](../tui/src/app/event_dispatch.rs)
+
+#### Invariants
+
+- Pool status includes active member, member availability, remaining usage, and member errors when
+  known.
+- Rate-limit status reads and updates do not select or switch pool members.
+
+## Invariants
+
+- Account pools are used only for configured ChatGPT-backed account IDs.
+- Pool selection is sticky for a bucket while the active account remains available.
+- Account switching is limited to fully exhausted 5-hour or weekly `usage_limit_reached` windows
+  before visible assistant output starts.
+- Non-mutating auth/status reads do not activate or switch pool members.
+- Spark exhaustion also exhausts regular availability for the same account.
+- Usage refresh data can influence initial selection but does not displace an available active
+  member.
+- WebSocket sessions reconnect when permitted failover changes the selected account identity.
+
+## Test Places
+
+### agent-e2e (agent behavior under core integration tests)
+
+#### Description
+
+Agent coverage should exercise mutating model requests selecting a pool member, sticky reuse,
+allowed hard-limit failover, and disallowed retry cases after visible output or unsupported usage
+errors.
+
+#### Test cases
+
+- Regular usage-limit failover retries with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_retries_regular_usage_limit_with_next_member
+- Spark usage-limit failover retries with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_retries_spark_usage_limit_with_next_member
+- Short-window usage limits do not retry with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_does_not_retry_short_usage_limit_with_next_member
+- Usage-not-included errors do not retry with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_does_not_retry_usage_not_included_with_next_member
+- Usage errors after visible output do not retry with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_does_not_retry_usage_error_after_visible_output
+- Usage-limit errors without account pool surface original error: codex-rs/core/tests/suite/account_pool__routing.rs:usage_limit_without_account_pool_surfaces_original_error
+
+### app-server-api (app-server API behavior)
+
+#### Description
+
+App-server coverage should exercise pool status reads, active member reporting, unavailable member
+reporting, rate-limit status reads, and non-mutating status refresh behavior.
+
+#### Test cases
+
+- Account read reports active members: codex-rs/app-server/tests/suite/v2/account_pool__app_server_account.rs:get_account_with_chatgpt_pool
+- Account read reports unavailable members: codex-rs/app-server/tests/suite/v2/account_pool__app_server_account.rs:get_account_with_chatgpt_pool_reports_unavailable_members
+- Rate-limit status reads are non-mutating: missing
+- Rate-limit update notifications preserve previously observed metadata: missing
+
+### cli (main CLI command behavior)
+
+#### Description
+
+CLI coverage should exercise account-pool account listing and account command behavior visible from
+the main Codex command surface.
+
+#### Test cases
+
+- Account listing displays account-pool members and active member state: missing
+- Account command behavior preserves non-mutating account-pool reads: missing
+
+### tui-e2e (full terminal TUI behavior)
+
+#### Description
+
+Full TUI coverage should exercise the live account status surface for active pool member display,
+unavailable member counts, and rate-limit refresh behavior without triggering account switching.
+
+#### Test cases
+
+- Live TUI status shows active pool member and unavailable member count: missing
+- Live TUI rate-limit refresh does not switch accounts: missing
+
+### tui-component (focused TUI component behavior)
+
+#### Description
+
+Focused TUI coverage should exercise pool metadata rendering, display fallback when no active
+member is set, and sparse rate-limit update merging.
+
+#### Test cases
+
+- Pool status rendering shows fallback active-member display: missing
+- Sparse rate-limit update merging preserves existing status metadata: missing
+
+### login-auth (auth and login behavior)
+
+#### Description
+
+Auth coverage should exercise token refresh and cached auth behavior for active account-pool
+members.
+
+#### Test cases
+
+- Active member token refresh preserves selected pool member semantics: missing
+- Cached auth reads do not activate or switch pool members: missing
+
+### mcp-server (Codex-as-MCP-server behavior)
+
+#### Description
+
+Account-pool selection is not exposed through Codex-as-MCP-server tool schemas or MCP tool
+execution.
+
+#### Status
+
+Not covered
+
+### rmcp-client (MCP client transport and resource behavior)
+
+#### Description
+
+Account-pool behavior does not change MCP client transport, resources, OAuth startup, or recovery
+behavior.
+
+#### Status
+
+Not covered
+
+### codex-api (Codex API client and protocol behavior)
+
+#### Description
+
+Account identity selection is owned by login and core auth handling; the Codex API client transports
+requests with the auth headers it is given.
+
+#### Status
+
+Not covered
+
+### exec-cli (codex exec CLI behavior)
+
+#### Description
+
+Account-pool behavior is covered by the account CLI and agent paths, not by non-interactive exec
+mode semantics.
+
+#### Status
+
+Not covered
+
+### otel (telemetry and export behavior)
+
+#### Description
+
+Account-pool behavior does not currently define telemetry, metric, or export contract changes.
+
+#### Status
+
+Not covered
+
+### exec-server (exec-server service boundary behavior)
+
+#### Description
+
+Account-pool behavior does not change exec-server process, filesystem, HTTP, relay, or WebSocket
+boundaries.
+
+#### Status
+
+Not covered
 
 ## Test Generation Notes
 
