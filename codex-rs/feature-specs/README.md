@@ -23,9 +23,14 @@ Each spec must also declare `Test Places`. This is a per-feature matrix over eve
 below. When a test place applies to the feature, the entry must include `Description` and
 `Test cases`. Each test case is a textual behavior expectation followed by either `missing` or a
 repo-relative test target like `codex-rs/core/tests/suite/account_pool__routing.rs:test_name`.
+Use `missing` for expected behavior that still needs test coverage; the verifier reports those
+entries as coverage backlog.
 When a test place should not cover the feature, the entry must include only `Description` and
 `Status`, with `Status` set to `Not covered`; the description must explain why that test place does
 not apply.
+
+Run `just verify-feature-specs` from the repository root to validate specs against the current
+branch and print the generated feature coverage report.
 
 ## Test Places
 

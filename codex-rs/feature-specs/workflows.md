@@ -90,11 +90,12 @@ planning-implementation-review workflow execution path.
 
 #### Description
 
-Workflows currently have CLI and TUI command surfaces but no app-server workflow RPC contract.
+App-server coverage should exercise workflow command RPC execution, persisted workflow output,
+notifications, and next-turn context after workflow output is recorded.
 
-#### Status
+#### Test cases
 
-Not covered
+- Workflow command RPC records assistant output and next-turn context: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_records_assistant_output_and_next_turn_context
 
 ### cli (main CLI command behavior)
 
@@ -114,11 +115,13 @@ for unknown workflows.
 #### Description
 
 Full TUI coverage should exercise workflow slash autocomplete, workflow option completion, and
-workflow command insertion in a live terminal session.
+workflow command insertion in a live terminal session. It should also exercise visible workflow mode
+state during a submitted mocked turn.
 
 #### Test cases
 
 - Workflow slash autocomplete is covered: codex-rs/tui/tests/suite/workflows__slash_autocomplete.rs:workflow_command_autocompletes_in_live_tui
+- Workflow mode footer and mocked turn submission are covered: codex-rs/tui/tests/suite/workflows__mode.rs:workflow_slash_enters_mode_and_submits_mocked_ai_turn
 
 ### tui-component (focused TUI component behavior)
 

@@ -81,6 +81,7 @@ mod thread_status;
 mod thread_unarchive;
 mod thread_unsubscribe;
 #[cfg(unix)]
+#[path = "workflows__thread_command.rs"]
 mod thread_workflow_command;
 mod turn_interrupt;
 mod turn_start;

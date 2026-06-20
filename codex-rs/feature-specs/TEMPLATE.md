@@ -43,7 +43,8 @@ then describe what should be tested for this feature without file references.
 If the test place applies to this feature, `Test cases` must list textual behavior expectations.
 Each item must end with either `missing` or a repo-relative test target in the form
 `path/to/test.rs:test_name[,test_name]`. The verifier checks that target files and functions exist
-and that target filenames map to the feature.
+and that target filenames map to the feature. Use `missing` for expected behavior that still needs
+test coverage.
 
 If the test place should not cover this feature, include only `Description` and `Status`. The status
 must be `Not covered`, and the description must explain why that test place does not apply.

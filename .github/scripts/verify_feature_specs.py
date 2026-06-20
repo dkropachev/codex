@@ -75,10 +75,6 @@ TEST_REF_RE = re.compile(
     r"^(codex-rs/[^\s:]+\.rs):"
     r"([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)$"
 )
-RUST_FUNCTION_RE = re.compile(
-    r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+"
-    r"([A-Za-z_][A-Za-z0-9_]*)\s*\("
-)
 RUST_FUNCTION_LINE_RE = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+"
     r"([A-Za-z_][A-Za-z0-9_]*)\s*\("
@@ -273,6 +269,24 @@ class MappedTestTarget:
     method: str
 
 
+@dataclass(frozen=True, order=True)
+class CoverageReportRow:
+    """One deterministic row in the generated feature coverage report."""
+
+    feature_id: str
+    test_place: str
+    status: str
+    discovered_mapped_test_count: int
+    concrete_declared_target_count: int
+    missing_test_case_count: int
+
+
+COVERAGE_STATUS_COVERED = "covered"
+COVERAGE_STATUS_MISSING_BACKLOG = "missing-backlog"
+COVERAGE_STATUS_NOT_COVERED = "not-covered"
+COVERAGE_STATUS_PARTIAL = "partial"
+
+
 def main() -> int:
     """Run the verifier from the command line and print all collected errors."""
 
@@ -280,6 +294,13 @@ def main() -> int:
     parser.add_argument(
         "--base",
         help="Git revision to diff against when enforcing changed e2e ownership.",
+    )
+    parser.add_argument(
+        "--base-ref",
+        help=(
+            "Git ref to compute a merge-base against when --base is omitted. "
+            "Useful for local PR-style checks."
+        ),
     )
     parser.add_argument(
         "--head",
@@ -292,14 +313,31 @@ def main() -> int:
         default=[],
         help="Changed file path to validate. May be passed more than once.",
     )
+    parser.add_argument(
+        "--coverage-report",
+        action="store_true",
+        help="Print a deterministic feature coverage report after validation succeeds.",
+    )
+    parser.add_argument(
+        "--include-working-tree",
+        action="store_true",
+        help="Include staged, unstaged, and untracked paths in changed-file checks.",
+    )
     args = parser.parse_args()
 
     changed_files = list(args.changed_file)
-    if args.base:
-        changed_files.extend(changed_files_from_git(ROOT, args.base, args.head))
+    base = args.base
+    if base is None and args.base_ref:
+        base = merge_base(ROOT, args.base_ref, args.head)
+    if base:
+        changed_files.extend(changed_files_from_git(ROOT, base, args.head))
+    if args.include_working_tree:
+        changed_files.extend(changed_files_from_working_tree(ROOT))
 
-    failures = verify_feature_specs(ROOT, changed_files=changed_files, base=args.base)
+    failures = verify_feature_specs(ROOT, changed_files=changed_files, base=base)
     if not failures:
+        if args.coverage_report:
+            print(format_coverage_report(feature_coverage_report(ROOT)), end="")
         return 0
 
     print("Feature specs must be indexed, deterministic, and linked to test ownership.")
@@ -849,6 +887,7 @@ def test_case_failures(
     if not test_cases:
         return [f"{rel_spec} test place `{test_place}` Test cases must list test cases"]
 
+    valid_backlog_or_target_count = 0
     for test_case in test_cases:
         if not test_case.description:
             failures.append(
@@ -856,6 +895,7 @@ def test_case_failures(
                 "must describe expected behavior before the target"
             )
         if test_case.target == "missing":
+            valid_backlog_or_target_count += 1
             continue
 
         target = TEST_REF_RE.fullmatch(test_case.target)
@@ -868,6 +908,7 @@ def test_case_failures(
 
         test_path = target.group(1)
         methods = [method.strip() for method in target.group(2).split(",")]
+        valid_backlog_or_target_count += len(methods)
         failures.extend(
             test_target_failures(
                 root,
@@ -877,6 +918,12 @@ def test_case_failures(
                 test_path,
                 methods,
             )
+        )
+
+    if valid_backlog_or_target_count == 0:
+        failures.append(
+            f"{rel_spec} test place `{test_place}` Test cases must include at least "
+            "one concrete target or `missing` backlog item"
         )
 
     return failures
@@ -1086,6 +1133,125 @@ def unlisted_mapped_test_failures(
     return failures
 
 
+def feature_coverage_report(root: Path) -> list[CoverageReportRow]:
+    """Return deterministic coverage rows for every feature/test-place pair.
+
+    ``missing`` test cases are counted as backlog items. A covered test place
+    with only missing backlog is reported as ``missing-backlog``; one with both
+    concrete targets and backlog is reported as ``partial``.
+    """
+
+    spec_files = feature_spec_files(root)
+    discovered_counts = mapped_test_counts(discovered_mapped_test_targets(root))
+    concrete_counts = mapped_test_counts(declared_mapped_test_targets(spec_files))
+    missing_counts = missing_test_case_counts(spec_files)
+    not_covered = not_covered_test_places(spec_files)
+    rows: list[CoverageReportRow] = []
+
+    for spec in spec_files:
+        feature_id = spec.stem
+        for test_place in TEST_PLACE_IDS:
+            key = (feature_id, test_place)
+            concrete_count = concrete_counts.get(key, 0)
+            missing_count = missing_counts.get(key, 0)
+            rows.append(
+                CoverageReportRow(
+                    feature_id=feature_id,
+                    test_place=test_place,
+                    status=coverage_status(
+                        key in not_covered,
+                        concrete_count,
+                        missing_count,
+                    ),
+                    discovered_mapped_test_count=discovered_counts.get(key, 0),
+                    concrete_declared_target_count=concrete_count,
+                    missing_test_case_count=missing_count,
+                )
+            )
+
+    return rows
+
+
+def mapped_test_counts(
+    targets: list[MappedTestTarget] | set[MappedTestTarget],
+) -> dict[tuple[str, str], int]:
+    """Count mapped Rust test functions by feature and test place."""
+
+    counts: dict[tuple[str, str], int] = {}
+    for target in targets:
+        key = (target.feature_id, target.test_place)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def missing_test_case_counts(spec_files: list[Path]) -> dict[tuple[str, str], int]:
+    """Count ``missing`` backlog entries by feature and test place."""
+
+    counts: dict[tuple[str, str], int] = {}
+    for spec in spec_files:
+        text = spec.read_text(encoding="utf-8")
+        for section in test_place_sections(text):
+            heading = TEST_PLACE_HEADING_RE.fullmatch(section.title)
+            if heading is None:
+                continue
+
+            test_place = heading.group(1)
+            if test_place not in TEST_PLACE_IDS:
+                continue
+
+            test_case_sections = sections_named(section.body, "Test cases")
+            if len(test_case_sections) != 1:
+                continue
+
+            missing_count = sum(
+                1
+                for test_case in parse_test_cases(test_case_sections[0])
+                if test_case.target == "missing"
+            )
+            if missing_count:
+                counts[(spec.stem, test_place)] = missing_count
+
+    return counts
+
+
+def coverage_status(
+    is_not_covered: bool,
+    concrete_declared_target_count: int,
+    missing_test_case_count: int,
+) -> str:
+    """Classify one feature/test-place coverage row from declared data."""
+
+    if is_not_covered:
+        return COVERAGE_STATUS_NOT_COVERED
+    if concrete_declared_target_count > 0 and missing_test_case_count > 0:
+        return COVERAGE_STATUS_PARTIAL
+    if concrete_declared_target_count > 0:
+        return COVERAGE_STATUS_COVERED
+    if missing_test_case_count > 0:
+        return COVERAGE_STATUS_MISSING_BACKLOG
+    return COVERAGE_STATUS_MISSING_BACKLOG
+
+
+def format_coverage_report(rows: list[CoverageReportRow]) -> str:
+    """Format coverage rows as a stable markdown table."""
+
+    lines = [
+        "Feature coverage report",
+        "",
+        "| Feature | Test place | Status | Discovered mapped tests | Concrete declared targets | Missing test cases |",
+        "| --- | --- | --- | ---: | ---: | ---: |",
+    ]
+    for row in rows:
+        lines.append(
+            f"| {row.feature_id} | {row.test_place} | {row.status} | "
+            f"{row.discovered_mapped_test_count} | "
+            f"{row.concrete_declared_target_count} | "
+            f"{row.missing_test_case_count} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def test_target_failures(
     root: Path,
     rel_spec: str,
@@ -1098,7 +1264,7 @@ def test_target_failures(
 
     A valid target is repo-relative, lives under the directory owned by the
     declared test place, has a filename that maps back to ``feature_id``, points
-    to an existing Rust file, and lists functions defined in that file.
+    to an existing Rust file, and lists Rust test functions defined in that file.
     """
 
     failures: list[str] = []
@@ -1137,26 +1303,15 @@ def test_target_failures(
         )
         return failures
 
-    function_names = rust_function_names(full_path)
+    function_names = rust_test_function_names(full_path)
     for method in methods:
         if method not in function_names:
             failures.append(
                 f"{rel_spec} test place `{test_place}` target `{test_path}` "
-                f"does not define `{method}`"
+                f"does not define test function `{method}`"
             )
 
     return failures
-
-
-def rust_function_names(path: Path) -> set[str]:
-    """Return Rust function names found in ``path``.
-
-    This lightweight parser is intentionally limited to ordinary Rust ``fn``
-    definitions because the spec only needs to prove that named test entry
-    points exist in the target file.
-    """
-
-    return set(RUST_FUNCTION_RE.findall(path.read_text(encoding="utf-8")))
 
 
 def rust_test_function_names(path: Path) -> set[str]:
@@ -1413,6 +1568,68 @@ def changed_files_from_git(root: Path, base: str, head: str) -> list[str]:
     if result.returncode != 0:
         raise SystemExit(result.stderr.strip() or result.stdout.strip())
     return changed_files_from_name_status(result.stdout)
+
+
+def changed_files_from_working_tree(root: Path) -> list[str]:
+    """Return staged, unstaged, and untracked repo paths from the working tree."""
+
+    diff_result = subprocess.run(
+        [
+            "git",
+            "diff",
+            "--name-status",
+            "--find-renames",
+            "--diff-filter=ACMR",
+            "HEAD",
+        ],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if diff_result.returncode != 0:
+        raise SystemExit(diff_result.stderr.strip() or diff_result.stdout.strip())
+
+    untracked_result = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+        ],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if untracked_result.returncode != 0:
+        raise SystemExit(untracked_result.stderr.strip() or untracked_result.stdout.strip())
+
+    changed_files = changed_files_from_name_status(diff_result.stdout)
+    changed_files.extend(
+        line.strip() for line in untracked_result.stdout.splitlines() if line.strip()
+    )
+    return changed_files
+
+
+def merge_base(root: Path, base_ref: str, head: str) -> str:
+    """Return the merge-base between ``base_ref`` and ``head``."""
+
+    result = subprocess.run(
+        [
+            "git",
+            "merge-base",
+            head,
+            base_ref,
+        ],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise SystemExit(result.stderr.strip() or result.stdout.strip())
+    return result.stdout.strip()
 
 
 def changed_files_from_name_status(output: str) -> list[str]:
