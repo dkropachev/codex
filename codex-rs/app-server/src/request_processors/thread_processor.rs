@@ -1864,6 +1864,8 @@ impl ThreadRequestProcessor {
         };
         let store_sort_direction = sort_direction.unwrap_or(SortDirection::Desc);
         let (allowed_sources, source_kind_filter) = compute_source_filters(source_kinds);
+        let source_filter_mode =
+            source_filter_mode(allowed_sources.as_slice(), source_kind_filter.as_deref());
         let mut cursor_obj = cursor;
         let mut last_cursor = cursor_obj.clone();
         let mut remaining = requested_page_size;
@@ -1894,10 +1896,12 @@ impl ThreadRequestProcessor {
                     result.thread.agent_nickname.clone(),
                     result.thread.agent_role.clone(),
                 );
-                if source_kind_filter
-                    .as_ref()
-                    .is_none_or(|filter| source_kind_matches(&source, filter))
-                {
+                if source_filter_allows_thread(
+                    &source,
+                    result.thread.thread_source,
+                    source_kind_filter.as_deref(),
+                    source_filter_mode,
+                ) {
                     search_results.push(result);
                     if search_results.len() >= requested_page_size {
                         break;
@@ -3462,6 +3466,7 @@ impl ThreadRequestProcessor {
         };
         let (allowed_sources_vec, source_kind_filter) = compute_source_filters(source_kinds);
         let allowed_sources = allowed_sources_vec.as_slice();
+        let source_filter_mode = source_filter_mode(allowed_sources, source_kind_filter.as_deref());
         let store_sort_direction = match sort_direction {
             SortDirection::Asc => StoreSortDirection::Asc,
             SortDirection::Desc => StoreSortDirection::Desc,
@@ -3493,15 +3498,16 @@ impl ThreadRequestProcessor {
                     it.agent_nickname.clone(),
                     it.agent_role.clone(),
                 );
-                if source_kind_filter
-                    .as_ref()
-                    .is_none_or(|filter| source_kind_matches(&source, filter))
-                    && cwd_filters.as_ref().is_none_or(|expected_cwds| {
-                        expected_cwds.iter().any(|expected_cwd| {
-                            path_utils::paths_match_after_normalization(&it.cwd, expected_cwd)
-                        })
+                if source_filter_allows_thread(
+                    &source,
+                    it.thread_source,
+                    source_kind_filter.as_deref(),
+                    source_filter_mode,
+                ) && cwd_filters.as_ref().is_none_or(|expected_cwds| {
+                    expected_cwds.iter().any(|expected_cwd| {
+                        path_utils::paths_match_after_normalization(&it.cwd, expected_cwd)
                     })
-                {
+                }) {
                     filtered.push(it);
                     if filtered.len() >= remaining {
                         break;
