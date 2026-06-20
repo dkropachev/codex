@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "input": {
+      "description": "Structured workflow input. Must be a JSON object."
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "workflowDir": {
+      "description": "Directory containing the workflow package.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "input",
+    "threadId",
+    "workflowDir"
+  ],
+  "title": "ThreadWorkflowCommandParams",
+  "type": "object"
+}

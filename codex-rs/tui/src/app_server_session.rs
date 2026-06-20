@@ -103,6 +103,8 @@ use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::ThreadWorkflowCommandParams;
+use codex_app_server_protocol::ThreadWorkflowCommandResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
@@ -923,6 +925,28 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/shellCommand failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_workflow_command(
+        &mut self,
+        thread_id: ThreadId,
+        workflow_dir: String,
+        input: serde_json::Value,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadWorkflowCommandResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadWorkflowCommand {
+                request_id,
+                params: ThreadWorkflowCommandParams {
+                    thread_id: thread_id.to_string(),
+                    workflow_dir,
+                    input,
+                },
+            })
+            .await
+            .wrap_err("thread/workflowCommand failed in TUI")?;
         Ok(())
     }
 

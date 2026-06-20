@@ -630,6 +630,16 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_workflow_command(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadWorkflowCommandParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_workflow_command_inner(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn thread_approve_guardian_denied_action(
         &self,
         request_id: &ConnectionRequestId,
@@ -1734,6 +1744,45 @@ impl ThreadRequestProcessor {
         .await
         .map_err(|err| internal_error(format!("failed to start shell command: {err}")))?;
         Ok(ThreadShellCommandResponse {})
+    }
+
+    async fn thread_workflow_command_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadWorkflowCommandParams,
+    ) -> Result<ThreadWorkflowCommandResponse, JSONRPCErrorError> {
+        let ThreadWorkflowCommandParams {
+            thread_id,
+            workflow_dir,
+            input,
+        } = params;
+        if workflow_dir.trim().is_empty() {
+            return Err(invalid_request("workflowDir must not be empty"));
+        }
+        if !input.is_object() {
+            return Err(invalid_request("input must be a JSON object"));
+        }
+        if self
+            .thread_manager
+            .environment_manager()
+            .try_local_environment()
+            .is_none()
+        {
+            return Err(internal_error("local environment is not configured"));
+        }
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        self.submit_core_op(
+            request_id,
+            thread.as_ref(),
+            Op::RunWorkflowCommand {
+                workflow_dir: PathBuf::from(workflow_dir),
+                input,
+            },
+        )
+        .await
+        .map_err(|err| internal_error(format!("failed to start workflow command: {err}")))?;
+        Ok(ThreadWorkflowCommandResponse {})
     }
 
     async fn thread_approve_guardian_denied_action_inner(

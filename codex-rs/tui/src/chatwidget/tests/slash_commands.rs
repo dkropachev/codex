@@ -4,7 +4,6 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use serial_test::serial;
 use std::fs;
-use std::path::Path;
 
 fn force_pet_image_support(chat: &mut ChatWidget) {
     chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
@@ -51,17 +50,6 @@ fn write_workflow_command(chat: &mut ChatWidget, command: &str, description: &st
     workflow_dir.to_path_buf()
 }
 
-fn shell_command_input_json(command: &str, workflow_dir: &Path) -> serde_json::Value {
-    let prefix = format!(
-        "cd {} && bun src/workflow.ts --input ",
-        shlex::try_quote(workflow_dir.to_string_lossy().as_ref()).expect("quote workflow dir")
-    );
-    let input = command
-        .strip_prefix(&prefix)
-        .unwrap_or_else(|| panic!("expected workflow command prefix {prefix:?}, got {command:?}"));
-    serde_json::from_str(input.trim_matches('\'')).expect("workflow input JSON")
-}
-
 fn next_shell_command(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> String {
     loop {
         match op_rx.try_recv() {
@@ -75,10 +63,36 @@ fn next_shell_command(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> S
     }
 }
 
+fn next_workflow_command(
+    op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>,
+) -> (PathBuf, serde_json::Value) {
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::RunWorkflowCommand {
+                workflow_dir,
+                input,
+            }) => return (workflow_dir, input),
+            Ok(Op::RunUserShellCommand { command }) => {
+                panic!("unexpected shell command op for workflow command: {command:?}")
+            }
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected workflow command op but queue was empty"),
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected workflow command op but channel closed")
+            }
+        }
+    }
+}
+
 fn assert_no_shell_or_user_turn(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
     while let Ok(op) = op_rx.try_recv() {
         assert!(
-            !matches!(op, Op::RunUserShellCommand { .. } | Op::UserTurn { .. }),
+            !matches!(
+                op,
+                Op::RunUserShellCommand { .. }
+                    | Op::RunWorkflowCommand { .. }
+                    | Op::UserTurn { .. }
+            ),
             "unexpected submit op: {op:?}"
         );
     }
@@ -90,6 +104,9 @@ fn next_user_turn_without_shell(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver
             Ok(op @ Op::UserTurn { .. }) => return op,
             Ok(op @ Op::RunUserShellCommand { .. }) => {
                 panic!("unexpected shell command op before user turn: {op:?}")
+            }
+            Ok(op @ Op::RunWorkflowCommand { .. }) => {
+                panic!("unexpected workflow command op before user turn: {op:?}")
             }
             Ok(_) => continue,
             Err(TryRecvError::Empty) => panic!("expected user turn op but queue was empty"),
@@ -313,7 +330,7 @@ async fn workflow_slash_with_args_dispatches_workflow_cli_command() {
 }
 
 #[tokio::test]
-async fn bare_workflow_command_dispatches_user_shell_workflow() {
+async fn bare_workflow_command_dispatches_structured_workflow_op() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
     let workflow_dir = write_workflow_command(&mut chat, "code-review", "Run review.");
@@ -321,12 +338,11 @@ async fn bare_workflow_command_dispatches_user_shell_workflow() {
 
     submit_composer_text(&mut chat, "/code-review");
 
-    let shell_command = next_shell_command(&mut op_rx);
+    let (submitted_workflow_dir, input) = next_workflow_command(&mut op_rx);
+    assert_eq!(submitted_workflow_dir, workflow_dir);
     assert_eq!(
-        shell_command_input_json(&shell_command, &workflow_dir),
-        json!({
-            "workingDirectory": test_path_display("/tmp/project"),
-        })
+        input,
+        json!({ "workingDirectory": test_path_display("/tmp/project") })
     );
     assert_eq!(recall_latest_after_clearing(&mut chat), "/code-review");
 }
@@ -343,9 +359,10 @@ async fn workflow_command_with_args_dispatches_structured_input_json() {
         "/code-review --action list-reports --output md --include-skipped-by-limit --allowed-areas tui --allowed-areas core",
     );
 
-    let shell_command = next_shell_command(&mut op_rx);
+    let (submitted_workflow_dir, input) = next_workflow_command(&mut op_rx);
+    assert_eq!(submitted_workflow_dir, workflow_dir);
     assert_eq!(
-        shell_command_input_json(&shell_command, &workflow_dir),
+        input,
         json!({
             "action": "list-reports",
             "output": "md",
@@ -403,9 +420,10 @@ async fn queued_workflow_command_dispatches_after_active_turn() {
 
     complete_turn_with_message(&mut chat, "turn-1", Some("done"));
 
-    let shell_command = next_shell_command(&mut op_rx);
+    let (submitted_workflow_dir, input) = next_workflow_command(&mut op_rx);
+    assert_eq!(submitted_workflow_dir, workflow_dir);
     assert_eq!(
-        shell_command_input_json(&shell_command, &workflow_dir),
+        input,
         json!({
             "action": "report",
             "workingDirectory": test_path_display("/tmp/project"),

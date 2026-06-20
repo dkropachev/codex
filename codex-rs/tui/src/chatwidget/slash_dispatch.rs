@@ -15,7 +15,7 @@ use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
 use crate::goal_display::GOAL_USAGE;
 use crate::workflow_commands::WorkflowCommand;
-use crate::workflow_commands::build_workflow_shell_command;
+use crate::workflow_commands::build_workflow_invocation;
 use crate::workflow_commands::discover_workflow_commands;
 use crate::workflow_commands::workflow_invocation_input;
 
@@ -74,9 +74,12 @@ impl ChatWidget {
             return;
         }
         let cwd = self.workflow_invocation_cwd();
-        match build_workflow_shell_command(&command, &cwd, "") {
-            Ok(shell_command) => {
-                self.submit_op(AppCommand::run_user_shell_command(shell_command));
+        match build_workflow_invocation(&command, &cwd, "") {
+            Ok(invocation) => {
+                self.submit_op(AppCommand::run_workflow_command(
+                    invocation.workflow_dir,
+                    invocation.input,
+                ));
                 self.bottom_pane.drain_pending_submission_state();
             }
             Err(err) => self.add_error_message(err.message().to_string()),
@@ -123,9 +126,12 @@ impl ChatWidget {
             return;
         };
 
-        match build_workflow_shell_command(&command, &cwd, &prepared_args) {
-            Ok(shell_command) => {
-                self.submit_op(AppCommand::run_user_shell_command(shell_command));
+        match build_workflow_invocation(&command, &cwd, &prepared_args) {
+            Ok(invocation) => {
+                self.submit_op(AppCommand::run_workflow_command(
+                    invocation.workflow_dir,
+                    invocation.input,
+                ));
                 self.bottom_pane.drain_pending_submission_state();
             }
             Err(err) => self.add_error_message(err.message().to_string()),
@@ -1122,9 +1128,12 @@ impl ChatWidget {
                     return QueueDrain::Continue;
                 }
                 let cwd = self.workflow_invocation_cwd();
-                match build_workflow_shell_command(&command, &cwd, trimmed_rest) {
-                    Ok(shell_command) => {
-                        self.submit_op(AppCommand::run_user_shell_command(shell_command));
+                match build_workflow_invocation(&command, &cwd, trimmed_rest) {
+                    Ok(invocation) => {
+                        self.submit_op(AppCommand::run_workflow_command(
+                            invocation.workflow_dir,
+                            invocation.input,
+                        ));
                         QueueDrain::Stop
                     }
                     Err(err) => {

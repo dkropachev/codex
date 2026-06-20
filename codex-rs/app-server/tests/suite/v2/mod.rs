@@ -65,6 +65,8 @@ mod thread_start;
 mod thread_status;
 mod thread_unarchive;
 mod thread_unsubscribe;
+#[cfg(unix)]
+mod thread_workflow_command;
 mod turn_interrupt;
 mod turn_start;
 mod turn_start_zsh_fork;

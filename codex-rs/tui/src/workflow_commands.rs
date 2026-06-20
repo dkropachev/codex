@@ -23,6 +23,12 @@ pub struct WorkflowCommandOptionHint {
     pub description: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorkflowInvocation {
+    pub workflow_dir: PathBuf,
+    pub input: Value,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkflowInvocationError {
     message: String,
@@ -52,10 +58,14 @@ pub fn build_workflow_shell_command(
     cwd: &Path,
     args: &str,
 ) -> Result<String, WorkflowInvocationError> {
-    let input = workflow_invocation_input(cwd, args)?;
+    let WorkflowInvocation {
+        workflow_dir,
+        input,
+        ..
+    } = build_workflow_invocation(command, cwd, args)?;
     let input_json = serde_json::to_string(&input)
         .map_err(|err| WorkflowInvocationError::new(format!("failed to serialize input: {err}")))?;
-    let workflow_dir = command.workflow_dir.to_string_lossy();
+    let workflow_dir = workflow_dir.to_string_lossy();
     let quoted_workflow_dir = shlex::try_quote(&workflow_dir)
         .map_err(|err| WorkflowInvocationError::new(format!("failed to quote path: {err}")))?;
     let invocation =
@@ -63,6 +73,17 @@ pub fn build_workflow_shell_command(
             WorkflowInvocationError::new(format!("failed to quote workflow command: {err}"))
         })?;
     Ok(format!("cd {quoted_workflow_dir} && {invocation}"))
+}
+
+pub fn build_workflow_invocation(
+    command: &WorkflowCommand,
+    cwd: &Path,
+    args: &str,
+) -> Result<WorkflowInvocation, WorkflowInvocationError> {
+    Ok(WorkflowInvocation {
+        workflow_dir: command.workflow_dir.clone(),
+        input: workflow_invocation_input(cwd, args)?,
+    })
 }
 
 pub fn workflow_invocation_input(cwd: &Path, args: &str) -> Result<Value, WorkflowInvocationError> {

@@ -3,6 +3,7 @@ mod lifecycle;
 mod regular;
 mod review;
 mod user_shell;
+mod workflow_command;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -59,6 +60,9 @@ pub(crate) use review::ReviewTask;
 pub(crate) use user_shell::UserShellCommandMode;
 pub(crate) use user_shell::UserShellCommandTask;
 pub(crate) use user_shell::execute_user_shell_command;
+pub(crate) use workflow_command::WorkflowCommandTask;
+#[cfg(test)]
+pub(crate) use workflow_command::record_workflow_output;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TASK_COMPACT_METRIC: &str = "codex.task.compact";

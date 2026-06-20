@@ -1138,6 +1138,11 @@ impl MessageProcessor {
                     .thread_shell_command(&request_id, params)
                     .await
             }
+            ClientRequest::ThreadWorkflowCommand { params, .. } => {
+                self.thread_processor
+                    .thread_workflow_command(&request_id, params)
+                    .await
+            }
             ClientRequest::ThreadApproveGuardianDeniedAction { params, .. } => {
                 self.thread_processor
                     .thread_approve_guardian_denied_action(&request_id, params)
