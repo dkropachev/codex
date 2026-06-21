@@ -255,8 +255,9 @@ the main Codex command surface.
 
 #### Test cases
 
-- Account listing displays account-pool members and active member state: missing
-- Account command behavior preserves non-mutating account-pool reads: missing
+- Account list displays account-pool members and credential state: codex-rs/cli/tests/account_pool__account.rs:account_list_human_groups_pool_members_and_statuses,account_list_human_marks_invalid_pool_members,account_list_json_includes_pool_metadata_and_memberships
+- Account limits displays account-pool member status: codex-rs/cli/tests/account_pool__account.rs:account_limits_groups_pool_members_and_reports_missing_invalid_in_config_order
+- Account refresh reports account-pool member outcomes: codex-rs/cli/tests/account_pool__account.rs:account_refresh_pool_reports_all_missing_credentials,account_refresh_pool_reports_partial_success,account_refresh_pool_reports_blocked_member_and_succeeds_when_another_member_refreshes,account_refresh_pool_fails_when_all_members_are_blocked,account_refresh_pool_fails_when_stale_credentials_cannot_refresh,account_refresh_pool_reports_missing_pool
 
 ### tui-e2e (full terminal TUI behavior)
 
