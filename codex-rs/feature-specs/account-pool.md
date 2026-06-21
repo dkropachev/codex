@@ -280,6 +280,7 @@ member is set, and sparse rate-limit update merging.
 
 #### Test cases
 
+- Pool status rendering shows active member and unavailable member metadata: codex-rs/tui/src/status/account_pool__status_tests.rs:status_snapshot_shows_chatgpt_pool_active_member,status_snapshot_shows_chatgpt_pool_unavailable_members
 - Pool status rendering shows fallback active-member display: missing
 - Sparse rate-limit update merging preserves existing status metadata: missing
 
@@ -292,7 +293,7 @@ members.
 
 #### Test cases
 
-- Active member token refresh preserves selected pool member semantics: missing
+- Active member token refresh preserves selected pool member semantics: codex-rs/login/tests/suite/account_pool__auth_refresh.rs:refresh_token_uses_active_account_pool_member
 - Cached auth reads do not activate or switch pool members: missing
 
 ### mcp-server (Codex-as-MCP-server behavior)

@@ -1,5 +1,5 @@
 ---
-source: tui/src/status/tests.rs
+source: tui/src/status/account_pool__status_tests.rs
 expression: sanitized
 ---
 /status
@@ -14,8 +14,8 @@ expression: sanitized
 │  Directory: [[workspace]]                                                            │
 │  Permissions:      Custom (custom permissions with network access, Ask for approval) │
 │  Agents.md:        <none>                                                            │
-│  Account:          codex-pro pool (2 members, 2 unavailable)                         │
-│                    active: no active member                                          │
+│  Account:          codex-pro pool (2 members, 0 unavailable)                         │
+│                    active: work-pro / work@example.com / Pro                         │
 │                                                                                      │
 │  Context window:   100% left (750 used / 272K)                                       │
 │  Limits:           data not available yet                                            │
