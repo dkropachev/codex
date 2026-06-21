@@ -32,4 +32,7 @@ pub(crate) use rate_limits::rate_limit_snapshot_display;
 pub(crate) use rate_limits::rate_limit_snapshot_display_for_limit;
 
 #[cfg(test)]
+#[path = "account_pool__status_tests.rs"]
+mod account_pool_status_tests;
+#[cfg(test)]
 mod tests;
