@@ -368,7 +368,7 @@ def verify_feature_specs(
 
     discovered_targets = discovered_mapped_test_targets(root)
     failures.extend(not_covered_mapped_test_failures(spec_files, discovered_targets))
-    failures.extend(unlisted_mapped_test_failures(spec_files, discovered_targets))
+    failures.extend(unlisted_mapped_test_failures(root, spec_files, discovered_targets))
     failures.extend(changed_e2e_failures(root, changed_files))
     return failures
 
@@ -955,13 +955,14 @@ def parse_test_cases(markdown: str) -> list[TestCase]:
     return test_cases
 
 
-def declared_mapped_test_targets(spec_files: list[Path]) -> set[MappedTestTarget]:
+def declared_mapped_test_targets(root: Path, spec_files: list[Path]) -> set[MappedTestTarget]:
     """Return concrete test targets declared by feature specs.
 
-    Only syntactically valid targets whose filename maps back to the declaring
-    spec and whose path belongs to the declared test place are included. Invalid
-    declarations are already reported by ``test_case_failures`` and are excluded
-    here so they cannot mask genuinely unlisted discovered tests.
+    Only valid targets whose filename maps back to the declaring spec, whose
+    path belongs to the declared test place, and whose method is an annotated
+    Rust test function are included. Invalid declarations are already reported by
+    ``test_case_failures`` and are excluded here so they cannot mask genuinely
+    unlisted discovered tests or inflate coverage-report counts.
     """
 
     targets: set[MappedTestTarget] = set()
@@ -991,15 +992,22 @@ def declared_mapped_test_targets(spec_files: list[Path]) -> set[MappedTestTarget
                 if not is_test_place_path(test_place, test_path):
                     continue
 
+                full_path = root / test_path
+                if not full_path.exists():
+                    continue
+
+                test_methods = rust_test_function_names(full_path)
                 for method in target.group(2).split(","):
-                    targets.add(
-                        MappedTestTarget(
-                            test_place=test_place,
-                            feature_id=spec.stem,
-                            path=test_path,
-                            method=method.strip(),
+                    method = method.strip()
+                    if method in test_methods:
+                        targets.add(
+                            MappedTestTarget(
+                                test_place=test_place,
+                                feature_id=spec.stem,
+                                path=test_path,
+                                method=method,
+                            )
                         )
-                    )
 
     return targets
 
@@ -1100,6 +1108,7 @@ def not_covered_test_places(spec_files: list[Path]) -> set[tuple[str, str]]:
 
 
 def unlisted_mapped_test_failures(
+    root: Path,
     spec_files: list[Path],
     discovered_targets: list[MappedTestTarget],
 ) -> list[str]:
@@ -1111,7 +1120,7 @@ def unlisted_mapped_test_failures(
     in the owning feature spec.
     """
 
-    declared_targets = declared_mapped_test_targets(spec_files)
+    declared_targets = declared_mapped_test_targets(root, spec_files)
     feature_ids = {spec.stem for spec in spec_files}
     failures: list[str] = []
 
@@ -1143,7 +1152,7 @@ def feature_coverage_report(root: Path) -> list[CoverageReportRow]:
 
     spec_files = feature_spec_files(root)
     discovered_counts = mapped_test_counts(discovered_mapped_test_targets(root))
-    concrete_counts = mapped_test_counts(declared_mapped_test_targets(spec_files))
+    concrete_counts = mapped_test_counts(declared_mapped_test_targets(root, spec_files))
     missing_counts = missing_test_case_counts(spec_files)
     not_covered = not_covered_test_places(spec_files)
     rows: list[CoverageReportRow] = []
