@@ -412,6 +412,74 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
         self.assertEqual(failures, [])
 
+    def test_explicit_legacy_target_counts_as_declared_coverage(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self.write_valid_repo(root)
+            self.write_file(
+                root / "codex-rs/core/tests/suite/mixed.rs",
+                "#[test]\nfn legacy_test() {}\n",
+            )
+            spec = root / "codex-rs/feature-specs/account-pool.md"
+            text = spec.read_text(encoding="utf-8")
+            spec.write_text(
+                text.replace(
+                    "- Missing routing edge case: missing",
+                    "- Legacy mixed test is explicit: codex-rs/core/tests/suite/mixed.rs:legacy_test\n"
+                    "- Missing routing edge case: missing",
+                ),
+                encoding="utf-8",
+            )
+
+            failures = verify_feature_specs.verify_feature_specs(
+                root,
+                changed_files=["codex-rs/core/tests/suite/mixed.rs"],
+            )
+            rows = verify_feature_specs.feature_coverage_report(root)
+
+        self.assertEqual(failures, [])
+        self.assertEqual(
+            rows[0],
+            verify_feature_specs.CoverageReportRow(
+                feature_id="account-pool",
+                test_place="agent-e2e",
+                status=verify_feature_specs.COVERAGE_STATUS_PARTIAL,
+                discovered_mapped_test_count=1,
+                concrete_declared_target_count=2,
+                missing_test_case_count=1,
+            ),
+        )
+
+    def test_explicit_legacy_target_must_be_a_rust_test_function(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self.write_valid_repo(root)
+            self.write_file(
+                root / "codex-rs/core/tests/suite/mixed.rs",
+                "fn helper_only() {}\n",
+            )
+            spec = root / "codex-rs/feature-specs/account-pool.md"
+            text = spec.read_text(encoding="utf-8")
+            spec.write_text(
+                text.replace(
+                    "- Missing routing edge case: missing",
+                    "- Legacy helper is not coverage: codex-rs/core/tests/suite/mixed.rs:helper_only\n"
+                    "- Missing routing edge case: missing",
+                ),
+                encoding="utf-8",
+            )
+
+            failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
+
+        self.assertEqual(
+            failures,
+            [
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
+                "target `codex-rs/core/tests/suite/mixed.rs` does not define "
+                "test function `helper_only`",
+            ],
+        )
+
     def test_discovered_mapped_test_must_be_listed_in_feature_spec(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

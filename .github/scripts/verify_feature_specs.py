@@ -958,9 +958,9 @@ def parse_test_cases(markdown: str) -> list[TestCase]:
 def declared_mapped_test_targets(root: Path, spec_files: list[Path]) -> set[MappedTestTarget]:
     """Return concrete test targets declared by feature specs.
 
-    Only valid targets whose filename maps back to the declaring spec, whose
-    path belongs to the declared test place, and whose method is an annotated
-    Rust test function are included. Invalid declarations are already reported by
+    Feature-prefixed targets must map back to the declaring spec. Legacy or mixed
+    files without a feature-prefixed name are mapped to the declaring spec as an
+    explicit fallback. Invalid declarations are already reported by
     ``test_case_failures`` and are excluded here so they cannot mask genuinely
     unlisted discovered tests or inflate coverage-report counts.
     """
@@ -987,7 +987,8 @@ def declared_mapped_test_targets(root: Path, spec_files: list[Path]) -> set[Mapp
                     continue
 
                 test_path = normalize_changed_path(target.group(1))
-                if feature_id_from_test_path(test_path) != spec.stem:
+                target_feature_id = feature_id_from_test_path(test_path)
+                if target_feature_id is not None and target_feature_id != spec.stem:
                     continue
                 if not is_test_place_path(test_place, test_path):
                     continue
@@ -1272,8 +1273,10 @@ def test_target_failures(
     """Validate one concrete test target from a feature spec.
 
     A valid target is repo-relative, lives under the directory owned by the
-    declared test place, has a filename that maps back to ``feature_id``, points
-    to an existing Rust file, and lists Rust test functions defined in that file.
+    declared test place, points to an existing Rust file, and lists Rust test
+    functions defined in that file. Feature-prefixed filenames must map back to
+    ``feature_id``; legacy or mixed files without a feature prefix are allowed as
+    explicit fallback targets.
     """
 
     failures: list[str] = []
@@ -1294,12 +1297,7 @@ def test_target_failures(
         )
 
     target_feature_id = feature_id_from_test_path(normalized_test_path)
-    if target_feature_id is None:
-        failures.append(
-            f"{rel_spec} test place `{test_place}` target `{test_path}` "
-            "filename must use `feature_name__scenario.rs`"
-        )
-    elif target_feature_id != feature_id:
+    if target_feature_id is not None and target_feature_id != feature_id:
         failures.append(
             f"{rel_spec} test place `{test_place}` target `{test_path}` "
             f"maps to feature `{target_feature_id}`, not `{feature_id}`"

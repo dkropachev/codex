@@ -7,13 +7,16 @@ documentation.
 The feature ID is derived from the spec filename. For example, `account-pool.md` defines
 `account-pool`. Specs must not contain a separate `Feature ID` metadata field.
 
-Tests link to a feature through their filename prefix. For example, the repo-relative target
-`codex-rs/core/tests/suite/account_pool__routing.rs:some_test` maps to `account-pool.md`.
-Cross-feature test ownership is out of scope for this framework.
+Tests link to a feature through their filename prefix when possible. For example, the
+repo-relative target `codex-rs/core/tests/suite/account_pool__routing.rs:some_test` maps to
+`account-pool.md`. As a fallback for legacy or mixed upstream files, a feature spec may explicitly
+list a concrete test target whose filename is not feature-prefixed; that target is counted as
+declared coverage for the declaring spec only. Cross-feature test ownership remains out of scope.
 
 Feature specs must not link to test files. Test cases list plain repo-relative test targets so the
-verifier can check that the files and test functions exist. Test ownership is derived from test
-filenames and test-place path rules.
+verifier can check that the files and test functions exist. Test discovery is derived from
+feature-prefixed test filenames and test-place path rules; explicit legacy targets are not
+auto-discovered.
 
 The verifier scans known test-place directories for feature-prefixed Rust test files. Discovered
 mapped tests must be listed in the owning feature spec, and a test place cannot be marked
