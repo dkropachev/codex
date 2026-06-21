@@ -36,6 +36,10 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 self.spec_text("rate-limits"),
             )
             self.write_file(
+                root / "codex-rs/core/tests/suite/rate_limits__routing.rs",
+                "#[test]\nfn routing_test() {}\n",
+            )
+            self.write_file(
                 root / "codex-rs/feature-specs/README.md",
                 """
                 # Feature Specs
@@ -50,13 +54,13 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertIn(
-            "codex-rs/feature-specs/README.md lists `account-pool.md` more than once",
+        self.assertEqual(
             failures,
-        )
-        self.assertIn(
-            "codex-rs/feature-specs/README.md feature links must be sorted",
-            failures,
+            [
+                "codex-rs/feature-specs/README.md is missing `## Test Places`",
+                "codex-rs/feature-specs/README.md lists `account-pool.md` more than once",
+                "codex-rs/feature-specs/README.md feature links must be sorted",
+            ],
         )
 
     def test_readme_test_place_records_must_match_catalog(self) -> None:
@@ -75,16 +79,15 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertIn(
-            "codex-rs/feature-specs/README.md README test place `agent-e2e` "
-            "`Name` must be `Agent E2E`",
+        self.assertEqual(
             failures,
-        )
-        self.assertIn(
-            "codex-rs/feature-specs/README.md README test place `agent-e2e` "
-            "`Description` must be "
-            f"`{verify_feature_specs.TEST_PLACES['agent-e2e'].long_description}`",
-            failures,
+            [
+                "codex-rs/feature-specs/README.md README test place `agent-e2e` "
+                "`Name` must be `Agent E2E`",
+                "codex-rs/feature-specs/README.md README test place `agent-e2e` "
+                "`Description` must be "
+                f"`{verify_feature_specs.TEST_PLACES['agent-e2e'].long_description}`",
+            ],
         )
 
     def test_spec_must_use_required_sections_and_valid_entry_points(self) -> None:
@@ -106,14 +109,13 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md is missing `## Invariants`",
+        self.assertEqual(
             failures,
-        )
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md Entry Points link "
-            "`../login/src/auth/missing.rs` does not resolve inside the repository",
-            failures,
+            [
+                "codex-rs/feature-specs/account-pool.md is missing `## Invariants`",
+                "codex-rs/feature-specs/account-pool.md Entry Points link "
+                "`../login/src/auth/missing.rs` does not resolve inside the repository",
+            ],
         )
 
     def test_test_places_must_list_each_catalog_place(self) -> None:
@@ -133,14 +135,13 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md Test Places is missing `exec-server`",
+        self.assertEqual(
             failures,
-        )
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md test place `otel` heading "
-            "description must be `telemetry and export behavior`",
-            failures,
+            [
+                "codex-rs/feature-specs/account-pool.md test place `otel` heading "
+                "description must be `telemetry and export behavior`",
+                "codex-rs/feature-specs/account-pool.md Test Places is missing `exec-server`",
+            ],
         )
 
     def test_test_places_reports_all_missing_catalog_places(self) -> None:
@@ -156,17 +157,18 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md Test Places section must list test places",
+        self.assertEqual(
             failures,
-        )
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md Test Places is missing `agent-e2e`",
-            failures,
-        )
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md Test Places is missing `exec-server`",
-            failures,
+            [
+                "codex-rs/feature-specs/account-pool.md Test Places section must list test places",
+                *[
+                    f"codex-rs/feature-specs/account-pool.md Test Places is missing `{test_place}`"
+                    for test_place in verify_feature_specs.TEST_PLACE_IDS
+                ],
+                "codex-rs/core/tests/suite/account_pool__routing.rs:routing_test maps "
+                "to feature `account-pool` and test place `agent-e2e` but is not listed "
+                "in `codex-rs/feature-specs/account-pool.md` Test cases",
+            ],
         )
 
     def test_test_place_block_reports_multiple_missing_subsections(self) -> None:
@@ -180,10 +182,19 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
-            "must include `#### Test cases`",
+        self.assertEqual(
             failures,
+            [
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
+                "must include `#### Test cases`",
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
+                "contains unexpected `#### Cases removed`",
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
+                "must include `#### Test cases`",
+                "codex-rs/core/tests/suite/account_pool__routing.rs:routing_test maps "
+                "to feature `account-pool` and test place `agent-e2e` but is not listed "
+                "in `codex-rs/feature-specs/account-pool.md` Test cases",
+            ],
         )
 
     def test_not_covered_status_must_not_include_coverage_sections(self) -> None:
@@ -205,10 +216,16 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md test place `app-server-api` "
-            "with Status `Not covered` must not include `#### Test cases`",
+        self.assertEqual(
             failures,
+            [
+                "codex-rs/feature-specs/account-pool.md test place `app-server-api` "
+                "contains unexpected `#### Test cases`",
+                "codex-rs/feature-specs/account-pool.md test place `app-server-api` "
+                "with Status `Not covered` must not include `#### Test cases`",
+                "codex-rs/feature-specs/account-pool.md test place `app-server-api` "
+                "with Status `Not covered` must only include Description and Status",
+            ],
         )
 
     def test_test_case_targets_must_exist(self) -> None:
@@ -226,10 +243,15 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md test place `agent-e2e` target "
-            "`codex-rs/core/tests/suite/account_pool__missing.rs` does not exist",
+        self.assertEqual(
             failures,
+            [
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` target "
+                "`codex-rs/core/tests/suite/account_pool__missing.rs` does not exist",
+                "codex-rs/core/tests/suite/account_pool__routing.rs:routing_test maps "
+                "to feature `account-pool` and test place `agent-e2e` but is not listed "
+                "in `codex-rs/feature-specs/account-pool.md` Test cases",
+            ],
         )
 
     def test_test_case_targets_must_define_methods(self) -> None:
@@ -274,11 +296,18 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md test place `agent-e2e` target "
-            "`codex-rs/core/tests/suite/rate_limits__routing.rs` maps to feature "
-            "`rate-limits`, not `account-pool`",
+        self.assertEqual(
             failures,
+            [
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` target "
+                "`codex-rs/core/tests/suite/rate_limits__routing.rs` maps to feature "
+                "`rate-limits`, not `account-pool`",
+                "codex-rs/core/tests/suite/account_pool__routing.rs:routing_test maps "
+                "to feature `account-pool` and test place `agent-e2e` but is not listed "
+                "in `codex-rs/feature-specs/account-pool.md` Test cases",
+                "codex-rs/core/tests/suite/rate_limits__routing.rs:routing_test maps "
+                "to missing feature spec `codex-rs/feature-specs/rate-limits.md`",
+            ],
         )
 
     def test_test_case_targets_must_be_in_test_place_path(self) -> None:
@@ -300,11 +329,22 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
-            "target `codex-rs/cli/tests/account_pool__routing.rs` must be under "
-            "codex-rs/core/tests/suite",
+        self.assertEqual(
             failures,
+            [
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
+                "target `codex-rs/cli/tests/account_pool__routing.rs` must be under "
+                "codex-rs/core/tests/suite",
+                "codex-rs/feature-specs/account-pool.md test place `cli` is "
+                "`Not covered` but discovered mapped test "
+                "`codex-rs/cli/tests/account_pool__routing.rs:routing_test`",
+                "codex-rs/core/tests/suite/account_pool__routing.rs:routing_test maps "
+                "to feature `account-pool` and test place `agent-e2e` but is not listed "
+                "in `codex-rs/feature-specs/account-pool.md` Test cases",
+                "codex-rs/cli/tests/account_pool__routing.rs:routing_test maps "
+                "to feature `account-pool` and test place `cli` but is not listed "
+                "in `codex-rs/feature-specs/account-pool.md` Test cases",
+            ],
         )
 
     def test_specs_must_not_list_test_links(self) -> None:
@@ -321,14 +361,19 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertTrue(
-            any(
-                failure.startswith("codex-rs/feature-specs/account-pool.md:")
-                and failure.endswith(
-                    "must not include test links; test ownership is derived from filenames"
-                )
-                for failure in failures
-            )
+        self.assertEqual(
+            failures,
+            [
+                "codex-rs/feature-specs/account-pool.md:34 must not include test links; "
+                "test ownership is derived from filenames",
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
+                "test case `- Routing behavior is covered: "
+                "[account_pool__routing](../core/tests/suite/account_pool__routing.rs)` "
+                "must target `repo/path.rs:test_name[,test_name]` or `missing`",
+                "codex-rs/core/tests/suite/account_pool__routing.rs:routing_test maps "
+                "to feature `account-pool` and test place `agent-e2e` but is not listed "
+                "in `codex-rs/feature-specs/account-pool.md` Test cases",
+            ],
         )
 
     def test_e2e_coverage_sections_are_rejected(self) -> None:
@@ -358,16 +403,18 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertTrue(
-            any(
-                "must not include `## E2E Coverage`; use `## Test Places`" in failure
-                for failure in failures
-            )
-        )
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md subfeature `Routing` "
-            "contains unexpected `#### E2E Coverage`",
+        self.assertEqual(
             failures,
+            [
+                "codex-rs/feature-specs/account-pool.md contains unexpected "
+                "`## E2E Coverage`",
+                "codex-rs/feature-specs/account-pool.md:27 must not include "
+                "`#### E2E Coverage`; use `## Test Places`",
+                "codex-rs/feature-specs/account-pool.md:159 must not include "
+                "`## E2E Coverage`; use `## Test Places`",
+                "codex-rs/feature-specs/account-pool.md subfeature `Routing` "
+                "contains unexpected `#### E2E Coverage`",
+            ],
         )
 
     def test_spec_must_not_define_feature_id_field(self) -> None:
@@ -380,9 +427,11 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
-        self.assertIn(
-            "codex-rs/feature-specs/account-pool.md:3 must not define a Feature ID field",
+        self.assertEqual(
             failures,
+            [
+                "codex-rs/feature-specs/account-pool.md:3 must not define a Feature ID field",
+            ],
         )
 
     def test_changed_mapped_test_requires_matching_spec_change(self) -> None:
@@ -394,11 +443,13 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 root,
                 changed_files=["codex-rs/core/tests/suite/account_pool__missing.rs"],
             )
-            self.assertIn(
+        self.assertEqual(
+            failures,
+            [
                 "codex-rs/core/tests/suite/account_pool__missing.rs changed without "
                 "matching feature spec `codex-rs/feature-specs/account-pool.md`",
-                failures,
-            )
+            ],
+        )
 
     def test_changed_legacy_test_names_are_unmapped(self) -> None:
         with TemporaryDirectory() as temp_dir:
