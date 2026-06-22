@@ -510,6 +510,9 @@
             "browser_use_external": {
               "type": "boolean"
             },
+            "browser_use_full_cdp_access": {
+              "type": "boolean"
+            },
             "chronicle": {
               "type": "boolean"
             },
@@ -5390,6 +5393,9 @@
           "type": "boolean"
         },
         "browser_use_external": {
+          "type": "boolean"
+        },
+        "browser_use_full_cdp_access": {
           "type": "boolean"
         },
         "chronicle": {
