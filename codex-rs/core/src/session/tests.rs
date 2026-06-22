@@ -1751,9 +1751,9 @@ async fn prepares_image_failures_before_history_insertion() {
                 FunctionCallOutputContentItem::InputText {
                     text: "image content omitted because it could not be processed".to_string(),
                 },
-                FunctionCallOutputContentItem::InputImage {
-                    image_url: "https://example.com/image.png".to_string(),
-                    detail: Some(ImageDetail::High),
+                FunctionCallOutputContentItem::InputText {
+                    text: "image content omitted because remote image URLs are not supported"
+                        .to_string(),
                 },
             ]),
             success: Some(true),
@@ -1772,6 +1772,10 @@ async fn prepares_resumed_history_before_installing_it() {
         content: vec![
             ContentItem::InputImage {
                 image_url: "data:image/png;base64,%%%".to_string(),
+                detail: Some(ImageDetail::High),
+            },
+            ContentItem::InputImage {
+                image_url: "https://example.com/image.png".to_string(),
                 detail: Some(ImageDetail::High),
             },
             ContentItem::InputText {
@@ -1798,6 +1802,10 @@ async fn prepares_resumed_history_before_installing_it() {
             content: vec![
                 ContentItem::InputText {
                     text: "image content omitted because it could not be processed".to_string(),
+                },
+                ContentItem::InputText {
+                    text: "image content omitted because remote image URLs are not supported"
+                        .to_string(),
                 },
                 ContentItem::InputText {
                     text: "keep me".to_string(),
