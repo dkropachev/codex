@@ -77,6 +77,7 @@ use codex_features::TokenBudgetConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_install_context::InstallContext;
 use codex_login::AuthManagerConfig;
+use codex_login::AuthRouteConfig;
 use codex_mcp::McpConfig;
 use codex_mcp::McpPluginAttribution;
 use codex_mcp::McpServerRegistration;
@@ -1227,8 +1228,8 @@ impl AuthManagerConfig for Config {
         self.chatgpt_base_url.clone()
     }
 
-    fn account_pool(&self) -> Option<AccountPoolToml> {
-        self.account_pool.clone()
+    fn auth_route_config(&self) -> Option<AuthRouteConfig> {
+        Config::auth_route_config(self)
     }
 }
 
@@ -1481,6 +1482,11 @@ impl Config {
             model_supports_reasoning_summaries: self.model_supports_reasoning_summaries,
             model_catalog: self.model_catalog.clone(),
         }
+    }
+
+    pub fn auth_route_config(&self) -> Option<AuthRouteConfig> {
+        self.respect_system_proxy
+            .then(AuthRouteConfig::respect_system_proxy)
     }
 
     /// Build the plugin-manager input from the effective config.
@@ -2764,6 +2770,15 @@ pub fn resolve_bootstrap_respect_system_proxy(
     let features =
         ManagedFeatures::from_configured(configured_features, feature_requirements.cloned())?;
     Ok(features.get().enabled(Feature::RespectSystemProxy))
+}
+
+/// Resolves auth route settings for the initial cloud-config bootstrap.
+pub fn resolve_bootstrap_auth_route_config(
+    cfg: &ConfigToml,
+    feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<Option<AuthRouteConfig>> {
+    resolve_bootstrap_respect_system_proxy(cfg, feature_requirements)
+        .map(|enabled| enabled.then(AuthRouteConfig::respect_system_proxy))
 }
 
 pub(crate) fn resolve_web_search_mode_for_turn(
