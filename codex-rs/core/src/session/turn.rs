@@ -339,7 +339,10 @@ pub(crate) async fn run_turn(
                 }
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if turn_context.features.enabled(Feature::AutoCompaction)
+                if turn_context
+                    .config
+                    .features
+                    .enabled(Feature::AutoCompaction)
                     && token_limit_reached
                     && needs_follow_up
                 {
@@ -853,7 +856,11 @@ async fn run_pre_sampling_compact(
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
 ) -> CodexResult<()> {
-    if !turn_context.features.enabled(Feature::AutoCompaction) {
+    if !turn_context
+        .config
+        .features
+        .enabled(Feature::AutoCompaction)
+    {
         return Ok(());
     }
 
