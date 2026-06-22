@@ -10,12 +10,12 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
-use codex_protocol::models::ResponseItemMetadata;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::protocol::AskForApproval;
@@ -43,7 +43,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -62,7 +62,7 @@ fn inter_agent_assistant_msg(text: &str) -> ResponseItem {
             text: serde_json::to_string(&communication).unwrap(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -96,7 +96,7 @@ fn user_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -108,7 +108,7 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -120,7 +120,7 @@ fn developer_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -135,7 +135,7 @@ fn developer_msg_with_fragments(texts: &[&str]) -> ResponseItem {
             })
             .collect(),
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -174,7 +174,7 @@ fn custom_tool_call_output(call_id: &str, output: &str) -> ResponseItem {
         call_id: call_id.to_string(),
         name: None,
         output: FunctionCallOutputPayload::from_text(output.to_string()),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -188,7 +188,7 @@ fn reasoning_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }]),
         encrypted_content: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -200,7 +200,7 @@ fn reasoning_with_encrypted_content(len: usize) -> ResponseItem {
         }],
         content: None,
         encrypted_content: Some("a".repeat(len)),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -224,7 +224,7 @@ fn filters_non_api_messages() {
             text: "ignored".to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     let reasoning = reasoning_msg("thinking...");
     h.record_items([&system, &reasoning, &ResponseItem::Other], policy);
@@ -247,7 +247,7 @@ fn filters_non_api_messages() {
                     text: "thinking...".to_string(),
                 }]),
                 encrypted_content: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -256,7 +256,7 @@ fn filters_non_api_messages() {
                     text: "hi".to_string()
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -265,7 +265,7 @@ fn filters_non_api_messages() {
                     text: "hello".to_string()
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }
         ]
     );
@@ -415,7 +415,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                 },
             ],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -423,7 +423,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
             id: None,
@@ -437,7 +437,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
             ]),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::CustomToolCall {
             id: None,
@@ -445,7 +445,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             call_id: "tool-1".to_string(),
             name: "js_repl".to_string(),
             input: "view_image".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::CustomToolCallOutput {
             id: None,
@@ -460,7 +460,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
             ]),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let history = create_history_with_items(items);
@@ -484,7 +484,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                 },
             ],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -492,7 +492,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
             id: None,
@@ -506,7 +506,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                         .to_string(),
                 },
             ]),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::CustomToolCall {
             id: None,
@@ -514,7 +514,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             call_id: "tool-1".to_string(),
             name: "js_repl".to_string(),
             input: "view_image".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::CustomToolCallOutput {
             id: None,
@@ -529,7 +529,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                         .to_string(),
                 },
             ]),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     assert_eq!(stripped, expected);
@@ -549,7 +549,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             },
         ],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }]);
     let preserved = with_images.for_prompt(&modalities);
     assert_eq!(preserved.len(), 1);
@@ -569,7 +569,7 @@ fn for_prompt_preserves_image_generation_calls_when_images_are_supported() {
             status: "generating".to_string(),
             revised_prompt: Some("lobster".to_string()),
             result: "Zm9v".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::Message {
             id: None,
@@ -578,7 +578,7 @@ fn for_prompt_preserves_image_generation_calls_when_images_are_supported() {
                 text: "hi".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ]);
 
@@ -590,7 +590,7 @@ fn for_prompt_preserves_image_generation_calls_when_images_are_supported() {
                 status: "generating".to_string(),
                 revised_prompt: Some("lobster".to_string()),
                 result: "Zm9v".to_string(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -599,7 +599,7 @@ fn for_prompt_preserves_image_generation_calls_when_images_are_supported() {
                     text: "hi".to_string(),
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }
         ]
     );
@@ -615,14 +615,14 @@ fn for_prompt_clears_image_generation_result_when_images_are_unsupported() {
                 text: "generate a lobster".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ImageGenerationCall {
             id: Some("ig_123".to_string()),
             status: "completed".to_string(),
             revised_prompt: Some("lobster".to_string()),
             result: "Zm9v".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ]);
 
@@ -636,14 +636,14 @@ fn for_prompt_clears_image_generation_result_when_images_are_unsupported() {
                     text: "generate a lobster".to_string(),
                 }],
                 phase: None,
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::ImageGenerationCall {
                 id: Some("ig_123".to_string()),
                 status: "completed".to_string(),
                 revised_prompt: Some("lobster".to_string()),
                 result: String::new(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
         ]
     );
@@ -680,13 +680,13 @@ fn remove_first_item_removes_matching_output_for_function_call() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
             id: None,
             call_id: "call-1".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let mut h = create_history_with_items(items);
@@ -701,7 +701,7 @@ fn remove_first_item_removes_matching_call_for_output() {
             id: None,
             call_id: "call-2".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -709,7 +709,7 @@ fn remove_first_item_removes_matching_call_for_output() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-2".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let mut h = create_history_with_items(items);
@@ -733,7 +733,7 @@ fn replace_last_turn_images_replaces_tool_output_images() {
                 ]),
                 success: Some(true),
             },
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let mut history = create_history_with_items(items);
@@ -755,7 +755,7 @@ fn replace_last_turn_images_replaces_tool_output_images() {
                     ]),
                     success: Some(true),
                 },
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
         ]
     );
@@ -771,7 +771,7 @@ fn replace_last_turn_images_does_not_touch_user_images() {
             detail: Some(DEFAULT_IMAGE_DETAIL),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     let mut history = create_history_with_items(items.clone());
 
@@ -793,13 +793,13 @@ fn remove_first_item_handles_local_shell_pair() {
                 env: None,
                 user: None,
             }),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
             id: None,
             call_id: "call-3".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let mut h = create_history_with_items(items);
@@ -1022,14 +1022,14 @@ fn remove_first_item_handles_custom_tool_pair() {
             call_id: "tool-1".to_string(),
             name: "my_tool".to_string(),
             input: "{}".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::CustomToolCallOutput {
             id: None,
             call_id: "tool-1".to_string(),
             name: None,
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let mut h = create_history_with_items(items);
@@ -1051,13 +1051,13 @@ fn normalization_retains_local_shell_outputs() {
                 env: None,
                 user: None,
             }),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
             id: None,
             call_id: "shell-1".to_string(),
             output: FunctionCallOutputPayload::from_text("Total output lines: 1\n\nok".to_string()),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
 
@@ -1082,9 +1082,8 @@ fn record_items_truncates_function_call_output_content() {
             body: FunctionCallOutputBody::Text(long_output.clone()),
             success: Some(true),
         },
-        metadata: Some(ResponseItemMetadata {
+        internal_chat_message_metadata_passthrough: Some(InternalChatMessageMetadataPassthrough {
             turn_id: Some("turn-1".to_string()),
-            ..Default::default()
         }),
     };
 
@@ -1120,7 +1119,7 @@ fn record_items_truncates_custom_tool_call_output_content() {
         call_id: "tool-200".to_string(),
         name: None,
         output: FunctionCallOutputPayload::from_text(long_output.clone()),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     history.record_items([&item], policy);
@@ -1188,7 +1187,7 @@ fn record_items_respects_custom_token_limit() {
             body: FunctionCallOutputBody::Text(long_output),
             success: Some(true),
         },
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     history.record_items([&item], policy);
@@ -1308,7 +1307,7 @@ fn normalize_adds_missing_output_for_function_call() {
         namespace: None,
         arguments: "{}".to_string(),
         call_id: "call-x".to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1323,13 +1322,13 @@ fn normalize_adds_missing_output_for_function_call() {
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-x".to_string(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::FunctionCallOutput {
                 id: None,
                 call_id: "call-x".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
         ]
     );
@@ -1344,7 +1343,7 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
         call_id: "tool-x".to_string(),
         name: "custom".to_string(),
         input: "{}".to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1359,14 +1358,14 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
                 call_id: "tool-x".to_string(),
                 name: "custom".to_string(),
                 input: "{}".to_string(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::CustomToolCallOutput {
                 id: None,
                 call_id: "tool-x".to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
         ]
     );
@@ -1386,7 +1385,7 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id() {
             env: None,
             user: None,
         }),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1406,13 +1405,13 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id() {
                     env: None,
                     user: None,
                 }),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::FunctionCallOutput {
                 id: None,
                 call_id: "shell-1".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
         ]
     );
@@ -1425,7 +1424,7 @@ fn normalize_removes_orphan_function_call_output() {
         id: None,
         call_id: "orphan-1".to_string(),
         output: FunctionCallOutputPayload::from_text("ok".to_string()),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1442,7 +1441,7 @@ fn normalize_removes_orphan_custom_tool_call_output() {
         call_id: "orphan-2".to_string(),
         name: None,
         output: FunctionCallOutputPayload::from_text("ok".to_string()),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1462,14 +1461,14 @@ fn normalize_mixed_inserts_and_removals() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "c1".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         // Orphan output that should be removed
         ResponseItem::FunctionCallOutput {
             id: None,
             call_id: "c2".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         // Will get an inserted custom tool output
         ResponseItem::CustomToolCall {
@@ -1478,7 +1477,7 @@ fn normalize_mixed_inserts_and_removals() {
             call_id: "t1".to_string(),
             name: "tool".to_string(),
             input: "{}".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         // Local shell call also gets an inserted function call output
         ResponseItem::LocalShellCall {
@@ -1492,7 +1491,7 @@ fn normalize_mixed_inserts_and_removals() {
                 env: None,
                 user: None,
             }),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let mut h = create_history_with_items(items);
@@ -1508,13 +1507,13 @@ fn normalize_mixed_inserts_and_removals() {
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "c1".to_string(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::FunctionCallOutput {
                 id: None,
                 call_id: "c1".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::CustomToolCall {
                 id: None,
@@ -1522,14 +1521,14 @@ fn normalize_mixed_inserts_and_removals() {
                 call_id: "t1".to_string(),
                 name: "tool".to_string(),
                 input: "{}".to_string(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::CustomToolCallOutput {
                 id: None,
                 call_id: "t1".to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::LocalShellCall {
                 id: None,
@@ -1542,13 +1541,13 @@ fn normalize_mixed_inserts_and_removals() {
                     env: None,
                     user: None,
                 }),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::FunctionCallOutput {
                 id: None,
                 call_id: "s1".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
         ]
     );
@@ -1562,7 +1561,7 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
         namespace: None,
         arguments: "{}".to_string(),
         call_id: "call-x".to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history(&default_input_modalities());
@@ -1575,13 +1574,13 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-x".to_string(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::FunctionCallOutput {
                 id: None,
                 call_id: "call-x".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
         ]
     );
@@ -1595,7 +1594,7 @@ fn normalize_adds_missing_output_for_tool_search_call() {
         status: Some("completed".to_string()),
         execution: "client".to_string(),
         arguments: "{}".into(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1610,7 +1609,7 @@ fn normalize_adds_missing_output_for_tool_search_call() {
                 status: Some("completed".to_string()),
                 execution: "client".to_string(),
                 arguments: "{}".into(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::ToolSearchOutput {
                 id: None,
@@ -1618,7 +1617,7 @@ fn normalize_adds_missing_output_for_tool_search_call() {
                 status: "completed".to_string(),
                 execution: "client".to_string(),
                 tools: Vec::new(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
         ]
     );
@@ -1634,7 +1633,7 @@ fn normalize_adds_missing_output_for_custom_tool_call_panics_in_debug() {
         call_id: "tool-x".to_string(),
         name: "custom".to_string(),
         input: "{}".to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history(&default_input_modalities());
@@ -1655,7 +1654,7 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id_panics_in_debug() 
             env: None,
             user: None,
         }),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history(&default_input_modalities());
@@ -1669,7 +1668,7 @@ fn normalize_removes_orphan_function_call_output_panics_in_debug() {
         id: None,
         call_id: "orphan-1".to_string(),
         output: FunctionCallOutputPayload::from_text("ok".to_string()),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history(&default_input_modalities());
@@ -1684,7 +1683,7 @@ fn normalize_removes_orphan_custom_tool_call_output_panics_in_debug() {
         call_id: "orphan-2".to_string(),
         name: None,
         output: FunctionCallOutputPayload::from_text("ok".to_string()),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history(&default_input_modalities());
@@ -1699,7 +1698,7 @@ fn normalize_removes_orphan_client_tool_search_output() {
         status: "completed".to_string(),
         execution: "client".to_string(),
         tools: Vec::new(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1718,7 +1717,7 @@ fn normalize_removes_orphan_client_tool_search_output_panics_in_debug() {
         status: "completed".to_string(),
         execution: "client".to_string(),
         tools: Vec::new(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history(&default_input_modalities());
@@ -1732,7 +1731,7 @@ fn normalize_keeps_server_tool_search_output_without_matching_call() {
         status: "completed".to_string(),
         execution: "server".to_string(),
         tools: Vec::new(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1746,7 +1745,7 @@ fn normalize_keeps_server_tool_search_output_without_matching_call() {
             status: "completed".to_string(),
             execution: "server".to_string(),
             tools: Vec::new(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }]
     );
 }
@@ -1762,13 +1761,13 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "c1".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
             id: None,
             call_id: "c2".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::CustomToolCall {
             id: None,
@@ -1776,7 +1775,7 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
             call_id: "t1".to_string(),
             name: "tool".to_string(),
             input: "{}".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::LocalShellCall {
             id: None,
@@ -1789,7 +1788,7 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
                 env: None,
                 user: None,
             }),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let mut h = create_history_with_items(items);
@@ -1813,7 +1812,7 @@ fn image_data_url_payload_does_not_dominate_message_estimate() {
             },
         ],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     let text_only_item = ResponseItem::Message {
         id: None,
@@ -1822,7 +1821,7 @@ fn image_data_url_payload_does_not_dominate_message_estimate() {
             text: "Here is the screenshot".to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let raw_len = serde_json::to_string(&image_item).unwrap().len() as i64;
@@ -1851,7 +1850,7 @@ fn image_data_url_payload_does_not_dominate_function_call_output_estimate() {
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
@@ -1879,7 +1878,7 @@ fn image_data_url_payload_does_not_dominate_custom_tool_call_output_estimate() {
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
@@ -1900,7 +1899,7 @@ fn non_base64_image_urls_are_unchanged() {
             detail: Some(DEFAULT_IMAGE_DETAIL),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     let function_output_item = ResponseItem::FunctionCallOutput {
         id: None,
@@ -1911,7 +1910,7 @@ fn non_base64_image_urls_are_unchanged() {
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     assert_eq!(
@@ -1935,7 +1934,7 @@ fn encrypted_function_output_uses_plaintext_byte_estimate() {
                 encrypted_content: encrypted_content.clone(),
             },
         ]),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
@@ -1956,7 +1955,7 @@ fn data_url_without_base64_marker_is_unchanged() {
             detail: Some(DEFAULT_IMAGE_DETAIL),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     assert_eq!(
@@ -1978,7 +1977,7 @@ fn non_image_base64_data_url_is_unchanged() {
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
@@ -1999,7 +1998,7 @@ fn mixed_case_data_url_markers_are_adjusted() {
             detail: Some(DEFAULT_IMAGE_DETAIL),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
@@ -2032,7 +2031,7 @@ fn multiple_inline_images_apply_multiple_fixed_costs() {
             },
         ],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
@@ -2067,7 +2066,7 @@ fn original_detail_images_scale_with_dimensions() {
                 detail: Some(ImageDetail::Original),
             },
         ]),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
@@ -2099,7 +2098,7 @@ fn original_detail_images_are_capped_at_max_patch_count() {
                 detail: Some(ImageDetail::Original),
             },
         ]),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
@@ -2134,7 +2133,7 @@ fn original_detail_webp_images_scale_with_dimensions() {
                 detail: Some(ImageDetail::Original),
             },
         ]),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
@@ -2153,7 +2152,7 @@ fn text_only_items_unchanged() {
             text: "Hello world, this is a response.".to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let estimated = estimate_response_item_model_visible_bytes(&item);

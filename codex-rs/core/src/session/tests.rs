@@ -109,8 +109,8 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::ResponseItemMetadata;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CompactedItem;
@@ -198,7 +198,7 @@ fn user_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -212,7 +212,7 @@ fn assign_missing_response_item_ids_skips_agent_messages() {
             content: vec![AgentMessageInputContent::InputText {
                 text: "done".to_string(),
             }],
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         user_message("hello"),
     ]);
@@ -231,7 +231,7 @@ fn assistant_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -291,7 +291,7 @@ fn skill_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -1638,9 +1638,8 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
             text: "summary".to_string(),
         }],
         phase: None,
-        metadata: Some(ResponseItemMetadata {
+        internal_chat_message_metadata_passthrough: Some(InternalChatMessageMetadataPassthrough {
             turn_id: Some("compact-turn".to_string()),
-            ..Default::default()
         }),
     };
     let replacement_history = vec![
@@ -1652,7 +1651,7 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
                 text: "stale developer instructions".to_string(),
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
     let first_window_id = Uuid::now_v7();
@@ -1724,7 +1723,7 @@ async fn prepares_image_failures_before_history_insertion() {
             ]),
             success: Some(true),
         },
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     session
@@ -1759,7 +1758,7 @@ async fn prepares_image_failures_before_history_insertion() {
             ]),
             success: Some(true),
         },
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }];
     assert_eq!(history.raw_items(), expected.as_slice());
 }
@@ -1780,7 +1779,7 @@ async fn prepares_resumed_history_before_installing_it() {
             },
         ],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     session
@@ -1805,7 +1804,7 @@ async fn prepares_resumed_history_before_installing_it() {
                 },
             ],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }]
     );
 }
@@ -7927,7 +7926,7 @@ async fn build_initial_context_omits_default_image_save_location_with_image_hist
                 status: "completed".to_string(),
                 revised_prompt: Some("a tiny blue square".to_string()),
                 result: "Zm9v".to_string(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             }],
             /*reference_context_item*/ None,
         )
@@ -8180,7 +8179,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
         status: "completed".to_string(),
         revised_prompt: Some("a tiny blue square".to_string()),
         result: "Zm9v".to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let mut ctx = HandleOutputCtx {
@@ -8237,7 +8236,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
         status: "completed".to_string(),
         revised_prompt: Some("broken payload".to_string()),
         result: "_-8".to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let mut ctx = HandleOutputCtx {
@@ -8403,7 +8402,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
             text: format!("{}\nsummary", crate::compact::SUMMARY_PREFIX),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&compacted_summary))
@@ -9079,7 +9078,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
             text: "late pending input".to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     assert!(
         history.raw_items().iter().any(|item| item == &expected),
@@ -9512,7 +9511,7 @@ async fn abort_empty_active_turn_preserves_pending_input() {
             text: "late pending input".to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     let turn_state = {
         let mut active = sess.active_turn.lock().await;
@@ -9771,7 +9770,7 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         namespace: None,
         arguments: "{}".to_string(),
         call_id: "call-1".to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     let mut ctx = HandleOutputCtx {
         sess: Arc::clone(&sess),
@@ -9899,7 +9898,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         call_id: "call-1".to_string(),
         name: "shell_command".to_string(),
         input: "{}".to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let call = ToolRouter::build_tool_call(item.clone())
@@ -9984,7 +9983,7 @@ async fn sample_rollout(
             text: "first user".to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     live_history.record_items(
         std::iter::once(&user1),
@@ -9999,7 +9998,7 @@ async fn sample_rollout(
             text: "assistant reply one".to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     live_history.record_items(
         std::iter::once(&assistant1),
@@ -10031,7 +10030,7 @@ async fn sample_rollout(
             text: "second user".to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     live_history.record_items(
         std::iter::once(&user2),
@@ -10046,7 +10045,7 @@ async fn sample_rollout(
             text: "assistant reply two".to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     live_history.record_items(
         std::iter::once(&assistant2),
@@ -10078,7 +10077,7 @@ async fn sample_rollout(
             text: "third user".to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     live_history.record_items(
         std::iter::once(&user3),
@@ -10093,7 +10092,7 @@ async fn sample_rollout(
             text: "assistant reply three".to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     live_history.record_items(
         std::iter::once(&assistant3),
@@ -10239,7 +10238,7 @@ while :; do sleep 1; done"#,
         })
         .to_string(),
         call_id: "shell-cleanup-call".to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     let call = ToolRouter::build_tool_call(item)?
         .expect("shell command response item should build a tool call");
