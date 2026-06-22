@@ -691,6 +691,7 @@ async fn run_websocket_response_stream(
                 }
                 let model_verifications = event.model_verifications();
                 let turn_moderation_metadata = event.turn_moderation_metadata();
+                let safety_buffering = event.safety_buffering();
                 if event.kind() == "codex.rate_limits" {
                     if let Some(snapshot) = parse_rate_limit_event(&text) {
                         latest_rate_limit_snapshot = Some(snapshot.clone());
@@ -726,7 +727,17 @@ async fn run_websocket_response_stream(
                         "response event consumer dropped".to_string(),
                     ));
                 }
-                match process_responses_event(event, latest_rate_limit_snapshot.as_ref()) {
+                if let Some(buffering) = safety_buffering
+                    && tx_event
+                        .send(Ok(ResponseEvent::SafetyBuffering(buffering)))
+                        .await
+                        .is_err()
+                {
+                    return Err(ApiError::Stream(
+                        "response event consumer dropped".to_string(),
+                    ));
+                }
+                match process_responses_event(event) {
                     Ok(Some(event)) => {
                         let is_completed = matches!(event, ResponseEvent::Completed { .. });
                         let _ = tx_event.send(Ok(event)).await;
