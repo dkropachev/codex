@@ -65,10 +65,7 @@ impl fmt::Display for ProviderAccountError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingChatgptAccountDetails => {
-                write!(
-                    f,
-                    "email and plan type are required for chatgpt authentication"
-                )
+                write!(f, "plan type is required for chatgpt authentication")
             }
             Self::UnsupportedBedrockApiKeyAuth => {
                 write!(
@@ -292,26 +289,9 @@ impl ModelProvider for ConfiguredModelProvider {
         })
     }
 
-    fn auth_selection_for_model(
-        &self,
-        model: Option<&str>,
-        context: Option<AccountPoolSelectionContext>,
-    ) -> ModelProviderFuture<'_, ModelProviderAuthSelection> {
-        let bucket = account_pool_usage_bucket_for_model(model);
-        Box::pin(async move {
-            match self.auth_manager.as_ref() {
-                Some(auth_manager) => {
-                    if let Some(mut context) = context {
-                        context.bucket = bucket;
-                        if let Some(selection) = auth_manager
-                            .auth_for_account_pool_selection_context(context)
-                            .await
-                        {
-                            return ModelProviderAuthSelection {
-                                auth: Some(selection.auth.clone()),
-                                account_pool_selection: Some(selection),
-                            };
-                        }
+                        plan_type
+                            .map(|plan_type| ProviderAccount::Chatgpt { email, plan_type })
+                            .ok_or(ProviderAccountError::MissingChatgptAccountDetails)
                     }
                     ModelProviderAuthSelection {
                         auth: auth_manager.auth_for_account_pool_bucket(bucket).await,
@@ -438,6 +418,7 @@ mod tests {
     use codex_model_provider_info::ModelProviderAwsAuthInfo;
     use codex_model_provider_info::WireApi;
     use codex_models_manager::manager::RefreshStrategy;
+    use codex_protocol::account::PlanType;
     use codex_protocol::config_types::ModelProviderAuthInfo;
     use codex_protocol::openai_models::ModelInfo;
     use codex_protocol::openai_models::ModelsResponse;
@@ -643,7 +624,7 @@ mod tests {
     }
 
     #[test]
-    fn openai_provider_rejects_chatgpt_account_state_without_email() {
+    fn openai_provider_returns_chatgpt_account_state_without_email() {
         let provider = create_model_provider(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             Some(AuthManager::from_auth_for_testing(
@@ -653,7 +634,13 @@ mod tests {
 
         assert_eq!(
             provider.account_state(),
-            Err(ProviderAccountError::MissingChatgptAccountDetails)
+            Ok(ProviderAccountState {
+                account: Some(ProviderAccount::Chatgpt {
+                    email: None,
+                    plan_type: PlanType::Unknown,
+                }),
+                requires_openai_auth: true,
+            })
         );
     }
 

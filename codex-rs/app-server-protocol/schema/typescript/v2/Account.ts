@@ -5,4 +5,4 @@ import type { AmazonBedrockCredentialSource } from "../AmazonBedrockCredentialSo
 import type { PlanType } from "../PlanType";
 import type { AccountPoolMember } from "./AccountPoolMember";
 
-export type Account = { "type": "apiKey", } | { "type": "chatgpt", email: string, planType: PlanType, } | { "type": "amazonBedrock", credentialSource: AmazonBedrockCredentialSource, };
+export type Account = { "type": "apiKey", } | { "type": "chatgpt", email: string | null, planType: PlanType, } | { "type": "amazonBedrock", credentialSource: AmazonBedrockCredentialSource, };
