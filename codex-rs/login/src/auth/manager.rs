@@ -49,13 +49,16 @@ use codex_protocol::auth::RefreshTokenFailedReason;
 use serde_json::Value;
 use thiserror::Error;
 
-pub use super::account_pool::AccountPoolBucket;
 pub use super::account_pool::AccountPoolManager;
 pub use super::account_pool::AccountPoolMemberStatus;
 pub use super::account_pool::AccountPoolStatus;
 pub use super::account_pool::AccountPoolUsageRefreshPoolReport;
 pub use super::account_pool::AccountPoolUsageRefreshProblem;
 pub use super::account_pool::AccountPoolUsageRefreshReport;
+pub use super::account_pool_selection::AccountPoolAuthSelection;
+pub use super::account_pool_selection::AccountPoolCacheHint;
+pub use super::account_pool_selection::AccountPoolSelectionContext;
+pub use super::account_pool_selection::AccountPoolUsageBucket;
 
 /// Authentication mechanism used by the current user.
 #[derive(Debug, Clone)]
@@ -1378,7 +1381,6 @@ pub struct AuthManager {
     refresh_lock: Semaphore,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
     account_pool: Option<Arc<AccountPoolManager>>,
-    next_account_pool_bucket: RwLock<Option<AccountPoolBucket>>,
 }
 
 /// Configuration view required to construct a shared [`AuthManager`].
@@ -1462,7 +1464,6 @@ impl AuthManager {
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
             account_pool: None,
-            next_account_pool_bucket: RwLock::new(None),
         }
     }
 
@@ -1485,7 +1486,6 @@ impl AuthManager {
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
             account_pool: None,
-            next_account_pool_bucket: RwLock::new(None),
         })
     }
 
@@ -1507,7 +1507,6 @@ impl AuthManager {
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
             account_pool: None,
-            next_account_pool_bucket: RwLock::new(None),
         })
     }
 
@@ -1529,7 +1528,6 @@ impl AuthManager {
                 Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
             )),
             account_pool: None,
-            next_account_pool_bucket: RwLock::new(None),
         })
     }
 
@@ -1568,9 +1566,6 @@ impl AuthManager {
             return Some(auth);
         }
         if let Some(account_pool) = self.account_pool.as_ref() {
-            if let Some(bucket) = self.take_next_account_pool_bucket() {
-                return account_pool.auth_for_bucket(bucket).await;
-            }
             return account_pool.auth().await;
         }
 
@@ -1580,9 +1575,8 @@ impl AuthManager {
     /// Returns auth selected from the requested account-pool bucket.
     pub async fn auth_for_account_pool_bucket(
         &self,
-        bucket: AccountPoolBucket,
+        bucket: AccountPoolUsageBucket,
     ) -> Option<CodexAuth> {
-        let _ = self.take_next_account_pool_bucket();
         if let Some(auth) = self.resolve_external_api_key_auth().await {
             return Some(auth);
         }
@@ -1593,12 +1587,34 @@ impl AuthManager {
         self.auth_unpooled_cached().await
     }
 
+    pub async fn auth_for_account_pool_selection_context(
+        &self,
+        context: AccountPoolSelectionContext,
+    ) -> Option<AccountPoolAuthSelection> {
+        if self.resolve_external_api_key_auth().await.is_some() {
+            return None;
+        }
+        let account_pool = self.account_pool.as_ref()?;
+        account_pool.auth_for_context(context).await
+    }
+
     pub(crate) async fn auth_unpooled_cached(&self) -> Option<CodexAuth> {
         let auth = self.auth_cached_unpooled()?;
         if Self::should_refresh_proactively(&auth)
             && let Err(err) = self.refresh_token().await
         {
             tracing::error!("Failed to refresh token: {}", err);
+            return Some(auth);
+        }
+        self.auth_cached_unpooled()
+    }
+
+    pub(crate) async fn auth_unpooled_cached_for_account_pool_member(&self) -> Option<CodexAuth> {
+        let auth = self.auth_cached_unpooled()?;
+        if Self::should_refresh_proactively(&auth)
+            && let Err(err) = self.refresh_token_unpooled().await
+        {
+            tracing::error!("Failed to refresh account pool member token: {}", err);
             return Some(auth);
         }
         self.auth_cached_unpooled()
@@ -1763,12 +1779,6 @@ impl AuthManager {
         self.account_pool.as_ref().and_then(|pool| pool.status())
     }
 
-    pub fn activate_cached_account_pool_auth(&self) -> Option<CodexAuth> {
-        self.account_pool
-            .as_deref()
-            .and_then(AccountPoolManager::activate_cached_auth)
-    }
-
     pub fn active_account_pool_member_id(&self) -> Option<String> {
         self.account_pool
             .as_ref()
@@ -1777,22 +1787,49 @@ impl AuthManager {
 
     pub fn mark_active_account_pool_member_exhausted(
         &self,
-        bucket: AccountPoolBucket,
+        bucket: AccountPoolUsageBucket,
         error: String,
     ) -> bool {
-        let has_available_member = self.account_pool.as_ref().is_some_and(|pool| {
+        self.account_pool.as_ref().is_some_and(|pool| {
             let has_available_member = pool.mark_active_exhausted(bucket, error.clone());
-            if bucket == AccountPoolBucket::Spark {
+            if bucket == AccountPoolUsageBucket::Spark {
                 // A Spark limit response can arrive after the regular auth path selected this
                 // member, so mark the regular bucket too to avoid immediately selecting it again.
-                pool.mark_active_exhausted(AccountPoolBucket::Regular, error);
+                pool.mark_active_exhausted(AccountPoolUsageBucket::Regular, error);
             }
             has_available_member
-        });
-        if has_available_member {
-            self.set_next_account_pool_bucket(bucket);
+        })
+    }
+
+    pub fn mark_account_pool_selection_exhausted(
+        &self,
+        selection: &AccountPoolAuthSelection,
+        bucket: AccountPoolUsageBucket,
+        error: String,
+    ) -> bool {
+        self.account_pool.as_ref().is_some_and(|pool| {
+            let has_available_member =
+                pool.mark_selection_exhausted(selection, bucket, error.clone());
+            if bucket == AccountPoolUsageBucket::Spark {
+                pool.mark_exhausted(
+                    &selection.account_id,
+                    AccountPoolUsageBucket::Regular,
+                    error,
+                );
+            }
+            has_available_member
+        })
+    }
+
+    pub fn record_account_pool_cache_hint(
+        &self,
+        bucket: AccountPoolUsageBucket,
+        affinity_key: String,
+        cache_hint: AccountPoolCacheHint,
+    ) {
+        if let Some(pool) = self.account_pool.as_ref() {
+            pool.record_cache_hint(bucket, affinity_key, cache_hint);
         }
-        has_available_member
     }
 
     pub async fn refresh_account_pool_usage(&self, pool_id: Option<&str>) {
@@ -1807,19 +1844,6 @@ impl AuthManager {
     ) -> Option<AccountPoolUsageRefreshReport> {
         let pool = self.account_pool.as_ref()?;
         Some(pool.refresh_usage_with_report(pool_id).await)
-    }
-
-    fn set_next_account_pool_bucket(&self, bucket: AccountPoolBucket) {
-        if let Ok(mut guard) = self.next_account_pool_bucket.write() {
-            *guard = Some(bucket);
-        }
-    }
-
-    fn take_next_account_pool_bucket(&self) -> Option<AccountPoolBucket> {
-        self.next_account_pool_bucket
-            .write()
-            .ok()
-            .and_then(|mut guard| guard.take())
     }
 
     pub fn is_external_chatgpt_auth_active(&self) -> bool {

@@ -822,9 +822,6 @@ impl AccountRequestProcessor {
         let do_refresh = params.refresh_token;
 
         self.refresh_token_if_requested(do_refresh).await;
-        if !do_refresh {
-            let _ = self.auth_manager.activate_cached_account_pool_auth();
-        }
 
         let provider = create_model_provider(
             self.config.model_provider.clone(),
@@ -967,7 +964,7 @@ impl AccountRequestProcessor {
         ),
         JSONRPCErrorError,
     > {
-        let Some(auth) = self.auth_manager.auth().await else {
+        let Some(auth) = self.auth_manager.auth_cached() else {
             return Err(invalid_request(
                 "codex account authentication required to read rate limits",
             ));

@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crate::SkillInjections;
+use crate::account_pool_failover::AccountPoolFailoverDecision;
+use crate::account_pool_failover::decide_account_pool_failover;
 use crate::build_skill_injections;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
@@ -76,7 +78,6 @@ use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputEnvironment;
 use codex_features::Feature;
 use codex_git_utils::get_git_repo_root_with_fs;
-use codex_login::AccountPoolBucket;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
@@ -97,8 +98,6 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::PlanDeltaEvent;
-use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::ReasoningContentDeltaEvent;
 use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::TokenUsage;
@@ -124,9 +123,6 @@ use tracing::instrument;
 use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
-
-const FIVE_HOUR_LIMIT_WINDOW_MINUTES: i64 = 5 * 60;
-const WEEKLY_LIMIT_WINDOW_MINUTES: i64 = 7 * 24 * 60;
 
 /// Takes initial turn input and runs a loop where, at each sampling request,
 /// the model replies with either:
@@ -1061,27 +1057,23 @@ async fn run_sampling_request(
                     sess.update_rate_limits(&turn_context, *rate_limits).await;
                 }
                 if !visible_output_started {
-                    let err = CodexErr::UsageLimitReached(e);
-                    if mark_active_pool_member_exhausted_for_usage_limit(&sess, &err) {
+                    if mark_pool_member_exhausted_for_usage_limit(
+                        &sess,
+                        client_session,
+                        &e,
+                        visible_output_started,
+                    ) {
                         retries = 0;
                         continue;
                     }
-                    return Err(err);
+                    return Err(CodexErr::UsageLimitReached(e));
                 }
                 return Err(CodexErr::UsageLimitReached(e));
             }
             Err(SamplingRequestFailure {
                 err: CodexErr::UsageNotIncluded,
-                visible_output_started,
+                visible_output_started: _,
             }) => {
-                if !visible_output_started {
-                    let err = CodexErr::UsageNotIncluded;
-                    if mark_active_pool_member_exhausted_for_usage_limit(&sess, &err) {
-                        retries = 0;
-                        continue;
-                    }
-                    return Err(err);
-                }
                 return Err(CodexErr::UsageNotIncluded);
             }
             Err(SamplingRequestFailure { err, .. }) => err,
@@ -1218,49 +1210,27 @@ pub(crate) async fn built_tools(
     )))
 }
 
-fn mark_active_pool_member_exhausted_for_usage_limit(sess: &Session, err: &CodexErr) -> bool {
-    let bucket = match err {
-        CodexErr::UsageLimitReached(error) if usage_limit_should_switch_account(error) => error
-            .rate_limits
-            .as_ref()
-            .and_then(|snapshot| snapshot.limit_id.as_deref())
-            .map(|limit_id| {
-                if limit_id == "codex" {
-                    AccountPoolBucket::Regular
-                } else {
-                    AccountPoolBucket::Spark
-                }
-            })
-            .unwrap_or(AccountPoolBucket::Regular),
-        _ => return false,
+fn mark_pool_member_exhausted_for_usage_limit(
+    sess: &Session,
+    client_session: &ModelClientSession,
+    error: &UsageLimitReachedError,
+    visible_output_started: bool,
+) -> bool {
+    let decision = decide_account_pool_failover(
+        client_session.account_pool_selection(),
+        error,
+        visible_output_started,
+        chrono::Utc::now(),
+    );
+    let AccountPoolFailoverDecision::Switch(bucket) = decision else {
+        return false;
+    };
+    let Some(selection) = client_session.account_pool_selection() else {
+        return false;
     };
     sess.services
         .auth_manager
-        .mark_active_account_pool_member_exhausted(bucket, err.to_string())
-}
-
-fn usage_limit_should_switch_account(error: &UsageLimitReachedError) -> bool {
-    error
-        .rate_limits
-        .as_deref()
-        .is_some_and(rate_limit_has_exhausted_pool_switch_window)
-}
-
-fn rate_limit_has_exhausted_pool_switch_window(snapshot: &RateLimitSnapshot) -> bool {
-    [snapshot.primary.as_ref(), snapshot.secondary.as_ref()]
-        .into_iter()
-        .flatten()
-        .any(rate_limit_window_allows_pool_switch)
-}
-
-fn rate_limit_window_allows_pool_switch(window: &RateLimitWindow) -> bool {
-    window.used_percent >= 100.0
-        && window.window_minutes.is_some_and(|minutes| {
-            matches!(
-                minutes,
-                FIVE_HOUR_LIMIT_WINDOW_MINUTES | WEEKLY_LIMIT_WINDOW_MINUTES
-            )
-        })
+        .mark_account_pool_selection_exhausted(selection, bucket, error.to_string())
 }
 
 fn response_item_starts_visible_output(item: &ResponseItem) -> bool {
@@ -2209,6 +2179,9 @@ async fn try_run_sampling_request(
                     &mut assistant_message_stream_parsers,
                 )
                 .await;
+                if let Some(token_usage) = token_usage.as_ref() {
+                    client_session.record_account_pool_cache_hint(token_usage);
+                }
                 sess.record_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
                 let accounting_usage = token_usage.clone().unwrap_or_default();

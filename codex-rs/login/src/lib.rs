@@ -17,9 +17,15 @@ pub use server::ServerOptions;
 pub use server::ShutdownHandle;
 pub use server::run_login_server;
 
+pub use auth::AccountPoolAuthSelection;
 pub use auth::AccountPoolBucket;
+pub use auth::AccountPoolCacheHeat;
+pub use auth::AccountPoolCacheHint;
 pub use auth::AccountPoolMemberStatus;
+pub use auth::AccountPoolOperationKind;
+pub use auth::AccountPoolSelectionContext;
 pub use auth::AccountPoolStatus;
+pub use auth::AccountPoolUsageBucket;
 pub use auth::AccountPoolUsageRefreshPoolReport;
 pub use auth::AccountPoolUsageRefreshProblem;
 pub use auth::AccountPoolUsageRefreshReport;

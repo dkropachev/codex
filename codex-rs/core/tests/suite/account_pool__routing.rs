@@ -1,5 +1,8 @@
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 use anyhow::Result;
 use base64::Engine as _;
@@ -65,17 +68,81 @@ async fn account_pool_retries_spark_usage_limit_with_next_member() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn account_pool_does_not_retry_short_usage_limit_with_next_member() -> Result<()> {
+async fn account_pool_retries_short_usage_limit_when_wait_exceeds_cache_cost() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
     mount_usage_limit_response(&server, "work-pro", "codex", /*window_minutes*/ 15).await;
+    mount_success_response(&server, "personal-pro").await;
 
     let codex = build_account_pool_codex(&server).await?.codex;
     submit_prompt(&codex, "short usage limit").await?;
+    wait_for_turn_complete(&codex).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn account_pool_keeps_hot_cache_for_short_wait_usage_limit() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    let work_requests = Arc::new(AtomicUsize::new(0));
+    let personal_requests = Arc::new(AtomicUsize::new(0));
+    let responder_work_requests = Arc::clone(&work_requests);
+    let responder_personal_requests = Arc::clone(&personal_requests);
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(move |request: &wiremock::Request| {
+            match request
+                .headers
+                .get("ChatGPT-Account-ID")
+                .and_then(|value| value.to_str().ok())
+            {
+                Some("work-pro") => {
+                    let count = responder_work_requests.fetch_add(1, Ordering::SeqCst);
+                    if count == 0 {
+                        ResponseTemplate::new(200)
+                            .insert_header("content-type", "text/event-stream")
+                            .set_body_string(sse(vec![
+                                ev_response_created("resp-hot"),
+                                ev_assistant_message("msg-hot", "warm cache"),
+                                ev_completed_with_cached_tokens("resp-hot"),
+                            ]))
+                    } else {
+                        usage_limit_response_with_reset(
+                            "codex",
+                            /*window_minutes*/ 15,
+                            /*reset_after_seconds*/ 5 * 60,
+                        )
+                    }
+                }
+                Some("personal-pro") => {
+                    responder_personal_requests.fetch_add(1, Ordering::SeqCst);
+                    ResponseTemplate::new(200)
+                        .insert_header("content-type", "text/event-stream")
+                        .set_body_string(sse(vec![
+                            ev_response_created("resp-unexpected"),
+                            ev_assistant_message("msg-unexpected", "unexpected"),
+                            ev_completed("resp-unexpected"),
+                        ]))
+                }
+                _ => ResponseTemplate::new(400),
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let codex = build_account_pool_codex(&server).await?.codex;
+    submit_prompt(&codex, "create hot cache").await?;
+    wait_for_turn_complete(&codex).await;
+
+    submit_prompt(&codex, "short wait limit").await?;
     let error = wait_for_error(&codex).await;
     wait_for_turn_complete(&codex).await;
 
     assert!(error.to_lowercase().contains("usage limit"));
+    assert_eq!(work_requests.load(Ordering::SeqCst), 2);
+    assert_eq!(personal_requests.load(Ordering::SeqCst), 0);
 
     Ok(())
 }
@@ -235,6 +302,18 @@ async fn mount_success_response(server: &MockServer, account_id: &str) {
 }
 
 fn usage_limit_response(limit_id: &str, window_minutes: i64) -> ResponseTemplate {
+    usage_limit_response_with_reset(
+        limit_id,
+        window_minutes,
+        /*reset_after_seconds*/ 60 * 60,
+    )
+}
+
+fn usage_limit_response_with_reset(
+    limit_id: &str,
+    window_minutes: i64,
+    reset_after_seconds: i64,
+) -> ResponseTemplate {
     let mut response = ResponseTemplate::new(429)
         .insert_header("x-codex-active-limit", limit_id)
         .insert_header("x-codex-primary-used-percent", "100.0")
@@ -243,7 +322,7 @@ fn usage_limit_response(limit_id: &str, window_minutes: i64) -> ResponseTemplate
             "error": {
                 "type": "usage_limit_reached",
                 "message": "usage limit reached",
-                "resets_at": Utc::now().timestamp() + 3600,
+                "resets_at": Utc::now().timestamp() + reset_after_seconds,
                 "plan_type": "pro"
             }
         }));
@@ -256,6 +335,24 @@ fn usage_limit_response(limit_id: &str, window_minutes: i64) -> ResponseTemplate
             );
     }
     response
+}
+
+fn ev_completed_with_cached_tokens(id: &str) -> serde_json::Value {
+    json!({
+        "type": "response.completed",
+        "response": {
+            "id": id,
+            "usage": {
+                "input_tokens": 20_000,
+                "input_tokens_details": {
+                    "cached_tokens": 12_000
+                },
+                "output_tokens": 0,
+                "output_tokens_details": null,
+                "total_tokens": 20_000
+            }
+        }
+    })
 }
 
 async fn submit_prompt(codex: &codex_core::CodexThread, text: &str) -> Result<()> {
