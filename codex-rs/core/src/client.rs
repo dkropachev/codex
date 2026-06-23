@@ -63,6 +63,11 @@ use codex_api::build_session_headers;
 use codex_api::create_text_param_for_request;
 use codex_api::response_create_client_metadata;
 use codex_app_server_protocol::AuthMode;
+use codex_login::AccountPoolAuthSelection;
+use codex_login::AccountPoolCacheHint;
+use codex_login::AccountPoolOperationKind;
+use codex_login::AccountPoolSelectionContext;
+use codex_login::AccountPoolUsageBucket;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
@@ -80,6 +85,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
@@ -192,6 +198,7 @@ struct ModelClientState {
 /// share the same auth/provider setup flow.
 struct CurrentClientSetup {
     auth: Option<CodexAuth>,
+    account_pool_selection: Option<AccountPoolAuthSelection>,
     api_provider: ApiProvider,
     api_auth: SharedAuthProvider,
     websocket_auth_identity: WebsocketAuthIdentity,
@@ -258,6 +265,7 @@ pub struct ModelClient {
 pub struct ModelClientSession {
     client: ModelClient,
     websocket_session: WebsocketSession,
+    last_account_pool_selection: Option<AccountPoolAuthSelection>,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -435,6 +443,7 @@ impl ModelClient {
         ModelClientSession {
             client: self.clone(),
             websocket_session: self.take_cached_websocket_session(),
+            last_account_pool_selection: None,
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -518,7 +527,13 @@ impl ModelClient {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
         }
-        let client_setup = self.current_client_setup(Some(&model_info.slug)).await?;
+        let client_setup = self
+            .current_client_setup(
+                Some(&model_info.slug),
+                AccountPoolOperationKind::Compaction,
+                /*pinned_selection*/ None,
+            )
+            .await?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = Self::build_request_telemetry(
             session_telemetry,
@@ -604,7 +619,13 @@ impl ModelClient {
     ) -> Result<RealtimeWebrtcCallStart> {
         // Create the media call over HTTP first, then retain matching auth so realtime can attach
         // the server-side control WebSocket to the call id from that HTTP response.
-        let client_setup = self.current_client_setup(/*model*/ None).await?;
+        let client_setup = self
+            .current_client_setup(
+                /*model*/ None,
+                AccountPoolOperationKind::RealtimeSetup,
+                /*pinned_selection*/ None,
+            )
+            .await?;
         if let Some(header_value) = self.generate_attestation_header_for().await {
             extra_headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
         }
@@ -642,7 +663,13 @@ impl ModelClient {
             return Ok(Vec::new());
         }
 
-        let client_setup = self.current_client_setup(Some(&model_info.slug)).await?;
+        let client_setup = self
+            .current_client_setup(
+                Some(&model_info.slug),
+                AccountPoolOperationKind::MemorySummarize,
+                /*pinned_selection*/ None,
+            )
+            .await?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = Self::build_request_telemetry(
             session_telemetry,
@@ -882,8 +909,25 @@ impl ModelClient {
     ///
     /// This centralizes setup used by both prewarm and normal request paths so they stay in
     /// lockstep when auth/provider resolution changes.
-    async fn current_client_setup(&self, model: Option<&str>) -> Result<CurrentClientSetup> {
-        let auth = self.state.provider.auth_for_model(model).await;
+    async fn current_client_setup(
+        &self,
+        model: Option<&str>,
+        operation_kind: AccountPoolOperationKind,
+        pinned_selection: Option<&AccountPoolAuthSelection>,
+    ) -> Result<CurrentClientSetup> {
+        let selection_context = AccountPoolSelectionContext {
+            bucket: AccountPoolUsageBucket::Regular,
+            affinity_key: self.prompt_cache_key(),
+            operation_kind,
+            cache_hint: None,
+            pinned_account_id: pinned_selection.map(|selection| selection.account_id.clone()),
+        };
+        let auth_selection = self
+            .state
+            .provider
+            .auth_selection_for_model(model, Some(selection_context))
+            .await;
+        let auth = auth_selection.auth;
         let api_provider = self
             .state
             .provider
@@ -892,6 +936,7 @@ impl ModelClient {
         let api_auth = self.state.provider.api_auth_for_auth(auth.as_ref()).await?;
         Ok(CurrentClientSetup {
             websocket_auth_identity: WebsocketAuthIdentity::new(auth.as_ref()),
+            account_pool_selection: auth_selection.account_pool_selection,
             auth,
             api_provider,
             api_auth,
@@ -1036,6 +1081,33 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    pub(crate) fn account_pool_selection(&self) -> Option<&AccountPoolAuthSelection> {
+        self.last_account_pool_selection.as_ref()
+    }
+
+    pub(crate) fn record_account_pool_cache_hint(&self, token_usage: &TokenUsage) {
+        let Some(selection) = self.last_account_pool_selection.as_ref() else {
+            return;
+        };
+        let Some(auth_manager) = self.client.state.provider.auth_manager() else {
+            return;
+        };
+        auth_manager.record_account_pool_cache_hint(
+            selection.bucket,
+            selection.affinity_key.clone(),
+            AccountPoolCacheHint {
+                input_tokens: token_usage.input_tokens,
+                cached_input_tokens: token_usage.cached_input_tokens,
+            },
+        );
+    }
+
+    fn remember_account_pool_selection(&mut self, setup: &CurrentClientSetup) {
+        if let Some(selection) = setup.account_pool_selection.clone() {
+            self.last_account_pool_selection = Some(selection);
+        }
+    }
+
     pub(crate) fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.auth_identity = None;
@@ -1178,13 +1250,18 @@ impl ModelClientSession {
 
         let client_setup = self
             .client
-            .current_client_setup(Some(&model_info.slug))
+            .current_client_setup(
+                Some(&model_info.slug),
+                AccountPoolOperationKind::Prewarm,
+                /*pinned_selection*/ None,
+            )
             .await
             .map_err(|err| {
                 ApiError::Stream(format!(
                     "failed to build websocket prewarm client setup: {err}"
                 ))
             })?;
+        self.remember_account_pool_selection(&client_setup);
         if self.websocket_session.connection.is_some()
             && self.websocket_session.auth_identity.as_ref()
                 == Some(&client_setup.websocket_auth_identity)
@@ -1326,7 +1403,7 @@ impl ModelClientSession {
         )
     )]
     async fn stream_responses_api(
-        &self,
+        &mut self,
         prompt: &Prompt,
         model_info: &ModelInfo,
         session_telemetry: &SessionTelemetry,
@@ -1341,11 +1418,20 @@ impl ModelClientSession {
             .as_ref()
             .map(AuthManager::unauthorized_recovery);
         let mut pending_retry = PendingUnauthorizedRetry::default();
+        let mut pinned_selection = None;
         loop {
             let client_setup = self
                 .client
-                .current_client_setup(Some(&model_info.slug))
+                .current_client_setup(
+                    Some(&model_info.slug),
+                    AccountPoolOperationKind::Stream,
+                    pinned_selection.as_ref(),
+                )
                 .await?;
+            if pinned_selection.is_none() {
+                pinned_selection = client_setup.account_pool_selection.clone();
+            }
+            self.remember_account_pool_selection(&client_setup);
             let transport = ReqwestTransport::new(build_reqwest_client());
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
@@ -1464,11 +1550,25 @@ impl ModelClientSession {
             .as_ref()
             .map(AuthManager::unauthorized_recovery);
         let mut pending_retry = PendingUnauthorizedRetry::default();
+        let mut pinned_selection = None;
         loop {
+            let operation_kind = if warmup {
+                AccountPoolOperationKind::Prewarm
+            } else {
+                AccountPoolOperationKind::Stream
+            };
             let client_setup = self
                 .client
-                .current_client_setup(Some(&model_info.slug))
+                .current_client_setup(
+                    Some(&model_info.slug),
+                    operation_kind,
+                    pinned_selection.as_ref(),
+                )
                 .await?;
+            if pinned_selection.is_none() {
+                pinned_selection = client_setup.account_pool_selection.clone();
+            }
+            self.remember_account_pool_selection(&client_setup);
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 client_setup.api_auth.as_ref(),

@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
+use codex_login::AccountPoolSelectionContext;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
@@ -20,6 +21,7 @@ use codex_protocol::error::Result;
 use codex_protocol::openai_models::ModelsResponse;
 
 use crate::provider::ModelProvider;
+use crate::provider::ModelProviderAuthSelection;
 use crate::provider::ProviderAccountResult;
 use crate::provider::ProviderAccountState;
 use crate::provider::ProviderCapabilities;
@@ -75,6 +77,17 @@ impl ModelProvider for AmazonBedrockModelProvider {
 
     async fn auth(&self) -> Option<CodexAuth> {
         None
+    }
+
+    async fn auth_selection_for_model(
+        &self,
+        _model: Option<&str>,
+        _context: Option<AccountPoolSelectionContext>,
+    ) -> ModelProviderAuthSelection {
+        ModelProviderAuthSelection {
+            auth: None,
+            account_pool_selection: None,
+        }
     }
 
     fn account_state(&self) -> ProviderAccountResult {

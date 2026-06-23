@@ -10,10 +10,18 @@ use super::X_OPENAI_SUBAGENT_HEADER;
 use crate::AttestationContext;
 use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
+use base64::Engine as _;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
+use codex_config::config_toml::AccountPoolDefinitionToml;
+use codex_config::config_toml::AccountPoolPolicyToml;
+use codex_config::config_toml::AccountPoolToml;
+use codex_config::types::AuthCredentialsStoreMode;
+use codex_login::AccountPoolOperationKind;
+use codex_login::AccountPoolUsageBucket;
 use codex_login::AuthManager;
+use codex_login::AuthManagerConfig;
 use codex_login::CodexAuth;
 use codex_model_provider::BearerAuthProvider;
 use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
@@ -41,6 +49,8 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
+use std::fs;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -59,6 +69,12 @@ use tracing_subscriber::layer::Context as LayerContext;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
     test_model_client_with_parent(session_source, /*parent_thread_id*/ None)
@@ -128,6 +144,34 @@ fn test_session_telemetry() -> SessionTelemetry {
         "test-terminal".to_string(),
         SessionSource::Cli,
     )
+}
+
+struct AccountPoolClientTestConfig {
+    codex_home: PathBuf,
+    chatgpt_base_url: String,
+    account_pool: AccountPoolToml,
+}
+
+impl AuthManagerConfig for AccountPoolClientTestConfig {
+    fn codex_home(&self) -> PathBuf {
+        self.codex_home.clone()
+    }
+
+    fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode {
+        AuthCredentialsStoreMode::File
+    }
+
+    fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {
+        None
+    }
+
+    fn chatgpt_base_url(&self) -> String {
+        self.chatgpt_base_url.clone()
+    }
+
+    fn account_pool(&self) -> Option<AccountPoolToml> {
+        Some(self.account_pool.clone())
+    }
 }
 
 #[derive(Default)]
@@ -340,6 +384,164 @@ async fn summarize_memories_returns_empty_for_empty_input() {
         .await
         .expect("empty summarize request should succeed");
     assert_eq!(output.len(), 0);
+}
+
+#[tokio::test]
+async fn current_client_setup_honors_account_pool_pins_for_operation_kinds() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+
+    let write_member_auth = |account_id: &str, email: &str| -> anyhow::Result<()> {
+        let account_home = codex_home.path().join("accounts").join(account_id);
+        fs::create_dir_all(&account_home)?;
+        let encode = |value: serde_json::Value| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(serde_json::to_vec(&value).expect("serialize jwt part"))
+        };
+        let jwt = format!(
+            "{}.{}.sig",
+            encode(json!({"alg": "none"})),
+            encode(json!({
+                "email": email,
+                "https://api.openai.com/auth": {
+                    "chatgpt_plan_type": "pro",
+                    "chatgpt_account_id": account_id,
+                    "user_id": format!("user-{account_id}")
+                }
+            }))
+        );
+        let auth = json!({
+            "auth_mode": AuthMode::Chatgpt,
+            "tokens": {
+                "id_token": jwt,
+                "access_token": format!("access-{account_id}"),
+                "refresh_token": format!("refresh-{account_id}"),
+                "account_id": account_id,
+            },
+            "last_refresh": chrono::Utc::now(),
+        });
+        fs::write(
+            account_home.join("auth.json"),
+            serde_json::to_string_pretty(&auth)?,
+        )?;
+        Ok(())
+    };
+
+    write_member_auth("work-pro", "work@example.com")?;
+    write_member_auth("personal-pro", "personal@example.com")?;
+
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header("authorization", "Bearer access-work-pro"))
+        .and(header("chatgpt-account-id", "work-pro"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": { "used_percent": 90 }
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header("authorization", "Bearer access-personal-pro"))
+        .and(header("chatgpt-account-id", "personal-pro"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": { "used_percent": 10 }
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let account_pool = AccountPoolToml {
+        enabled: true,
+        default_pool: Some("codex-pro".to_string()),
+        pools: [(
+            "codex-pro".to_string(),
+            AccountPoolDefinitionToml {
+                provider: "openai".to_string(),
+                policy: AccountPoolPolicyToml::LoadBalance,
+                accounts: vec!["work-pro".to_string(), "personal-pro".to_string()],
+            },
+        )]
+        .into(),
+    };
+    let config = AccountPoolClientTestConfig {
+        codex_home: codex_home.path().to_path_buf(),
+        chatgpt_base_url: server.uri(),
+        account_pool,
+    };
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+    let provider = ModelProviderInfo::create_openai_provider(Some("https://example.com/v1".into()));
+    let client = ModelClient::new(
+        Some(auth_manager),
+        SessionId::new(),
+        ThreadId::new(),
+        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+        provider,
+        SessionSource::Cli,
+        /*parent_thread_id*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+        /*attestation_provider*/ None,
+    );
+    let model_info = test_model_info();
+    let unpinned = client
+        .current_client_setup(
+            Some(&model_info.slug),
+            AccountPoolOperationKind::Stream,
+            /*pinned_selection*/ None,
+        )
+        .await?;
+    let mut pinned_selection = unpinned
+        .account_pool_selection
+        .clone()
+        .expect("load-balanced setup should select account-pool auth");
+    assert_eq!(pinned_selection.account_id, "personal-pro");
+    pinned_selection.account_id = "work-pro".to_string();
+
+    for operation_kind in [
+        AccountPoolOperationKind::Stream,
+        AccountPoolOperationKind::RealtimeSetup,
+        AccountPoolOperationKind::Prewarm,
+        AccountPoolOperationKind::Compaction,
+        AccountPoolOperationKind::MemorySummarize,
+    ] {
+        let model = match operation_kind {
+            AccountPoolOperationKind::RealtimeSetup => None,
+            AccountPoolOperationKind::Stream
+            | AccountPoolOperationKind::Prewarm
+            | AccountPoolOperationKind::Compaction
+            | AccountPoolOperationKind::MemorySummarize => Some(model_info.slug.as_str()),
+        };
+        let setup = client
+            .current_client_setup(model, operation_kind, Some(&pinned_selection))
+            .await?;
+        let selected = setup
+            .account_pool_selection
+            .expect("pinned setup should select account-pool auth");
+        assert_eq!(selected.account_id, "work-pro");
+        assert_eq!(selected.bucket, AccountPoolUsageBucket::Regular);
+        assert_eq!(
+            setup
+                .api_auth
+                .to_auth_headers()
+                .get("ChatGPT-Account-ID")
+                .and_then(|header| header.to_str().ok()),
+            Some("work-pro")
+        );
+    }
+
+    server.verify().await;
+    Ok(())
 }
 
 #[tokio::test]

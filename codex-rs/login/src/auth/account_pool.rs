@@ -14,10 +14,22 @@ use serde_json::Value;
 
 use crate::CodexAuth;
 
+use super::account_pool_selection::AccountPoolAssignmentKey;
+use super::account_pool_selection::AccountPoolAuthSelection;
+use super::account_pool_selection::AccountPoolCacheHeat;
+use super::account_pool_selection::AccountPoolCacheHint;
+use super::account_pool_selection::AccountPoolOperationKind;
+use super::account_pool_selection::AccountPoolSelectionContext;
+use super::account_pool_selection::AccountPoolUsageBucket;
+use super::account_pool_selection::DEFAULT_ACCOUNT_POOL_AFFINITY_KEY;
 use super::manager::AuthManager;
 use super::manager::RefreshTokenError;
 
 const USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const WARM_REBALANCE_LOW_REMAINING: u64 = 20;
+const WARM_REBALANCE_MATERIAL_ADVANTAGE: u64 = 25;
+const HOT_REBALANCE_LOW_REMAINING: u64 = 10;
+const HOT_REBALANCE_MATERIAL_ADVANTAGE: u64 = 50;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountPoolStatus {
@@ -59,12 +71,6 @@ pub struct AccountPoolUsageRefreshProblem {
     pub message: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AccountPoolBucket {
-    Regular,
-    Spark,
-}
-
 #[derive(Clone, Debug)]
 struct MemberUsage {
     regular_remaining: Option<u64>,
@@ -80,6 +86,12 @@ struct MemberRuntimeState {
     usage: Option<MemberUsage>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct AccountPoolAssignment {
+    account_id: String,
+    cache_hint: Option<AccountPoolCacheHint>,
+}
+
 #[derive(Debug)]
 struct AccountPoolMember {
     account_id: String,
@@ -92,7 +104,8 @@ struct AccountPool {
     definition: AccountPoolDefinitionToml,
     members: Vec<AccountPoolMember>,
     chatgpt_base_url: Option<String>,
-    active_account_id: RwLock<Option<String>>,
+    assignments: RwLock<HashMap<AccountPoolAssignmentKey, AccountPoolAssignment>>,
+    last_assignment_key: RwLock<Option<AccountPoolAssignmentKey>>,
     last_usage_refresh_attempt: RwLock<Option<Instant>>,
     state: RwLock<HashMap<String, MemberRuntimeState>>,
 }
@@ -142,7 +155,8 @@ impl AccountPoolManager {
                     definition,
                     members,
                     chatgpt_base_url: chatgpt_base_url.clone(),
-                    active_account_id: RwLock::new(None),
+                    assignments: RwLock::new(HashMap::new()),
+                    last_assignment_key: RwLock::new(None),
                     last_usage_refresh_attempt: RwLock::new(None),
                     state: RwLock::new(HashMap::new()),
                 },
@@ -156,30 +170,39 @@ impl AccountPoolManager {
     }
 
     pub async fn auth(&self) -> Option<CodexAuth> {
-        self.auth_for_bucket(AccountPoolBucket::Regular).await
+        self.auth_for_bucket(AccountPoolUsageBucket::Regular).await
     }
 
-    pub async fn auth_for_bucket(&self, bucket: AccountPoolBucket) -> Option<CodexAuth> {
+    pub async fn auth_for_bucket(&self, bucket: AccountPoolUsageBucket) -> Option<CodexAuth> {
+        self.auth_for_context(AccountPoolSelectionContext::default_for_bucket(bucket))
+            .await
+            .map(|selection| selection.auth)
+    }
+
+    pub async fn auth_for_context(
+        &self,
+        context: AccountPoolSelectionContext,
+    ) -> Option<AccountPoolAuthSelection> {
         let pool = self.pools.get(&self.default_pool)?;
         pool.refresh_stale_usage_for_load_balance().await;
-        pool.select_auth(bucket).await
+        pool.select_auth(context).await
     }
 
     pub fn auth_cached(&self) -> Option<CodexAuth> {
         let pool = self.pools.get(&self.default_pool)?;
-        pool.select_cached_auth(AccountPoolBucket::Regular)
+        pool.select_cached_auth(AccountPoolUsageBucket::Regular)
     }
 
     pub fn activate_cached_auth(&self) -> Option<CodexAuth> {
         let pool = self.pools.get(&self.default_pool)?;
-        pool.activate_cached_auth(AccountPoolBucket::Regular)
+        pool.activate_cached_auth(AccountPoolUsageBucket::Regular)
     }
 
     pub fn status(&self) -> Option<AccountPoolStatus> {
         self.pools.get(&self.default_pool).map(AccountPool::status)
     }
 
-    pub fn mark_exhausted(&self, account_id: &str, bucket: AccountPoolBucket, error: String) {
+    pub fn mark_exhausted(&self, account_id: &str, bucket: AccountPoolUsageBucket, error: String) {
         let Some(pool) = self.pools.get(&self.default_pool) else {
             return;
         };
@@ -192,7 +215,7 @@ impl AccountPoolManager {
             .and_then(AccountPool::active_account_id)
     }
 
-    pub fn mark_active_exhausted(&self, bucket: AccountPoolBucket, error: String) -> bool {
+    pub fn mark_active_exhausted(&self, bucket: AccountPoolUsageBucket, error: String) -> bool {
         let Some(pool) = self.pools.get(&self.default_pool) else {
             return false;
         };
@@ -201,6 +224,31 @@ impl AccountPoolManager {
         };
         pool.mark_exhausted(&account_id, bucket, error);
         pool.has_available_member(bucket)
+    }
+
+    pub fn mark_selection_exhausted(
+        &self,
+        selection: &AccountPoolAuthSelection,
+        bucket: AccountPoolUsageBucket,
+        error: String,
+    ) -> bool {
+        let Some(pool) = self.pools.get(&selection.pool_id) else {
+            return false;
+        };
+        pool.mark_exhausted(&selection.account_id, bucket, error);
+        pool.has_available_member(bucket)
+    }
+
+    pub fn record_cache_hint(
+        &self,
+        bucket: AccountPoolUsageBucket,
+        affinity_key: String,
+        cache_hint: AccountPoolCacheHint,
+    ) {
+        let Some(pool) = self.pools.get(&self.default_pool) else {
+            return;
+        };
+        pool.record_cache_hint(bucket, affinity_key, cache_hint);
     }
 
     pub async fn refresh_usage(&self, pool_id: Option<&str>) {
@@ -255,37 +303,98 @@ impl AccountPoolManager {
 }
 
 impl AccountPool {
-    async fn select_auth(&self, bucket: AccountPoolBucket) -> Option<CodexAuth> {
-        for member in self.select_members(bucket) {
-            let Some(auth) = member_auth(&member.account_id, &member.manager).await else {
-                self.set_last_error(&member.account_id, "missing credentials".to_string());
+    async fn select_auth(
+        &self,
+        mut context: AccountPoolSelectionContext,
+    ) -> Option<AccountPoolAuthSelection> {
+        if context.affinity_key.is_empty() {
+            context.affinity_key = DEFAULT_ACCOUNT_POOL_AFFINITY_KEY.to_string();
+        }
+        let assignment_key = self.assignment_key(context.bucket, &context.affinity_key);
+        let cache_hint = context
+            .cache_hint
+            .or_else(|| self.assignment_cache_hint(&assignment_key));
+        let member_ids = self.select_member_ids(&context, cache_hint);
+        for account_id in member_ids {
+            let Some((member_account_id, member_manager)) = self
+                .member(&account_id)
+                .map(|member| (member.account_id.clone(), Arc::clone(&member.manager)))
+            else {
+                continue;
+            };
+            let Some(auth) = member_auth(&member_account_id, &member_manager).await else {
+                self.set_last_error(&member_account_id, "missing credentials".to_string());
                 continue;
             };
             if !auth.is_chatgpt_auth() {
                 self.set_last_error(
-                    &member.account_id,
+                    &member_account_id,
                     "account pool members must use ChatGPT auth".to_string(),
                 );
                 continue;
             }
-            self.set_active_account_id(member.account_id.clone());
-            return Some(auth);
+            self.clear_last_error(&member_account_id);
+            self.set_assignment(
+                assignment_key.clone(),
+                member_account_id.clone(),
+                cache_hint,
+            );
+            return Some(AccountPoolAuthSelection {
+                auth,
+                pool_id: self.pool_id.clone(),
+                account_id: member_account_id,
+                bucket: context.bucket,
+                affinity_key: context.affinity_key,
+                cache_hint,
+            });
         }
         None
     }
 
-    fn select_cached_auth(&self, bucket: AccountPoolBucket) -> Option<CodexAuth> {
+    fn select_cached_auth(&self, bucket: AccountPoolUsageBucket) -> Option<CodexAuth> {
         self.cached_member_auth(bucket).map(|(_, auth)| auth)
     }
 
-    fn activate_cached_auth(&self, bucket: AccountPoolBucket) -> Option<CodexAuth> {
-        let (account_id, auth) = self.cached_member_auth(bucket)?;
-        self.set_active_account_id(account_id);
+    fn activate_cached_auth(&self, bucket: AccountPoolUsageBucket) -> Option<CodexAuth> {
+        let context = AccountPoolSelectionContext {
+            bucket,
+            affinity_key: DEFAULT_ACCOUNT_POOL_AFFINITY_KEY.to_string(),
+            operation_kind: AccountPoolOperationKind::Stream,
+            cache_hint: None,
+            pinned_account_id: None,
+        };
+        let assignment_key = self.assignment_key(context.bucket, &context.affinity_key);
+        let (account_id, auth) = self.cached_member_auth_for_context(&context)?;
+        self.set_assignment(
+            assignment_key.clone(),
+            account_id,
+            self.assignment_cache_hint(&assignment_key),
+        );
         Some(auth)
     }
 
-    fn cached_member_auth(&self, bucket: AccountPoolBucket) -> Option<(String, CodexAuth)> {
-        for member in self.select_members(bucket) {
+    fn cached_member_auth(&self, bucket: AccountPoolUsageBucket) -> Option<(String, CodexAuth)> {
+        self.cached_member_auth_for_context(&AccountPoolSelectionContext {
+            bucket,
+            affinity_key: DEFAULT_ACCOUNT_POOL_AFFINITY_KEY.to_string(),
+            operation_kind: AccountPoolOperationKind::Stream,
+            cache_hint: None,
+            pinned_account_id: None,
+        })
+    }
+
+    fn cached_member_auth_for_context(
+        &self,
+        context: &AccountPoolSelectionContext,
+    ) -> Option<(String, CodexAuth)> {
+        let assignment_key = self.assignment_key(context.bucket, &context.affinity_key);
+        let cache_hint = context
+            .cache_hint
+            .or_else(|| self.assignment_cache_hint(&assignment_key));
+        for account_id in self.select_member_ids(context, cache_hint) {
+            let Some(member) = self.member(&account_id) else {
+                continue;
+            };
             let Some(auth) = member.manager.auth_cached_unpooled() else {
                 continue;
             };
@@ -297,27 +406,59 @@ impl AccountPool {
         None
     }
 
-    fn select_members(&self, bucket: AccountPoolBucket) -> Vec<&AccountPoolMember> {
-        let mut members: Vec<_> = self
+    fn select_member_ids(
+        &self,
+        context: &AccountPoolSelectionContext,
+        cache_hint: Option<AccountPoolCacheHint>,
+    ) -> Vec<String> {
+        let bucket = context.bucket;
+        let mut account_ids: Vec<_> = self
             .members
             .iter()
             .filter(|member| !self.is_exhausted(&member.account_id, bucket))
+            .map(|member| member.account_id.clone())
             .collect();
-        if let Some(active_account_id) = self.active_account_id()
-            && let Some(active_index) = members
+        if let Some(pinned_account_id) = context.pinned_account_id.as_deref() {
+            return account_ids
+                .into_iter()
+                .filter(|account_id| account_id == pinned_account_id)
+                .collect();
+        }
+        let assignment_key = self.assignment_key(bucket, &context.affinity_key);
+        if let Some(assignment) = self.assignment(&assignment_key)
+            && let Some(active_index) = account_ids
                 .iter()
-                .position(|member| member.account_id == active_account_id)
+                .position(|account_id| account_id == &assignment.account_id)
         {
-            let active_member = members.remove(active_index);
-            members.insert(0, active_member);
-            return members;
+            if self.definition.policy != AccountPoolPolicyToml::LoadBalance {
+                let active_account_id = account_ids.remove(active_index);
+                account_ids.insert(0, active_account_id);
+                return account_ids;
+            }
+            match cache_hint
+                .map(|hint| hint.heat())
+                .unwrap_or(AccountPoolCacheHeat::Cold)
+            {
+                AccountPoolCacheHeat::Cold => {}
+                AccountPoolCacheHeat::Warm | AccountPoolCacheHeat::Hot
+                    if !self.should_rebalance_assignment(
+                        &assignment.account_id,
+                        bucket,
+                        cache_hint,
+                    ) =>
+                {
+                    let active_account_id = account_ids.remove(active_index);
+                    account_ids.insert(0, active_account_id);
+                    return account_ids;
+                }
+                AccountPoolCacheHeat::Warm | AccountPoolCacheHeat::Hot => {}
+            }
         }
         if self.definition.policy == AccountPoolPolicyToml::LoadBalance {
-            members.sort_by_key(|member| {
-                std::cmp::Reverse(self.remaining(&member.account_id, bucket))
-            });
+            account_ids
+                .sort_by_key(|account_id| std::cmp::Reverse(self.remaining(account_id, bucket)));
         }
-        members
+        account_ids
     }
 
     async fn refresh_stale_usage_for_load_balance(&self) {
@@ -457,11 +598,7 @@ impl AccountPool {
     }
 
     fn status(&self) -> AccountPoolStatus {
-        let active_account_id = self
-            .active_account_id
-            .read()
-            .ok()
-            .and_then(|guard| guard.clone());
+        let active_account_id = self.active_account_id();
         let members = self
             .members
             .iter()
@@ -503,12 +640,12 @@ impl AccountPool {
         }
     }
 
-    fn mark_exhausted(&self, account_id: &str, bucket: AccountPoolBucket, error: String) {
+    fn mark_exhausted(&self, account_id: &str, bucket: AccountPoolUsageBucket, error: String) {
         if let Ok(mut guard) = self.state.write() {
             let state = guard.entry(account_id.to_string()).or_default();
             match bucket {
-                AccountPoolBucket::Regular => state.regular_exhausted = true,
-                AccountPoolBucket::Spark => state.spark_exhausted = true,
+                AccountPoolUsageBucket::Regular => state.regular_exhausted = true,
+                AccountPoolUsageBucket::Spark => state.spark_exhausted = true,
             }
             state.last_error = Some(error);
         }
@@ -551,9 +688,66 @@ impl AccountPool {
         }
     }
 
-    fn set_active_account_id(&self, account_id: String) {
-        if let Ok(mut guard) = self.active_account_id.write() {
-            *guard = Some(account_id);
+    fn member(&self, account_id: &str) -> Option<&AccountPoolMember> {
+        self.members
+            .iter()
+            .find(|member| member.account_id == account_id)
+    }
+
+    fn assignment_key(
+        &self,
+        bucket: AccountPoolUsageBucket,
+        affinity_key: &str,
+    ) -> AccountPoolAssignmentKey {
+        AccountPoolAssignmentKey::new(self.pool_id.clone(), bucket, affinity_key.to_string())
+    }
+
+    fn assignment(&self, key: &AccountPoolAssignmentKey) -> Option<AccountPoolAssignment> {
+        self.assignments
+            .read()
+            .ok()
+            .and_then(|guard| guard.get(key).cloned())
+    }
+
+    fn assignment_cache_hint(
+        &self,
+        key: &AccountPoolAssignmentKey,
+    ) -> Option<AccountPoolCacheHint> {
+        self.assignment(key)
+            .and_then(|assignment| assignment.cache_hint)
+    }
+
+    fn set_assignment(
+        &self,
+        key: AccountPoolAssignmentKey,
+        account_id: String,
+        cache_hint: Option<AccountPoolCacheHint>,
+    ) {
+        if let Ok(mut guard) = self.assignments.write() {
+            guard.insert(
+                key.clone(),
+                AccountPoolAssignment {
+                    account_id,
+                    cache_hint,
+                },
+            );
+        }
+        if let Ok(mut guard) = self.last_assignment_key.write() {
+            *guard = Some(key);
+        }
+    }
+
+    fn record_cache_hint(
+        &self,
+        bucket: AccountPoolUsageBucket,
+        affinity_key: String,
+        cache_hint: AccountPoolCacheHint,
+    ) {
+        let key = self.assignment_key(bucket, &affinity_key);
+        if let Ok(mut guard) = self.assignments.write()
+            && let Some(assignment) = guard.get_mut(&key)
+        {
+            assignment.cache_hint = Some(cache_hint);
         }
     }
 
@@ -565,52 +759,101 @@ impl AccountPool {
     }
 
     fn active_account_id(&self) -> Option<String> {
-        self.active_account_id
+        let key = self
+            .last_assignment_key
             .read()
             .ok()
-            .and_then(|guard| guard.clone())
+            .and_then(|guard| guard.clone())?;
+        self.assignment(&key)
+            .map(|assignment| assignment.account_id)
     }
 
-    fn is_exhausted(&self, account_id: &str, bucket: AccountPoolBucket) -> bool {
+    fn is_exhausted(&self, account_id: &str, bucket: AccountPoolUsageBucket) -> bool {
         self.member_state(account_id)
             .is_some_and(|state| match bucket {
-                AccountPoolBucket::Regular => state.regular_exhausted,
-                AccountPoolBucket::Spark => state.spark_exhausted,
+                AccountPoolUsageBucket::Regular => state.regular_exhausted,
+                AccountPoolUsageBucket::Spark => state.spark_exhausted,
             })
     }
 
-    fn remaining(&self, account_id: &str, bucket: AccountPoolBucket) -> u64 {
+    fn remaining(&self, account_id: &str, bucket: AccountPoolUsageBucket) -> u64 {
+        self.fresh_remaining(account_id, bucket).unwrap_or(0)
+    }
+
+    fn fresh_remaining(&self, account_id: &str, bucket: AccountPoolUsageBucket) -> Option<u64> {
         self.member_state(account_id)
             .and_then(|state| state.usage)
             .filter(|usage| usage.last_refreshed.elapsed() <= USAGE_REFRESH_INTERVAL)
             .and_then(|usage| match bucket {
-                AccountPoolBucket::Regular => usage.regular_remaining,
-                AccountPoolBucket::Spark => usage.spark_remaining,
+                AccountPoolUsageBucket::Regular => usage.regular_remaining,
+                AccountPoolUsageBucket::Spark => usage.spark_remaining,
             })
-            .unwrap_or(0)
     }
 
-    fn has_available_member(&self, bucket: AccountPoolBucket) -> bool {
+    fn should_rebalance_assignment(
+        &self,
+        active_account_id: &str,
+        bucket: AccountPoolUsageBucket,
+        cache_hint: Option<AccountPoolCacheHint>,
+    ) -> bool {
+        let Some(active_remaining) = self.fresh_remaining(active_account_id, bucket) else {
+            return false;
+        };
+        let (low_remaining, material_advantage) = match cache_hint
+            .map(|hint| hint.heat())
+            .unwrap_or(AccountPoolCacheHeat::Cold)
+        {
+            AccountPoolCacheHeat::Cold => return true,
+            AccountPoolCacheHeat::Warm => (
+                WARM_REBALANCE_LOW_REMAINING,
+                WARM_REBALANCE_MATERIAL_ADVANTAGE,
+            ),
+            AccountPoolCacheHeat::Hot => (
+                HOT_REBALANCE_LOW_REMAINING,
+                HOT_REBALANCE_MATERIAL_ADVANTAGE,
+            ),
+        };
+        if active_remaining > low_remaining {
+            return false;
+        }
         self.members
             .iter()
-            .any(|member| !self.is_exhausted(&member.account_id, bucket))
+            .filter(|member| member.account_id != active_account_id)
+            .filter(|member| !self.is_exhausted(&member.account_id, bucket))
+            .filter_map(|member| self.fresh_remaining(&member.account_id, bucket))
+            .max()
+            .is_some_and(|best_remaining| {
+                best_remaining >= active_remaining.saturating_add(material_advantage)
+            })
+    }
+
+    fn has_available_member(&self, bucket: AccountPoolUsageBucket) -> bool {
+        self.members.iter().any(|member| {
+            !self.is_exhausted(&member.account_id, bucket)
+                && member
+                    .manager
+                    .auth_cached_unpooled()
+                    .is_some_and(|auth| auth.is_chatgpt_auth())
+        })
     }
 
     async fn refresh_active_token(&self) -> Result<(), RefreshTokenError> {
-        if self.active_account_id().is_none() {
-            let _ = self.activate_cached_auth(AccountPoolBucket::Regular);
-        }
-        let Some(account_id) = self.active_account_id() else {
+        let account_id = self.active_account_id().or_else(|| {
+            self.cached_member_auth(AccountPoolUsageBucket::Regular)
+                .map(|(account_id, _)| account_id)
+        });
+        let Some(account_id) = account_id else {
             return Ok(());
         };
-        let Some(member) = self
+        let Some(member_manager) = self
             .members
             .iter()
             .find(|member| member.account_id == account_id)
+            .map(|member| Arc::clone(&member.manager))
         else {
             return Ok(());
         };
-        member.manager.refresh_token_unpooled().await
+        member_manager.refresh_token_unpooled().await
     }
 }
 
@@ -800,7 +1043,7 @@ async fn fetch_usage_remaining(
 }
 
 async fn member_auth(account_id: &str, manager: &AuthManager) -> Option<CodexAuth> {
-    let auth = manager.auth_unpooled_cached().await;
+    let auth = manager.auth_unpooled_cached_for_account_pool_member().await;
     if auth.is_none() {
         tracing::debug!(account_id, "missing account pool member credentials");
     }
@@ -953,7 +1196,7 @@ mod tests {
         regular_pool.set_usage_for_testing("personal-pro", Some(90), Some(1), Instant::now());
 
         let regular = regular_pool
-            .auth_for_bucket(AccountPoolBucket::Regular)
+            .auth_for_bucket(AccountPoolUsageBucket::Regular)
             .await
             .expect("regular auth");
         assert_eq!(
@@ -971,7 +1214,7 @@ mod tests {
         spark_pool.set_usage_for_testing("personal-pro", Some(90), Some(1), Instant::now());
 
         let spark = spark_pool
-            .auth_for_bucket(AccountPoolBucket::Spark)
+            .auth_for_bucket(AccountPoolUsageBucket::Spark)
             .await
             .expect("spark auth");
         assert_eq!(
@@ -992,19 +1235,142 @@ mod tests {
             vec!["work-pro", "personal-pro"],
         )
         .await;
-        pool.set_usage_for_testing("work-pro", Some(10), Some(10), Instant::now());
+        pool.set_usage_for_testing("work-pro", Some(50), Some(50), Instant::now());
         pool.set_usage_for_testing("personal-pro", Some(90), Some(90), Instant::now());
 
         let account_pool = pool.pools.get("codex-pro").expect("pool");
-        account_pool.set_active_account_id("work-pro".to_string());
+        let affinity_key = "thread-hot";
+        account_pool.set_assignment(
+            account_pool.assignment_key(AccountPoolUsageBucket::Regular, affinity_key),
+            "work-pro".to_string(),
+            Some(AccountPoolCacheHint {
+                input_tokens: 20_000,
+                cached_input_tokens: 12_000,
+            }),
+        );
 
         let auth = pool
-            .auth_for_bucket(AccountPoolBucket::Regular)
+            .auth_for_context(AccountPoolSelectionContext {
+                bucket: AccountPoolUsageBucket::Regular,
+                affinity_key: affinity_key.to_string(),
+                operation_kind: AccountPoolOperationKind::Stream,
+                cache_hint: Some(AccountPoolCacheHint {
+                    input_tokens: 20_000,
+                    cached_input_tokens: 12_000,
+                }),
+                pinned_account_id: None,
+            })
             .await
             .expect("regular auth");
         assert_eq!(
-            auth.get_account_email().as_deref(),
+            auth.auth.get_account_email().as_deref(),
             Some("work@example.com")
+        );
+    }
+
+    #[tokio::test]
+    async fn load_balance_rebalances_warm_affinity_when_another_member_is_healthier() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        write_chatgpt_auth(codex_home.path(), "work-pro", "work@example.com");
+        write_chatgpt_auth(codex_home.path(), "personal-pro", "personal@example.com");
+
+        let pool = pool_manager(
+            codex_home.path(),
+            AccountPoolPolicyToml::LoadBalance,
+            vec!["work-pro", "personal-pro"],
+        )
+        .await;
+        pool.set_usage_for_testing("work-pro", Some(5), Some(5), Instant::now());
+        pool.set_usage_for_testing("personal-pro", Some(90), Some(90), Instant::now());
+        let account_pool = pool.pools.get("codex-pro").expect("pool");
+        let affinity_key = "thread-warm";
+        let cache_hint = AccountPoolCacheHint {
+            input_tokens: 10_000,
+            cached_input_tokens: 3_000,
+        };
+        account_pool.set_assignment(
+            account_pool.assignment_key(AccountPoolUsageBucket::Regular, affinity_key),
+            "work-pro".to_string(),
+            Some(cache_hint),
+        );
+
+        let auth = pool
+            .auth_for_context(AccountPoolSelectionContext {
+                bucket: AccountPoolUsageBucket::Regular,
+                affinity_key: affinity_key.to_string(),
+                operation_kind: AccountPoolOperationKind::Stream,
+                cache_hint: Some(cache_hint),
+                pinned_account_id: None,
+            })
+            .await
+            .expect("regular auth");
+
+        assert_eq!(
+            auth.auth.get_account_email().as_deref(),
+            Some("personal@example.com")
+        );
+    }
+
+    #[tokio::test]
+    async fn load_balance_stores_assignments_by_affinity_and_usage_bucket() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        write_chatgpt_auth(codex_home.path(), "work-pro", "work@example.com");
+        write_chatgpt_auth(codex_home.path(), "personal-pro", "personal@example.com");
+
+        let pool = pool_manager(
+            codex_home.path(),
+            AccountPoolPolicyToml::LoadBalance,
+            vec!["work-pro", "personal-pro"],
+        )
+        .await;
+        pool.set_usage_for_testing("work-pro", Some(90), Some(1), Instant::now());
+        pool.set_usage_for_testing("personal-pro", Some(1), Some(90), Instant::now());
+
+        let regular = pool
+            .auth_for_context(AccountPoolSelectionContext {
+                bucket: AccountPoolUsageBucket::Regular,
+                affinity_key: "thread-a".to_string(),
+                operation_kind: AccountPoolOperationKind::Stream,
+                cache_hint: None,
+                pinned_account_id: None,
+            })
+            .await
+            .expect("regular auth");
+        let spark = pool
+            .auth_for_context(AccountPoolSelectionContext {
+                bucket: AccountPoolUsageBucket::Spark,
+                affinity_key: "thread-a".to_string(),
+                operation_kind: AccountPoolOperationKind::Stream,
+                cache_hint: None,
+                pinned_account_id: None,
+            })
+            .await
+            .expect("spark auth");
+
+        assert_eq!(
+            regular.auth.get_account_email().as_deref(),
+            Some("work@example.com")
+        );
+        assert_eq!(
+            spark.auth.get_account_email().as_deref(),
+            Some("personal@example.com")
+        );
+        let account_pool = pool.pools.get("codex-pro").expect("pool");
+        assert_eq!(
+            account_pool
+                .assignment(
+                    &account_pool.assignment_key(AccountPoolUsageBucket::Regular, "thread-a")
+                )
+                .expect("regular assignment")
+                .account_id,
+            "work-pro"
+        );
+        assert_eq!(
+            account_pool
+                .assignment(&account_pool.assignment_key(AccountPoolUsageBucket::Spark, "thread-a"))
+                .expect("spark assignment")
+                .account_id,
+            "personal-pro"
         );
     }
 
@@ -1031,11 +1397,11 @@ mod tests {
         .await;
 
         let first_auth = pool
-            .auth_for_bucket(AccountPoolBucket::Regular)
+            .auth_for_bucket(AccountPoolUsageBucket::Regular)
             .await
             .expect("first auth should still select credentials");
         let second_auth = pool
-            .auth_for_bucket(AccountPoolBucket::Regular)
+            .auth_for_bucket(AccountPoolUsageBucket::Regular)
             .await
             .expect("second auth should still select credentials");
 
@@ -1138,7 +1504,7 @@ mod tests {
         .await;
         pool.mark_exhausted(
             "work-pro",
-            AccountPoolBucket::Regular,
+            AccountPoolUsageBucket::Regular,
             "usage limit reached".to_string(),
         );
 
@@ -1166,7 +1532,7 @@ mod tests {
         .await;
         pool.mark_exhausted(
             "work-pro",
-            AccountPoolBucket::Regular,
+            AccountPoolUsageBucket::Regular,
             "usage limit reached".to_string(),
         );
         pool.set_usage_for_testing(
@@ -1187,7 +1553,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mark_active_exhausted_reports_whether_bucket_has_fallback() {
+    async fn mark_active_exhausted_reports_whether_bucket_has_usable_fallback() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let pool = pool_manager(
             codex_home.path(),
@@ -1196,10 +1562,17 @@ mod tests {
         )
         .await;
         let account_pool = pool.pools.get("codex-pro").expect("pool");
-        account_pool.set_active_account_id("work-pro".to_string());
+        account_pool.set_assignment(
+            account_pool.assignment_key(
+                AccountPoolUsageBucket::Regular,
+                DEFAULT_ACCOUNT_POOL_AFFINITY_KEY,
+            ),
+            "work-pro".to_string(),
+            /*cache_hint*/ None,
+        );
 
-        assert!(pool.mark_active_exhausted(
-            AccountPoolBucket::Regular,
+        assert!(!pool.mark_active_exhausted(
+            AccountPoolUsageBucket::Regular,
             "usage limit reached".to_string()
         ));
         assert_eq!(

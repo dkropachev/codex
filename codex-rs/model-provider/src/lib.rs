@@ -11,6 +11,7 @@ pub use bearer_auth_provider::BearerAuthProvider as CoreAuthProvider;
 pub use codex_protocol::account::ProviderAccount;
 pub use models_endpoint::list_provider_models_uncached;
 pub use provider::ModelProvider;
+pub use provider::ModelProviderAuthSelection;
 pub use provider::ProviderAccountError;
 pub use provider::ProviderAccountResult;
 pub use provider::ProviderAccountState;

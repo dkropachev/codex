@@ -2,146 +2,308 @@
 
 ## Summary
 
-Account pool lets a ChatGPT-backed Codex session choose from a configured set of account IDs. It is
-for continuity after hard usage exhaustion, not for opportunistic account churn. Switching accounts
-can lose prompt-cache/token-cache benefit, so the active account must remain sticky until it reaches
-an allowed hard limit.
+Account pools let a user configure multiple Codex-capable ChatGPT accounts and use them as one
+logical account. Codex smooths quota load across eligible pool members while preserving prompt-cache
+locality for each conversation or session. Account choice is pinned for each model operation, and
+failover happens only at safe retry boundaries when the expected limit wait outweighs the cache cost.
 
 ## Behavior
 
-The account-pool behavior is defined by the configuration, selection, switching, refresh,
-WebSocket, and status contracts below.
+Account-pool behavior is defined by configuration, member selection, cache-aware switching, usage
+refresh, request routing, WebSocket identity, CLI maintenance, and status reporting.
+
+### Goals And Non-Goals
+
+Goals:
+
+- Group multiple named ChatGPT accounts into a single logical pool account.
+- Route model requests through a configured default pool when account pooling is enabled.
+- Support predictable member selection policies:
+  - `drain`: use the first available member until it is unavailable or exhausted.
+  - `load_balance`: choose healthy members for cold affinities and preserve cache locality for warm
+    or hot affinities unless another member is materially healthier.
+- Retry eligible usage-limit failures with the next available member before surfacing the error.
+- Keep account-pool state inspectable through CLI and app-server account APIs.
+- Preserve normal Codex auth behavior when account pooling is disabled.
+
+Non-goals:
+
+- Combining quota across accounts at the provider. A pool is client-side routing, not a server-side
+  entitlement merge.
+- Pooling API-key, Bedrock, local, or OSS provider accounts.
+- Sharing tokens between accounts.
+- Automatically creating or logging in pool member accounts.
+- Hiding selected-member diagnostics from clients. A logical pool account still exposes which
+  physical member was used.
+
+### Terminology
+
+- Pool: named logical account configured in `config.toml`.
+- Member: named account stored under `CODEX_HOME/accounts/<account-id>/auth.json`.
+- Default pool: pool used by ordinary Codex requests when pooling is enabled.
+- Usage bucket: usage class used for member selection and exhaustion tracking. Current buckets are
+  `regular` and `spark`.
+- Affinity key: cache-locality key derived from the existing `ModelClient::prompt_cache_key()`.
+- Assignment: process-local mapping from pool id, usage bucket, and affinity key to the selected
+  member and recent cache metadata.
+- Operation: one pinned ModelClient action, such as streaming, realtime setup, WebSocket prewarm,
+  compaction, or memory summarization.
 
 ### Configuration
 
-Account pool is enabled by `[account_pool]` config. A pool contains:
+Account pools are disabled by default. They are enabled only by explicit `[account_pool]`
+configuration.
 
-- `default_pool`: optional ID of the pool used by normal auth selection.
-- `pools.<pool_id>.provider`: currently expected to be OpenAI/ChatGPT-backed.
-- `pools.<pool_id>.policy`: `drain` or `load_balance`.
-- `pools.<pool_id>.accounts`: ordered account IDs, each loaded from `$CODEX_HOME/accounts/<id>/auth.json`.
+```toml
+[account_pool]
+enabled = true
+default_pool = "codex-pro"
 
-Without enabled account-pool config, Codex uses the normal single-account auth path.
+[account_pool.pools.codex-pro]
+provider = "openai"
+accounts = ["work-pro", "personal-pro"]
+policy = "load_balance"
+```
 
-### Default Behavior
+Config fields:
 
-- Normal model requests use the `Regular` bucket.
-- Models whose name selects Spark routing use the `Spark` bucket.
-- `drain` chooses the first configured non-exhausted account.
-- `load_balance` may choose the account with the most fresh remaining usage only when there is no
-  active account for the requested bucket.
-- Once an account is active, both `drain` and `load_balance` keep using it while it is available.
+- `account_pool.enabled`: required to activate the feature. `false` or absent means Codex uses the
+  normal single-account auth path.
+- `account_pool.default_pool`: optional when exactly one pool is configured. It must reference an
+  existing pool when present.
+- `account_pool.pools.<pool-id>.provider`: must be `openai` for the initial feature.
+- `account_pool.pools.<pool-id>.accounts`: ordered member account ids. Empty ids, path separators,
+  and parent-directory components are invalid. Order is significant for `drain` and tie-breaking.
+- `account_pool.pools.<pool-id>.policy`: `drain` or `load_balance`.
+
+Codex fails config loading with an actionable error when enabled pool config has no pools, a missing
+default pool reference, a non-OpenAI provider, an empty member list, or an unsafe member id.
+
+### Account Storage
+
+Pool members use the existing named-account storage layout:
+
+```text
+CODEX_HOME/
+  accounts/
+    work-pro/
+      auth.json
+    personal-pro/
+      auth.json
+```
+
+Pool members must use managed ChatGPT auth. Missing credentials or non-ChatGPT auth do not
+invalidate the whole pool; that member is unavailable and selection continues with the next eligible
+member. Member-level errors are surfaced in pool status.
+
+### Selection Semantics
+
+Common rules:
+
+- Normal model requests use the `regular` bucket.
+- Models or request paths that consume a distinct Spark limit use the `spark` bucket.
+- Selection is keyed by pool id, usage bucket, and affinity key. Different conversations, sessions,
+  and buckets can keep separate assignments.
+- Selection considers only members that are not exhausted for the request bucket.
+- Missing credentials or unsupported credentials make a member unavailable for selection and record a
+  member-level status error.
+- Selecting a member for a model operation stores or updates the assignment for that selection key.
+- Account choice is pinned for the entire ModelClient operation. Codex must not switch accounts
+  mid-stream, during realtime setup, during WebSocket prewarm, or after compaction or memory
+  summarization starts.
 - Cached auth reads are non-mutating: startup checks, provider capability checks, account display,
-  and other cached reads must not activate a pool member or switch the active member.
-- Missing credentials and non-ChatGPT credentials make a member unavailable for selection and
-  should be surfaced in pool status.
+  rate-limit reads, and other cached status reads must not activate a pool member or switch the
+  current assignment.
+- Ties preserve configured member order.
+- If no member can provide auth, Codex acts unauthenticated for that request and surfaces the same
+  class of auth error as the non-pool path.
 
-### Switching Rules
+`drain` selects the first configured member that is available and not exhausted for the request
+bucket. Once selected, that member remains assigned while it remains available.
 
-The active account may switch only when all of these are true:
+`load_balance` uses fresh usage data and cache heat to choose an available member:
+
+- Cold affinities prefer the member with the healthiest remaining usage.
+- Warm affinities keep the assigned member unless it is exhausted, unavailable, or materially worse
+  than another member.
+- Hot affinities strongly prefer the assigned member and rebalance only when the assigned member is
+  exhausted, unavailable, or significantly worse.
+
+Cache heat is derived from the latest known cached-token state for the affinity:
+
+- Cold: cached input tokens are below 1,000 and cached ratio is below 20%.
+- Warm: cache is present but not hot.
+- Hot: cached input tokens are at least 10,000 or cached ratio is at least 50%.
+
+### Usage Refresh
+
+For `load_balance`, Codex can refresh usage snapshots before auth selection when cached usage is
+missing or stale. Freshness is bounded and currently uses a short interval. The refresh is metadata
+for choosing or rebalancing an assignment; it must not switch accounts by itself.
+
+Usage refresh should:
+
+- Fetch all pool members in parallel when possible.
+- Use each member's own auth token and account id header.
+- Query the ChatGPT Codex usage endpoint for the configured backend base URL.
+- Compute remaining percentage from the most constrained available window.
+- Track separate remaining values for `regular` and `spark` buckets.
+- Bound persisted or in-memory status to small scalar values and short error strings.
+
+Usage refresh must not:
+
+- Persist access tokens outside each member's existing auth storage.
+- Log bearer tokens, refresh tokens, or raw auth payloads.
+- Block selection indefinitely when one member's usage endpoint hangs or fails.
+- Switch the current assignment by itself.
+
+Automatic refresh attempts are throttled to once per minute per pool. Failed refresh attempts count
+toward this throttle so an unavailable usage endpoint does not cause repeated refreshes on every auth
+selection. Manual refresh entry points may refresh all members and report partial failures, but
+manual refresh also does not switch an assignment by itself.
+
+### Request Routing
+
+When account pooling is enabled and a default pool exists:
+
+- Model requests use pool auth instead of default single-account auth.
+- Request auth and request headers are derived from the same selected member.
+- WebSocket prewarm and the normal request attempt each pin one selected member for that operation.
+- Unauthorized recovery and token refresh refresh the selected member, not the default account.
+- Non-model calls that require the same ChatGPT backend auth use the same auth manager path unless
+  they explicitly need the default account.
+
+When account pooling is disabled, no account-pool path affects auth selection, status reporting, or
+token refresh.
+
+### Exhaustion And Retry
+
+The selected member may switch on retry only when all of these are true:
 
 - A model request fails before visible assistant output starts.
 - The failure is `usage_limit_reached`.
-- A rate-limit window in the error is fully exhausted (`used_percent >= 100`).
-- The exhausted window duration is one of:
-  - 300 minutes (5-hour window)
-  - 10080 minutes (weekly window)
+- One or more rate-limit windows in the error are fully exhausted (`used_percent >= 100`).
+- The longest estimated wait from all exhausted windows exceeds the cache-cost threshold.
 - Another member is available for the same bucket.
+
+Codex evaluates every exhausted window reported by the error, not only named or currently known
+window sizes. If `resets_at` is present, Codex uses it to estimate wait time. If it is missing,
+Codex uses a bounded estimate from `window_minutes`.
+
+Cache-cost thresholds:
+
+- Cold cache: switch immediately.
+- Warm cache: switch when the estimated wait is at least 2 minutes.
+- Hot cache: switch when the estimated wait is at least 10 minutes.
 
 The pool must not switch for:
 
-- Short-window limits such as 15-minute or 60-minute windows.
 - `usage_not_included`.
-- Any usage error after visible assistant output has started.
-- Account status reads, rate-limit reads, startup prewarm, or agent/subagent startup.
-- Load-balance refresh results while the current active account is still available.
+- Any usage error after visible or durable assistant output has started.
+- Account status reads, rate-limit reads, cached auth/status inspection, or agent/subagent startup.
+- Load-balance refresh results by themselves.
 
-When a Spark bucket limit exhausts the active member, both Spark and Regular availability for that
-member are marked exhausted to avoid immediately reusing the same account on a regular retry path.
+Exhaustion state is process-local and may reset across Codex process restarts.
 
-### Usage Refresh Behavior
-
-For `load_balance`, Codex can refresh usage snapshots before auth selection when cached usage is
-stale. This refresh is metadata for choosing an initial account; it must not displace an active
-account that remains available.
-
-Usage refresh attempts are throttled to once per minute per pool. Failed refresh attempts count
-toward this throttle so an unavailable usage endpoint does not cause repeated refreshes on every
-auth selection.
-
-Manual refresh entry points may refresh all members and report partial failures. Manual refresh
-does not by itself switch the active account.
-
-### WebSocket Behavior
+### WebSocket Identity
 
 Responses WebSocket connections are opened with auth headers for the selected account. A live
 connection may be reused only while the selected auth identity matches the identity used to open the
 connection. If a permitted account-pool failover changes the selected account, the WebSocket session
-must drop incremental state and reconnect with the new account headers.
+must drop incremental request state and reconnect with the new account headers.
 
-### TUI And App-Server API
+### CLI Surface
 
-The TUI observes account-pool state through app-server v2 APIs and notifications.
+The CLI supports account-pool inspection and maintenance:
 
-#### `account/read`
+- `codex account list`: list default, named, and configured logical pool accounts.
+- `codex account limits`: show Codex usage limits for default, named, and pool member accounts.
+- `codex account refresh --pool <pool-id>`: refresh token and usage snapshots for all members in a
+  pool.
+- `codex login --account <account-id>`: allow logging in a named member account.
+- `codex logout --account <account-id>`: allow logging out a named member account.
 
-Returns the current provider account. For account pools, the account shape is:
+Pool member accounts should not be duplicated in account list output as ordinary named accounts when
+they are already represented by a configured pool.
+
+### App-Server And TUI Surface
+
+`account/read` returns a logical pool account when a pool is active:
 
 ```json
 {
-  "type": "chatgptPool",
-  "id": "codex-pro",
-  "activeAccountId": "work-pro",
-  "members": [
-    {
-      "id": "work-pro",
-      "email": "work@example.com",
-      "planType": "pro",
-      "active": true,
-      "unavailableReason": null,
-      "regularRemaining": 73,
-      "sparkRemaining": 100,
-      "lastError": null
-    }
-  ]
+  "account": {
+    "type": "chatgptPool",
+    "id": "codex-pro",
+    "activeAccountId": "work-pro",
+    "members": [
+      {
+        "id": "work-pro",
+        "email": "work@example.com",
+        "planType": "pro",
+        "active": true,
+        "unavailableReason": null,
+        "regularRemaining": 82,
+        "sparkRemaining": 100,
+        "lastError": null
+      }
+    ]
+  },
+  "requiresOpenaiAuth": true
 }
 ```
 
-`activeAccountId` may be null before the first mutating auth selection. Member emails, plans, and
-remaining usage values may be null when unavailable.
+Fields:
 
-#### `account/updated`
+- `activeAccountId`: selected member id, or `null` before any member is selected.
+- `members[].active`: true for the active member.
+- `members[].unavailableReason`: current reason this member cannot be selected, when known.
+- `members[].regularRemaining` and `members[].sparkRemaining`: latest known remaining usage
+  percentages, or `null` when unknown.
+- `members[].lastError`: latest member-level refresh or auth error.
 
-Notifies auth mode and plan type changes. This notification does not carry full pool member state;
-clients should use `account/read` for detailed pool display.
+`account/updated` notifies auth mode and plan type changes. It does not carry full pool member
+state; clients should use `account/read` for detailed pool display.
 
-#### `account/rateLimits/read`
+`account/rateLimits/read` returns the backward-compatible primary rate-limit snapshot and may return
+`rateLimitsByLimitId` keyed by metered `limit_id`, for example `codex`. This read must not switch the
+active pool member.
 
-Returns:
+`account/rateLimits/updated` carries sparse rolling rate-limit updates. Clients should merge
+available values into the latest known rate-limit state or refetch. Nullable metadata in an update
+does not clear previously observed metadata.
 
-- `rateLimits`: backward-compatible primary rate-limit snapshot.
-- `rateLimitsByLimitId`: optional map keyed by metered `limit_id`, for example `codex`.
+The TUI presents a pool as one ChatGPT account with pool metadata. It displays the active member when
+known and falls back to the first usable member for display only when no active member exists. Member
+count, unavailable count, remaining usage, and member errors are diagnostic status data and must not
+imply account switching.
 
-The TUI fetches this during startup/status refresh and converts the response into status snapshots.
-This read must not switch the active pool member.
+### Telemetry, Logging, Security, And Compatibility
 
-#### `account/rateLimits/updated`
+Logging should be enough to diagnose routing without exposing credentials:
 
-Carries sparse rolling rate-limit updates. The TUI should merge available values into the latest
-known rate-limit state or refetch. Nullable metadata in an update does not clear previously observed
-metadata.
+- Pool id.
+- Selected member id.
+- Selection policy.
+- Request bucket.
+- Exhaustion reason.
+- Usage refresh success or failure counts.
 
-### TUI Default Display Behavior
+Do not log access tokens, refresh tokens, raw auth JSON, or full usage endpoint bodies when they may
+contain account metadata beyond the bounded fields needed for diagnostics.
 
-- A ChatGPT pool appears as a ChatGPT account status with pool metadata.
-- The active member is displayed when known.
-- If there is no active member, the TUI falls back to the first usable member for display only.
-- Member count and unavailable count should be available to status surfaces.
-- Rate-limit status uses `account/rateLimits/read` and update notifications; it should not imply
-  account switching.
+Member ids are local config identifiers and must be validated before being used as path components.
+A pool must not let config escape `CODEX_HOME/accounts`. Each member's auth remains isolated in its
+own account directory, and pool status must not expose tokens or raw account payloads.
+
+Existing single-account users see no behavior change. Existing named-account auth files remain
+compatible. Sessions created with account pools resume without requiring historical selected-member
+state. If account-pool config is removed, Codex returns to default auth behavior.
 
 ## Entry Points
 
+- [codex-rs/config/src/config_toml.rs](../config/src/config_toml.rs)
+- [codex-rs/core/src/config/mod.rs](../core/src/config/mod.rs)
 - [codex-rs/login/src/auth/account_pool.rs](../login/src/auth/account_pool.rs)
 - [codex-rs/login/src/auth/manager.rs](../login/src/auth/manager.rs)
 - [codex-rs/core/src/session/turn.rs](../core/src/session/turn.rs)
@@ -152,8 +314,24 @@ metadata.
 - [codex-rs/tui/src/app/background_requests.rs](../tui/src/app/background_requests.rs)
 - [codex-rs/tui/src/app/event_dispatch.rs](../tui/src/app/event_dispatch.rs)
 - [codex-rs/cli/src/account_list.rs](../cli/src/account_list.rs)
+- [codex-rs/cli/src/account_refresh.rs](../cli/src/account_refresh.rs)
+- [codex-rs/cli/src/account_usage.rs](../cli/src/account_usage.rs)
 
 ## Subfeatures
+
+### Configuration And Account Storage
+
+#### Entry Points
+
+- [codex-rs/config/src/config_toml.rs](../config/src/config_toml.rs)
+- [codex-rs/core/src/config/mod.rs](../core/src/config/mod.rs)
+- [codex-rs/login/src/auth/manager.rs](../login/src/auth/manager.rs)
+
+#### Invariants
+
+- Account pools are opt-in and only apply when enabled config references a valid pool.
+- Pool member ids are validated before they are used as account storage path components.
+- Member credentials remain isolated in their named account directories.
 
 ### Account Selection And Failover
 
@@ -165,11 +343,16 @@ metadata.
 
 #### Invariants
 
-- Mutating model requests select a pool member according to the configured policy.
+- Mutating model operations select and pin a pool member according to the configured policy.
 - Cached account/status reads do not activate or switch pool members.
-- Allowed hard-limit failover retries with another member for the same bucket before visible
-  assistant output starts.
+- `load_balance` stores assignments separately by usage bucket and affinity key.
+- Warm and hot affinities keep their assigned member while the cache benefit outweighs the quota
+  benefit of switching.
+- Allowed generic usage-limit failover retries with another member for the same bucket before
+  visible assistant output starts.
 - Disallowed usage errors surface without retrying another member.
+- WebSocket request state is dropped and reconnected when a permitted failover changes account
+  identity.
 
 ### Usage Refresh
 
@@ -177,15 +360,16 @@ metadata.
 
 - [codex-rs/login/src/auth/account_pool.rs](../login/src/auth/account_pool.rs)
 - [codex-rs/app-server/src/request_processors/account_processor.rs](../app-server/src/request_processors/account_processor.rs)
+- [codex-rs/cli/src/account_refresh.rs](../cli/src/account_refresh.rs)
 
 #### Invariants
 
 - Automatic refresh is throttled per pool.
-- Refresh metadata can influence initial selection but does not displace an available active
-  account.
-- Manual refresh reports partial failures without switching the active account by itself.
+- Refresh metadata can influence selection but does not switch assignments by itself.
+- Manual refresh reports partial failures without switching assignments by itself.
+- Refresh status is bounded and excludes tokens or raw auth payloads.
 
-### TUI And App-Server Status
+### Account Status And CLI
 
 #### Entry Points
 
@@ -194,23 +378,29 @@ metadata.
 - [codex-rs/tui/src/app_server_session.rs](../tui/src/app_server_session.rs)
 - [codex-rs/tui/src/app/background_requests.rs](../tui/src/app/background_requests.rs)
 - [codex-rs/tui/src/app/event_dispatch.rs](../tui/src/app/event_dispatch.rs)
+- [codex-rs/cli/src/account_list.rs](../cli/src/account_list.rs)
+- [codex-rs/cli/src/account_usage.rs](../cli/src/account_usage.rs)
 
 #### Invariants
 
 - Pool status includes active member, member availability, remaining usage, and member errors when
   known.
 - Rate-limit status reads and updates do not select or switch pool members.
+- CLI account commands show configured pools and member diagnostics without duplicating pool members
+  as ordinary named accounts.
 
 ## Invariants
 
 - Account pools are used only for configured ChatGPT-backed account IDs.
-- Pool selection is sticky for a bucket while the active account remains available.
-- Account switching is limited to fully exhausted 5-hour or weekly `usage_limit_reached` windows
-  before visible assistant output starts.
+- Pool selection is tracked per pool id, usage bucket, and affinity key.
+- Account choice is pinned for each ModelClient operation.
+- `load_balance` prefers healthiest remaining quota for cold affinities and preserves warm or hot
+  cache locality unless another member is materially healthier.
+- Account switching is limited to fully exhausted `usage_limit_reached` windows before visible
+  assistant output starts, and only when the estimated wait exceeds cache cost.
+- `usage_not_included` surfaces without retrying another member.
 - Non-mutating auth/status reads do not activate or switch pool members.
-- Spark exhaustion also exhausts regular availability for the same account.
-- Usage refresh data can influence initial selection but does not displace an available active
-  member.
+- Usage refresh data can influence selection but does not switch assignments by itself.
 - WebSocket sessions reconnect when permitted failover changes the selected account identity.
 
 ## Test Places
@@ -219,15 +409,16 @@ metadata.
 
 #### Description
 
-Agent coverage should exercise mutating model requests selecting a pool member, sticky reuse,
-allowed hard-limit failover, and disallowed retry cases after visible output or unsupported usage
+Agent coverage should exercise mutating model requests selecting a pool member, cache-aware reuse,
+generic usage-limit failover, and disallowed retry cases after visible output or unsupported usage
 errors.
 
 #### Test cases
 
 - Regular usage-limit failover retries with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_retries_regular_usage_limit_with_next_member
 - Spark usage-limit failover retries with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_retries_spark_usage_limit_with_next_member
-- Short-window usage limits do not retry with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_does_not_retry_short_usage_limit_with_next_member
+- Short-window usage limits retry when wait exceeds cache cost: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_retries_short_usage_limit_when_wait_exceeds_cache_cost
+- Hot cache prevents short-wait failover: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_keeps_hot_cache_for_short_wait_usage_limit
 - Usage-not-included errors do not retry with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_does_not_retry_usage_not_included_with_next_member
 - Usage errors after visible output do not retry with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_does_not_retry_usage_error_after_visible_output
 - Usage-limit errors without account pool surface original error: codex-rs/core/tests/suite/account_pool__routing.rs:usage_limit_without_account_pool_surfaces_original_error
@@ -243,8 +434,7 @@ reporting, rate-limit status reads, and non-mutating status refresh behavior.
 
 - Account read reports active members: codex-rs/app-server/tests/suite/v2/account_pool__app_server_account.rs:get_account_with_chatgpt_pool
 - Account read reports unavailable members: codex-rs/app-server/tests/suite/v2/account_pool__app_server_account.rs:get_account_with_chatgpt_pool_reports_unavailable_members
-- Rate-limit status reads are non-mutating: missing
-- Rate-limit update notifications preserve previously observed metadata: missing
+- Rate-limit status reads are non-mutating: codex-rs/app-server/tests/suite/v2/account_pool__app_server_account.rs:get_account_rate_limits_read_does_not_activate_chatgpt_pool_member
 
 ### cli (main CLI command behavior)
 
@@ -263,38 +453,42 @@ the main Codex command surface.
 
 #### Description
 
-Full TUI coverage should exercise the live account status surface for active pool member display,
-unavailable member counts, and rate-limit refresh behavior without triggering account switching.
+Account-pool behavior is covered by focused TUI component tests and app-server API tests; it does
+not currently require a full terminal interaction test.
 
-#### Test cases
+#### Status
 
-- Live TUI status shows active pool member and unavailable member count: missing
-- Live TUI rate-limit refresh does not switch accounts: missing
+Not covered
 
 ### tui-component (focused TUI component behavior)
 
 #### Description
 
-Focused TUI coverage should exercise pool metadata rendering, display fallback when no active
-member is set, and sparse rate-limit update merging.
+Focused TUI coverage should exercise pool metadata rendering, display fallback when no active member
+is set, and sparse rate-limit update merging.
 
 #### Test cases
 
 - Pool status rendering shows active member and unavailable member metadata: codex-rs/tui/src/status/account_pool__status_tests.rs:status_snapshot_shows_chatgpt_pool_active_member,status_snapshot_shows_chatgpt_pool_unavailable_members
-- Pool status rendering shows fallback active-member display: missing
-- Sparse rate-limit update merging preserves existing status metadata: missing
+- Pool status rendering shows fallback active-member display: codex-rs/tui/src/status/account_pool__status_tests.rs:status_snapshot_shows_chatgpt_pool_without_active_member
+- Pool account-read responses map active and fallback member metadata for status display: codex-rs/tui/src/app_server_session.rs:account_ui_state_from_response_preserves_chatgpt_pool_details,account_ui_state_from_response_uses_pool_member_metadata_without_active_assignment
+- Sparse rate-limit update merging preserves existing status metadata: codex-rs/tui/src/chatwidget/tests/status_and_layout.rs:rolling_rate_limit_snapshot_preserves_prior_individual_limit
 
 ### login-auth (auth and login behavior)
 
 #### Description
 
-Auth coverage should exercise token refresh and cached auth behavior for active account-pool
-members.
+Auth coverage should exercise token refresh, cached auth, per-affinity assignment, and cache-aware
+load balancing for account-pool members.
 
 #### Test cases
 
 - Active member token refresh preserves selected pool member semantics: codex-rs/login/tests/suite/account_pool__auth_refresh.rs:refresh_token_uses_active_account_pool_member
-- Cached auth reads do not activate or switch pool members: missing
+- Cached auth reads do not activate or switch pool members: codex-rs/login/tests/suite/account_pool__selection.rs:cached_auth_read_does_not_activate_or_switch_pool_members
+- Cold load-balance selection chooses healthiest fresh remaining quota: codex-rs/login/tests/suite/account_pool__selection.rs:cold_load_balance_selection_chooses_healthiest_remaining_quota
+- Hot affinity keeps the assigned account: codex-rs/login/tests/suite/account_pool__selection.rs:hot_affinity_keeps_assigned_account
+- Warm affinity rebalances when another member is materially healthier: codex-rs/login/tests/suite/account_pool__selection.rs:warm_affinity_rebalances_when_another_member_is_materially_healthier
+- Assignments are separate by affinity key and usage bucket: codex-rs/login/tests/suite/account_pool__selection.rs:assignments_are_separate_by_affinity_key_and_usage_bucket
 
 ### mcp-server (Codex-as-MCP-server behavior)
 
@@ -333,8 +527,8 @@ Not covered
 
 #### Description
 
-Account-pool behavior is covered by the account CLI and agent paths, not by non-interactive exec
-mode semantics.
+Account-pool behavior is covered by the account CLI and agent paths, not by non-interactive exec mode
+semantics.
 
 #### Status
 
@@ -366,22 +560,26 @@ Not covered
 Generate tests for these behaviors:
 
 - Initial `drain` selection chooses the first usable member and marks it active.
-- Initial `load_balance` selection chooses the highest fresh remaining usage when no active member
-  exists.
-- `load_balance` keeps the active member even when another member has more remaining usage.
+- Cold `load_balance` selection chooses the highest fresh remaining usage for an affinity.
+- Warm and hot `load_balance` selections keep the assigned member while cache cost outweighs quota
+  benefit.
+- Warm `load_balance` selection rebalances when another member has materially healthier quota.
+- Assignments are independent by pool id, usage bucket, and affinity key.
 - Cached auth reads return a usable auth without setting `activeAccountId`.
-- Starting a new agent/subagent does not switch account unless a request hits an allowed hard limit.
-- 300-minute exhausted usage-limit error before visible output retries with the next account.
-- 10080-minute exhausted usage-limit error before visible output retries with the next account.
-- 15-minute or 60-minute exhausted usage-limit errors surface to the user and do not retry with the
-  next account.
+- Each ModelClient operation selects auth once and pins that account for the operation.
+- Starting a new agent/subagent does not switch account unless a request hits an allowed failover
+  boundary.
+- Exhausted 15-minute, 60-minute, 300-minute, and weekly usage-limit windows can retry with the next
+  account when wait exceeds cache cost.
+- Multiple exhausted usage-limit windows use the longest relevant wait.
+- Hot cache prevents short-wait failover.
 - `usage_not_included` surfaces to the user and does not retry with the next account.
 - Usage errors after visible assistant output do not retry with the next account.
 - Failed automatic usage refresh is throttled; repeated auth selections inside one minute do not
   repeatedly call the usage endpoint.
 - A permitted WebSocket failover reconnects with the new account identity instead of reusing an old
   account connection.
-- TUI/app-server `account/read` for a pool includes `chatgptPool`, `activeAccountId`, members, active
-  flags, unavailable reasons, remaining usage, and last error.
+- TUI/app-server `account/read` for a pool includes `chatgptPool`, `activeAccountId`, members,
+  active flags, unavailable reasons, remaining usage, and last error.
 - TUI/app-server `account/rateLimits/read` and `account/rateLimits/updated` update status display
   without selecting or switching accounts.

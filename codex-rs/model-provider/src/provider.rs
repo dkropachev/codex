@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
-use codex_login::AccountPoolBucket;
+use codex_login::AccountPoolAuthSelection;
+use codex_login::AccountPoolSelectionContext;
+use codex_login::AccountPoolUsageBucket;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -73,6 +75,12 @@ impl std::error::Error for ProviderAccountError {}
 
 pub type ProviderAccountResult = std::result::Result<ProviderAccountState, ProviderAccountError>;
 
+#[derive(Clone, Debug)]
+pub struct ModelProviderAuthSelection {
+    pub auth: Option<CodexAuth>,
+    pub account_pool_selection: Option<AccountPoolAuthSelection>,
+}
+
 /// Default model used for automatic approval review when a provider does not
 /// require a backend-specific model ID.
 pub const DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL: &str = "codex-auto-review";
@@ -123,6 +131,12 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         let _ = model;
         self.auth().await
     }
+
+    async fn auth_selection_for_model(
+        &self,
+        model: Option<&str>,
+        context: Option<AccountPoolSelectionContext>,
+    ) -> ModelProviderAuthSelection;
 
     /// Returns the current app-visible account state for this provider.
     fn account_state(&self) -> ProviderAccountResult;
@@ -226,14 +240,44 @@ impl ModelProvider for ConfiguredModelProvider {
     }
 
     async fn auth_for_model(&self, model: Option<&str>) -> Option<CodexAuth> {
+        self.auth_selection_for_model(model, /*context*/ None)
+            .await
+            .auth
+    }
+
+    async fn auth_selection_for_model(
+        &self,
+        model: Option<&str>,
+        context: Option<AccountPoolSelectionContext>,
+    ) -> ModelProviderAuthSelection {
         match self.auth_manager.as_ref() {
-            Some(auth_manager) if model.is_some_and(uses_spark_account_pool_bucket) => {
-                auth_manager
-                    .auth_for_account_pool_bucket(AccountPoolBucket::Spark)
-                    .await
+            Some(auth_manager) => {
+                let bucket = if model.is_some_and(uses_spark_account_pool_bucket) {
+                    AccountPoolUsageBucket::Spark
+                } else {
+                    AccountPoolUsageBucket::Regular
+                };
+                if let Some(mut context) = context {
+                    context.bucket = bucket;
+                    if let Some(selection) = auth_manager
+                        .auth_for_account_pool_selection_context(context)
+                        .await
+                    {
+                        return ModelProviderAuthSelection {
+                            auth: Some(selection.auth.clone()),
+                            account_pool_selection: Some(selection),
+                        };
+                    }
+                }
+                ModelProviderAuthSelection {
+                    auth: auth_manager.auth_for_account_pool_bucket(bucket).await,
+                    account_pool_selection: None,
+                }
             }
-            Some(auth_manager) => auth_manager.auth().await,
-            None => None,
+            None => ModelProviderAuthSelection {
+                auth: None,
+                account_pool_selection: None,
+            },
         }
     }
 

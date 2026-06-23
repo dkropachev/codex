@@ -133,6 +133,59 @@ async fn status_snapshot_shows_chatgpt_pool_unavailable_members() {
     assert_snapshot!(sanitized);
 }
 
+#[tokio::test]
+async fn status_snapshot_shows_chatgpt_pool_without_active_member() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("gpt-5.1-codex-max".to_string());
+    config.cwd = test_path_buf("/workspace/tests").abs();
+
+    let account_display = StatusAccountDisplay::ChatGptPool {
+        pool_id: "codex-pro".to_string(),
+        active_member: None,
+        member_count: 2,
+        unavailable_count: 0,
+    };
+    let usage = TokenUsage {
+        input_tokens: 500,
+        cached_input_tokens: 0,
+        output_tokens: 250,
+        reasoning_output_tokens: 0,
+        total_tokens: 750,
+    };
+
+    let now = chrono::Local
+        .with_ymd_and_hms(2024, 2, 3, 4, 5, 6)
+        .single()
+        .expect("timestamp");
+
+    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let token_info = token_info_for(&model_slug, &config, &usage);
+    let composite = new_status_output(
+        &config,
+        Some(&account_display),
+        Some(&token_info),
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
+        None,
+        now,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+    );
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 100));
+    if cfg!(windows) {
+        for line in &mut rendered_lines {
+            *line = line.replace('\\', "/");
+        }
+    }
+    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    assert_snapshot!(sanitized);
+}
+
 fn app_server_workspace_write_profile(network_enabled: bool) -> PermissionProfile {
     PermissionProfile::Managed {
         network: if network_enabled {
