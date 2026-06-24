@@ -1,4 +1,6 @@
 // Aggregates all former standalone integration tests as modules.
+#[path = "mcp__live.rs"]
+mod mcp_live;
 mod resize_reflow;
 mod status_indicator;
 mod vt100_history;

@@ -157,8 +157,8 @@ flows in a live terminal session.
 
 #### Test cases
 
-- MCP startup-warning interaction works in live TUI: missing
-- MCP elicitation form submission works in live TUI: missing
+- MCP startup-warning interaction works in live TUI: codex-rs/tui/tests/suite/mcp__live.rs:mcp_startup_warning_interaction_works_in_live_tui
+- MCP elicitation form submission works in live TUI: codex-rs/tui/tests/suite/mcp__live.rs:mcp_elicitation_form_submission_works_in_live_tui
 
 ### tui-component (focused TUI component behavior)
 
