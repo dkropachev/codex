@@ -213,6 +213,76 @@ async fn apply_role_preserves_unspecified_keys() {
 }
 
 #[tokio::test]
+async fn apply_non_empty_role_preserves_runtime_model_without_override() {
+    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    config.model = Some("runtime-model".to_string());
+    config.model_reasoning_effort = Some(ReasoningEffort::High);
+    let role_path = write_role_config(
+        &home,
+        "instructions-only.toml",
+        r#"developer_instructions = "Stay focused"
+"#,
+    )
+    .await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    apply_role_to_config(&mut config, Some("custom"))
+        .await
+        .expect("custom role should apply");
+
+    assert_eq!(config.model.as_deref(), Some("runtime-model"));
+    assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
+    assert_eq!(
+        config.developer_instructions.as_deref(),
+        Some("Stay focused")
+    );
+}
+
+#[tokio::test]
+async fn apply_non_empty_role_preserves_runtime_provider_without_override() {
+    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    let provider_id = config.model_provider_id.clone();
+    config.model_provider.base_url = Some("http://127.0.0.1:9/v1".to_string());
+    config.chatgpt_base_url = "http://127.0.0.1:10/backend-api/codex".to_string();
+    let role_path = write_role_config(
+        &home,
+        "instructions-only.toml",
+        r#"developer_instructions = "Stay focused"
+"#,
+    )
+    .await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    apply_role_to_config(&mut config, Some("custom"))
+        .await
+        .expect("custom role should apply");
+
+    assert_eq!(config.model_provider_id, provider_id);
+    assert_eq!(
+        config.model_provider.base_url.as_deref(),
+        Some("http://127.0.0.1:9/v1")
+    );
+    assert_eq!(
+        config.chatgpt_base_url,
+        "http://127.0.0.1:10/backend-api/codex"
+    );
+}
+
+#[tokio::test]
 async fn apply_role_reports_explicit_service_tier() {
     let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
     let role_path = write_role_config(
