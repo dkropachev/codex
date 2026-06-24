@@ -146,8 +146,8 @@ disabled state, and toggle view behavior.
 
 #### Test cases
 
-- Skill popup rendering and long-list behavior are covered: missing
-- Skill selection, disabled, and toggle states are covered: missing
+- Skill popup rendering and long-list behavior are covered: codex-rs/tui/src/bottom_pane/skills__skill_popup.rs:filtered_mentions_preserve_results_beyond_popup_height,scrolling_mentions_shifts_rendered_window_snapshot,display_name_match_sorting_beats_worse_secondary_search_term_matches,query_match_score_sorts_before_plugin_rank_bias
+- Skill selection, disabled, and toggle states are covered: codex-rs/tui/src/bottom_pane/skills__toggle_view.rs:renders_basic_popup,footer_hint_uses_list_keymap_accept_and_cancel,space_toggles_selected_skill_and_emits_event
 
 ### login-auth (auth and login behavior)
 
