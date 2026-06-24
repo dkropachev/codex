@@ -860,7 +860,7 @@ impl AccountRequestProcessor {
     async fn get_account_token_usage_response(
         &self,
     ) -> Result<GetAccountTokenUsageResponse, JSONRPCErrorError> {
-        let Some(auth) = self.auth_manager.auth().await else {
+        let Some(auth) = self.auth_manager.auth_cached() else {
             return Err(invalid_request(
                 "codex account authentication required to read token usage",
             ));

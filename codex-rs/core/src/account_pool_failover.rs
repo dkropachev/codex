@@ -48,12 +48,16 @@ fn longest_exhausted_window_wait(
     error_resets_at: Option<&DateTime<Utc>>,
     now: DateTime<Utc>,
 ) -> Option<Duration> {
+    exhausted_windows(snapshot)
+        .filter_map(|window| estimated_wait(window, error_resets_at, now))
+        .max()
+}
+
+fn exhausted_windows(snapshot: &RateLimitSnapshot) -> impl Iterator<Item = &RateLimitWindow> {
     [snapshot.primary.as_ref(), snapshot.secondary.as_ref()]
         .into_iter()
         .flatten()
         .filter(|window| window.used_percent >= 100.0)
-        .filter_map(|window| estimated_wait(window, error_resets_at, now))
-        .max()
 }
 
 fn estimated_wait(

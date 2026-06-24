@@ -51,6 +51,73 @@ fn exhausted_weekly_window_still_switches() {
 }
 
 #[test]
+fn exhausted_hour_window_still_switches() {
+    let now = Utc::now();
+    let error = usage_limit_error(rate_limit_window(
+        /*used_percent*/ 100.0,
+        Some(60),
+        Some((now + Duration::minutes(60)).timestamp()),
+    ));
+
+    assert_eq!(
+        decide_account_pool_failover(
+            Some(&selection(/*cache_hint*/ None)),
+            &error,
+            /*visible_output_started*/ false,
+            now,
+        ),
+        AccountPoolFailoverDecision::Switch(AccountPoolUsageBucket::Regular)
+    );
+}
+
+#[test]
+fn missing_window_reset_falls_back_to_window_duration() {
+    let now = Utc::now();
+    let error = usage_limit_error(rate_limit_window(
+        /*used_percent*/ 100.0,
+        Some(60),
+        /*resets_at*/ None,
+    ));
+
+    assert_eq!(
+        decide_account_pool_failover(
+            Some(&selection(Some(AccountPoolCacheHint {
+                input_tokens: 20_000,
+                cached_input_tokens: 12_000,
+            }))),
+            &error,
+            /*visible_output_started*/ false,
+            now,
+        ),
+        AccountPoolFailoverDecision::Switch(AccountPoolUsageBucket::Regular)
+    );
+}
+
+#[test]
+fn missing_window_reset_uses_error_reset_before_window_duration() {
+    let now = Utc::now();
+    let mut error = usage_limit_error(rate_limit_window(
+        /*used_percent*/ 100.0,
+        Some(60),
+        /*resets_at*/ None,
+    ));
+    error.resets_at = Some(now + Duration::minutes(5));
+
+    assert_eq!(
+        decide_account_pool_failover(
+            Some(&selection(Some(AccountPoolCacheHint {
+                input_tokens: 20_000,
+                cached_input_tokens: 12_000,
+            }))),
+            &error,
+            /*visible_output_started*/ false,
+            now,
+        ),
+        AccountPoolFailoverDecision::Stay
+    );
+}
+
+#[test]
 fn multiple_exhausted_windows_use_longest_wait() {
     let now = Utc::now();
     let mut error = usage_limit_error(rate_limit_window(

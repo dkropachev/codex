@@ -26,6 +26,8 @@ use super::manager::AuthManager;
 use super::manager::RefreshTokenError;
 
 const USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const ACTIVE_AFFINITY_PENALTY: i64 = 3;
+const UNKNOWN_USAGE_PENALTY: i64 = 25;
 const WARM_REBALANCE_LOW_REMAINING: u64 = 20;
 const WARM_REBALANCE_MATERIAL_ADVANTAGE: u64 = 25;
 const HOT_REBALANCE_LOW_REMAINING: u64 = 10;
@@ -311,9 +313,7 @@ impl AccountPool {
             context.affinity_key = DEFAULT_ACCOUNT_POOL_AFFINITY_KEY.to_string();
         }
         let assignment_key = self.assignment_key(context.bucket, &context.affinity_key);
-        let cache_hint = context
-            .cache_hint
-            .or_else(|| self.assignment_cache_hint(&assignment_key));
+        let cache_hint = self.cache_hint_for_context(&context, &assignment_key);
         let member_ids = self.select_member_ids(&context, cache_hint);
         for account_id in member_ids {
             let Some((member_account_id, member_manager)) = self
@@ -388,9 +388,7 @@ impl AccountPool {
         context: &AccountPoolSelectionContext,
     ) -> Option<(String, CodexAuth)> {
         let assignment_key = self.assignment_key(context.bucket, &context.affinity_key);
-        let cache_hint = context
-            .cache_hint
-            .or_else(|| self.assignment_cache_hint(&assignment_key));
+        let cache_hint = self.cache_hint_for_context(context, &assignment_key);
         for account_id in self.select_member_ids(context, cache_hint) {
             let Some(member) = self.member(&account_id) else {
                 continue;
@@ -455,8 +453,9 @@ impl AccountPool {
             }
         }
         if self.definition.policy == AccountPoolPolicyToml::LoadBalance {
-            account_ids
-                .sort_by_key(|account_id| std::cmp::Reverse(self.remaining(account_id, bucket)));
+            account_ids.sort_by_key(|account_id| {
+                std::cmp::Reverse(self.member_score(account_id, bucket, &assignment_key))
+            });
         }
         account_ids
     }
@@ -717,6 +716,19 @@ impl AccountPool {
             .and_then(|assignment| assignment.cache_hint)
     }
 
+    fn cache_hint_for_context(
+        &self,
+        context: &AccountPoolSelectionContext,
+        assignment_key: &AccountPoolAssignmentKey,
+    ) -> Option<AccountPoolCacheHint> {
+        if matches!(context.operation_kind, AccountPoolOperationKind::Compaction) {
+            return Some(AccountPoolCacheHint::default());
+        }
+        context
+            .cache_hint
+            .or_else(|| self.assignment_cache_hint(assignment_key))
+    }
+
     fn set_assignment(
         &self,
         key: AccountPoolAssignmentKey,
@@ -776,8 +788,34 @@ impl AccountPool {
             })
     }
 
-    fn remaining(&self, account_id: &str, bucket: AccountPoolUsageBucket) -> u64 {
-        self.fresh_remaining(account_id, bucket).unwrap_or(0)
+    fn member_score(
+        &self,
+        account_id: &str,
+        bucket: AccountPoolUsageBucket,
+        assignment_key: &AccountPoolAssignmentKey,
+    ) -> i64 {
+        let (remaining, unknown_usage_penalty) = match self.fresh_remaining(account_id, bucket) {
+            Some(remaining) => (remaining as i64, 0),
+            None => (0, UNKNOWN_USAGE_PENALTY),
+        };
+        let active_affinity_penalty = self.active_assignment_count(account_id, assignment_key)
+            as i64
+            * ACTIVE_AFFINITY_PENALTY;
+        remaining - unknown_usage_penalty - active_affinity_penalty
+    }
+
+    fn active_assignment_count(
+        &self,
+        account_id: &str,
+        current_key: &AccountPoolAssignmentKey,
+    ) -> usize {
+        let Ok(guard) = self.assignments.read() else {
+            return 0;
+        };
+        guard
+            .iter()
+            .filter(|(key, assignment)| key != &current_key && assignment.account_id == account_id)
+            .count()
     }
 
     fn fresh_remaining(&self, account_id: &str, bucket: AccountPoolUsageBucket) -> Option<u64> {

@@ -75,6 +75,55 @@ async fn cold_load_balance_selection_chooses_healthiest_remaining_quota() -> Res
 }
 
 #[tokio::test]
+async fn cold_load_balance_selection_penalizes_existing_affinity_assignments() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_chatgpt_auth(codex_home.path(), "work-pro", "work@example.com")?;
+    write_chatgpt_auth(codex_home.path(), "personal-pro", "personal@example.com")?;
+    let pool = load_balance_pool(codex_home.path()).await?;
+    pool.set_usage_for_testing("work-pro", Some(90), Some(90), Instant::now());
+    pool.set_usage_for_testing("personal-pro", Some(90), Some(90), Instant::now());
+
+    let first = pool
+        .auth_for_context(selection_context(
+            AccountPoolUsageBucket::Regular,
+            "thread-a",
+        ))
+        .await
+        .context("first selection should exist")?;
+    let second = pool
+        .auth_for_context(selection_context(
+            AccountPoolUsageBucket::Regular,
+            "thread-b",
+        ))
+        .await
+        .context("second selection should exist")?;
+
+    assert_eq!(first.account_id, "work-pro");
+    assert_eq!(second.account_id, "personal-pro");
+    Ok(())
+}
+
+#[tokio::test]
+async fn cold_load_balance_selection_penalizes_unknown_usage() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_chatgpt_auth(codex_home.path(), "work-pro", "work@example.com")?;
+    write_chatgpt_auth(codex_home.path(), "personal-pro", "personal@example.com")?;
+    let pool = load_balance_pool(codex_home.path()).await?;
+    pool.set_usage_for_testing("personal-pro", Some(0), Some(0), Instant::now());
+
+    let selection = pool
+        .auth_for_context(selection_context(
+            AccountPoolUsageBucket::Regular,
+            "known-empty-usage",
+        ))
+        .await
+        .context("selection should exist")?;
+
+    assert_eq!(selection.account_id, "personal-pro");
+    Ok(())
+}
+
+#[tokio::test]
 async fn hot_affinity_keeps_assigned_account() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_chatgpt_auth(codex_home.path(), "work-pro", "work@example.com")?;
@@ -159,6 +208,58 @@ async fn warm_affinity_rebalances_when_another_member_is_materially_healthier() 
 }
 
 #[tokio::test]
+async fn compaction_context_treats_existing_affinity_as_cold_boundary() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_chatgpt_auth(codex_home.path(), "work-pro", "work@example.com")?;
+    write_chatgpt_auth(codex_home.path(), "personal-pro", "personal@example.com")?;
+    let pool = load_balance_pool(codex_home.path()).await?;
+    pool.set_usage_for_testing("work-pro", Some(90), Some(90), Instant::now());
+    pool.set_usage_for_testing("personal-pro", Some(50), Some(50), Instant::now());
+    let affinity_key = "compact-thread";
+
+    let initial = pool
+        .auth_for_context(selection_context(
+            AccountPoolUsageBucket::Regular,
+            affinity_key,
+        ))
+        .await
+        .context("initial selection should exist")?;
+    assert_eq!(initial.account_id, "work-pro");
+
+    pool.record_cache_hint(
+        AccountPoolUsageBucket::Regular,
+        affinity_key.to_string(),
+        AccountPoolCacheHint {
+            input_tokens: 20_000,
+            cached_input_tokens: 12_000,
+        },
+    );
+    pool.set_usage_for_testing("work-pro", Some(50), Some(50), Instant::now());
+    pool.set_usage_for_testing("personal-pro", Some(90), Some(90), Instant::now());
+
+    let stream = pool
+        .auth_for_context(selection_context(
+            AccountPoolUsageBucket::Regular,
+            affinity_key,
+        ))
+        .await
+        .context("stream selection should preserve hot affinity")?;
+    assert_eq!(stream.account_id, "work-pro");
+
+    let compaction = pool
+        .auth_for_context(selection_context_for_operation(
+            AccountPoolUsageBucket::Regular,
+            affinity_key,
+            AccountPoolOperationKind::Compaction,
+        ))
+        .await
+        .context("compaction selection should exist")?;
+
+    assert_eq!(compaction.account_id, "personal-pro");
+    Ok(())
+}
+
+#[tokio::test]
 async fn assignments_are_separate_by_affinity_key_and_usage_bucket() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_chatgpt_auth(codex_home.path(), "work-pro", "work@example.com")?;
@@ -239,10 +340,18 @@ fn selection_context(
     bucket: AccountPoolUsageBucket,
     affinity_key: &str,
 ) -> AccountPoolSelectionContext {
+    selection_context_for_operation(bucket, affinity_key, AccountPoolOperationKind::Stream)
+}
+
+fn selection_context_for_operation(
+    bucket: AccountPoolUsageBucket,
+    affinity_key: &str,
+    operation_kind: AccountPoolOperationKind,
+) -> AccountPoolSelectionContext {
     AccountPoolSelectionContext {
         bucket,
         affinity_key: affinity_key.to_string(),
-        operation_kind: AccountPoolOperationKind::Stream,
+        operation_kind,
         cache_hint: None,
         pinned_account_id: None,
     }
