@@ -75,6 +75,11 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 "Vague agent tests.",
                 1,
             )
+            text = text.replace(
+                "- `codex-rs/core/tests/suite`",
+                "- `codex-rs/core/tests`",
+                1,
+            )
             readme.write_text(text, encoding="utf-8")
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
@@ -87,6 +92,31 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 "codex-rs/feature-specs/README.md README test place `agent-e2e` "
                 "`Description` must be "
                 f"`{verify_feature_specs.TEST_PLACES['agent-e2e'].long_description}`",
+                "codex-rs/feature-specs/README.md README test place `agent-e2e` "
+                "`Path Ownership Rules` must list `codex-rs/core/tests/suite`",
+            ],
+        )
+
+    def test_readme_test_place_records_must_include_path_ownership_rules(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self.write_valid_repo(root)
+            readme = root / "codex-rs/feature-specs/README.md"
+            text = readme.read_text(encoding="utf-8")
+            text = text.replace(
+                "\n\n#### Path Ownership Rules\n\n- `codex-rs/core/tests/suite`",
+                "",
+                1,
+            )
+            readme.write_text(text, encoding="utf-8")
+
+            failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
+
+        self.assertEqual(
+            failures,
+            [
+                "codex-rs/feature-specs/README.md README test place `agent-e2e` "
+                "must include `#### Path Ownership Rules`",
             ],
         )
 
@@ -375,6 +405,54 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 "in `codex-rs/feature-specs/account-pool.md` Test cases",
             ],
         )
+
+    def test_specs_must_not_link_tui_component_test_files(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self.write_valid_repo(root)
+            spec = root / "codex-rs/feature-specs/account-pool.md"
+            text = spec.read_text(encoding="utf-8")
+            text = text.replace(
+                "codex-rs/core/tests/suite/account_pool__routing.rs:routing_test",
+                "[account_pool__status_tests](../tui/src/status/account_pool__status_tests.rs)",
+            )
+            spec.write_text(text, encoding="utf-8")
+
+            failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
+
+        self.assertEqual(
+            failures,
+            [
+                "codex-rs/feature-specs/account-pool.md:34 must not include test links; "
+                "test ownership is derived from filenames",
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
+                "test case `- Routing behavior is covered: "
+                "[account_pool__status_tests](../tui/src/status/account_pool__status_tests.rs)` "
+                "must target `repo/path.rs:test_name[,test_name]` or `missing`",
+                "codex-rs/core/tests/suite/account_pool__routing.rs:routing_test maps "
+                "to feature `account-pool` and test place `agent-e2e` but is not listed "
+                "in `codex-rs/feature-specs/account-pool.md` Test cases",
+            ],
+        )
+
+    def test_specs_can_link_tui_implementation_entry_points(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self.write_valid_repo(root)
+            self.write_file(root / "codex-rs/tui/src/chatwidget/plugins.rs", "")
+            spec = root / "codex-rs/feature-specs/account-pool.md"
+            text = spec.read_text(encoding="utf-8")
+            text = text.replace(
+                "- [codex-rs/login/src/auth/account_pool.rs](../login/src/auth/account_pool.rs)",
+                "- [codex-rs/login/src/auth/account_pool.rs](../login/src/auth/account_pool.rs)\n"
+                "- [codex-rs/tui/src/chatwidget/plugins.rs](../tui/src/chatwidget/plugins.rs)",
+                1,
+            )
+            spec.write_text(text, encoding="utf-8")
+
+            failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
+
+        self.assertEqual(failures, [])
 
     def test_e2e_coverage_sections_are_rejected(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -960,6 +1038,10 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 #### Description
 
                 {verify_feature_specs.TEST_PLACES[test_place].long_description}
+
+                #### Path Ownership Rules
+
+                {self.readme_path_rules(test_place)}
                 """
             ).strip()
             for test_place in verify_feature_specs.TEST_PLACE_IDS
@@ -970,6 +1052,11 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
             f"{test_places}\n\n"
             "## Feature Index\n\n"
             "- [account-pool](account-pool.md)\n"
+        )
+
+    def readme_path_rules(self, test_place: str) -> str:
+        return "\n".join(
+            f"- `{path}`" for path in verify_feature_specs.TEST_PLACES[test_place].paths
         )
 
     def spec_text(self, name: str) -> str:

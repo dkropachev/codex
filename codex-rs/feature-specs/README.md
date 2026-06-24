@@ -21,6 +21,7 @@ auto-discovered.
 The verifier scans known test-place directories for feature-prefixed Rust test files. Discovered
 mapped tests must be listed in the owning feature spec, and a test place cannot be marked
 `Not covered` when mapped tests exist for that feature and place.
+`Path Ownership Rules` defines the repo-relative roots that the verifier scans for each test place.
 
 Each spec must also declare `Test Places`. This is a per-feature matrix over every catalog entry
 below. When a test place applies to the feature, the entry must include `Description` and
@@ -53,6 +54,10 @@ Place test cases here when feature behavior must be exercised through the core a
 turns, tool calls, model-visible context, approvals, resume or compaction, and user-visible agent
 state transitions.
 
+#### Path Ownership Rules
+
+- `codex-rs/core/tests/suite`
+
 ### app-server-api (app-server API behavior)
 
 #### Name
@@ -67,6 +72,10 @@ app-server API behavior
 
 Place test cases here when clients observe or control the feature through app-server requests,
 responses, notifications, WebSocket flows, or v2 protocol payloads.
+
+#### Path Ownership Rules
+
+- `codex-rs/app-server/tests/suite`
 
 ### cli (main CLI command behavior)
 
@@ -83,6 +92,10 @@ main CLI command behavior
 Place test cases here when the feature changes the top-level codex command surface, command
 parsing, command output, or user-visible CLI error behavior.
 
+#### Path Ownership Rules
+
+- `codex-rs/cli/tests`
+
 ### tui-e2e (full terminal TUI behavior)
 
 #### Name
@@ -97,6 +110,10 @@ full terminal TUI behavior
 
 Place test cases here when the behavior needs a running terminal UI, keyboard input, popup
 completion, screen rendering, or terminal state across an interactive TUI session.
+
+#### Path Ownership Rules
+
+- `codex-rs/tui/tests/suite`
 
 ### tui-component (focused TUI component behavior)
 
@@ -114,6 +131,10 @@ Place test cases here when the behavior is local to TUI rendering or state, incl
 layout, selection state, popups, status surfaces, and component interactions that do not need a full
 terminal session.
 
+#### Path Ownership Rules
+
+- `codex-rs/tui/src`
+
 ### login-auth (auth and login behavior)
 
 #### Name
@@ -128,6 +149,10 @@ auth and login behavior
 
 Place test cases here when the feature changes login, logout, token refresh, credential selection,
 account storage, cached auth semantics, or auth error handling.
+
+#### Path Ownership Rules
+
+- `codex-rs/login/tests/suite`
 
 ### mcp-server (Codex-as-MCP-server behavior)
 
@@ -144,6 +169,10 @@ Codex-as-MCP-server behavior
 Place test cases here when external MCP clients invoke Codex as an MCP server, depend on Codex MCP
 tool schemas, or consume MCP result and error shapes.
 
+#### Path Ownership Rules
+
+- `codex-rs/mcp-server/tests/suite`
+
 ### rmcp-client (MCP client transport and resource behavior)
 
 #### Name
@@ -158,6 +187,10 @@ MCP client transport and resource behavior
 
 Place test cases here when Codex acts as an MCP client and the feature changes server startup,
 streamable HTTP, OAuth recovery, resource listing, tool discovery, or process cleanup behavior.
+
+#### Path Ownership Rules
+
+- `codex-rs/rmcp-client/tests`
 
 ### codex-api (Codex API client and protocol behavior)
 
@@ -174,6 +207,10 @@ Codex API client and protocol behavior
 Place test cases here when the feature changes the lower-level Codex API client, SSE handling,
 realtime WebSocket protocol, request construction, or model API integration behavior.
 
+#### Path Ownership Rules
+
+- `codex-rs/codex-api/tests`
+
 ### exec-cli (codex exec CLI behavior)
 
 #### Name
@@ -188,6 +225,10 @@ codex exec CLI behavior
 
 Place test cases here when the feature changes non-interactive codex exec semantics, exec-mode
 sandbox or approval handling, process behavior, or exec output and error reporting.
+
+#### Path Ownership Rules
+
+- `codex-rs/exec/tests/suite`
 
 ### otel (telemetry and export behavior)
 
@@ -204,6 +245,10 @@ telemetry and export behavior
 Place test cases here when the feature changes telemetry spans, metrics, event attributes, export
 routing, runtime summaries, or OTLP behavior.
 
+#### Path Ownership Rules
+
+- `codex-rs/otel/tests/suite`
+
 ### exec-server (exec-server service boundary behavior)
 
 #### Name
@@ -218,6 +263,10 @@ exec-server service boundary behavior
 
 Place test cases here when the feature changes exec-server process, filesystem, health, HTTP,
 relay, or WebSocket service-boundary behavior.
+
+#### Path Ownership Rules
+
+- `codex-rs/exec-server/tests`
 
 ## Feature Index
 

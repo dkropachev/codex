@@ -470,7 +470,9 @@ def spec_failures(root: Path, spec: Path) -> list[str]:
         if FEATURE_ID_FIELD_RE.match(line):
             failures.append(f"{rel_spec}:{line_number} must not define a Feature ID field")
         for link in markdown_links(line):
-            if is_test_path_reference(link.text) or is_test_path_reference(link.target):
+            if is_test_path_reference(
+                root, spec, link.text
+            ) or is_test_path_reference(root, spec, link.target):
                 failures.append(
                     f"{rel_spec}:{line_number} must not include test links; "
                     "test ownership is derived from filenames"
@@ -598,7 +600,7 @@ def readme_test_place_failures(root: Path, readme_path: Path, text: str) -> list
                 rel_readme,
                 f"README test place `{test_place}`",
                 child_titles,
-                ("Name", "Short Description", "Description"),
+                ("Name", "Short Description", "Description", "Path Ownership Rules"),
             )
         )
         if test_place in TEST_PLACE_IDS:
@@ -645,6 +647,17 @@ def readme_test_place_record_failures(
             failures.append(
                 f"{rel_readme} README test place `{test_place}` `{heading}` must be "
                 f"`{expected}`"
+            )
+
+    path_sections = sections_named(markdown, "Path Ownership Rules")
+    if path_sections:
+        expected_paths = [f"- `{path}`" for path in record.paths]
+        actual_paths = nonempty_lines(path_sections[0])
+        if actual_paths != expected_paths:
+            expected = "`, `".join(record.paths)
+            failures.append(
+                f"{rel_readme} README test place `{test_place}` "
+                f"`Path Ownership Rules` must list `{expected}`"
             )
     return failures
 
@@ -1722,11 +1735,24 @@ def markdown_links(markdown: str) -> list[MarkdownLink]:
     ]
 
 
-def is_test_path_reference(value: str) -> bool:
+def is_test_path_reference(root: Path, source_path: Path, value: str) -> bool:
     """Return whether a markdown link text or target appears to reference tests."""
 
-    path = value.split("#", maxsplit=1)[0]
-    return path.endswith(".rs") and "/tests/" in path
+    path_text = value.split("#", maxsplit=1)[0]
+    if not path_text.endswith(".rs"):
+        return False
+
+    target_path = resolve_link_target(root, source_path, path_text)
+    if target_path is None:
+        rel_path = normalize_changed_path(path_text)
+    else:
+        rel_path = relative_path(root, target_path)
+    if "/tests/" in rel_path:
+        return True
+    if test_place_for_test_path(rel_path) is None:
+        return False
+    stem = Path(rel_path).stem
+    return feature_id_from_test_path(rel_path) is not None or stem.endswith("_tests")
 
 
 def resolve_link_target(root: Path, source_path: Path, target: str) -> Path | None:
