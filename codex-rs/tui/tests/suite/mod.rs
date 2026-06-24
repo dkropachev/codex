@@ -1,6 +1,8 @@
 // Aggregates all former standalone integration tests as modules.
 #[path = "mcp__live.rs"]
 mod mcp_live;
+#[path = "plugins__live.rs"]
+mod plugins_live;
 mod resize_reflow;
 #[path = "skills__live.rs"]
 mod skills_live;

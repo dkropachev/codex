@@ -153,13 +153,13 @@ CLI coverage should exercise plugin commands and marketplace commands.
 
 #### Description
 
-Full TUI coverage should exercise user-facing plugin list, install, and plugin mention flows in a
-live terminal session when those surfaces are available.
+Full TUI coverage should exercise user-facing installed-plugin list, installed-plugin toggle, and
+plugin mention flows in a live terminal session when those surfaces are available.
 
 #### Test cases
 
-- Live TUI plugin list and install flows are covered: missing
-- Live TUI plugin mention selection and submission are covered: missing
+- Live TUI installed-plugin list and toggle flows are covered: codex-rs/tui/tests/suite/plugins__live.rs:plugin_popup_lists_installed_plugin_and_toggles_enabled_state
+- Live TUI plugin mention selection and submission are covered: codex-rs/tui/tests/suite/plugins__live.rs:plugin_mention_selection_submits_plugin_guidance
 
 ### tui-component (focused TUI component behavior)
 
