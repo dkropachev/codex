@@ -138,3 +138,5 @@ mod websocket_fallback;
 mod window_headers;
 #[cfg(target_os = "windows")]
 mod windows_sandbox;
+#[path = "workflows__agent_roles.rs"]
+mod workflows_agent_roles;

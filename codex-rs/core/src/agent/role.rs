@@ -2,9 +2,9 @@
 //!
 //! Roles are selected at spawn time and are loaded with the same config machinery as
 //! `config.toml`. This module resolves built-in and user-defined role files, inserts the role as a
-//! high-precedence layer, and preserves the caller's current provider and service tier unless the
-//! role layer sets them. It does not decide when to spawn a sub-agent or which role to use; the
-//! multi-agent tool handler owns that orchestration.
+//! high-precedence layer, and preserves the caller's current runtime model, provider, and service
+//! tier unless the role layer sets them. It does not decide when to spawn a sub-agent or which role
+//! to use; the multi-agent tool handler owns that orchestration.
 
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
@@ -32,9 +32,10 @@ const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not availabl
 /// Applies a named role layer to `config` while preserving caller-owned provider settings.
 ///
 /// The role layer is inserted at session-flag precedence so it can override persisted config, but
-/// the caller's current `model_provider` and `service_tier` remain sticky runtime choices unless
-/// the role explicitly sets the corresponding top-level config key. Rebuilding the config without
-/// those overrides would make a spawned agent silently fall back to default settings.
+/// the caller's current `model`, `model_provider`, `model_reasoning_effort`, and `service_tier`
+/// remain sticky runtime choices unless the role explicitly sets the corresponding top-level config
+/// key. Rebuilding the config without those overrides would make a spawned agent silently fall back
+/// to default settings.
 pub(crate) async fn apply_role_to_config(
     config: &mut Config,
     role_name: Option<&str>,
@@ -62,12 +63,28 @@ async fn apply_role_to_config_inner(
     let Some(config_file) = role.config_file.as_ref() else {
         return Ok(());
     };
-    let role_layer_toml = load_role_layer_toml(config, config_file, is_built_in, role_name).await?;
+    let mut role_layer_toml =
+        load_role_layer_toml(config, config_file, is_built_in, role_name).await?;
     if role_layer_toml
         .as_table()
         .is_some_and(toml::map::Map::is_empty)
     {
         return Ok(());
+    }
+    if let Some(table) = role_layer_toml.as_table_mut() {
+        if !table.contains_key("model")
+            && let Some(model) = config.model.as_ref()
+        {
+            table.insert("model".to_string(), TomlValue::String(model.clone()));
+        }
+        if !table.contains_key("model_reasoning_effort")
+            && let Some(reasoning_effort) = config.model_reasoning_effort.as_ref()
+        {
+            table.insert(
+                "model_reasoning_effort".to_string(),
+                TomlValue::String(reasoning_effort.to_string()),
+            );
+        }
     }
     let preserve_current_provider = role_layer_toml.get("model_provider").is_none();
     let preserve_current_service_tier = role_layer_toml.get("service_tier").is_none();
@@ -138,7 +155,7 @@ mod reload {
         let config_layer_stack = build_config_layer_stack(config, &role_layer_toml)?;
         let merged_config = deserialize_effective_config(config, &config_layer_stack)?;
 
-        let next_config = Config::load_config_with_layer_stack(
+        let mut next_config = Config::load_config_with_layer_stack(
             LOCAL_FS.as_ref(),
             merged_config,
             reload_overrides(
@@ -150,6 +167,11 @@ mod reload {
             config_layer_stack,
         )
         .await?;
+        if preserve_current_provider {
+            next_config.model_provider_id = config.model_provider_id.clone();
+            next_config.model_provider = config.model_provider.clone();
+            next_config.chatgpt_base_url = config.chatgpt_base_url.clone();
+        }
         Ok(next_config)
     }
 

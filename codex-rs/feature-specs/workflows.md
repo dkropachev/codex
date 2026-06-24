@@ -83,8 +83,8 @@ planning-implementation-review workflow execution path.
 
 #### Test cases
 
-- Each built-in workflow role is discoverable and applied: missing
-- Full workflow execution covers planning, implementation, review, and repair roles: missing
+- Each built-in workflow role is discoverable and applied: codex-rs/core/tests/suite/workflows__agent_roles.rs:built_in_workflow_roles_are_discoverable_from_spawn_agent_tool,workflow_spawn_path_applies_planning_implementation_review_and_repair_roles
+- Full workflow execution covers planning, implementation, review, and repair roles: codex-rs/core/tests/suite/workflows__agent_roles.rs:workflow_spawn_path_applies_planning_implementation_review_and_repair_roles
 
 ### app-server-api (app-server API behavior)
 
