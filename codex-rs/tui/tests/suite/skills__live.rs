@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use wiremock::MockServer;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn skill_selection_submits_selected_skill() -> Result<()> {
+async fn skill_mention_submits_skill_instructions() -> Result<()> {
     if cfg!(windows) {
         return Ok(());
     }
@@ -68,12 +68,20 @@ async fn skill_selection_submits_selected_skill() -> Result<()> {
     })
     .await?;
 
-    writer.send(b"\t".to_vec()).await?;
+    send_text(&writer, "-haiku").await?;
     wait_for_screen(
         &mut output_rx,
         &mut screen,
-        "selected skill mention",
+        "complete skill mention",
         |contents| contents.contains("$write-haiku"),
+    )
+    .await?;
+    writer.send(b"\x1b".to_vec()).await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "closed skill popup",
+        |contents| contents.contains("$write-haiku") && !contents.contains("Write compact haiku."),
     )
     .await?;
 
