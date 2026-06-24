@@ -170,7 +170,7 @@ handling, and plugin UI rendering.
 
 #### Test cases
 
-- Plugin mention resolution and selection state are covered: missing
+- Plugin mention resolution and selection state are covered: codex-rs/tui/src/bottom_pane/chat_composer/plugins__mentions.rs:set_plugin_mentions_refreshes_open_mention_popup,mention_items_show_plugin_owned_skill_and_app_duplicates,restored_bound_at_mentions_do_not_open_mention_popup
 - Installed plugin enablement and disabled-state popup behavior are covered: codex-rs/tui/src/chatwidget/tests/plugins__popups.rs:plugins_popup_space_toggles_installed_plugin_from_list,plugins_popup_space_on_uninstalled_row_does_not_start_search,plugins_popup_space_with_active_search_does_not_toggle_installed_plugin
 
 ### login-auth (auth and login behavior)
