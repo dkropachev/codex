@@ -209,7 +209,11 @@ async fn account_pool_websocket_failover_reconnects_with_next_member() -> Result
     submit_prompt(&codex, "second websocket turn").await?;
     wait_for_turn_complete(&codex).await;
 
-    assert!(server.wait_for_handshakes(2, Duration::from_secs(5)).await);
+    assert!(
+        server
+            .wait_for_handshakes(/*expected*/ 2, Duration::from_secs(5))
+            .await
+    );
 
     let handshakes = server.handshakes();
     assert_eq!(handshakes.len(), 2);
