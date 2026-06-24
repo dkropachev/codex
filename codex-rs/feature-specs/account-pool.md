@@ -435,6 +435,7 @@ reporting, rate-limit status reads, and non-mutating status refresh behavior.
 - Account read reports active members: codex-rs/app-server/tests/suite/v2/account_pool__app_server_account.rs:get_account_with_chatgpt_pool
 - Account read reports unavailable members: codex-rs/app-server/tests/suite/v2/account_pool__app_server_account.rs:get_account_with_chatgpt_pool_reports_unavailable_members
 - Rate-limit status reads are non-mutating: codex-rs/app-server/tests/suite/v2/account_pool__app_server_account.rs:get_account_rate_limits_read_does_not_activate_chatgpt_pool_member
+- Token usage status reads are non-mutating: codex-rs/app-server/tests/suite/v2/account_pool__app_server_account.rs:get_account_token_usage_read_does_not_activate_chatgpt_pool_member
 
 ### cli (main CLI command behavior)
 
@@ -486,9 +487,12 @@ load balancing for account-pool members.
 - Active member token refresh preserves selected pool member semantics: codex-rs/login/tests/suite/account_pool__auth_refresh.rs:refresh_token_uses_active_account_pool_member
 - Cached auth reads do not activate or switch pool members: codex-rs/login/tests/suite/account_pool__selection.rs:cached_auth_read_does_not_activate_or_switch_pool_members
 - Cold load-balance selection chooses healthiest fresh remaining quota: codex-rs/login/tests/suite/account_pool__selection.rs:cold_load_balance_selection_chooses_healthiest_remaining_quota
+- Cold load-balance selection accounts for existing active affinities: codex-rs/login/tests/suite/account_pool__selection.rs:cold_load_balance_selection_penalizes_existing_affinity_assignments
+- Cold load-balance selection accounts for unknown usage: codex-rs/login/tests/suite/account_pool__selection.rs:cold_load_balance_selection_penalizes_unknown_usage
 - Hot affinity keeps the assigned account: codex-rs/login/tests/suite/account_pool__selection.rs:hot_affinity_keeps_assigned_account
 - Warm affinity rebalances when another member is materially healthier: codex-rs/login/tests/suite/account_pool__selection.rs:warm_affinity_rebalances_when_another_member_is_materially_healthier
 - Assignments are separate by affinity key and usage bucket: codex-rs/login/tests/suite/account_pool__selection.rs:assignments_are_separate_by_affinity_key_and_usage_bucket
+- Compaction treats existing affinity as a cold cache boundary: codex-rs/login/tests/suite/account_pool__selection.rs:compaction_context_treats_existing_affinity_as_cold_boundary
 
 ### mcp-server (Codex-as-MCP-server behavior)
 
