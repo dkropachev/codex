@@ -12,6 +12,10 @@ use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
 use base64::Engine as _;
 use codex_api::ApiError;
+use codex_api::RealtimeEventParser;
+use codex_api::RealtimeOutputModality;
+use codex_api::RealtimeSessionConfig;
+use codex_api::RealtimeSessionMode;
 use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_config::config_toml::AccountPoolDefinitionToml;
@@ -31,10 +35,12 @@ use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::InternalSessionSource;
+use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_rollout_trace::ExecutionStatus;
@@ -44,12 +50,17 @@ use codex_rollout_trace::RawTraceEventPayload;
 use codex_rollout_trace::RolloutTrace;
 use codex_rollout_trace::TraceWriter;
 use codex_rollout_trace::replay_bundle;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::start_websocket_server;
+use core_test_support::skip_if_no_network;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -257,6 +268,127 @@ fn output_message(id: &str, text: &str) -> ResponseItem {
     }
 }
 
+fn input_message(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+    }
+}
+
+fn prompt_with_input(input: Vec<ResponseItem>) -> crate::client_common::Prompt {
+    crate::client_common::Prompt {
+        input,
+        ..Default::default()
+    }
+}
+
+fn write_account_pool_member_auth(
+    codex_home: &Path,
+    account_id: &str,
+    email: &str,
+) -> anyhow::Result<()> {
+    let account_home = codex_home.join("accounts").join(account_id);
+    fs::create_dir_all(&account_home)?;
+    let encode = |value: serde_json::Value| {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&value).expect("serialize jwt part"))
+    };
+    let jwt = format!(
+        "{}.{}.sig",
+        encode(json!({"alg": "none"})),
+        encode(json!({
+            "email": email,
+            "https://api.openai.com/auth": {
+                "chatgpt_plan_type": "pro",
+                "chatgpt_account_id": account_id,
+                "user_id": format!("user-{account_id}")
+            }
+        }))
+    );
+    let auth = json!({
+        "auth_mode": AuthMode::Chatgpt,
+        "tokens": {
+            "id_token": jwt,
+            "access_token": format!("access-{account_id}"),
+            "refresh_token": format!("refresh-{account_id}"),
+            "account_id": account_id,
+        },
+        "last_refresh": chrono::Utc::now(),
+    });
+    fs::write(
+        account_home.join("auth.json"),
+        serde_json::to_string_pretty(&auth)?,
+    )?;
+    Ok(())
+}
+
+fn load_balance_account_pool_toml() -> AccountPoolToml {
+    AccountPoolToml {
+        enabled: true,
+        default_pool: Some("codex-pro".to_string()),
+        pools: [(
+            "codex-pro".to_string(),
+            AccountPoolDefinitionToml {
+                provider: "openai".to_string(),
+                policy: AccountPoolPolicyToml::LoadBalance,
+                accounts: vec!["work-pro".to_string(), "personal-pro".to_string()],
+            },
+        )]
+        .into(),
+    }
+}
+
+async fn mount_account_pool_usage(server: &MockServer, account_id: &str, used_percent: u64) {
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header(
+            "authorization",
+            format!("Bearer access-{account_id}"),
+        ))
+        .and(header("chatgpt-account-id", account_id))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": { "used_percent": used_percent }
+            }
+        })))
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+async fn account_pool_model_client(
+    codex_home: &Path,
+    chatgpt_base_url: String,
+    provider: ModelProviderInfo,
+) -> ModelClient {
+    let config = AccountPoolClientTestConfig {
+        codex_home: codex_home.to_path_buf(),
+        chatgpt_base_url,
+        account_pool: load_balance_account_pool_toml(),
+    };
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+    ModelClient::new(
+        Some(auth_manager),
+        SessionId::new(),
+        ThreadId::new(),
+        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+        provider,
+        SessionSource::Cli,
+        /*parent_thread_id*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+        /*attestation_provider*/ None,
+    )
+}
+
 async fn replay_until_cancelled(temp: &TempDir) -> anyhow::Result<RolloutTrace> {
     let mut rollout = replay_bundle(temp.path())?;
     for _ in 0..50 {
@@ -391,108 +523,13 @@ async fn current_client_setup_honors_account_pool_pins_for_operation_kinds() -> 
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
 
-    let write_member_auth = |account_id: &str, email: &str| -> anyhow::Result<()> {
-        let account_home = codex_home.path().join("accounts").join(account_id);
-        fs::create_dir_all(&account_home)?;
-        let encode = |value: serde_json::Value| {
-            base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .encode(serde_json::to_vec(&value).expect("serialize jwt part"))
-        };
-        let jwt = format!(
-            "{}.{}.sig",
-            encode(json!({"alg": "none"})),
-            encode(json!({
-                "email": email,
-                "https://api.openai.com/auth": {
-                    "chatgpt_plan_type": "pro",
-                    "chatgpt_account_id": account_id,
-                    "user_id": format!("user-{account_id}")
-                }
-            }))
-        );
-        let auth = json!({
-            "auth_mode": AuthMode::Chatgpt,
-            "tokens": {
-                "id_token": jwt,
-                "access_token": format!("access-{account_id}"),
-                "refresh_token": format!("refresh-{account_id}"),
-                "account_id": account_id,
-            },
-            "last_refresh": chrono::Utc::now(),
-        });
-        fs::write(
-            account_home.join("auth.json"),
-            serde_json::to_string_pretty(&auth)?,
-        )?;
-        Ok(())
-    };
+    write_account_pool_member_auth(codex_home.path(), "work-pro", "work@example.com")?;
+    write_account_pool_member_auth(codex_home.path(), "personal-pro", "personal@example.com")?;
+    mount_account_pool_usage(&server, "work-pro", /*used_percent*/ 90).await;
+    mount_account_pool_usage(&server, "personal-pro", /*used_percent*/ 10).await;
 
-    write_member_auth("work-pro", "work@example.com")?;
-    write_member_auth("personal-pro", "personal@example.com")?;
-
-    Mock::given(method("GET"))
-        .and(path("/api/codex/usage"))
-        .and(header("authorization", "Bearer access-work-pro"))
-        .and(header("chatgpt-account-id", "work-pro"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "rate_limit": {
-                "allowed": true,
-                "limit_reached": false,
-                "primary_window": { "used_percent": 90 }
-            }
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/api/codex/usage"))
-        .and(header("authorization", "Bearer access-personal-pro"))
-        .and(header("chatgpt-account-id", "personal-pro"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "rate_limit": {
-                "allowed": true,
-                "limit_reached": false,
-                "primary_window": { "used_percent": 10 }
-            }
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let account_pool = AccountPoolToml {
-        enabled: true,
-        default_pool: Some("codex-pro".to_string()),
-        pools: [(
-            "codex-pro".to_string(),
-            AccountPoolDefinitionToml {
-                provider: "openai".to_string(),
-                policy: AccountPoolPolicyToml::LoadBalance,
-                accounts: vec!["work-pro".to_string(), "personal-pro".to_string()],
-            },
-        )]
-        .into(),
-    };
-    let config = AccountPoolClientTestConfig {
-        codex_home: codex_home.path().to_path_buf(),
-        chatgpt_base_url: server.uri(),
-        account_pool,
-    };
-    let auth_manager =
-        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
     let provider = ModelProviderInfo::create_openai_provider(Some("https://example.com/v1".into()));
-    let client = ModelClient::new(
-        Some(auth_manager),
-        SessionId::new(),
-        ThreadId::new(),
-        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
-        provider,
-        SessionSource::Cli,
-        /*parent_thread_id*/ None,
-        /*enable_request_compression*/ false,
-        /*include_timing_metrics*/ false,
-        /*beta_features_header*/ None,
-        /*attestation_provider*/ None,
-    );
+    let client = account_pool_model_client(codex_home.path(), server.uri(), provider).await;
     let model_info = test_model_info();
     let unpinned = client
         .current_client_setup(
@@ -541,6 +578,138 @@ async fn current_client_setup_honors_account_pool_pins_for_operation_kinds() -> 
     }
 
     server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn realtime_webrtc_sideband_uses_same_account_pool_auth() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_account_pool_member_auth(codex_home.path(), "work-pro", "work@example.com")?;
+    write_account_pool_member_auth(codex_home.path(), "personal-pro", "personal@example.com")?;
+    mount_account_pool_usage(&server, "work-pro", /*used_percent*/ 90).await;
+    mount_account_pool_usage(&server, "personal-pro", /*used_percent*/ 10).await;
+
+    Mock::given(method("POST"))
+        .and(path("/backend-api/codex/realtime/calls"))
+        .and(header("authorization", "Bearer access-personal-pro"))
+        .and(header("chatgpt-account-id", "personal-pro"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Location", "/v1/realtime/calls/rtc_account_pool")
+                .set_body_string("v=0\r\n"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider = ModelProviderInfo::create_openai_provider(Some(format!(
+        "{}/backend-api/codex",
+        server.uri()
+    )));
+    let client = account_pool_model_client(codex_home.path(), server.uri(), provider).await;
+
+    let call = client
+        .create_realtime_call_with_headers(
+            "v=offer\r\n".to_string(),
+            RealtimeSessionConfig {
+                instructions: "test instructions".to_string(),
+                model: Some("gpt-realtime".to_string()),
+                session_id: Some("session-1".to_string()),
+                event_parser: RealtimeEventParser::RealtimeV2,
+                session_mode: RealtimeSessionMode::Conversational,
+                output_modality: RealtimeOutputModality::Audio,
+                voice: RealtimeVoice::Marin,
+            },
+            http::HeaderMap::new(),
+        )
+        .await?;
+
+    assert_eq!(call.call_id, "rtc_account_pool");
+    assert_eq!(call.sdp, "v=0\r\n");
+    assert_eq!(
+        call.sideband_headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer access-personal-pro")
+    );
+    assert_eq!(
+        call.sideband_headers
+            .get("ChatGPT-Account-ID")
+            .and_then(|value| value.to_str().ok()),
+        Some("personal-pro")
+    );
+
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_preconnect_with_account_pool_reuses_selected_account() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let codex_home = TempDir::new()?;
+    let usage_server = MockServer::start().await;
+    write_account_pool_member_auth(codex_home.path(), "work-pro", "work@example.com")?;
+    write_account_pool_member_auth(codex_home.path(), "personal-pro", "personal@example.com")?;
+    mount_account_pool_usage(&usage_server, "work-pro", /*used_percent*/ 90).await;
+    mount_account_pool_usage(&usage_server, "personal-pro", /*used_percent*/ 10).await;
+
+    let websocket_server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+    let provider =
+        ModelProviderInfo::create_openai_provider(Some(format!("{}/v1", websocket_server.uri())));
+    let client = account_pool_model_client(codex_home.path(), usage_server.uri(), provider).await;
+    let model_info = test_model_info();
+    let session_telemetry = test_session_telemetry();
+    let mut client_session = client.new_session();
+
+    client_session
+        .preconnect_websocket(&session_telemetry, &model_info)
+        .await
+        .expect("websocket preconnect failed");
+    let prompt = prompt_with_input(vec![input_message("hello")]);
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &model_info,
+            &session_telemetry,
+            /*effort*/ None,
+            ReasoningSummary::Auto,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
+            &InferenceTraceContext::disabled(),
+        )
+        .await
+        .expect("websocket stream failed");
+
+    while let Some(event) = stream.next().await {
+        if matches!(event, Ok(ResponseEvent::Completed { .. })) {
+            break;
+        }
+    }
+
+    assert_eq!(
+        websocket_server
+            .single_handshake()
+            .header("chatgpt-account-id")
+            .as_deref(),
+        Some("personal-pro")
+    );
+    assert_eq!(
+        websocket_server
+            .single_handshake()
+            .header("authorization")
+            .as_deref(),
+        Some("Bearer access-personal-pro")
+    );
+    assert_eq!(websocket_server.single_connection().len(), 1);
+
+    usage_server.verify().await;
+    websocket_server.shutdown().await;
     Ok(())
 }
 

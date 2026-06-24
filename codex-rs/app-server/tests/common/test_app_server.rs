@@ -377,6 +377,12 @@ impl TestAppServer {
             .await
     }
 
+    /// Send an `account/usage/read` JSON-RPC request.
+    pub async fn send_get_account_token_usage_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("account/usage/read", /*params*/ None)
+            .await
+    }
+
     /// Send an `account/sendAddCreditsNudgeEmail` JSON-RPC request.
     pub async fn send_add_credits_nudge_email_request(
         &mut self,
