@@ -16,6 +16,8 @@ use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
+use tokio::task::JoinSet;
 use tokio_tungstenite::accept_hdr_async_with_config;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::extensions::ExtensionsConfig;
@@ -1220,156 +1222,174 @@ pub async fn start_websocket_server_with_headers(
     let connections_log = Arc::new(Mutex::new(Vec::new()));
     let handshakes_log = Arc::new(Mutex::new(Vec::new()));
     let request_log_updated = Arc::new(Notify::new());
-    let requests = Arc::clone(&connections_log);
-    let handshakes = Arc::clone(&handshakes_log);
+    let logged_connections = Arc::clone(&connections_log);
+    let logged_handshakes = Arc::clone(&handshakes_log);
     let request_log = Arc::clone(&request_log_updated);
-    let connections = Arc::new(Mutex::new(VecDeque::from(connections)));
+    let pending_connections = Arc::new(Mutex::new(VecDeque::from(connections)));
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+    let (shutdown_signal_tx, shutdown_signal_rx) = watch::channel(false);
 
     let task = tokio::spawn(async move {
+        let mut connection_tasks = JoinSet::new();
+
         loop {
-            let accept_res = tokio::select! {
-                _ = &mut shutdown_rx => return,
-                accept_res = listener.accept() => accept_res,
-            };
-            let (stream, _) = match accept_res {
-                Ok(value) => value,
-                Err(_) => return,
-            };
-            let connection = {
-                let mut pending = connections.lock().unwrap();
-                pending.pop_front()
-            };
-
-            let Some(connection) = connection else {
-                continue;
-            };
-
-            if let Some(delay) = connection.accept_delay {
-                tokio::time::sleep(delay).await;
+            let has_pending_connections = !pending_connections.lock().unwrap().is_empty();
+            if !has_pending_connections && connection_tasks.is_empty() {
+                return;
             }
 
-            let response_headers = connection.response_headers.clone();
-            let handshake_log = Arc::clone(&handshakes);
-            let callback = move |req: &Request, mut response: Response| {
-                let headers = req
-                    .headers()
-                    .iter()
-                    .filter_map(|(name, value)| {
-                        value
-                            .to_str()
-                            .ok()
-                            .map(|value| (name.as_str().to_string(), value.to_string()))
-                    })
-                    .collect();
-                handshake_log.lock().unwrap().push(WebSocketHandshake {
-                    uri: req.uri().to_string(),
-                    headers,
-                });
-
-                let headers_mut = response.headers_mut();
-                for (name, value) in &response_headers {
-                    if let (Ok(name), Ok(value)) = (
-                        HeaderName::from_bytes(name.as_bytes()),
-                        HeaderValue::from_str(value),
-                    ) {
-                        headers_mut.insert(name, value);
-                    }
+            tokio::select! {
+                _ = &mut shutdown_rx => {
+                    let _ = shutdown_signal_tx.send(true);
+                    while connection_tasks.join_next().await.is_some() {}
+                    return;
                 }
+                Some(_) = connection_tasks.join_next(), if !connection_tasks.is_empty() => {}
+                accept_res = listener.accept(), if has_pending_connections => {
+                    let (stream, _) = match accept_res {
+                        Ok(value) => value,
+                        Err(_) => return,
+                    };
+                    let connection = {
+                        let mut pending = pending_connections.lock().unwrap();
+                        pending.pop_front()
+                    };
 
-                Ok(response)
-            };
-
-            let mut ws_stream = match accept_hdr_async_with_config(
-                stream,
-                callback,
-                Some(websocket_accept_config()),
-            )
-            .await
-            {
-                Ok(ws) => ws,
-                Err(_) => continue,
-            };
-
-            let connection_index = {
-                let mut log = requests.lock().unwrap();
-                log.push(Vec::new());
-                log.len() - 1
-            };
-            let close_after_requests = connection.close_after_requests;
-            for request_events in connection.requests {
-                let Some(Ok(message)) = ws_stream.next().await else {
-                    break;
-                };
-                if let Some(body) = parse_ws_request_body(message) {
-                    let mut log = requests.lock().unwrap();
-                    if let Some(connection_log) = log.get_mut(connection_index) {
-                        connection_log.push(WebSocketRequest { body });
-                        let request_index = connection_log.len() - 1;
-                        let request = &connection_log[request_index];
-                        let request_body = request.body_json();
-                        eprintln!(
-                            "[ws test server +{}ms] connection={} received request={} type={:?} role={:?} text={:?} data={:?}",
-                            start.elapsed().as_millis(),
-                            connection_index,
-                            request_index,
-                            request_body.get("type").and_then(Value::as_str),
-                            request_body
-                                .get("item")
-                                .and_then(|item| item.get("role"))
-                                .and_then(Value::as_str),
-                            request_body
-                                .get("item")
-                                .and_then(|item| item.get("content"))
-                                .and_then(Value::as_array)
-                                .and_then(|content| content.first())
-                                .and_then(|content| content.get("text"))
-                                .and_then(Value::as_str),
-                            request_body
-                                .get("item")
-                                .and_then(|item| item.get("content"))
-                                .and_then(Value::as_array)
-                                .and_then(|content| content.first())
-                                .and_then(|content| content.get("data"))
-                                .and_then(Value::as_str),
-                        );
-                    }
-                    request_log.notify_waiters();
-                }
-
-                eprintln!(
-                    "[ws test server +{}ms] connection={} sending batch_size={} event_types={:?} audio_data={:?}",
-                    start.elapsed().as_millis(),
-                    connection_index,
-                    request_events.len(),
-                    request_events
-                        .iter()
-                        .map(|event| event.get("type").and_then(Value::as_str))
-                        .collect::<Vec<_>>(),
-                    request_events
-                        .iter()
-                        .find_map(|event| event.get("delta").and_then(Value::as_str)),
-                );
-                for event in &request_events {
-                    let Ok(payload) = serde_json::to_string(event) else {
+                    let Some(connection) = connection else {
                         continue;
                     };
-                    if ws_stream.send(Message::Text(payload.into())).await.is_err() {
-                        break;
-                    }
+
+                    let connection_index = {
+                        let mut log = logged_connections.lock().unwrap();
+                        log.push(Vec::new());
+                        log.len() - 1
+                    };
+                    let requests = Arc::clone(&logged_connections);
+                    let handshakes = Arc::clone(&logged_handshakes);
+                    let request_log = Arc::clone(&request_log);
+                    let mut shutdown_signal = shutdown_signal_rx.clone();
+
+                    connection_tasks.spawn(async move {
+                        if let Some(delay) = connection.accept_delay {
+                            tokio::time::sleep(delay).await;
+                        }
+
+                        let response_headers = connection.response_headers.clone();
+                        let handshake_log = Arc::clone(&handshakes);
+                        let callback = move |req: &Request, mut response: Response| {
+                            let headers = req
+                                .headers()
+                                .iter()
+                                .filter_map(|(name, value)| {
+                                    value.to_str().ok().map(|value| {
+                                        (name.as_str().to_string(), value.to_string())
+                                    })
+                                })
+                                .collect();
+                            handshake_log.lock().unwrap().push(WebSocketHandshake {
+                                uri: req.uri().to_string(),
+                                headers,
+                            });
+
+                            let headers_mut = response.headers_mut();
+                            for (name, value) in &response_headers {
+                                if let (Ok(name), Ok(value)) = (
+                                    HeaderName::from_bytes(name.as_bytes()),
+                                    HeaderValue::from_str(value),
+                                ) {
+                                    headers_mut.insert(name, value);
+                                }
+                            }
+
+                            Ok(response)
+                        };
+
+                        let mut ws_stream = match accept_hdr_async_with_config(
+                            stream,
+                            callback,
+                            Some(websocket_accept_config()),
+                        )
+                        .await
+                        {
+                            Ok(ws) => ws,
+                            Err(_) => return,
+                        };
+
+                        let close_after_requests = connection.close_after_requests;
+                        for request_events in connection.requests {
+                            let Some(Ok(message)) = ws_stream.next().await else {
+                                break;
+                            };
+                            if let Some(body) = parse_ws_request_body(message) {
+                                let mut log = requests.lock().unwrap();
+                                if let Some(connection_log) = log.get_mut(connection_index) {
+                                    connection_log.push(WebSocketRequest { body });
+                                    let request_index = connection_log.len() - 1;
+                                    let request = &connection_log[request_index];
+                                    let request_body = request.body_json();
+                                    eprintln!(
+                                        "[ws test server +{}ms] connection={} received request={} type={:?} role={:?} text={:?} data={:?}",
+                                        start.elapsed().as_millis(),
+                                        connection_index,
+                                        request_index,
+                                        request_body.get("type").and_then(Value::as_str),
+                                        request_body
+                                            .get("item")
+                                            .and_then(|item| item.get("role"))
+                                            .and_then(Value::as_str),
+                                        request_body
+                                            .get("item")
+                                            .and_then(|item| item.get("content"))
+                                            .and_then(Value::as_array)
+                                            .and_then(|content| content.first())
+                                            .and_then(|content| content.get("text"))
+                                            .and_then(Value::as_str),
+                                        request_body
+                                            .get("item")
+                                            .and_then(|item| item.get("content"))
+                                            .and_then(Value::as_array)
+                                            .and_then(|content| content.first())
+                                            .and_then(|content| content.get("data"))
+                                            .and_then(Value::as_str),
+                                    );
+                                }
+                                request_log.notify_waiters();
+                            }
+
+                            eprintln!(
+                                "[ws test server +{}ms] connection={} sending batch_size={} event_types={:?} audio_data={:?}",
+                                start.elapsed().as_millis(),
+                                connection_index,
+                                request_events.len(),
+                                request_events
+                                    .iter()
+                                    .map(|event| event.get("type").and_then(Value::as_str))
+                                    .collect::<Vec<_>>(),
+                                request_events
+                                    .iter()
+                                    .find_map(|event| event.get("delta").and_then(Value::as_str)),
+                            );
+                            for event in &request_events {
+                                let Ok(payload) = serde_json::to_string(event) else {
+                                    continue;
+                                };
+                                if ws_stream.send(Message::Text(payload.into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+
+                        if close_after_requests {
+                            let _ = ws_stream.close(None).await;
+                        } else {
+                            if !*shutdown_signal.borrow() {
+                                let _ = shutdown_signal.changed().await;
+                            }
+                            let _ = ws_stream.close(None).await;
+                        }
+                    });
                 }
-            }
-
-            if close_after_requests {
-                let _ = ws_stream.close(None).await;
-            } else {
-                let _ = shutdown_rx.await;
-                return;
-            }
-
-            if connections.lock().unwrap().is_empty() {
-                return;
-            }
+            };
         }
     });
 
