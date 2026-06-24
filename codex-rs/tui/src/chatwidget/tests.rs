@@ -216,6 +216,8 @@ macro_rules! assert_chatwidget_snapshot {
     }};
 }
 
+#[path = "tests/account_pool__status_and_layout.rs"]
+mod account_pool_status_and_layout;
 mod app_server;
 mod approval_requests;
 mod composer_submission;
