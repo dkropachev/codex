@@ -399,7 +399,8 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
                 "test case `- Routing behavior is covered: "
                 "[account_pool__routing](../core/tests/suite/account_pool__routing.rs)` "
-                "must target `repo/path.rs:test_name[,test_name]` or `missing`",
+                "must target `repo/path.rs:test_name[,test_name]`, `missing`, or "
+                "`missing:kebab-case-id`",
                 "codex-rs/core/tests/suite/account_pool__routing.rs:routing_test maps "
                 "to feature `account-pool` and test place `agent-e2e` but is not listed "
                 "in `codex-rs/feature-specs/account-pool.md` Test cases",
@@ -428,7 +429,8 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
                 "test case `- Routing behavior is covered: "
                 "[account_pool__status_tests](../tui/src/status/account_pool__status_tests.rs)` "
-                "must target `repo/path.rs:test_name[,test_name]` or `missing`",
+                "must target `repo/path.rs:test_name[,test_name]`, `missing`, or "
+                "`missing:kebab-case-id`",
                 "codex-rs/core/tests/suite/account_pool__routing.rs:routing_test maps "
                 "to feature `account-pool` and test place `agent-e2e` but is not listed "
                 "in `codex-rs/feature-specs/account-pool.md` Test cases",
@@ -592,6 +594,71 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
             ],
         )
 
+    def test_missing_backlog_id_from_target_parses_optional_id(self) -> None:
+        self.assertTrue(verify_feature_specs.is_missing_target("missing"))
+        self.assertTrue(verify_feature_specs.is_missing_target("missing:routing-edge"))
+        self.assertEqual(
+            verify_feature_specs.missing_backlog_id_from_target("missing:routing-edge"),
+            "routing-edge",
+        )
+        self.assertIsNone(
+            verify_feature_specs.missing_backlog_id_from_target("missing")
+        )
+        self.assertFalse(verify_feature_specs.is_missing_target("missing:RoutingEdge"))
+
+    def test_missing_backlog_ids_must_be_unique_per_test_place(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self.write_valid_repo(root)
+            spec = root / "codex-rs/feature-specs/account-pool.md"
+            text = spec.read_text(encoding="utf-8")
+            spec.write_text(
+                text.replace(
+                    "- Missing routing edge case: missing",
+                    "- Missing routing edge case: missing:routing-edge\n"
+                    "- Another routing edge case: missing:routing-edge",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
+
+        self.assertEqual(
+            failures,
+            [
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
+                "missing backlog id `routing-edge` is used more than once",
+            ],
+        )
+
+    def test_invalid_missing_backlog_id_shape_is_rejected(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self.write_valid_repo(root)
+            spec = root / "codex-rs/feature-specs/account-pool.md"
+            text = spec.read_text(encoding="utf-8")
+            spec.write_text(
+                text.replace(
+                    "- Missing routing edge case: missing",
+                    "- Missing routing edge case: missing:RoutingEdge",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
+
+        self.assertEqual(
+            failures,
+            [
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
+                "test case `- Missing routing edge case: missing:RoutingEdge` "
+                "must target `repo/path.rs:test_name[,test_name]`, `missing`, or "
+                "`missing:kebab-case-id`",
+            ],
+        )
+
     def test_explicit_legacy_target_counts_as_declared_coverage(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -706,10 +773,12 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
             [
                 "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
                 "test case `- Routing behavior is covered: todo` must target "
-                "`repo/path.rs:test_name[,test_name]` or `missing`",
+                "`repo/path.rs:test_name[,test_name]`, `missing`, or "
+                "`missing:kebab-case-id`",
                 "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
                 "test case `- Missing routing edge case: todo` must target "
-                "`repo/path.rs:test_name[,test_name]` or `missing`",
+                "`repo/path.rs:test_name[,test_name]`, `missing`, or "
+                "`missing:kebab-case-id`",
                 "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
                 "Test cases must include at least one concrete target or `missing` "
                 "backlog item",
@@ -756,7 +825,7 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
                 #### Test cases
 
-                - Live account list behavior is covered: missing
+                - Live account list behavior is covered: missing:live-account-list
                 """,
             )
             spec.write_text(text, encoding="utf-8")
@@ -767,6 +836,7 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
             "agent-e2e": (
                 verify_feature_specs.COVERAGE_STATUS_PARTIAL,
                 ("routing",),
+                (),
                 1,
                 1,
                 1,
@@ -774,6 +844,7 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
             "cli": (
                 verify_feature_specs.COVERAGE_STATUS_COVERED,
                 ("list",),
+                (),
                 1,
                 1,
                 0,
@@ -781,6 +852,7 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
             "tui-e2e": (
                 verify_feature_specs.COVERAGE_STATUS_MISSING_BACKLOG,
                 (),
+                ("live-account-list",),
                 0,
                 0,
                 1,
@@ -788,17 +860,23 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
         }
 
         def expected_row(test_place: str) -> verify_feature_specs.CoverageReportRow:
-            status, declared_scenarios, discovered_count, concrete_count, missing_count = (
-                expected_rows_by_place.get(
-                    test_place,
-                    (
-                        verify_feature_specs.COVERAGE_STATUS_NOT_COVERED,
-                        (),
-                        0,
-                        0,
-                        0,
-                    ),
-                )
+            (
+                status,
+                declared_scenarios,
+                missing_backlog_ids,
+                discovered_count,
+                concrete_count,
+                missing_count,
+            ) = expected_rows_by_place.get(
+                test_place,
+                (
+                    verify_feature_specs.COVERAGE_STATUS_NOT_COVERED,
+                    (),
+                    (),
+                    0,
+                    0,
+                    0,
+                ),
             )
             return verify_feature_specs.CoverageReportRow(
                 feature_id="account-pool",
@@ -808,6 +886,7 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 concrete_declared_target_count=concrete_count,
                 missing_test_case_count=missing_count,
                 declared_scenarios=declared_scenarios,
+                missing_backlog_ids=missing_backlog_ids,
             )
 
         self.assertEqual(
@@ -820,20 +899,20 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 """
                 Feature coverage report
 
-                | Feature | Test place | Status | Declared scenarios | Discovered mapped tests | Concrete declared targets | Missing test cases |
-                | --- | --- | --- | --- | ---: | ---: | ---: |
-                | account-pool | agent-e2e | partial | routing | 1 | 1 | 1 |
-                | account-pool | app-server-api | not-covered | - | 0 | 0 | 0 |
-                | account-pool | cli | covered | list | 1 | 1 | 0 |
-                | account-pool | tui-e2e | missing-backlog | - | 0 | 0 | 1 |
-                | account-pool | tui-component | not-covered | - | 0 | 0 | 0 |
-                | account-pool | login-auth | not-covered | - | 0 | 0 | 0 |
-                | account-pool | mcp-server | not-covered | - | 0 | 0 | 0 |
-                | account-pool | rmcp-client | not-covered | - | 0 | 0 | 0 |
-                | account-pool | codex-api | not-covered | - | 0 | 0 | 0 |
-                | account-pool | exec-cli | not-covered | - | 0 | 0 | 0 |
-                | account-pool | otel | not-covered | - | 0 | 0 | 0 |
-                | account-pool | exec-server | not-covered | - | 0 | 0 | 0 |
+                | Feature | Test place | Status | Declared scenarios | Missing backlog IDs | Discovered mapped tests | Concrete declared targets | Missing test cases |
+                | --- | --- | --- | --- | --- | ---: | ---: | ---: |
+                | account-pool | agent-e2e | partial | routing | - | 1 | 1 | 1 |
+                | account-pool | app-server-api | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | cli | covered | list | - | 1 | 1 | 0 |
+                | account-pool | tui-e2e | missing-backlog | - | live-account-list | 0 | 0 | 1 |
+                | account-pool | tui-component | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | login-auth | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | mcp-server | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | rmcp-client | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | codex-api | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | exec-cli | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | otel | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | exec-server | not-covered | - | - | 0 | 0 | 0 |
                 """
             ).lstrip(),
         )
@@ -883,20 +962,20 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 """
                 Feature coverage report
 
-                | Feature | Test place | Status | Declared scenarios | Discovered mapped tests | Concrete declared targets | Missing test cases |
-                | --- | --- | --- | --- | ---: | ---: | ---: |
-                | account-pool | agent-e2e | partial | routing | 1 | 1 | 1 |
-                | account-pool | app-server-api | not-covered | - | 0 | 0 | 0 |
-                | account-pool | cli | not-covered | - | 0 | 0 | 0 |
-                | account-pool | tui-e2e | not-covered | - | 0 | 0 | 0 |
-                | account-pool | tui-component | not-covered | - | 0 | 0 | 0 |
-                | account-pool | login-auth | not-covered | - | 0 | 0 | 0 |
-                | account-pool | mcp-server | not-covered | - | 0 | 0 | 0 |
-                | account-pool | rmcp-client | not-covered | - | 0 | 0 | 0 |
-                | account-pool | codex-api | not-covered | - | 0 | 0 | 0 |
-                | account-pool | exec-cli | not-covered | - | 0 | 0 | 0 |
-                | account-pool | otel | not-covered | - | 0 | 0 | 0 |
-                | account-pool | exec-server | not-covered | - | 0 | 0 | 0 |
+                | Feature | Test place | Status | Declared scenarios | Missing backlog IDs | Discovered mapped tests | Concrete declared targets | Missing test cases |
+                | --- | --- | --- | --- | --- | ---: | ---: | ---: |
+                | account-pool | agent-e2e | partial | routing | - | 1 | 1 | 1 |
+                | account-pool | app-server-api | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | cli | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | tui-e2e | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | tui-component | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | login-auth | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | mcp-server | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | rmcp-client | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | codex-api | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | exec-cli | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | otel | not-covered | - | - | 0 | 0 | 0 |
+                | account-pool | exec-server | not-covered | - | - | 0 | 0 | 0 |
                 """
             ).lstrip(),
         )

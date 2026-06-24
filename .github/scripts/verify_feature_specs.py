@@ -75,6 +75,7 @@ TEST_REF_RE = re.compile(
     r"^(codex-rs/[^\s:]+\.rs):"
     r"([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)$"
 )
+MISSING_TARGET_RE = re.compile(r"^missing(?::([a-z0-9]+(?:-[a-z0-9]+)*))?$")
 BEHAVIOR_ID_WORD_RE = re.compile(r"[A-Za-z0-9]+")
 RUST_FUNCTION_LINE_RE = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+"
@@ -244,9 +245,9 @@ class TestCase:
     """A parsed bullet from a feature spec ``#### Test cases`` section.
 
     ``description`` is the textual behavior expectation before the final
-    ``: `` delimiter. ``target`` is either ``missing`` or a concrete
-    ``repo/path.rs:test_fn[,test_fn]`` target. ``line`` preserves the original
-    bullet text for actionable error messages.
+    ``: `` delimiter. ``target`` is ``missing``, ``missing:<stable-id>``, or a
+    concrete ``repo/path.rs:test_fn[,test_fn]`` target. ``line`` preserves the
+    original bullet text for actionable error messages.
     """
 
     description: str
@@ -281,6 +282,7 @@ class CoverageReportRow:
     concrete_declared_target_count: int
     missing_test_case_count: int
     declared_scenarios: tuple[str, ...] = ()
+    missing_backlog_ids: tuple[str, ...] = ()
 
 
 COVERAGE_STATUS_COVERED = "covered"
@@ -893,9 +895,10 @@ def test_case_failures(
 ) -> list[str]:
     """Validate all bullets in one ``#### Test cases`` section.
 
-    Each bullet must describe the expected behavior and end in either
-    ``missing`` or a concrete Rust test target. Concrete targets are delegated
-    to ``test_target_failures`` for path, filename, and method validation.
+    Each bullet must describe the expected behavior and end in ``missing``,
+    ``missing:<stable-id>``, or a concrete Rust test target. Concrete targets
+    are delegated to ``test_target_failures`` for path, filename, and method
+    validation.
     """
 
     failures: list[str] = []
@@ -904,21 +907,34 @@ def test_case_failures(
         return [f"{rel_spec} test place `{test_place}` Test cases must list test cases"]
 
     valid_backlog_or_target_count = 0
+    missing_ids: set[str] = set()
     for test_case in test_cases:
         if not test_case.description:
             failures.append(
                 f"{rel_spec} test place `{test_place}` test case `{test_case.line}` "
                 "must describe expected behavior before the target"
             )
-        if test_case.target == "missing":
+
+        if is_missing_target(test_case.target):
             valid_backlog_or_target_count += 1
+            missing_id = missing_backlog_id_from_target(test_case.target)
+            if missing_id is None:
+                continue
+            if missing_id in missing_ids:
+                failures.append(
+                    f"{rel_spec} test place `{test_place}` missing backlog id "
+                    f"`{missing_id}` is used more than once"
+                )
+            else:
+                missing_ids.add(missing_id)
             continue
 
         target = TEST_REF_RE.fullmatch(test_case.target)
         if target is None:
             failures.append(
                 f"{rel_spec} test place `{test_place}` test case `{test_case.line}` "
-                "must target `repo/path.rs:test_name[,test_name]` or `missing`"
+                "must target `repo/path.rs:test_name[,test_name]`, `missing`, or "
+                "`missing:kebab-case-id`"
             )
             continue
 
@@ -1185,7 +1201,7 @@ def missing_behavior_scenario_failures(root: Path, spec_files: list[Path]) -> li
                 continue
 
             for test_case in parse_test_cases(test_case_sections[0]):
-                if test_case.target != "missing":
+                if not is_missing_target(test_case.target):
                     continue
                 behavior_id = scenario_id_from_behavior_description(
                     test_case.description
@@ -1215,6 +1231,7 @@ def feature_coverage_report(root: Path) -> list[CoverageReportRow]:
     declared_targets = declared_mapped_test_targets(root, spec_files)
     concrete_counts = mapped_test_counts(declared_targets)
     declared_scenarios = mapped_test_scenarios(declared_targets)
+    missing_id_values = missing_backlog_ids(spec_files)
     missing_counts = missing_test_case_counts(spec_files)
     not_covered = not_covered_test_places(spec_files)
     rows: list[CoverageReportRow] = []
@@ -1238,6 +1255,7 @@ def feature_coverage_report(root: Path) -> list[CoverageReportRow]:
                     concrete_declared_target_count=concrete_count,
                     missing_test_case_count=missing_count,
                     declared_scenarios=declared_scenarios.get(key, ()),
+                    missing_backlog_ids=missing_id_values.get(key, ()),
                 )
             )
 
@@ -1293,12 +1311,40 @@ def missing_test_case_counts(spec_files: list[Path]) -> dict[tuple[str, str], in
             missing_count = sum(
                 1
                 for test_case in parse_test_cases(test_case_sections[0])
-                if test_case.target == "missing"
+                if is_missing_target(test_case.target)
             )
             if missing_count:
                 counts[(spec.stem, test_place)] = missing_count
 
     return counts
+
+
+def missing_backlog_ids(spec_files: list[Path]) -> dict[tuple[str, str], tuple[str, ...]]:
+    """Return declared stable ids for missing backlog entries."""
+
+    ids: dict[tuple[str, str], set[str]] = {}
+    for spec in spec_files:
+        text = spec.read_text(encoding="utf-8")
+        for section in test_place_sections(text):
+            heading = TEST_PLACE_HEADING_RE.fullmatch(section.title)
+            if heading is None:
+                continue
+
+            test_place = heading.group(1)
+            if test_place not in TEST_PLACE_IDS:
+                continue
+
+            test_case_sections = sections_named(section.body, "Test cases")
+            if len(test_case_sections) != 1:
+                continue
+
+            for test_case in parse_test_cases(test_case_sections[0]):
+                missing_id = missing_backlog_id_from_target(test_case.target)
+                if missing_id is None:
+                    continue
+                ids.setdefault((spec.stem, test_place), set()).add(missing_id)
+
+    return {key: tuple(sorted(values)) for key, values in ids.items()}
 
 
 def coverage_status(
@@ -1325,16 +1371,20 @@ def format_coverage_report(rows: list[CoverageReportRow]) -> str:
     lines = [
         "Feature coverage report",
         "",
-        "| Feature | Test place | Status | Declared scenarios | Discovered mapped tests | Concrete declared targets | Missing test cases |",
-        "| --- | --- | --- | --- | ---: | ---: | ---: |",
+        "| Feature | Test place | Status | Declared scenarios | Missing backlog IDs | Discovered mapped tests | Concrete declared targets | Missing test cases |",
+        "| --- | --- | --- | --- | --- | ---: | ---: | ---: |",
     ]
     for row in rows:
         declared_scenarios = (
             ", ".join(row.declared_scenarios) if row.declared_scenarios else "-"
         )
+        missing_ids = (
+            ", ".join(row.missing_backlog_ids) if row.missing_backlog_ids else "-"
+        )
         lines.append(
             f"| {row.feature_id} | {row.test_place} | {row.status} | "
             f"{declared_scenarios} | "
+            f"{missing_ids} | "
             f"{row.discovered_mapped_test_count} | "
             f"{row.concrete_declared_target_count} | "
             f"{row.missing_test_case_count} |"
@@ -1614,6 +1664,21 @@ def scenario_id_from_behavior_description(description: str) -> str | None:
     if not words:
         return None
     return "-".join(words)
+
+
+def is_missing_target(target: str) -> bool:
+    """Return whether ``target`` is a valid missing-backlog target."""
+
+    return MISSING_TARGET_RE.fullmatch(target) is not None
+
+
+def missing_backlog_id_from_target(target: str) -> str | None:
+    """Return the optional stable id from a missing-backlog target."""
+
+    match = MISSING_TARGET_RE.fullmatch(target)
+    if match is None:
+        return None
+    return match.group(1)
 
 
 def changed_e2e_failures(root: Path, changed_files: list[str]) -> list[str]:
