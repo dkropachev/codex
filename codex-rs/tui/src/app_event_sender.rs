@@ -3,8 +3,6 @@
 //! This wraps the raw channel so call sites can submit typed `AppCommand`s
 //! without duplicating event construction or session logging behavior.
 
-use std::path::PathBuf;
-
 use crate::app_command::AppCommand;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::FileChangeApprovalDecision;
@@ -63,13 +61,6 @@ impl AppEventSender {
 
     pub(crate) fn review(&self, target: ReviewTarget) {
         self.send(AppEvent::CodexOp(AppCommand::review(target)));
-    }
-
-    pub(crate) fn list_skills(&self, cwds: Vec<PathBuf>, force_reload: bool) {
-        self.send(AppEvent::CodexOp(AppCommand::list_skills(
-            cwds,
-            force_reload,
-        )));
     }
 
     #[cfg_attr(target_os = "linux", allow(dead_code))]

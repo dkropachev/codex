@@ -4,18 +4,18 @@
 
 Skills provide reusable, named instructions and assets that Codex can load into a turn when a user
 explicitly invokes a skill or when configured skill rules select one. Skills are user-facing because
-they alter model behavior, appear in TUI controls, and can require approval before their
+they alter model behavior, appear in TUI controls, and can be enabled or disabled before their
 instructions are injected.
 
 ## Behavior
 
 Skills are discovered from system, user, plugin, and remote skill sources. Each skill has a stable
 name, instructions, optional assets, and optional invocation metadata. Skill loading must respect
-configuration rules, approval state, and source precedence.
+configuration rules and source precedence.
 
 When skills are enabled for a turn, Codex injects bounded skill instructions into model-visible
 context. Skill instructions must preserve the selected skill content without rewriting previous
-conversation history. Disabled or unapproved skills must not be injected as active instructions.
+conversation history. Disabled skills must not be injected as active instructions.
 
 Skill lists and toggles let clients expose available skills without starting a model turn. TUI skill
 controls should reflect availability and selection state consistently with app-server responses.
@@ -78,7 +78,7 @@ controls should reflect availability and selection state consistently with app-s
 
 #### Invariants
 
-- TUI controls distinguish available, enabled, disabled, and approval-required skills.
+- TUI controls distinguish available, enabled, and disabled skills.
 - Skill toggles update client-visible state without losing the current composer input.
 - Skill popups render long lists without dropping selectable skills.
 
@@ -87,7 +87,7 @@ controls should reflect availability and selection state consistently with app-s
 - Skills alter model-visible behavior only through explicit skill injection paths.
 - Skill discovery and skill injection are separate so clients can list skills without starting a
   turn.
-- Skill approval state gates active instruction injection.
+- Disabled skill state gates active instruction injection.
 - Skill context remains bounded and source-aware.
 
 ## Test Places
@@ -96,13 +96,13 @@ controls should reflect availability and selection state consistently with app-s
 
 #### Description
 
-Agent coverage should exercise skill discovery, explicit invocation, approval gating, disabled
+Agent coverage should exercise skill discovery, explicit invocation, disabled
 skill exclusion, and bounded model-context injection during agent turns.
 
 #### Test cases
 
 - Skill model-context behavior is covered: codex-rs/core/tests/suite/skills__agent_context.rs:user_turn_includes_skill_instructions
-- Skill approval behavior is covered: codex-rs/core/tests/suite/skills__approval.rs:shell_zsh_fork_skill_scripts_ignore_declared_permissions,shell_zsh_fork_still_enforces_workspace_write_sandbox
+- Skill script sandbox behavior is covered: codex-rs/core/tests/suite/skills__approval.rs:shell_zsh_fork_skill_scripts_ignore_declared_permissions,shell_zsh_fork_still_enforces_workspace_write_sandbox
 
 ### app-server-api (app-server API behavior)
 
@@ -129,13 +129,13 @@ Not covered
 
 #### Description
 
-Full TUI coverage should exercise live skill selection, toggling, approval-required state, and
+Full TUI coverage should exercise live skill selection, enabled and disabled state, toggling, and
 composer preservation.
 
 #### Test cases
 
-- Live TUI skill selection and toggling are covered: missing
-- Approval-required skill state and composer preservation are covered: missing
+- Live TUI skill selection and submission are covered: codex-rs/tui/tests/suite/skills__live.rs:skill_selection_submits_selected_skill
+- Disabled skill state, toggling, and composer preservation are covered: codex-rs/tui/tests/suite/skills__live.rs:skill_toggle_enables_disabled_skill_and_preserves_draft
 
 ### tui-component (focused TUI component behavior)
 
@@ -222,5 +222,4 @@ Not covered
 ## Test Generation Notes
 
 Generate tests for discovery from each supported source, invalid skill definitions, list APIs,
-approval-required skills, disabled skills, bounded instruction injection, explicit invocation, and
-TUI skill selection state.
+disabled skills, bounded instruction injection, explicit invocation, and TUI skill selection state.
