@@ -25,10 +25,11 @@ mapped tests must be listed in the owning feature spec, and a test place cannot 
 
 Each spec must also declare `Test Places`. This is a per-feature matrix over every catalog entry
 below. When a test place applies to the feature, the entry must include `Description` and
-`Test cases`. Each test case is a textual behavior expectation followed by either `missing` or a
-repo-relative test target like `codex-rs/core/tests/suite/account_pool__routing.rs:test_name`.
-Use `missing` for expected behavior that still needs test coverage; the verifier reports those
-entries as coverage backlog.
+`Test cases`. Each test case is a textual behavior expectation followed by `missing`,
+`missing:<stable-id>`, or a repo-relative test target like
+`codex-rs/core/tests/suite/account_pool__routing.rs:test_name`. Use `missing` for expected
+behavior that still needs test coverage; use the optional kebab-case stable ID form when a backlog
+entry needs lifecycle tracking. The verifier reports those entries as coverage backlog.
 When a test place should not cover the feature, the entry must include only `Description` and
 `Status`, with `Status` set to `Not covered`; the description must explain why that test place does
 not apply.

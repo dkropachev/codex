@@ -41,10 +41,11 @@ For every test place from the README catalog, add a heading with the exact catal
 then describe what should be tested for this feature without file references.
 
 If the test place applies to this feature, `Test cases` must list textual behavior expectations.
-Each item must end with either `missing` or a repo-relative test target in the form
-`path/to/test.rs:test_name[,test_name]`. The verifier checks that target files and functions exist
-and that target filenames map to the feature. Use `missing` for expected behavior that still needs
-test coverage.
+Each item must end with `missing`, `missing:<stable-id>`, or a repo-relative test target in the
+form `path/to/test.rs:test_name[,test_name]`. The verifier checks that target files and functions
+exist and that target filenames map to the feature. Use `missing` for expected behavior that still
+needs test coverage, or `missing:<stable-id>` when a kebab-case backlog ID would help track the
+item across edits.
 
 If the test place should not cover this feature, include only `Description` and `Status`. The status
 must be `Not covered`, and the description must explain why that test place does not apply.
@@ -57,7 +58,7 @@ Describe what agent behavior should be tested for this feature, without file ref
 
 #### Test cases
 
-- Main user-visible behavior is covered: missing
+- Main user-visible behavior still needs coverage: missing:main-user-visible
 - Important edge behavior is covered: codex-rs/path/to/feature_name__scenario.rs:test_name
 
 ### app-server-api (app-server API behavior)
