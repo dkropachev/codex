@@ -2,6 +2,8 @@
 #[path = "mcp__live.rs"]
 mod mcp_live;
 mod resize_reflow;
+#[path = "skills__live.rs"]
+mod skills_live;
 mod status_indicator;
 mod vt100_history;
 mod vt100_live_commit;
