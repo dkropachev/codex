@@ -419,6 +419,7 @@ errors.
 - Spark usage-limit failover retries with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_retries_spark_usage_limit_with_next_member
 - Short-window usage limits retry when wait exceeds cache cost: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_retries_short_usage_limit_when_wait_exceeds_cache_cost
 - Hot cache prevents short-wait failover: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_keeps_hot_cache_for_short_wait_usage_limit
+- WebSocket failover reconnects with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_websocket_failover_reconnects_with_next_member
 - Usage-not-included errors do not retry with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_does_not_retry_usage_not_included_with_next_member
 - Usage errors after visible output do not retry with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_does_not_retry_usage_error_after_visible_output
 - Usage-limit errors without account pool surface original error: codex-rs/core/tests/suite/account_pool__routing.rs:usage_limit_without_account_pool_surfaces_original_error

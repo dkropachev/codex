@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use anyhow::Result;
 use base64::Engine as _;
@@ -15,12 +16,14 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
+use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -148,6 +151,99 @@ async fn account_pool_keeps_hot_cache_for_short_wait_usage_limit() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn account_pool_websocket_failover_reconnects_with_next_member() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let usage_limit_error = json!({
+        "type": "error",
+        "status": 429,
+        "error": {
+            "type": "usage_limit_reached",
+            "message": "usage limit reached",
+            "plan_type": "pro",
+            "resets_at": Utc::now().timestamp() + 60 * 60,
+            "resets_in_seconds": 60 * 60
+        },
+        "headers": {
+            "x-codex-active-limit": "codex",
+            "x-codex-primary-used-percent": "100.0",
+            "x-codex-primary-window-minutes": "300"
+        }
+    });
+
+    let server = start_websocket_server_with_headers(vec![
+        WebSocketConnectionConfig {
+            requests: vec![
+                vec![
+                    ev_response_created("resp-prewarm"),
+                    ev_completed("resp-prewarm"),
+                ],
+                vec![
+                    ev_response_created("resp-work"),
+                    ev_assistant_message("msg-work", "work account response"),
+                    ev_completed("resp-work"),
+                ],
+                vec![usage_limit_error],
+            ],
+            response_headers: Vec::new(),
+            accept_delay: None,
+            close_after_requests: false,
+        },
+        WebSocketConnectionConfig {
+            requests: vec![vec![
+                ev_response_created("resp-personal"),
+                ev_assistant_message("msg-personal", "personal account response"),
+                ev_completed("resp-personal"),
+            ]],
+            response_headers: Vec::new(),
+            accept_delay: None,
+            close_after_requests: true,
+        },
+    ])
+    .await;
+
+    let codex = build_account_pool_websocket_codex(&server).await?.codex;
+    submit_prompt(&codex, "first websocket turn").await?;
+    wait_for_turn_complete(&codex).await;
+
+    submit_prompt(&codex, "second websocket turn").await?;
+    wait_for_turn_complete(&codex).await;
+
+    assert!(server.wait_for_handshakes(2, Duration::from_secs(5)).await);
+
+    let handshakes = server.handshakes();
+    assert_eq!(handshakes.len(), 2);
+    assert_eq!(
+        handshakes[0].header("ChatGPT-Account-ID").as_deref(),
+        Some("work-pro")
+    );
+    assert_eq!(
+        handshakes[1].header("ChatGPT-Account-ID").as_deref(),
+        Some("personal-pro")
+    );
+
+    let connections = server.connections();
+    assert_eq!(connections.len(), 2);
+    assert_eq!(connections[0].len(), 3);
+    assert_eq!(connections[1].len(), 1);
+
+    let work_retry = connections[0][2].body_json();
+    assert_eq!(work_retry["type"].as_str(), Some("response.create"));
+    assert_eq!(
+        work_retry["previous_response_id"].as_str(),
+        Some("resp-work")
+    );
+
+    let personal_retry = connections[1][0].body_json();
+    assert_eq!(personal_retry["type"].as_str(), Some("response.create"));
+    assert_eq!(personal_retry.get("previous_response_id"), None);
+    assert!(personal_retry.to_string().contains("second websocket turn"));
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn account_pool_does_not_retry_usage_not_included_with_next_member() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
@@ -264,6 +360,33 @@ async fn build_account_pool_codex(
             });
         });
     builder.build(server).await
+}
+
+async fn build_account_pool_websocket_codex(
+    server: &responses::WebSocketTestServer,
+) -> Result<core_test_support::test_codex::TestCodex> {
+    let mut builder = test_codex()
+        .with_config_auth_manager()
+        .with_pre_build_hook(|codex_home| {
+            write_chatgpt_auth(codex_home, "work-pro", "work@example.com");
+            write_chatgpt_auth(codex_home, "personal-pro", "personal@example.com");
+        })
+        .with_config(|config| {
+            config.account_pool = Some(AccountPoolToml {
+                enabled: true,
+                default_pool: Some("codex-pro".to_string()),
+                pools: [(
+                    "codex-pro".to_string(),
+                    AccountPoolDefinitionToml {
+                        provider: "openai".to_string(),
+                        policy: AccountPoolPolicyToml::Drain,
+                        accounts: vec!["work-pro".to_string(), "personal-pro".to_string()],
+                    },
+                )]
+                .into(),
+            });
+        });
+    builder.build_with_websocket_server(server).await
 }
 
 async fn mount_usage_limit_response(
