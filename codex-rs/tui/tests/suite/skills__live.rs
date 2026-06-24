@@ -260,6 +260,13 @@ async fn skill_toggle_enables_disabled_skill_and_preserves_draft() -> Result<()>
     )
     .await?;
     send_text(&writer, " after toggle").await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "full draft before submit",
+        |contents| contents.contains("draft before $disabled-scout after toggle"),
+    )
+    .await?;
     writer.send(b"\r".to_vec()).await?;
     wait_for_screen(
         &mut output_rx,
