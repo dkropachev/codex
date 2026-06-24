@@ -29,7 +29,8 @@ below. When a test place applies to the feature, the entry must include `Descrip
 `missing:<stable-id>`, or a repo-relative test target like
 `codex-rs/core/tests/suite/account_pool__routing.rs:test_name`. Use `missing` for expected
 behavior that still needs test coverage; use the optional kebab-case stable ID form when a backlog
-entry needs lifecycle tracking. The verifier reports those entries as coverage backlog.
+entry needs lifecycle tracking. When supplied, the stable ID must match the normalized behavior
+text before the target. The verifier reports those entries as coverage backlog.
 When a test place should not cover the feature, the entry must include only `Description` and
 `Status`, with `Status` set to `Not covered`; the description must explain why that test place does
 not apply.

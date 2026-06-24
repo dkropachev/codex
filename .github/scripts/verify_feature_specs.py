@@ -920,6 +920,15 @@ def test_case_failures(
             missing_id = missing_backlog_id_from_target(test_case.target)
             if missing_id is None:
                 continue
+            expected_missing_id = scenario_id_from_behavior_description(
+                test_case.description
+            )
+            if expected_missing_id is not None and missing_id != expected_missing_id:
+                failures.append(
+                    f"{rel_spec} test place `{test_place}` missing backlog id "
+                    f"`{missing_id}` must match normalized behavior id "
+                    f"`{expected_missing_id}`"
+                )
             if missing_id in missing_ids:
                 failures.append(
                     f"{rel_spec} test place `{test_place}` missing backlog id "
