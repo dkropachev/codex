@@ -541,6 +541,19 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
         self.assertEqual(failures, [])
 
+    def test_scenario_id_from_test_path_normalizes_feature_prefixed_filename(self) -> None:
+        self.assertEqual(
+            verify_feature_specs.scenario_id_from_test_path(
+                "codex-rs/core/tests/suite/account_pool__rate_limit_failover.rs"
+            ),
+            "rate-limit-failover",
+        )
+        self.assertIsNone(
+            verify_feature_specs.scenario_id_from_test_path(
+                "codex-rs/core/tests/suite/mixed.rs"
+            )
+        )
+
     def test_explicit_legacy_target_counts_as_declared_coverage(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -576,6 +589,7 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 discovered_mapped_test_count=1,
                 concrete_declared_target_count=2,
                 missing_test_case_count=1,
+                declared_scenarios=("routing",),
             ),
         )
 
@@ -714,18 +728,21 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
         expected_rows_by_place = {
             "agent-e2e": (
                 verify_feature_specs.COVERAGE_STATUS_PARTIAL,
+                ("routing",),
                 1,
                 1,
                 1,
             ),
             "cli": (
                 verify_feature_specs.COVERAGE_STATUS_COVERED,
+                ("list",),
                 1,
                 1,
                 0,
             ),
             "tui-e2e": (
                 verify_feature_specs.COVERAGE_STATUS_MISSING_BACKLOG,
+                (),
                 0,
                 0,
                 1,
@@ -733,11 +750,12 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
         }
 
         def expected_row(test_place: str) -> verify_feature_specs.CoverageReportRow:
-            status, discovered_count, concrete_count, missing_count = (
+            status, declared_scenarios, discovered_count, concrete_count, missing_count = (
                 expected_rows_by_place.get(
                     test_place,
                     (
                         verify_feature_specs.COVERAGE_STATUS_NOT_COVERED,
+                        (),
                         0,
                         0,
                         0,
@@ -751,6 +769,7 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 discovered_mapped_test_count=discovered_count,
                 concrete_declared_target_count=concrete_count,
                 missing_test_case_count=missing_count,
+                declared_scenarios=declared_scenarios,
             )
 
         self.assertEqual(
@@ -763,20 +782,20 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 """
                 Feature coverage report
 
-                | Feature | Test place | Status | Discovered mapped tests | Concrete declared targets | Missing test cases |
-                | --- | --- | --- | ---: | ---: | ---: |
-                | account-pool | agent-e2e | partial | 1 | 1 | 1 |
-                | account-pool | app-server-api | not-covered | 0 | 0 | 0 |
-                | account-pool | cli | covered | 1 | 1 | 0 |
-                | account-pool | tui-e2e | missing-backlog | 0 | 0 | 1 |
-                | account-pool | tui-component | not-covered | 0 | 0 | 0 |
-                | account-pool | login-auth | not-covered | 0 | 0 | 0 |
-                | account-pool | mcp-server | not-covered | 0 | 0 | 0 |
-                | account-pool | rmcp-client | not-covered | 0 | 0 | 0 |
-                | account-pool | codex-api | not-covered | 0 | 0 | 0 |
-                | account-pool | exec-cli | not-covered | 0 | 0 | 0 |
-                | account-pool | otel | not-covered | 0 | 0 | 0 |
-                | account-pool | exec-server | not-covered | 0 | 0 | 0 |
+                | Feature | Test place | Status | Declared scenarios | Discovered mapped tests | Concrete declared targets | Missing test cases |
+                | --- | --- | --- | --- | ---: | ---: | ---: |
+                | account-pool | agent-e2e | partial | routing | 1 | 1 | 1 |
+                | account-pool | app-server-api | not-covered | - | 0 | 0 | 0 |
+                | account-pool | cli | covered | list | 1 | 1 | 0 |
+                | account-pool | tui-e2e | missing-backlog | - | 0 | 0 | 1 |
+                | account-pool | tui-component | not-covered | - | 0 | 0 | 0 |
+                | account-pool | login-auth | not-covered | - | 0 | 0 | 0 |
+                | account-pool | mcp-server | not-covered | - | 0 | 0 | 0 |
+                | account-pool | rmcp-client | not-covered | - | 0 | 0 | 0 |
+                | account-pool | codex-api | not-covered | - | 0 | 0 | 0 |
+                | account-pool | exec-cli | not-covered | - | 0 | 0 | 0 |
+                | account-pool | otel | not-covered | - | 0 | 0 | 0 |
+                | account-pool | exec-server | not-covered | - | 0 | 0 | 0 |
                 """
             ).lstrip(),
         )
@@ -826,20 +845,20 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 """
                 Feature coverage report
 
-                | Feature | Test place | Status | Discovered mapped tests | Concrete declared targets | Missing test cases |
-                | --- | --- | --- | ---: | ---: | ---: |
-                | account-pool | agent-e2e | partial | 1 | 1 | 1 |
-                | account-pool | app-server-api | not-covered | 0 | 0 | 0 |
-                | account-pool | cli | not-covered | 0 | 0 | 0 |
-                | account-pool | tui-e2e | not-covered | 0 | 0 | 0 |
-                | account-pool | tui-component | not-covered | 0 | 0 | 0 |
-                | account-pool | login-auth | not-covered | 0 | 0 | 0 |
-                | account-pool | mcp-server | not-covered | 0 | 0 | 0 |
-                | account-pool | rmcp-client | not-covered | 0 | 0 | 0 |
-                | account-pool | codex-api | not-covered | 0 | 0 | 0 |
-                | account-pool | exec-cli | not-covered | 0 | 0 | 0 |
-                | account-pool | otel | not-covered | 0 | 0 | 0 |
-                | account-pool | exec-server | not-covered | 0 | 0 | 0 |
+                | Feature | Test place | Status | Declared scenarios | Discovered mapped tests | Concrete declared targets | Missing test cases |
+                | --- | --- | --- | --- | ---: | ---: | ---: |
+                | account-pool | agent-e2e | partial | routing | 1 | 1 | 1 |
+                | account-pool | app-server-api | not-covered | - | 0 | 0 | 0 |
+                | account-pool | cli | not-covered | - | 0 | 0 | 0 |
+                | account-pool | tui-e2e | not-covered | - | 0 | 0 | 0 |
+                | account-pool | tui-component | not-covered | - | 0 | 0 | 0 |
+                | account-pool | login-auth | not-covered | - | 0 | 0 | 0 |
+                | account-pool | mcp-server | not-covered | - | 0 | 0 | 0 |
+                | account-pool | rmcp-client | not-covered | - | 0 | 0 | 0 |
+                | account-pool | codex-api | not-covered | - | 0 | 0 | 0 |
+                | account-pool | exec-cli | not-covered | - | 0 | 0 | 0 |
+                | account-pool | otel | not-covered | - | 0 | 0 | 0 |
+                | account-pool | exec-server | not-covered | - | 0 | 0 | 0 |
                 """
             ).lstrip(),
         )

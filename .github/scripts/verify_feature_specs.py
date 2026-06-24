@@ -279,6 +279,7 @@ class CoverageReportRow:
     discovered_mapped_test_count: int
     concrete_declared_target_count: int
     missing_test_case_count: int
+    declared_scenarios: tuple[str, ...] = ()
 
 
 COVERAGE_STATUS_COVERED = "covered"
@@ -1166,7 +1167,9 @@ def feature_coverage_report(root: Path) -> list[CoverageReportRow]:
 
     spec_files = feature_spec_files(root)
     discovered_counts = mapped_test_counts(discovered_mapped_test_targets(root))
-    concrete_counts = mapped_test_counts(declared_mapped_test_targets(root, spec_files))
+    declared_targets = declared_mapped_test_targets(root, spec_files)
+    concrete_counts = mapped_test_counts(declared_targets)
+    declared_scenarios = mapped_test_scenarios(declared_targets)
     missing_counts = missing_test_case_counts(spec_files)
     not_covered = not_covered_test_places(spec_files)
     rows: list[CoverageReportRow] = []
@@ -1189,6 +1192,7 @@ def feature_coverage_report(root: Path) -> list[CoverageReportRow]:
                     discovered_mapped_test_count=discovered_counts.get(key, 0),
                     concrete_declared_target_count=concrete_count,
                     missing_test_case_count=missing_count,
+                    declared_scenarios=declared_scenarios.get(key, ()),
                 )
             )
 
@@ -1205,6 +1209,21 @@ def mapped_test_counts(
         key = (target.feature_id, target.test_place)
         counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+def mapped_test_scenarios(
+    targets: list[MappedTestTarget] | set[MappedTestTarget],
+) -> dict[tuple[str, str], tuple[str, ...]]:
+    """Return normalized scenario ids from feature-prefixed test filenames."""
+
+    scenarios: dict[tuple[str, str], set[str]] = {}
+    for target in targets:
+        scenario_id = scenario_id_from_test_path(target.path)
+        if scenario_id is None:
+            continue
+        key = (target.feature_id, target.test_place)
+        scenarios.setdefault(key, set()).add(scenario_id)
+    return {key: tuple(sorted(values)) for key, values in scenarios.items()}
 
 
 def missing_test_case_counts(spec_files: list[Path]) -> dict[tuple[str, str], int]:
@@ -1261,12 +1280,16 @@ def format_coverage_report(rows: list[CoverageReportRow]) -> str:
     lines = [
         "Feature coverage report",
         "",
-        "| Feature | Test place | Status | Discovered mapped tests | Concrete declared targets | Missing test cases |",
-        "| --- | --- | --- | ---: | ---: | ---: |",
+        "| Feature | Test place | Status | Declared scenarios | Discovered mapped tests | Concrete declared targets | Missing test cases |",
+        "| --- | --- | --- | --- | ---: | ---: | ---: |",
     ]
     for row in rows:
+        declared_scenarios = (
+            ", ".join(row.declared_scenarios) if row.declared_scenarios else "-"
+        )
         lines.append(
             f"| {row.feature_id} | {row.test_place} | {row.status} | "
+            f"{declared_scenarios} | "
             f"{row.discovered_mapped_test_count} | "
             f"{row.concrete_declared_target_count} | "
             f"{row.missing_test_case_count} |"
@@ -1527,6 +1550,16 @@ def feature_id_from_test_path(path: str) -> str | None:
         return None
     feature_prefix = stem.split("__", maxsplit=1)[0]
     return feature_prefix.replace("_", "-")
+
+
+def scenario_id_from_test_path(path: str) -> str | None:
+    """Return the normalized scenario suffix from a feature-prefixed test path."""
+
+    stem = Path(path).stem
+    if not E2E_STEM_RE.fullmatch(stem):
+        return None
+    scenario_suffix = stem.split("__", maxsplit=1)[1]
+    return scenario_suffix.replace("_", "-")
 
 
 def changed_e2e_failures(root: Path, changed_files: list[str]) -> list[str]:
