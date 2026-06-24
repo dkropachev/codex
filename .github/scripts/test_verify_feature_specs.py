@@ -615,8 +615,8 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
             spec.write_text(
                 text.replace(
                     "- Missing routing edge case: missing",
-                    "- Missing routing edge case: missing:routing-edge\n"
-                    "- Another routing edge case: missing:routing-edge",
+                    "- Missing routing edge case: missing:missing-routing-edge-case\n"
+                    "- Missing routing edge case: missing:missing-routing-edge-case",
                     1,
                 ),
                 encoding="utf-8",
@@ -628,7 +628,33 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
             failures,
             [
                 "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
-                "missing backlog id `routing-edge` is used more than once",
+                "missing backlog id `missing-routing-edge-case` is used more than once",
+            ],
+        )
+
+    def test_missing_backlog_id_must_match_normalized_behavior(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self.write_valid_repo(root)
+            spec = root / "codex-rs/feature-specs/account-pool.md"
+            text = spec.read_text(encoding="utf-8")
+            spec.write_text(
+                text.replace(
+                    "- Missing routing edge case: missing",
+                    "- Missing routing edge case: missing:routing-edge",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
+
+        self.assertEqual(
+            failures,
+            [
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
+                "missing backlog id `routing-edge` must match normalized behavior id "
+                "`missing-routing-edge-case`",
             ],
         )
 
@@ -825,7 +851,7 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
                 #### Test cases
 
-                - Live account list behavior is covered: missing:live-account-list
+                - Live account list: missing:live-account-list
                 """,
             )
             spec.write_text(text, encoding="utf-8")

@@ -45,7 +45,8 @@ Each item must end with `missing`, `missing:<stable-id>`, or a repo-relative tes
 form `path/to/test.rs:test_name[,test_name]`. The verifier checks that target files and functions
 exist and that target filenames map to the feature. Use `missing` for expected behavior that still
 needs test coverage, or `missing:<stable-id>` when a kebab-case backlog ID would help track the
-item across edits.
+item across edits. When supplied, the stable ID must match the normalized behavior text before the
+target.
 
 If the test place should not cover this feature, include only `Description` and `Status`. The status
 must be `Not covered`, and the description must explain why that test place does not apply.
@@ -58,7 +59,7 @@ Describe what agent behavior should be tested for this feature, without file ref
 
 #### Test cases
 
-- Main user-visible behavior still needs coverage: missing:main-user-visible
+- Main user-visible behavior: missing:main-user-visible-behavior
 - Important edge behavior is covered: codex-rs/path/to/feature_name__scenario.rs:test_name
 
 ### app-server-api (app-server API behavior)
