@@ -76,21 +76,16 @@ async fn skill_mention_submits_skill_instructions() -> Result<()> {
         |contents| contents.contains("$write-haiku"),
     )
     .await?;
-    writer.send(b"\x1b".to_vec()).await?;
-    wait_for_screen(
-        &mut output_rx,
-        &mut screen,
-        "closed skill popup",
-        |contents| contents.contains("$write-haiku") && !contents.contains("Write compact haiku."),
-    )
-    .await?;
 
     send_text(&writer, " about live tui").await?;
     wait_for_screen(
         &mut output_rx,
         &mut screen,
-        "prompt with selected skill",
-        |contents| contents.contains("$write-haiku") && contents.contains("about live tui"),
+        "prompt with skill mention",
+        |contents| {
+            contents.contains("$write-haiku about live tui")
+                && !contents.contains("Write compact haiku.")
+        },
     )
     .await?;
 
