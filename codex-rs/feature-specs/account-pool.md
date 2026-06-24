@@ -473,7 +473,7 @@ is set, and sparse rate-limit update merging.
 
 - Pool status rendering shows active member and unavailable member metadata: codex-rs/tui/src/status/account_pool__status_tests.rs:status_snapshot_shows_chatgpt_pool_active_member,status_snapshot_shows_chatgpt_pool_unavailable_members
 - Pool status rendering shows fallback active-member display: codex-rs/tui/src/status/account_pool__status_tests.rs:status_snapshot_shows_chatgpt_pool_without_active_member
-- Pool account-read responses map active and fallback member metadata for status display: codex-rs/tui/src/app_server_session.rs:account_ui_state_from_response_preserves_chatgpt_pool_details,account_ui_state_from_response_uses_pool_member_metadata_without_active_assignment
+- Pool account-read responses map active and fallback member metadata for status display: codex-rs/tui/src/account_pool__app_server_session.rs:account_ui_state_from_response_preserves_chatgpt_pool_details,account_ui_state_from_response_uses_pool_member_metadata_without_active_assignment
 - Sparse rate-limit update merging preserves existing status metadata: codex-rs/tui/src/chatwidget/tests/status_and_layout.rs:rolling_rate_limit_snapshot_preserves_prior_individual_limit
 
 ### login-auth (auth and login behavior)
