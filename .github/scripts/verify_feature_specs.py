@@ -75,6 +75,7 @@ TEST_REF_RE = re.compile(
     r"^(codex-rs/[^\s:]+\.rs):"
     r"([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)$"
 )
+BEHAVIOR_ID_WORD_RE = re.compile(r"[A-Za-z0-9]+")
 RUST_FUNCTION_LINE_RE = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+"
     r"([A-Za-z_][A-Za-z0-9_]*)\s*\("
@@ -370,6 +371,7 @@ def verify_feature_specs(
     discovered_targets = discovered_mapped_test_targets(root)
     failures.extend(not_covered_mapped_test_failures(spec_files, discovered_targets))
     failures.extend(unlisted_mapped_test_failures(root, spec_files, discovered_targets))
+    failures.extend(missing_behavior_scenario_failures(root, spec_files))
     failures.extend(changed_e2e_failures(root, changed_files))
     return failures
 
@@ -1157,6 +1159,49 @@ def unlisted_mapped_test_failures(
     return failures
 
 
+def missing_behavior_scenario_failures(root: Path, spec_files: list[Path]) -> list[str]:
+    """Reject ``missing`` items that duplicate an already-declared scenario id."""
+
+    declared_scenarios = mapped_test_scenarios(declared_mapped_test_targets(root, spec_files))
+    failures: list[str] = []
+    for spec in spec_files:
+        rel_spec = relative_path(root, spec)
+        text = spec.read_text(encoding="utf-8")
+        for section in test_place_sections(text):
+            heading = TEST_PLACE_HEADING_RE.fullmatch(section.title)
+            if heading is None:
+                continue
+
+            test_place = heading.group(1)
+            if test_place not in TEST_PLACE_IDS:
+                continue
+
+            scenarios = set(declared_scenarios.get((spec.stem, test_place), ()))
+            if not scenarios:
+                continue
+
+            test_case_sections = sections_named(section.body, "Test cases")
+            if len(test_case_sections) != 1:
+                continue
+
+            for test_case in parse_test_cases(test_case_sections[0]):
+                if test_case.target != "missing":
+                    continue
+                behavior_id = scenario_id_from_behavior_description(
+                    test_case.description
+                )
+                if behavior_id not in scenarios:
+                    continue
+                failures.append(
+                    f"{rel_spec} test place `{test_place}` missing test case "
+                    f"`{test_case.line}` matches declared scenario `{behavior_id}`; "
+                    "replace `missing` with a concrete test target or rename the "
+                    "missing behavior"
+                )
+
+    return failures
+
+
 def feature_coverage_report(root: Path) -> list[CoverageReportRow]:
     """Return deterministic coverage rows for every feature/test-place pair.
 
@@ -1560,6 +1605,15 @@ def scenario_id_from_test_path(path: str) -> str | None:
         return None
     scenario_suffix = stem.split("__", maxsplit=1)[1]
     return scenario_suffix.replace("_", "-")
+
+
+def scenario_id_from_behavior_description(description: str) -> str | None:
+    """Return a low-noise scenario id candidate from test-case behavior text."""
+
+    words = BEHAVIOR_ID_WORD_RE.findall(description.lower())
+    if not words:
+        return None
+    return "-".join(words)
 
 
 def changed_e2e_failures(root: Path, changed_files: list[str]) -> list[str]:
