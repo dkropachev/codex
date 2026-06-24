@@ -171,7 +171,7 @@ handling, and plugin UI rendering.
 #### Test cases
 
 - Plugin mention resolution and selection state are covered: missing
-- Disabled plugin handling and plugin UI rendering are covered: missing
+- Installed plugin enablement and disabled-state popup behavior are covered: codex-rs/tui/src/chatwidget/tests/plugins__popups.rs:plugins_popup_space_toggles_installed_plugin_from_list,plugins_popup_space_on_uninstalled_row_does_not_start_search,plugins_popup_space_with_active_search_does_not_toggle_installed_plugin
 
 ### login-auth (auth and login behavior)
 
