@@ -554,6 +554,44 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
             )
         )
 
+    def test_scenario_id_from_behavior_description_normalizes_words(self) -> None:
+        self.assertEqual(
+            verify_feature_specs.scenario_id_from_behavior_description(
+                "Rate-limit failover!"
+            ),
+            "rate-limit-failover",
+        )
+        self.assertIsNone(
+            verify_feature_specs.scenario_id_from_behavior_description("`!`")
+        )
+
+    def test_missing_behavior_must_not_duplicate_declared_scenario_id(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self.write_valid_repo(root)
+            spec = root / "codex-rs/feature-specs/account-pool.md"
+            text = spec.read_text(encoding="utf-8")
+            spec.write_text(
+                text.replace(
+                    "- Missing routing edge case: missing",
+                    "- Routing: missing",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
+
+        self.assertEqual(
+            failures,
+            [
+                "codex-rs/feature-specs/account-pool.md test place `agent-e2e` "
+                "missing test case `- Routing: missing` matches declared scenario "
+                "`routing`; replace `missing` with a concrete test target or rename "
+                "the missing behavior",
+            ],
+        )
+
     def test_explicit_legacy_target_counts_as_declared_coverage(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
