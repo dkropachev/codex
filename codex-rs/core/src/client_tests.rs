@@ -45,6 +45,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::SessionSource;
@@ -211,6 +212,20 @@ impl AuthManagerConfig for AccountPoolClientTestConfig {
     fn auth_keyring_backend_kind(&self) -> AuthKeyringBackendKind {
         AuthKeyringBackendKind::default()
     }
+}
+
+#[test]
+fn ultra_reasoning_uses_max_for_requests() {
+    assert_eq!(
+        (
+            super::reasoning_effort_for_request(ReasoningEffort::Ultra),
+            super::reasoning_effort_for_request(ReasoningEffort::High),
+        ),
+        (
+            ReasoningEffort::Custom("max".to_string()),
+            ReasoningEffort::High,
+        )
+    );
 }
 
 #[derive(Default)]
