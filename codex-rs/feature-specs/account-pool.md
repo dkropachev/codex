@@ -455,12 +455,12 @@ the main Codex command surface.
 
 #### Description
 
-Account-pool behavior is covered by focused TUI component tests and app-server API tests; it does
-not currently require a full terminal interaction test.
+Live TUI coverage should exercise the embedded app-server to status-card path for configured
+account pools.
 
-#### Status
+#### Test cases
 
-Not covered
+- Status command renders account-pool metadata in a live terminal session: codex-rs/tui/tests/suite/account_pool__live.rs:account_pool_status_renders_in_live_tui
 
 ### tui-component (focused TUI component behavior)
 
