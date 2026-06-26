@@ -20,6 +20,7 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
         ApiError::ContextWindowExceeded => CodexErr::ContextWindowExceeded,
         ApiError::QuotaExceeded => CodexErr::QuotaExceeded,
         ApiError::UsageNotIncluded => CodexErr::UsageNotIncluded,
+        ApiError::UsageLimitReached(err) => CodexErr::UsageLimitReached(*err),
         ApiError::Retryable { message, delay } => CodexErr::Stream(message, delay),
         ApiError::Stream(msg) => CodexErr::Stream(msg, None),
         ApiError::ServerOverloaded => CodexErr::ServerOverloaded,

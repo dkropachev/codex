@@ -2,15 +2,22 @@ use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::error::ApiError;
 use crate::rate_limits::parse_all_rate_limits;
+use crate::rate_limits::parse_rate_limit_for_limit;
 use crate::telemetry::SseTelemetry;
+use chrono::DateTime;
+use chrono::Utc;
 use codex_client::ByteStream;
 use codex_client::StreamResponse;
+use codex_protocol::auth::PlanType;
+use codex_protocol::error::UsageLimitReachedError;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ModelVerification;
+use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnModerationMetadataEvent;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
+use http::HeaderMap;
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
@@ -25,6 +32,7 @@ use tracing::trace;
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
 const OPENAI_MODEL_HEADER: &str = "openai-model";
 const REQUEST_ID_HEADER: &str = "x-request-id";
+const ACTIVE_LIMIT_HEADER: &str = "x-codex-active-limit";
 const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
 
 pub fn spawn_response_stream(
@@ -34,6 +42,13 @@ pub fn spawn_response_stream(
     turn_state: Option<Arc<OnceLock<String>>>,
 ) -> ResponseStream {
     let rate_limit_snapshots = parse_all_rate_limits(&stream_response.headers);
+    let usage_limit_snapshot =
+        usage_limit_snapshot_from_headers(&stream_response.headers).or_else(|| {
+            rate_limit_snapshots
+                .iter()
+                .find(|snapshot| snapshot_exhausted(snapshot))
+                .cloned()
+        });
     let models_etag = stream_response
         .headers
         .get("X-Models-Etag")
@@ -77,7 +92,14 @@ pub fn spawn_response_stream(
                 .send(Ok(ResponseEvent::ServerReasoningIncluded(true)))
                 .await;
         }
-        process_sse(stream_response.bytes, tx_event, idle_timeout, telemetry).await;
+        process_sse(
+            stream_response.bytes,
+            tx_event,
+            idle_timeout,
+            telemetry,
+            usage_limit_snapshot,
+        )
+        .await;
     });
 
     ResponseStream {
@@ -92,7 +114,7 @@ struct Error {
     r#type: Option<String>,
     code: Option<String>,
     message: Option<String>,
-    plan_type: Option<String>,
+    plan_type: Option<PlanType>,
     resets_at: Option<i64>,
 }
 
@@ -275,6 +297,7 @@ impl ResponsesEventError {
 
 pub fn process_responses_event(
     event: ResponsesStreamEvent,
+    usage_limit_snapshot: Option<&RateLimitSnapshot>,
 ) -> std::result::Result<Option<ResponseEvent>, ResponsesEventError> {
     match event.kind.as_str() {
         "response.output_item.done" => {
@@ -334,6 +357,10 @@ pub fn process_responses_event(
                         response_error = ApiError::QuotaExceeded;
                     } else if is_usage_not_included(&error) {
                         response_error = ApiError::UsageNotIncluded;
+                    } else if is_usage_limit_reached(&error) {
+                        response_error = ApiError::UsageLimitReached(Box::new(
+                            usage_limit_reached_error(error, usage_limit_snapshot.cloned()),
+                        ));
                     } else if is_cyber_policy_error(&error) {
                         let message = cyber_policy_message(error.message);
                         response_error = ApiError::CyberPolicy { message };
@@ -414,6 +441,7 @@ pub async fn process_sse(
     tx_event: mpsc::Sender<Result<ResponseEvent, ApiError>>,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
+    usage_limit_snapshot: Option<RateLimitSnapshot>,
 ) {
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
@@ -488,7 +516,7 @@ pub async fn process_sse(
             return;
         }
 
-        match process_responses_event(event) {
+        match process_responses_event(event, usage_limit_snapshot.as_ref()) {
             Ok(Some(event)) => {
                 let is_completed = matches!(event, ResponseEvent::Completed { .. });
                 if tx_event.send(Ok(event)).await.is_err() {
@@ -544,8 +572,47 @@ fn is_usage_not_included(error: &Error) -> bool {
     error.code.as_deref() == Some("usage_not_included")
 }
 
+fn is_usage_limit_reached(error: &Error) -> bool {
+    error.r#type.as_deref() == Some("usage_limit_reached")
+        || error.code.as_deref() == Some("usage_limit_reached")
+}
+
+fn usage_limit_reached_error(
+    error: Error,
+    rate_limits: Option<RateLimitSnapshot>,
+) -> UsageLimitReachedError {
+    UsageLimitReachedError {
+        plan_type: error.plan_type,
+        resets_at: error
+            .resets_at
+            .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0)),
+        rate_limits: rate_limits.map(Box::new),
+        promo_message: None,
+        rate_limit_reached_type: None,
+    }
+}
+
 fn is_invalid_prompt_error(error: &Error) -> bool {
     error.code.as_deref() == Some("invalid_prompt")
+}
+
+fn usage_limit_snapshot_from_headers(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
+    let active_limit = headers
+        .get(ACTIVE_LIMIT_HEADER)
+        .and_then(|value| value.to_str().ok());
+    active_limit
+        .and_then(|limit_id| parse_rate_limit_for_limit(headers, Some(limit_id)))
+        .filter(snapshot_exhausted)
+        .or_else(|| {
+            parse_rate_limit_for_limit(headers, /*limit_id*/ None).filter(snapshot_exhausted)
+        })
+}
+
+fn snapshot_exhausted(snapshot: &RateLimitSnapshot) -> bool {
+    [snapshot.primary.as_ref(), snapshot.secondary.as_ref()]
+        .into_iter()
+        .flatten()
+        .any(|window| window.used_percent >= 100.0)
 }
 
 fn is_cyber_policy_error(error: &Error) -> bool {
@@ -610,6 +677,7 @@ mod tests {
             tx,
             idle_timeout(),
             /*telemetry*/ None,
+            /*usage_limit_snapshot*/ None,
         ));
 
         let mut events = Vec::new();
@@ -641,6 +709,7 @@ mod tests {
             tx,
             idle_timeout(),
             /*telemetry*/ None,
+            /*usage_limit_snapshot*/ None,
         ));
 
         let mut out = Vec::new();
@@ -834,6 +903,7 @@ mod tests {
             tx,
             idle_timeout(),
             /*telemetry*/ None,
+            /*usage_limit_snapshot*/ None,
         ));
 
         let events = tokio::time::timeout(Duration::from_millis(1000), async {
