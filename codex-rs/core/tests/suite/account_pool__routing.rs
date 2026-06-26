@@ -85,6 +85,20 @@ async fn account_pool_retries_short_usage_limit_when_wait_exceeds_cache_cost() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn account_pool_retries_stream_usage_limit_with_next_member() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    mount_stream_usage_limit_response(&server, "work-pro", "codex", /*window_minutes*/ 300).await;
+    mount_success_response(&server, "personal-pro").await;
+
+    let codex = build_account_pool_codex(&server).await?.codex;
+    submit_prompt(&codex, "stream usage limit").await?;
+    wait_for_turn_complete(&codex).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn account_pool_keeps_hot_cache_for_short_wait_usage_limit() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
@@ -428,6 +442,22 @@ async fn mount_success_response(server: &MockServer, account_id: &str) {
         .await;
 }
 
+async fn mount_stream_usage_limit_response(
+    server: &MockServer,
+    account_id: &str,
+    limit_id: &str,
+    window_minutes: i64,
+) {
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header("ChatGPT-Account-ID", account_id))
+        .respond_with(stream_usage_limit_response(limit_id, window_minutes))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
 fn usage_limit_response(limit_id: &str, window_minutes: i64) -> ResponseTemplate {
     usage_limit_response_with_reset(
         limit_id,
@@ -462,6 +492,26 @@ fn usage_limit_response_with_reset(
             );
     }
     response
+}
+
+fn stream_usage_limit_response(limit_id: &str, window_minutes: i64) -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .insert_header("x-codex-active-limit", limit_id)
+        .insert_header("x-codex-primary-used-percent", "100.0")
+        .insert_header("x-codex-primary-window-minutes", window_minutes.to_string())
+        .set_body_string(sse(vec![json!({
+            "type": "response.failed",
+            "response": {
+                "id": "resp-stream-limit",
+                "error": {
+                    "type": "usage_limit_reached",
+                    "message": "usage limit reached",
+                    "resets_at": Utc::now().timestamp() + 60 * 60,
+                    "plan_type": "pro"
+                }
+            }
+        })]))
 }
 
 fn ev_completed_with_cached_tokens(id: &str) -> serde_json::Value {

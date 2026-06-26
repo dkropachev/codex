@@ -1,5 +1,6 @@
 use crate::rate_limits::RateLimitError;
 use codex_client::TransportError;
+use codex_protocol::error::UsageLimitReachedError;
 use http::StatusCode;
 use std::time::Duration;
 use thiserror::Error;
@@ -18,6 +19,8 @@ pub enum ApiError {
     QuotaExceeded,
     #[error("usage not included")]
     UsageNotIncluded,
+    #[error("usage limit reached: {0}")]
+    UsageLimitReached(Box<UsageLimitReachedError>),
     #[error("retryable error: {message}")]
     Retryable {
         message: String,

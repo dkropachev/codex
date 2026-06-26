@@ -633,6 +633,7 @@ async fn run_websocket_response_stream(
     connection_reused: bool,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
+    let mut latest_rate_limit_snapshot = None;
     send_websocket_request(
         ws_stream,
         request_body,
@@ -686,6 +687,7 @@ async fn run_websocket_response_stream(
                 let turn_moderation_metadata = event.turn_moderation_metadata();
                 if event.kind() == "codex.rate_limits" {
                     if let Some(snapshot) = parse_rate_limit_event(&text) {
+                        latest_rate_limit_snapshot = Some(snapshot.clone());
                         let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
                     }
                     continue;
@@ -718,7 +720,7 @@ async fn run_websocket_response_stream(
                         "response event consumer dropped".to_string(),
                     ));
                 }
-                match process_responses_event(event) {
+                match process_responses_event(event, latest_rate_limit_snapshot.as_ref()) {
                     Ok(Some(event)) => {
                         let is_completed = matches!(event, ResponseEvent::Completed { .. });
                         let _ = tx_event.send(Ok(event)).await;
