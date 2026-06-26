@@ -186,6 +186,10 @@ The selected member may switch on retry only when all of these are true:
 - The longest estimated wait from all exhausted windows exceeds the cache-cost threshold.
 - Another member is available for the same bucket.
 
+`usage_limit_reached` may arrive as an HTTP failure or as a successful stream/WebSocket response
+that later reports `response.failed` before assistant output starts. Both forms are eligible for the
+same failover rules when they carry a fully exhausted rate-limit window.
+
 Codex evaluates every exhausted window reported by the error, not only named or currently known
 window sizes. If `resets_at` is present, Codex uses it to estimate wait time. If it is missing,
 Codex uses a bounded estimate from `window_minutes`.
@@ -340,6 +344,8 @@ state. If account-pool config is removed, Codex returns to default auth behavior
 - [codex-rs/login/src/auth/account_pool.rs](../login/src/auth/account_pool.rs)
 - [codex-rs/core/src/session/turn.rs](../core/src/session/turn.rs)
 - [codex-rs/core/src/client.rs](../core/src/client.rs)
+- [codex-rs/codex-api/src/sse/responses.rs](../codex-api/src/sse/responses.rs)
+- [codex-rs/codex-api/src/endpoint/responses_websocket.rs](../codex-api/src/endpoint/responses_websocket.rs)
 
 #### Invariants
 
@@ -418,6 +424,7 @@ errors.
 - Regular usage-limit failover retries with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_retries_regular_usage_limit_with_next_member
 - Spark usage-limit failover retries with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_retries_spark_usage_limit_with_next_member
 - Short-window usage limits retry when wait exceeds cache cost: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_retries_short_usage_limit_when_wait_exceeds_cache_cost
+- Streamed usage-limit failover retries with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_retries_stream_usage_limit_with_next_member
 - Hot cache prevents short-wait failover: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_keeps_hot_cache_for_short_wait_usage_limit
 - Usage-not-included errors do not retry with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_does_not_retry_usage_not_included_with_next_member
 - Usage errors after visible output do not retry with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_does_not_retry_usage_error_after_visible_output
@@ -573,6 +580,8 @@ Generate tests for these behaviors:
 - Each ModelClient operation selects auth once and pins that account for the operation.
 - Starting a new agent/subagent does not switch account unless a request hits an allowed failover
   boundary.
+- Streamed `response.failed` usage-limit errors before visible output can retry with the next
+  account.
 - Exhausted 15-minute, 60-minute, 300-minute, and weekly usage-limit windows can retry with the next
   account when wait exceeds cache cost.
 - Multiple exhausted usage-limit windows use the longest relevant wait.
