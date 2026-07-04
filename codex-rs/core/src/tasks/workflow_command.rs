@@ -135,6 +135,7 @@ pub(crate) async fn record_workflow_output(
                     text: markdown.clone(),
                 }],
                 phase: Some(MessagePhase::FinalAnswer),
+                metadata: None,
             },
         )
         .await;
