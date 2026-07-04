@@ -1,5 +1,6 @@
 use crate::context::ContextualUserFragment;
 use crate::context::world_state::WorldState;
+use crate::context::world_state::WorldStateSnapshot;
 use crate::context_manager::normalize;
 use crate::event_mapping::has_non_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_dev_message_content;
@@ -30,7 +31,6 @@ use codex_utils_output_truncation::truncate_text;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
-use std::sync::Arc;
 use std::sync::LazyLock;
 
 /// Transcript of thread history
@@ -54,7 +54,7 @@ pub(crate) struct ContextManager {
     reference_context_item: Option<TurnContextItem>,
     code_mode_exec_output_policies: HashMap<String, TruncationPolicy>,
     /// World state most recently appended to model-visible history.
-    world_state_baseline: Option<Arc<WorldState>>,
+    world_state_baseline: Option<WorldStateSnapshot>,
 }
 
 impl ContextManager {
@@ -89,18 +89,18 @@ impl ContextManager {
 
     pub(crate) fn update_world_state(
         &mut self,
-        world_state: Arc<WorldState>,
+        world_state: &WorldState,
     ) -> Vec<Box<dyn ContextualUserFragment>> {
-        let fragments = self.world_state_baseline.as_deref().map_or_else(
+        let fragments = self.world_state_baseline.as_ref().map_or_else(
             || world_state.render_full(),
             |previous| world_state.render_diff(previous),
         );
-        self.world_state_baseline = Some(world_state);
+        self.world_state_baseline = Some(world_state.snapshot());
         fragments
     }
 
-    pub(crate) fn set_world_state_baseline(&mut self, world_state: Arc<WorldState>) {
-        self.world_state_baseline = Some(world_state);
+    pub(crate) fn set_world_state_baseline(&mut self, snapshot: WorldStateSnapshot) {
+        self.world_state_baseline = Some(snapshot);
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
