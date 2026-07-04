@@ -49,12 +49,11 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) collaboration_modes_enabled: bool,
     pub(crate) connectors_enabled: bool,
     pub(crate) plugins_command_enabled: bool,
+    pub(crate) token_activity_command_enabled: bool,
     pub(crate) service_tier_commands_enabled: bool,
     pub(crate) workflow_commands_enabled: bool,
     pub(crate) goal_command_enabled: bool,
     pub(crate) personality_command_enabled: bool,
-    pub(crate) realtime_conversation_enabled: bool,
-    pub(crate) audio_device_selection_enabled: bool,
     pub(crate) windows_degraded_sandbox_active: bool,
     pub(crate) side_conversation_active: bool,
 }
@@ -65,12 +64,11 @@ impl From<CommandPopupFlags> for BuiltinCommandFlags {
             collaboration_modes_enabled: value.collaboration_modes_enabled,
             connectors_enabled: value.connectors_enabled,
             plugins_command_enabled: value.plugins_command_enabled,
+            token_activity_command_enabled: value.token_activity_command_enabled,
             service_tier_commands_enabled: value.service_tier_commands_enabled,
             workflow_commands_enabled: value.workflow_commands_enabled,
             goal_command_enabled: value.goal_command_enabled,
             personality_command_enabled: value.personality_command_enabled,
-            realtime_conversation_enabled: value.realtime_conversation_enabled,
-            audio_device_selection_enabled: value.audio_device_selection_enabled,
             allow_elevate_sandbox: value.windows_degraded_sandbox_active,
             side_conversation_active: value.side_conversation_active,
         }
@@ -882,6 +880,26 @@ mod tests {
         insta::assert_snapshot!("command_popup_app", format!("{buf:?}"));
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn default_command_popup_items_snapshot() {
+        let mut popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
+        popup.on_composer_text_change("/".to_string());
+
+        let commands = popup
+            .filtered_items()
+            .into_iter()
+            .map(|item| {
+                let command = item.command();
+                let description = item.description().unwrap_or_default();
+                format!("/{command} - {description}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        insta::assert_snapshot!("command_popup_default_items", commands);
+    }
+
     #[test]
     fn prefix_filter_limits_matches_for_ac() {
         let mut popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
@@ -977,12 +995,11 @@ mod tests {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 plugins_command_enabled: false,
+                token_activity_command_enabled: false,
                 service_tier_commands_enabled: false,
                 workflow_commands_enabled: false,
                 goal_command_enabled: false,
                 personality_command_enabled: true,
-                realtime_conversation_enabled: false,
-                audio_device_selection_enabled: false,
                 windows_degraded_sandbox_active: false,
                 side_conversation_active: false,
             },
@@ -1012,12 +1029,11 @@ mod tests {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 plugins_command_enabled: false,
+                token_activity_command_enabled: false,
                 service_tier_commands_enabled: false,
                 workflow_commands_enabled: false,
                 goal_command_enabled: false,
                 personality_command_enabled: false,
-                realtime_conversation_enabled: false,
-                audio_device_selection_enabled: false,
                 windows_degraded_sandbox_active: false,
                 side_conversation_active: false,
             },
@@ -1043,12 +1059,11 @@ mod tests {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 plugins_command_enabled: false,
+                token_activity_command_enabled: false,
                 service_tier_commands_enabled: false,
                 workflow_commands_enabled: false,
                 goal_command_enabled: false,
                 personality_command_enabled: true,
-                realtime_conversation_enabled: false,
-                audio_device_selection_enabled: false,
                 windows_degraded_sandbox_active: false,
                 side_conversation_active: false,
             },
@@ -1069,38 +1084,6 @@ mod tests {
             }
             other => panic!("expected personality to be selected for exact match, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn settings_command_hidden_when_audio_device_selection_is_disabled() {
-        let mut popup = CommandPopup::new(
-            CommandPopupFlags {
-                collaboration_modes_enabled: false,
-                connectors_enabled: false,
-                plugins_command_enabled: false,
-                service_tier_commands_enabled: false,
-                workflow_commands_enabled: false,
-                goal_command_enabled: false,
-                personality_command_enabled: true,
-                realtime_conversation_enabled: true,
-                audio_device_selection_enabled: false,
-                windows_degraded_sandbox_active: false,
-                side_conversation_active: false,
-            },
-            Vec::new(),
-        );
-        popup.on_composer_text_change("/aud".to_string());
-
-        let cmds: Vec<String> = popup
-            .filtered_items()
-            .into_iter()
-            .map(|item| item.command().to_string())
-            .collect();
-
-        assert!(
-            !cmds.iter().any(|cmd| cmd == "settings"),
-            "expected '/settings' to be hidden when audio device selection is disabled, got {cmds:?}"
-        );
     }
 
     #[test]

@@ -260,6 +260,14 @@
       "additionalProperties": false,
       "description": "Default settings that apply to all apps.",
       "properties": {
+        "approvals_reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            }
+          ],
+          "description": "Reviewer for approval prompts unless overridden by per-app settings."
+        },
         "destructive_enabled": {
           "description": "Whether tools with `destructive_hint = true` are allowed by default.",
           "type": "boolean"
@@ -272,18 +280,6 @@
         "open_world_enabled": {
           "description": "Whether tools with `open_world_hint = true` are allowed by default.",
           "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "AppsMcpPathOverrideConfigToml": {
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "path": {
-          "type": "string"
         }
       },
       "type": "object"
@@ -469,7 +465,23 @@
               "type": "boolean"
             },
             "apps_mcp_path_override": {
-              "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              ]
             },
             "auth_elicitation": {
               "type": "boolean"
@@ -636,6 +648,9 @@
             "request_rule": {
               "type": "boolean"
             },
+            "resize_all_images": {
+              "type": "boolean"
+            },
             "responses_websockets": {
               "type": "boolean"
             },
@@ -646,6 +661,9 @@
               "type": "boolean"
             },
             "search_tool": {
+              "type": "boolean"
+            },
+            "secret_auth_storage": {
               "type": "boolean"
             },
             "shell_snapshot": {
@@ -679,6 +697,9 @@
               "type": "boolean"
             },
             "terminal_visualization_instructions": {
+              "type": "boolean"
+            },
+            "token_budget": {
               "type": "boolean"
             },
             "tool_call_mcp_elicitation": {
@@ -905,16 +926,6 @@
         }
       },
       "type": "object"
-    },
-    "FeatureToml_for_AppsMcpPathOverrideConfigToml": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "$ref": "#/definitions/AppsMcpPathOverrideConfigToml"
-        }
-      ]
     },
     "FeatureToml_for_CodeModeConfigToml": {
       "anyOf": [
@@ -3052,6 +3063,13 @@
       },
       "type": "object"
     },
+    "RealtimeConversationArchitecture": {
+      "enum": [
+        "realtimeapi",
+        "avas"
+      ],
+      "type": "string"
+    },
     "RealtimeConversationVersion": {
       "enum": [
         "v1",
@@ -3062,6 +3080,9 @@
     "RealtimeToml": {
       "additionalProperties": false,
       "properties": {
+        "architecture": {
+          "$ref": "#/definitions/RealtimeConversationArchitecture"
+        },
         "transport": {
           "$ref": "#/definitions/RealtimeTransport"
         },
@@ -5130,6 +5151,10 @@
       "description": "Experimental / do not use. Replaces the built-in realtime start instructions inserted into developer messages when realtime becomes active.",
       "type": "string"
     },
+    "experimental_realtime_webrtc_call_base_url": {
+      "description": "Experimental / do not use. Overrides only the WebRTC realtime call creation base URL. This is separate from `experimental_realtime_ws_base_url` because WebRTC call creation is HTTP, while sideband control is websocket.",
+      "type": "string"
+    },
     "experimental_realtime_ws_backend_prompt": {
       "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport instructions (the `Op::RealtimeConversation` `/ws` session.update instructions) without changing normal prompts.",
       "type": "string"
@@ -5176,7 +5201,23 @@
           "type": "boolean"
         },
         "apps_mcp_path_override": {
-          "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "path": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          ]
         },
         "auth_elicitation": {
           "type": "boolean"
@@ -5343,6 +5384,9 @@
         "request_rule": {
           "type": "boolean"
         },
+        "resize_all_images": {
+          "type": "boolean"
+        },
         "responses_websockets": {
           "type": "boolean"
         },
@@ -5353,6 +5397,9 @@
           "type": "boolean"
         },
         "search_tool": {
+          "type": "boolean"
+        },
+        "secret_auth_storage": {
           "type": "boolean"
         },
         "shell_snapshot": {
@@ -5386,6 +5433,9 @@
           "type": "boolean"
         },
         "terminal_visualization_instructions": {
+          "type": "boolean"
+        },
+        "token_budget": {
           "type": "boolean"
         },
         "tool_call_mcp_elicitation": {

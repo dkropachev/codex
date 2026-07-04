@@ -199,6 +199,7 @@ async fn credential_status(
         codex_home,
         config.cli_auth_credentials_store_mode,
         Some(config.chatgpt_base_url.as_str()),
+        config.auth_keyring_backend_kind(),
     )
     .await
     {
@@ -296,6 +297,7 @@ async fn render_account_usage(config: &Config, target: &AccountUsageTarget) -> S
         /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
         Some(config.chatgpt_base_url.clone()),
+        config.auth_keyring_backend_kind(),
     )
     .await;
     let Some(auth) = manager.auth().await else {

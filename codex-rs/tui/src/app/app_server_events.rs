@@ -8,8 +8,9 @@ use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_server_session::AppServerSession;
-use crate::app_server_session::account_ui_state_from_auth_mode;
+use crate::app_server_session::status_account_display_from_auth_mode;
 use codex_app_server_client::AppServerEvent;
+use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 
@@ -79,35 +80,48 @@ impl App {
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {
-                let fallback =
-                    account_ui_state_from_auth_mode(notification.auth_mode, notification.plan_type);
-                let account_ui = match app_server_client.read_account_ui_state().await {
-                    Ok(account_ui) => account_ui,
-                    Err(err) => {
-                        tracing::warn!(
-                            "failed to refresh account state after account/updated: {err}"
-                        );
-                        fallback
-                    }
-                };
+                let has_codex_backend_auth = matches!(
+                    notification.auth_mode,
+                    Some(
+                        AuthMode::Chatgpt
+                            | AuthMode::ChatgptAuthTokens
+                            | AuthMode::AgentIdentity
+                            | AuthMode::PersonalAccessToken
+                    )
+                );
                 self.chat_widget.update_account_state(
-                    account_ui.status_account_display,
-                    account_ui.plan_type,
-                    account_ui.has_chatgpt_account,
+                    status_account_display_from_auth_mode(
+                        notification.auth_mode,
+                        notification.plan_type,
+                    ),
+                    notification.plan_type,
+                    notification
+                        .auth_mode
+                        .is_some_and(AuthMode::has_chatgpt_account),
+                    has_codex_backend_auth,
                 );
                 return;
             }
             ServerNotification::ExternalAgentConfigImportCompleted(_) => {
-                let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
+                let should_report_completion =
+                    app_server_client.consume_external_agent_config_import_completion();
                 if let Err(err) = self.refresh_in_memory_config_from_disk().await {
                     tracing::warn!(
                         error = %err,
                         "failed to refresh config after external agent config import"
                     );
                 }
+                let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
                 self.chat_widget.refresh_plugin_mentions();
                 self.chat_widget.submit_op(AppCommand::reload_user_config());
                 self.fetch_plugins_list(app_server_client, cwd);
+                if should_report_completion {
+                    self.chat_widget.add_info_message(
+                        crate::external_agent_config_migration_flow::EXTERNAL_AGENT_CONFIG_MIGRATION_FINISHED_MESSAGE
+                            .to_string(),
+                        /*hint*/ None,
+                    );
+                }
                 return;
             }
             ServerNotification::AppListUpdated(notification) => {

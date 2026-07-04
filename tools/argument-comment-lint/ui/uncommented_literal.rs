@@ -1,9 +1,12 @@
 #![warn(uncommented_anonymous_literal_argument)]
 
-struct Client;
+struct Options;
 
-impl Client {
-    fn set_flag(&self, enabled: bool) {}
+impl Options {
+    fn enabled(self, enabled: bool, retry_count: usize) -> Self {
+        let _ = (enabled, retry_count);
+        self
+    }
 }
 
 fn create_openai_url(base_url: Option<String>, retry_count: usize) -> String {
@@ -12,7 +15,6 @@ fn create_openai_url(base_url: Option<String>, retry_count: usize) -> String {
 }
 
 fn main() {
-    let client = Client;
     let _ = create_openai_url(None, 3);
-    client.set_flag(true);
+    let _ = Options.enabled(false, /*retry_count*/ 3);
 }

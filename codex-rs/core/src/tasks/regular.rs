@@ -71,77 +71,84 @@ impl SessionTask for RegularTask {
         let run_turn_span = trace_span!("run_turn");
         // Regular turns emit `TurnStarted` inline so first-turn lifecycle does
         // not wait on startup prewarm resolution.
-        let event = EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: ctx.sub_id.clone(),
-            trace_id: ctx.trace_id.clone(),
-            started_at: ctx.turn_timing_state.started_at_unix_secs().await,
-            model_context_window: ctx.model_context_window(),
-            collaboration_mode_kind: ctx.collaboration_mode.mode,
-        });
-        sess.send_event(ctx.as_ref(), event).await;
-        if model_router_route_changed {
-            let current_model = ctx.model_info.slug.clone();
-            if current_model != previous_model {
-                sess.send_event(
-                    ctx.as_ref(),
-                    EventMsg::ModelReroute(ModelRerouteEvent {
-                        from_model: previous_model.clone(),
-                        to_model: current_model,
-                        reason: ModelRerouteReason::ModelRouterPolicy,
-                    }),
-                )
-                .await;
-            } else {
-                let display_optional = |value: Option<&str>| value.unwrap_or("default").to_string();
-                let previous_reasoning =
-                    previous_reasoning_effort.as_ref().map(ToString::to_string);
-                let current_reasoning = ctx
-                    .config
-                    .model_reasoning_effort
-                    .as_ref()
-                    .map(ToString::to_string);
-                let mut changes = Vec::new();
-                if ctx.config.model_provider_id != previous_provider_id {
-                    changes.push(format!(
-                        "provider {} -> {}",
-                        previous_provider_id, ctx.config.model_provider_id
-                    ));
+        let prewarmed_client_session = async {
+            let event = EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: ctx.sub_id.clone(),
+                trace_id: ctx.trace_id.clone(),
+                started_at: ctx.turn_timing_state.started_at_unix_secs().await,
+                model_context_window: ctx.model_context_window(),
+                collaboration_mode_kind: ctx.collaboration_mode.mode,
+            });
+            sess.send_event(ctx.as_ref(), event).await;
+            if model_router_route_changed {
+                let current_model = ctx.model_info.slug.clone();
+                if current_model != previous_model {
+                    sess.send_event(
+                        ctx.as_ref(),
+                        EventMsg::ModelReroute(ModelRerouteEvent {
+                            from_model: previous_model.clone(),
+                            to_model: current_model,
+                            reason: ModelRerouteReason::ModelRouterPolicy,
+                        }),
+                    )
+                    .await;
+                } else {
+                    let display_optional =
+                        |value: Option<&str>| value.unwrap_or("default").to_string();
+                    let previous_reasoning =
+                        previous_reasoning_effort.as_ref().map(ToString::to_string);
+                    let current_reasoning = ctx
+                        .config
+                        .model_reasoning_effort
+                        .as_ref()
+                        .map(ToString::to_string);
+                    let mut changes = Vec::new();
+                    if ctx.config.model_provider_id != previous_provider_id {
+                        changes.push(format!(
+                            "provider {} -> {}",
+                            previous_provider_id, ctx.config.model_provider_id
+                        ));
+                    }
+                    if current_account_pool != previous_account_pool {
+                        changes.push(format!(
+                            "account label {} -> {}",
+                            display_optional(previous_account_pool.as_deref()),
+                            display_optional(current_account_pool.as_deref())
+                        ));
+                    }
+                    if ctx.config.service_tier != previous_service_tier {
+                        changes.push(format!(
+                            "service tier {} -> {}",
+                            display_optional(previous_service_tier.as_deref()),
+                            display_optional(ctx.config.service_tier.as_deref())
+                        ));
+                    }
+                    if current_reasoning != previous_reasoning {
+                        changes.push(format!(
+                            "reasoning effort {} -> {}",
+                            display_optional(previous_reasoning.as_deref()),
+                            display_optional(current_reasoning.as_deref())
+                        ));
+                    }
+                    sess.send_event(
+                        ctx.as_ref(),
+                        EventMsg::Warning(WarningEvent {
+                            message: format!(
+                                "Model router updated this turn: {}.",
+                                changes.join(", ")
+                            ),
+                        }),
+                    )
+                    .await;
                 }
-                if current_account_pool != previous_account_pool {
-                    changes.push(format!(
-                        "account label {} -> {}",
-                        display_optional(previous_account_pool.as_deref()),
-                        display_optional(current_account_pool.as_deref())
-                    ));
-                }
-                if ctx.config.service_tier != previous_service_tier {
-                    changes.push(format!(
-                        "service tier {} -> {}",
-                        display_optional(previous_service_tier.as_deref()),
-                        display_optional(ctx.config.service_tier.as_deref())
-                    ));
-                }
-                if current_reasoning != previous_reasoning {
-                    changes.push(format!(
-                        "reasoning effort {} -> {}",
-                        display_optional(previous_reasoning.as_deref()),
-                        display_optional(current_reasoning.as_deref())
-                    ));
-                }
-                sess.send_event(
-                    ctx.as_ref(),
-                    EventMsg::Warning(WarningEvent {
-                        message: format!("Model router updated this turn: {}.", changes.join(", ")),
-                    }),
-                )
-                .await;
             }
+            sess.set_server_reasoning_included(/*included*/ false).await;
+            sess.consume_startup_prewarm_for_regular_turn(&cancellation_token)
+                .await
         }
-        sess.set_server_reasoning_included(/*included*/ false).await;
-        let prewarmed_client_session = match sess
-            .consume_startup_prewarm_for_regular_turn(&cancellation_token)
-            .await
-        {
+        .instrument(trace_span!("regular_task.prepare_run_turn"))
+        .await;
+        let prewarmed_client_session = match prewarmed_client_session {
             SessionStartupPrewarmResolution::Cancelled => return None,
             SessionStartupPrewarmResolution::Unavailable { .. } => None,
             SessionStartupPrewarmResolution::Ready(mut prewarmed_client_session) => {

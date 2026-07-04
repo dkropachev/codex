@@ -18,6 +18,7 @@ use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
+use codex_login::AuthKeyringBackendKind;
 use codex_login::TokenData;
 use codex_login::login_with_api_key;
 use codex_login::save_auth;
@@ -91,14 +92,25 @@ fn write_chatgpt_auth_with_expiration(
         last_refresh: Some(last_refresh),
         agent_identity: None,
         personal_access_token: None,
+        bedrock_api_key: None,
     };
-    save_auth(account_home, &auth, AuthCredentialsStoreMode::File)?;
+    save_auth(
+        account_home,
+        &auth,
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
     Ok(())
 }
 
 pub(crate) fn write_api_key_auth(account_home: &Path) -> Result<()> {
     std::fs::create_dir_all(account_home)?;
-    login_with_api_key(account_home, "sk-test-key", AuthCredentialsStoreMode::File)?;
+    login_with_api_key(
+        account_home,
+        "sk-test-key",
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
     Ok(())
 }
 

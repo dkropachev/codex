@@ -9,7 +9,6 @@ use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ReviewTarget;
-use codex_app_server_protocol::ThreadRealtimeAudioChunk;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_protocol::ThreadId;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -61,13 +60,6 @@ impl AppEventSender {
 
     pub(crate) fn review(&self, target: ReviewTarget) {
         self.send(AppEvent::CodexOp(AppCommand::review(target)));
-    }
-
-    #[cfg_attr(target_os = "linux", allow(dead_code))]
-    pub(crate) fn realtime_conversation_audio(&self, frame: ThreadRealtimeAudioChunk) {
-        self.send(AppEvent::CodexOp(AppCommand::realtime_conversation_audio(
-            frame,
-        )));
     }
 
     pub(crate) fn user_input_answer(&self, id: String, response: ToolRequestUserInputResponse) {

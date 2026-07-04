@@ -32,6 +32,7 @@ impl Session {
             .iter()
             .filter_map(|item| match item {
                 TurnInput::UserInput { content, .. } => Some(content.as_slice()),
+                TurnInput::InterAgentCommunication(_) => None,
                 TurnInput::ResponseItem(_) => None,
             })
             .flatten()

@@ -54,7 +54,6 @@ impl codex_extension_api::ToolContributor for ExtensionEchoContributor {
 
 struct ExtensionEchoExecutor;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced("extension/", "echo")
@@ -83,7 +82,13 @@ impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
         })
     }
 
-    async fn handle(
+    fn handle(&self, call: ExtensionToolCall) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(call))
+    }
+}
+
+impl ExtensionEchoExecutor {
+    async fn handle_call(
         &self,
         call: ExtensionToolCall,
     ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
@@ -94,7 +99,7 @@ impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
             "callId": call.call_id,
             "conversationHistory": call.conversation_history.items(),
             "ok": true,
-        }))))
+        }))) as Box<dyn codex_tools::ToolOutput>)
     }
 }
 
@@ -192,17 +197,12 @@ fn assert_extension_echo_response(
 }
 
 #[tokio::test]
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "test builds a router from session-owned MCP manager state"
-)]
 async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow::Result<()> {
     let (session, turn) = make_session_and_context().await;
     let mcp_tools = session
         .services
         .mcp_connection_manager
-        .read()
-        .await
+        .load_full()
         .list_all_tools()
         .await;
     let router = ToolRouter::from_turn_context(

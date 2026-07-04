@@ -10,6 +10,8 @@ use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
 use chrono::TimeZone;
 use codex_config::LoaderOverrides;
+use codex_models_manager::test_support::construct_model_info_offline_for_tests;
+use codex_models_manager::test_support::get_model_offline_for_tests;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -53,7 +55,7 @@ async fn status_snapshot_shows_chatgpt_pool_active_member() {
         .single()
         .expect("timestamp");
 
-    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let model_slug = get_model_offline_for_tests(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
@@ -106,7 +108,7 @@ async fn status_snapshot_shows_chatgpt_pool_unavailable_members() {
         .single()
         .expect("timestamp");
 
-    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let model_slug = get_model_offline_for_tests(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
@@ -159,7 +161,7 @@ async fn status_snapshot_shows_chatgpt_pool_without_active_member() {
         .single()
         .expect("timestamp");
 
-    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let model_slug = get_model_offline_for_tests(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
@@ -247,7 +249,7 @@ async fn test_config(temp_home: &TempDir) -> Config {
 
 fn token_info_for(model_slug: &str, config: &Config, usage: &TokenUsage) -> TokenUsageInfo {
     let context_window =
-        crate::legacy_core::test_support::construct_model_info_offline(model_slug, config)
+        construct_model_info_offline_for_tests(model_slug, &config.to_models_manager_config())
             .context_window;
     TokenUsageInfo {
         total_token_usage: usage.clone(),
