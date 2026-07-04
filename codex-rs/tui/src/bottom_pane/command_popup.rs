@@ -891,7 +891,7 @@ mod tests {
             .into_iter()
             .map(|item| {
                 let command = item.command();
-                let description = item.description();
+                let description = item.description().unwrap_or_default();
                 format!("/{command} - {description}")
             })
             .collect::<Vec<_>>()
