@@ -54,8 +54,6 @@ use chrono::Utc;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::TurnCodexErrorFact;
-use codex_app_server_protocol::McpServerElicitationRequest;
-use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
@@ -87,6 +85,7 @@ use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyAmendment;
@@ -3337,6 +3336,16 @@ impl Session {
                 )
                 .render(),
             );
+            if let Some(guidance_message) = turn_context
+                .config
+                .token_budget
+                .as_ref()
+                .and_then(|config| config.guidance_message.as_deref())
+                .filter(|message| !message.trim().is_empty())
+            {
+                developer_sections
+                    .push(crate::context::ContextWindowGuidance::new(guidance_message).render());
+            }
         }
         for fragment in world_state.render_full() {
             match fragment.role() {
