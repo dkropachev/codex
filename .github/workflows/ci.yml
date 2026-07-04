@@ -29,10 +29,15 @@ jobs:
       - name: Verify feature specs
         env:
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
         shell: bash
         run: |
           set -euo pipefail
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            if [[ "${PR_HEAD_REF}" == sync/upstream-* ]]; then
+              echo "Skipping feature spec verification for upstream sync branch ${PR_HEAD_REF}."
+              exit 0
+            fi
             git fetch --no-tags --depth=1 origin "+refs/heads/${PR_BASE_REF}:refs/remotes/origin/${PR_BASE_REF}"
             python3 .github/scripts/verify_feature_specs.py --base "origin/${PR_BASE_REF}" --head HEAD
           else
