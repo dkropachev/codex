@@ -139,6 +139,7 @@ pub use exec_events::TurnStartedEvent;
 pub use exec_events::Usage;
 pub use exec_events::WebSearchItem;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::future::Future;
 use std::io::IsTerminal;
 use std::io::Read;
@@ -1055,7 +1056,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox.flatten(),
         permissions,
-        config: None,
+        config: thread_config_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
         thread_source: Some(ThreadSource::User),
         ..ThreadStartParams::default()
@@ -1080,9 +1081,15 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox.flatten(),
         permissions,
-        config: None,
+        config: thread_config_overrides_from_config(config),
         ..ThreadResumeParams::default()
     }
+}
+
+fn thread_config_overrides_from_config(config: &Config) -> Option<HashMap<String, Value>> {
+    config
+        .bypass_hook_trust
+        .then(|| HashMap::from([("bypass_hook_trust".to_string(), Value::Bool(true))]))
 }
 
 fn permissions_selection_from_config(config: &Config) -> Option<String> {
@@ -1470,6 +1477,7 @@ async fn resolve_resume_thread_id(
                         model_providers: model_providers.clone(),
                         source_kinds: source_kinds.clone(),
                         archived: Some(false),
+                        parent_thread_id: None,
                         cwd: None,
                         use_state_db_only: false,
                         search_term: None,
@@ -1536,6 +1544,7 @@ async fn resolve_resume_thread_id(
                     model_providers: model_providers.clone(),
                     source_kinds: source_kinds.clone(),
                     archived: Some(false),
+                    parent_thread_id: None,
                     cwd: None,
                     use_state_db_only: false,
                     search_term: Some(session_id.to_string()),

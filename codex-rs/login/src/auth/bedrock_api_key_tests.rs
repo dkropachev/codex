@@ -43,7 +43,7 @@ fn bedrock_auth() -> BedrockApiKeyAuth {
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn login_with_bedrock_api_key_replaces_openai_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
@@ -92,7 +92,7 @@ async fn login_with_bedrock_api_key_replaces_openai_auth() -> anyhow::Result<()>
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn logout_removes_bedrock_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
@@ -120,7 +120,7 @@ async fn logout_removes_bedrock_auth() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn bedrock_only_auth_storage_creates_primary_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
