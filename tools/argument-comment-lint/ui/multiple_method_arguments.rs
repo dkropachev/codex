@@ -10,5 +10,5 @@ impl Options {
 }
 
 fn main() {
-    let _ = Options.enabled(false, /*retry_count*/ 3);
+    let _ = Options.enabled(/*enabled*/ false, /*retry_count*/ 3);
 }
