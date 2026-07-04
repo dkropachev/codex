@@ -12,6 +12,7 @@ use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_protocol::ThreadId;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
+use std::path::PathBuf;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::app_event::AppEvent;

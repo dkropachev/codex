@@ -401,6 +401,7 @@ mod settings_popups;
 mod side;
 mod status_state;
 mod windows_sandbox_prompts;
+mod workflows;
 use self::status_state::StatusIndicatorState;
 use self::status_state::StatusState;
 use self::status_state::TerminalTitleStatusKind;
@@ -573,6 +574,7 @@ pub(crate) struct ChatWidget {
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<ProtocolSkillMetadata>,
     skills_initial_state: Option<HashMap<AbsolutePathBuf, bool>>,
+    workflow_commands: Vec<crate::workflow_commands::WorkflowCommand>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     turn_lifecycle: TurnLifecycleState,

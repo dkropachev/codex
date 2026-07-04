@@ -8,14 +8,17 @@ use codex_config::types::MemoriesConfig;
 use codex_features::Feature;
 use codex_git_utils::diff_since_latest_init;
 use codex_git_utils::reset_git_repository;
+use codex_login::AccountPoolSelectionContext;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::ModelProvider;
+use codex_model_provider::ModelProviderAuthSelection;
 use codex_model_provider::ModelProviderFuture;
 use codex_model_provider::ProviderAccountResult;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ContentItem;
@@ -620,6 +623,14 @@ impl ModelProvider for MockMemoryModelProvider {
         Box::pin(async move { delegate.auth().await })
     }
 
+    fn auth_selection_for_model(
+        &self,
+        model: Option<&str>,
+        context: Option<AccountPoolSelectionContext>,
+    ) -> ModelProviderFuture<'_, ModelProviderAuthSelection> {
+        self.delegate.auth_selection_for_model(model, context)
+    }
+
     fn account_state(&self) -> ProviderAccountResult {
         self.delegate.account_state()
     }
@@ -628,9 +639,10 @@ impl ModelProvider for MockMemoryModelProvider {
         &self,
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
+        collaboration_modes_config: CollaborationModesConfig,
     ) -> codex_models_manager::manager::SharedModelsManager {
         self.delegate
-            .models_manager(codex_home, config_model_catalog)
+            .models_manager(codex_home, config_model_catalog, collaboration_modes_config)
     }
 }
 

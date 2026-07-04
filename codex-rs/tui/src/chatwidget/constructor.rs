@@ -111,6 +111,7 @@ impl ChatWidget {
             effective_service_tier,
             skills_all: Vec::new(),
             skills_initial_state: None,
+            workflow_commands: Vec::new(),
             current_collaboration_mode,
             active_collaboration_mask,
             has_chatgpt_account,

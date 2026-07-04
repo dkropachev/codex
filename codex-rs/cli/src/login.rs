@@ -536,13 +536,19 @@ pub async fn run_logout(
 ) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
-    match logout_with_revoke(
-        &config.codex_home,
-        config.cli_auth_credentials_store_mode,
-        config.auth_keyring_backend_kind(),
-    )
-    .await
-    {
+    let result = if all {
+        logout_all_accounts(&config).await
+    } else {
+        let account_home = account_codex_home(&config.codex_home, account_id.as_deref());
+        logout_with_revoke(
+            &account_home,
+            config.cli_auth_credentials_store_mode,
+            config.auth_keyring_backend_kind(),
+        )
+        .await
+    };
+
+    match result {
         Ok(true) => {
             eprintln!("Successfully logged out");
             std::process::exit(0);
@@ -559,8 +565,12 @@ pub async fn run_logout(
 }
 
 async fn logout_all_accounts(config: &Config) -> std::io::Result<bool> {
-    let mut removed =
-        logout_with_revoke(&config.codex_home, config.cli_auth_credentials_store_mode).await?;
+    let mut removed = logout_with_revoke(
+        &config.codex_home,
+        config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
+    )
+    .await?;
     let accounts_dir = config.codex_home.join("accounts");
     let Ok(entries) = std::fs::read_dir(accounts_dir) else {
         return Ok(removed);
@@ -570,7 +580,12 @@ async fn logout_all_accounts(config: &Config) -> std::io::Result<bool> {
         if !path.is_dir() {
             continue;
         }
-        removed |= logout_with_revoke(&path, config.cli_auth_credentials_store_mode).await?;
+        removed |= logout_with_revoke(
+            &path,
+            config.cli_auth_credentials_store_mode,
+            config.auth_keyring_backend_kind(),
+        )
+        .await?;
     }
     Ok(removed)
 }
@@ -609,9 +624,12 @@ mod tests {
     use codex_login::load_auth_dot_json;
     use codex_login::login_with_api_key;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
+    use super::account_codex_home;
     use super::clear_existing_auth_before_login;
+    use super::is_safe_account_id;
     use super::safe_format_key;
 
     #[tokio::test]

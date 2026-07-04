@@ -55,6 +55,7 @@ async fn refresh_single_account(config: &Config, account_id: &str) -> ! {
         &account_home,
         config.cli_auth_credentials_store_mode,
         Some(config.chatgpt_base_url.as_str()),
+        config.auth_keyring_backend_kind(),
     )
     .await
     {
@@ -64,6 +65,7 @@ async fn refresh_single_account(config: &Config, account_id: &str) -> ! {
                 /*enable_codex_api_key_env*/ false,
                 config.cli_auth_credentials_store_mode,
                 Some(config.chatgpt_base_url.clone()),
+                config.auth_keyring_backend_kind(),
             )
             .await;
             if access_token_expired(&auth)

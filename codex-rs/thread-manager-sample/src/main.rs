@@ -12,6 +12,7 @@ use codex_core_api::AbsolutePathBuf;
 use codex_core_api::AltScreenMode;
 use codex_core_api::ApprovalsReviewer;
 use codex_core_api::Arg0DispatchPaths;
+use codex_core_api::ArtifactStyle;
 use codex_core_api::AskForApproval;
 use codex_core_api::AuthCredentialsStoreMode;
 use codex_core_api::AuthManager;
@@ -41,6 +42,7 @@ use codex_core_api::Permissions;
 use codex_core_api::ProjectConfig;
 use codex_core_api::RealtimeAudioConfig;
 use codex_core_api::RealtimeConfig;
+use codex_core_api::ResponseStyle;
 use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
 use codex_core_api::TerminalResizeReflowConfig;
@@ -258,6 +260,8 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         model_supports_reasoning_summaries: None,
         model_catalog: None,
         model_verbosity: None,
+        response_style: ResponseStyle::Normal,
+        artifact_style: ArtifactStyle::Normal,
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         apps_mcp_product_sku: None,
         realtime_audio: RealtimeAudioConfig::default(),

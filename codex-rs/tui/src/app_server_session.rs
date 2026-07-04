@@ -1267,6 +1267,7 @@ pub(crate) fn account_ui_state_from_auth_mode(
         account_email: None,
         auth_mode: auth_mode.map(|auth_mode| match auth_mode {
             AuthMode::ApiKey => TelemetryAuthMode::ApiKey,
+            AuthMode::BedrockApiKey => TelemetryAuthMode::ApiKey,
             AuthMode::Chatgpt
             | AuthMode::ChatgptAuthTokens
             | AuthMode::AgentIdentity

@@ -2050,7 +2050,7 @@ impl ThreadRequestProcessor {
                 );
                 if source_filter_allows_thread(
                     &source,
-                    result.thread.thread_source,
+                    result.thread.thread_source.clone(),
                     source_kind_filter.as_deref(),
                     source_filter_mode,
                 ) {
@@ -3667,7 +3667,7 @@ impl ThreadRequestProcessor {
                 );
                 if source_filter_allows_thread(
                     &source,
-                    it.thread_source,
+                    it.thread_source.clone(),
                     source_kind_filter.as_deref(),
                     source_filter_mode,
                 ) && cwd_filters.as_ref().is_none_or(|expected_cwds| {

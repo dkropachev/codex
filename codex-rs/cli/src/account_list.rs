@@ -162,6 +162,7 @@ async fn credential_for_account_home(
         codex_home,
         config.cli_auth_credentials_store_mode,
         Some(config.chatgpt_base_url.as_str()),
+        config.auth_keyring_backend_kind(),
     )
     .await
     {
@@ -399,6 +400,7 @@ fn auth_mode_name(auth_mode: AuthMode) -> &'static str {
         AuthMode::ChatgptAuthTokens => "chatgptAuthTokens",
         AuthMode::AgentIdentity => "agentIdentity",
         AuthMode::PersonalAccessToken => "personalAccessToken",
+        AuthMode::BedrockApiKey => "bedrockApiKey",
     }
 }
 

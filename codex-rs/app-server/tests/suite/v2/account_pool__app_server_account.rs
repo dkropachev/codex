@@ -16,6 +16,7 @@ use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RateLimitWindow;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_login::AuthKeyringBackendKind;
 use codex_login::login_with_api_key;
 use codex_protocol::account::PlanType as AccountPlanType;
 use pretty_assertions::assert_eq;
@@ -129,13 +130,13 @@ accounts = ["work-pro", "personal-pro"]
     let expected = GetAccountResponse {
         account: Some(Account::ChatgptPool {
             id: "codex-pro".to_string(),
-            active_account_id: None,
+            active_account_id: Some("work-pro".to_string()),
             members: vec![
                 AccountPoolMember {
                     id: "work-pro".to_string(),
                     email: Some("work@example.com".to_string()),
                     plan_type: Some(AccountPlanType::Pro),
-                    active: false,
+                    active: true,
                     unavailable_reason: None,
                     regular_remaining: None,
                     spark_remaining: None,
@@ -196,20 +197,25 @@ accounts = ["work-pro", "api-key-pro", "missing-pro"]
     )?;
     let api_key_home = codex_home.path().join("accounts/api-key-pro");
     fs::create_dir_all(&api_key_home)?;
-    login_with_api_key(&api_key_home, "sk-test-key", AuthCredentialsStoreMode::File)?;
+    login_with_api_key(
+        &api_key_home,
+        "sk-test-key",
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
 
     let received = read_account_response(codex_home.path()).await?;
 
     let expected = GetAccountResponse {
         account: Some(Account::ChatgptPool {
             id: "codex-pro".to_string(),
-            active_account_id: None,
+            active_account_id: Some("work-pro".to_string()),
             members: vec![
                 AccountPoolMember {
                     id: "work-pro".to_string(),
                     email: Some("work@example.com".to_string()),
                     plan_type: Some(AccountPlanType::Pro),
-                    active: false,
+                    active: true,
                     unavailable_reason: None,
                     regular_remaining: None,
                     spark_remaining: None,
@@ -324,13 +330,13 @@ accounts = ["work-pro", "personal-pro"]
     let expected_account = GetAccountResponse {
         account: Some(Account::ChatgptPool {
             id: "codex-pro".to_string(),
-            active_account_id: None,
+            active_account_id: Some("work-pro".to_string()),
             members: vec![
                 AccountPoolMember {
                     id: "work-pro".to_string(),
                     email: Some("work@example.com".to_string()),
                     plan_type: Some(AccountPlanType::Pro),
-                    active: false,
+                    active: true,
                     unavailable_reason: None,
                     regular_remaining: None,
                     spark_remaining: None,
@@ -479,13 +485,13 @@ accounts = ["work-pro", "personal-pro"]
     let expected_account = GetAccountResponse {
         account: Some(Account::ChatgptPool {
             id: "codex-pro".to_string(),
-            active_account_id: None,
+            active_account_id: Some("work-pro".to_string()),
             members: vec![
                 AccountPoolMember {
                     id: "work-pro".to_string(),
                     email: Some("work@example.com".to_string()),
                     plan_type: Some(AccountPlanType::Pro),
-                    active: false,
+                    active: true,
                     unavailable_reason: None,
                     regular_remaining: None,
                     spark_remaining: None,

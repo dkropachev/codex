@@ -183,13 +183,6 @@ fn network_proxy_is_experimental_and_disabled_by_default() {
 }
 
 #[test]
-fn tool_search_is_removed_and_disabled_by_default() {
-    assert_eq!(Feature::ToolSearch.stage(), Stage::Removed);
-    assert_eq!(Feature::ToolSearch.default_enabled(), false);
-    assert_eq!(feature_for_key("tool_search"), Some(Feature::ToolSearch));
-}
-
-#[test]
 fn secret_auth_storage_defaults_to_windows_only() {
     assert_eq!(Feature::SecretAuthStorage.stage(), Stage::Stable);
     assert_eq!(Feature::SecretAuthStorage.default_enabled(), cfg!(windows));

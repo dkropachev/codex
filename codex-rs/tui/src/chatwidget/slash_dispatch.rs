@@ -14,6 +14,9 @@ use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
 use crate::goal_display::GOAL_USAGE;
 use crate::goal_files::GoalDraft;
+use crate::workflow_commands::WorkflowCommand;
+use crate::workflow_commands::build_workflow_invocation;
+use crate::workflow_commands::workflow_invocation_input;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -1154,19 +1157,42 @@ impl ChatWidget {
             rest_offset + leading_trimmed,
             &text_elements,
         );
-        self.dispatch_prepared_command_with_args(
-            cmd,
-            PreparedSlashCommandArgs {
-                args: trimmed_rest.to_string(),
-                text_elements: args_elements,
-                pending_pastes,
-                local_images,
-                remote_image_urls,
-                mention_bindings,
-                source: SlashCommandDispatchSource::Queued,
-            },
-        );
-        self.queued_command_drain_result(cmd)
+        let prepared = PreparedSlashCommandArgs {
+            args: trimmed_rest.to_string(),
+            text_elements: args_elements,
+            pending_pastes,
+            local_images,
+            remote_image_urls,
+            mention_bindings,
+            source: SlashCommandDispatchSource::Queued,
+        };
+        match command {
+            SlashCommandItem::Builtin(cmd) => {
+                self.dispatch_prepared_command_with_args(cmd, prepared);
+                self.queued_command_drain_result(cmd)
+            }
+            SlashCommandItem::Workflow(command) => {
+                let cwd = self.workflow_invocation_cwd();
+                if let Err(err) = workflow_invocation_input(&cwd, &prepared.args) {
+                    self.add_error_message(err.message().to_string());
+                    return QueueDrain::Continue;
+                }
+                match build_workflow_invocation(&command, &cwd, &prepared.args) {
+                    Ok(invocation) => {
+                        self.submit_op(AppCommand::run_workflow_command(
+                            invocation.workflow_dir,
+                            invocation.input,
+                        ));
+                        QueueDrain::Stop
+                    }
+                    Err(err) => {
+                        self.add_error_message(err.message().to_string());
+                        QueueDrain::Continue
+                    }
+                }
+            }
+            SlashCommandItem::ServiceTier(_) => QueueDrain::Stop,
+        }
     }
 
     fn builtin_command_flags(&self) -> BuiltinCommandFlags {

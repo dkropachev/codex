@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::path::Path;
 use std::path::PathBuf;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub(crate) struct VersionInfo {
     pub(crate) latest_version: String,
     // ISO-8601 timestamp (RFC3339)
