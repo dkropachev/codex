@@ -1668,6 +1668,10 @@ async fn builtin_exec_output_compaction_skips_tool_router_optimizer() -> Result<
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
     skip_if_host_windows!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "uses POSIX heredoc stdout for the compaction fixture"
+    );
 
     let server = start_mock_server().await;
 
@@ -1748,6 +1752,10 @@ async fn builtin_exec_output_raw_recovery_keeps_learned_optimizer_candidate() ->
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
     skip_if_host_windows!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "uses POSIX heredoc stdout for the compaction fixture"
+    );
 
     let server = start_mock_server().await;
 
