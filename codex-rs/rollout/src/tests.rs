@@ -1299,6 +1299,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 dynamic_tools: None,
                 memory_mode: None,
                 multi_agent_version: None,
+                context_window: None,
             },
             git: None,
         }),

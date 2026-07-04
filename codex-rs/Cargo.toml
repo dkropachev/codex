@@ -47,6 +47,7 @@ members = [
     "secrets",
     "exec",
     "file-system",
+    "exec-server-protocol",
     "exec-server",
     "execpolicy",
     "execpolicy-legacy",
@@ -179,6 +180,7 @@ codex-core-skills = { path = "core-skills" }
 codex-exec = { path = "exec" }
 codex-exec-output-compaction = { path = "exec-output-compaction" }
 codex-file-system = { path = "file-system" }
+codex-exec-server-protocol = { path = "exec-server-protocol" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
 codex-extension-api = { path = "ext/extension-api" }

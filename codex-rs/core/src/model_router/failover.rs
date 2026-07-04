@@ -121,6 +121,7 @@ pub(crate) fn model_router_failure_scope(err: &CodexErr) -> Option<ModelRouterFa
         | CodexErr::ResponseStreamFailed(_) => Some(ModelRouterFailureScope::Provider),
         CodexErr::InvalidRequest(message) => message_failure_scope(message),
         CodexErr::TurnAborted
+        | CodexErr::SessionBudgetExceeded
         | CodexErr::Interrupted
         | CodexErr::EnvVar(_)
         | CodexErr::Fatal(_)

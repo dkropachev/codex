@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
-use crate::session::turn_context::TurnContext;
 use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_extension_api::ExtensionData;
@@ -141,15 +141,15 @@ fn extension_tool_test_registry() -> Arc<ExtensionRegistry<Config>> {
     Arc::new(builder.build())
 }
 
-fn extension_echo_router(session: &Session, turn: &TurnContext) -> ToolRouter {
-    ToolRouter::from_turn_context(
-        turn,
+fn extension_echo_router(session: &Session, step_context: &StepContext) -> ToolRouter {
+    ToolRouter::from_context(
+        step_context,
         ToolRouterParams {
             tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: None,
             extension_tool_executors: extension_tool_executors(session),
-            dynamic_tools: turn.dynamic_tools.as_slice(),
+            dynamic_tools: step_context.turn.dynamic_tools.as_slice(),
         },
         &Default::default(),
     )
@@ -204,14 +204,16 @@ fn assert_extension_echo_response(
 #[tokio::test]
 async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow::Result<()> {
     let (session, turn) = make_session_and_context().await;
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
     let mcp_tools = session
         .services
         .mcp_connection_manager
         .load_full()
         .list_all_tools()
         .await;
-    let router = ToolRouter::from_turn_context(
-        &turn,
+    let router = ToolRouter::from_context(
+        step_context.as_ref(),
         ToolRouterParams {
             tool_suggest_candidates: None,
             deferred_mcp_tools: None,
@@ -278,8 +280,10 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
 #[tokio::test]
 async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
-    let router = ToolRouter::from_turn_context(
-        &turn,
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let router = ToolRouter::from_context(
+        step_context.as_ref(),
         ToolRouterParams {
             tool_suggest_candidates: None,
             deferred_mcp_tools: None,
@@ -327,8 +331,10 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
 #[tokio::test]
 async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
-    let router = ToolRouter::from_turn_context(
-        &turn,
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let router = ToolRouter::from_context(
+        step_context.as_ref(),
         ToolRouterParams {
             tool_suggest_candidates: None,
             deferred_mcp_tools: None,
@@ -353,6 +359,8 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
 #[tokio::test]
 async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
     let hidden_tool = "hidden_dynamic_tool";
     let visible_tool = "visible_dynamic_tool";
     let dynamic_tools = vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
@@ -382,8 +390,8 @@ async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
         ],
     })];
 
-    let router = ToolRouter::from_turn_context(
-        &turn,
+    let router = ToolRouter::from_context(
+        step_context.as_ref(),
         ToolRouterParams {
             tool_suggest_candidates: None,
             deferred_mcp_tools: None,
@@ -432,6 +440,8 @@ fn mcp_tool_info(
 async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow::Result<()> {
     let (mut session, turn) = make_session_and_context().await;
     session.services.extensions = extension_tool_test_registry();
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
     let history_item = ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -447,7 +457,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
     let mut expected_history_item = history_item.clone();
     expected_history_item.set_turn_id_if_missing(&turn.sub_id);
 
-    let router = extension_echo_router(&session, &turn);
+    let router = extension_echo_router(&session, step_context.as_ref());
 
     assert!(
         router.model_visible_specs().iter().any(
@@ -465,7 +475,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
     let result = router
         .dispatch_tool_call_with_code_mode_result(
             Arc::new(session),
-            Arc::new(turn),
+            step_context,
             CancellationToken::new(),
             Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call,
@@ -489,20 +499,21 @@ async fn tool_router_disabled_preserves_output_and_skips_diagnostics() -> anyhow
         codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
             .await?;
     let (mut session, turn) = make_session_and_context().await;
+    let step_context = StepContext::for_test(Arc::new(turn));
     let repo_key = {
         #[allow(deprecated)]
         {
-            turn.cwd.display().to_string()
+            step_context.turn.cwd.display().to_string()
         }
     };
     session.services.state_db = Some(Arc::clone(&state_db));
     session.services.extensions = extension_tool_test_registry();
 
-    let router = extension_echo_router(&session, &turn);
+    let router = extension_echo_router(&session, step_context.as_ref());
     let result = router
         .dispatch_tool_call_with_code_mode_result(
             Arc::new(session),
-            Arc::new(turn),
+            step_context,
             CancellationToken::new(),
             Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             extension_echo_call("call-feature-disabled")?,
@@ -529,13 +540,14 @@ async fn tool_router_missing_state_db_still_returns_normal_output() -> anyhow::R
     Arc::make_mut(&mut turn.config)
         .features
         .enable(Feature::ToolRouter)?;
+    let step_context = StepContext::for_test(Arc::new(turn));
     session.services.extensions = extension_tool_test_registry();
 
-    let router = extension_echo_router(&session, &turn);
+    let router = extension_echo_router(&session, step_context.as_ref());
     let result = router
         .dispatch_tool_call_with_code_mode_result(
             Arc::new(session),
-            Arc::new(turn),
+            step_context,
             CancellationToken::new(),
             Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             extension_echo_call("call-no-state-db")?,
@@ -563,16 +575,17 @@ async fn tool_router_records_direct_dispatch_diagnostics() -> anyhow::Result<()>
             turn.cwd.display().to_string()
         }
     };
+    let step_context = StepContext::for_test(Arc::new(turn));
     session.services.state_db = Some(Arc::clone(&state_db));
     session.services.extensions = extension_tool_test_registry();
 
-    let router = extension_echo_router(&session, &turn);
+    let router = extension_echo_router(&session, step_context.as_ref());
     let call = extension_echo_call("call-diagnostics")?;
 
     let result = router
         .dispatch_tool_call_with_code_mode_result(
             Arc::new(session),
-            Arc::new(turn),
+            step_context,
             CancellationToken::new(),
             Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call,
@@ -618,10 +631,11 @@ async fn tool_router_diagnostics_use_original_output_token_hint() -> anyhow::Res
     Arc::make_mut(&mut turn.config)
         .features
         .enable(Feature::ToolRouter)?;
+    let step_context = StepContext::for_test(Arc::new(turn));
     session.services.state_db = Some(Arc::clone(&state_db));
     session.services.extensions = extension_tool_test_registry();
 
-    let router = extension_echo_router(&session, &turn);
+    let router = extension_echo_router(&session, step_context.as_ref());
     let payload = ToolPayload::Function {
         arguments: "{}".to_string(),
     };
@@ -635,7 +649,7 @@ async fn tool_router_diagnostics_use_original_output_token_hint() -> anyhow::Res
     let diagnostics = router
         .build_direct_tool_diagnostics(DirectToolDiagnosticsInput {
             session: &session,
-            turn: &turn,
+            turn: step_context.turn.as_ref(),
             call_id: "call-token-hint",
             tool_name: &ToolName::plain("exec_command"),
             payload: &payload,
@@ -670,14 +684,15 @@ async fn tool_router_records_code_mode_diagnostics_without_changing_result() -> 
     Arc::make_mut(&mut turn.config)
         .features
         .enable(Feature::ToolRouter)?;
+    let step_context = StepContext::for_test(Arc::new(turn));
     session.services.state_db = Some(Arc::clone(&state_db));
     session.services.extensions = extension_tool_test_registry();
 
-    let router = extension_echo_router(&session, &turn);
+    let router = extension_echo_router(&session, step_context.as_ref());
     let result = router
         .dispatch_tool_call_with_code_mode_result(
             Arc::new(session),
-            Arc::new(turn),
+            step_context,
             CancellationToken::new(),
             Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             extension_echo_call("call-code-mode-diagnostics")?,

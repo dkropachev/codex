@@ -8321,7 +8321,7 @@ model_provider = "openai-custom"
 [profiles.zdr]
 model = "o3"
 model_provider = "openai"
-approval_policy = "on-failure"
+approval_policy = "on-request"
 
 [profiles.zdr.analytics]
 enabled = false
@@ -8329,7 +8329,7 @@ enabled = false
 [profiles.gpt5]
 model = "gpt-5.4"
 model_provider = "openai"
-approval_policy = "on-failure"
+approval_policy = "on-request"
 model_reasoning_effort = "high"
 model_reasoning_summary = "detailed"
 model_verbosity = "high"

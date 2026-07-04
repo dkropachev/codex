@@ -31,9 +31,10 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_host_windows;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
-use core_test_support::skip_if_windows;
+use core_test_support::skip_if_target_windows;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::TestCodexHarness;
@@ -323,7 +324,7 @@ async fn create_workspace_directory(
 async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
+    skip_if_host_windows!(Ok(()));
 
     let builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
@@ -465,13 +466,12 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     // TODO(anp): Remove after unified-exec fixtures use target-native commands.
-    skip_if_wine_exec!(
+    skip_if_target_windows!(
         Ok(()),
         "uses a POSIX command and does not assert successful execution"
     );
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -482,7 +482,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let cwd = test.config.cwd.to_path_buf();
 
     let call_id = "uexec-begin-event";
@@ -529,13 +529,12 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_resolves_relative_workdir() -> Result<()> {
     // TODO(anp): Remove after workdir helpers use target-native paths.
-    skip_if_wine_exec!(
+    skip_if_target_windows!(
         Ok(()),
         "does not assert successful native-Windows workdir execution"
     );
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -546,7 +545,7 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let workdir_rel = std::path::PathBuf::from("uexec_relative_workdir");
     let workdir = create_workspace_directory(&test, &workdir_rel).await?;
@@ -603,7 +602,7 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
 async fn unified_exec_respects_workdir_override() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
+    skip_if_host_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -614,7 +613,7 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let workdir = create_workspace_directory(&test, "uexec_workdir_test").await?;
 
@@ -667,10 +666,9 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
     // TODO(anp): Remove after unified-exec fixtures use target-native commands.
-    skip_if_wine_exec!(Ok(()), "uses a POSIX-only command fixture");
+    skip_if_target_windows!(Ok(()), "uses a POSIX-only command fixture");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -681,7 +679,7 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let call_id = "uexec-end-event";
     let args = json!({
@@ -742,10 +740,9 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
     // TODO(anp): Remove after unified-exec fixtures use target-native commands.
-    skip_if_wine_exec!(Ok(()), "uses a POSIX-only command fixture");
+    skip_if_target_windows!(Ok(()), "uses a POSIX-only command fixture");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -756,7 +753,7 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let call_id = "uexec-delta-1";
     let args = json!({
@@ -802,10 +799,9 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
     // TODO(anp): Remove after unified-exec fixtures use target-native commands.
-    skip_if_wine_exec!(Ok(()), "uses a POSIX-only command fixture");
+    skip_if_target_windows!(Ok(()), "uses a POSIX-only command fixture");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -816,7 +812,7 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let call_id = "uexec-full-lifecycle";
     // This timing force the long-standing PTY
@@ -899,10 +895,9 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_network_denial_emits_failed_background_end_event() -> Result<()> {
     // TODO(anp): Remove after network-denial fixtures use target-native commands.
-    skip_if_wine_exec!(Ok(()), "uses the POSIX/Python network-denial fixture");
+    skip_if_target_windows!(Ok(()), "uses the POSIX/Python network-denial fixture");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
     let (test, sandbox_policy) = unified_exec_network_denial_test(&server).await?;
@@ -944,10 +939,9 @@ async fn unified_exec_network_denial_emits_failed_background_end_event() -> Resu
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_short_lived_network_denial_emits_failed_end_event() -> Result<()> {
     // TODO(anp): Remove after network-denial fixtures use target-native commands.
-    skip_if_wine_exec!(Ok(()), "uses the POSIX/Python network-denial fixture");
+    skip_if_target_windows!(Ok(()), "uses the POSIX/Python network-denial fixture");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
     let (test, sandbox_policy) = unified_exec_network_denial_test(&server).await?;
@@ -1029,7 +1023,7 @@ allow_local_binding = true
                 .set_permission_profile(permission_profile_for_config)
                 .expect("set permission profile");
         });
-    let test = builder.build_with_remote_env(server).await?;
+    let test = builder.build_with_auto_env(server).await?;
     assert!(
         test.config.permissions.network.is_some(),
         "expected managed network proxy config to be present"
@@ -1099,10 +1093,9 @@ async fn wait_for_unified_exec_end(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()> {
     // TODO(anp): Remove after unified-exec interactive fixtures support Windows/ConPTY.
-    skip_if_wine_exec!(Ok(()), "uses POSIX interactive-process and EOF semantics");
+    skip_if_target_windows!(Ok(()), "uses POSIX interactive-process and EOF semantics");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1113,7 +1106,7 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let open_call_id = "uexec-open";
     let open_args = json!({
@@ -1184,10 +1177,9 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<()> {
     // TODO(anp): Remove after timing fixtures use target-native commands.
-    skip_if_wine_exec!(Ok(()), "uses a POSIX sleep/echo timing fixture");
+    skip_if_target_windows!(Ok(()), "uses a POSIX sleep/echo timing fixture");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1198,7 +1190,7 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let open_call_id = "uexec-delayed-open";
     let open_args = json!({
@@ -1366,7 +1358,7 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
 async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
+    skip_if_host_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1377,7 +1369,7 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let open_call_id = "uexec-open-session";
     let open_args = json!({
@@ -1488,10 +1480,9 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
     // TODO(anp): Remove after unified-exec fixtures use target-native commands.
-    skip_if_wine_exec!(Ok(()), "uses a POSIX-only command fixture");
+    skip_if_target_windows!(Ok(()), "uses a POSIX-only command fixture");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1501,7 +1492,7 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let call_id = "uexec-metadata";
     let args = serde_json::json!({
@@ -1584,7 +1575,7 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
 async fn exec_output_compaction_compacts_completed_unified_exec_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
+    skip_if_host_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1598,7 +1589,7 @@ async fn exec_output_compaction_compacts_completed_unified_exec_output() -> Resu
             .enable(Feature::ExecOutputCompaction)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_remote_and_local_env(&server).await?;
 
     let script = cargo_test_success_script(/*pass_count*/ 600);
     let call_id = "uexec-compacted";
@@ -1672,7 +1663,7 @@ async fn exec_output_compaction_compacts_completed_unified_exec_output() -> Resu
 async fn builtin_exec_output_compaction_skips_tool_router_optimizer() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
+    skip_if_host_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1690,7 +1681,7 @@ async fn builtin_exec_output_compaction_skips_tool_router_optimizer() -> Result<
             .enable(Feature::ToolRouter)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_remote_and_local_env(&server).await?;
 
     let call_id = "uexec-builtin-compacted";
     let args = serde_json::json!({
@@ -1752,7 +1743,7 @@ async fn builtin_exec_output_compaction_skips_tool_router_optimizer() -> Result<
 async fn builtin_exec_output_raw_recovery_keeps_learned_optimizer_candidate() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
+    skip_if_host_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1770,7 +1761,7 @@ async fn builtin_exec_output_raw_recovery_keeps_learned_optimizer_candidate() ->
             .enable(Feature::ToolRouter)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_remote_and_local_env(&server).await?;
     let state_db = test.codex.state_db().context("state db enabled")?;
     let thread_id = test.session_configured.thread_id.to_string();
     let rg_output = rg_output_for_tool_router_candidate(/*lines*/ 80);
@@ -1904,10 +1895,9 @@ async fn builtin_exec_output_raw_recovery_keeps_learned_optimizer_candidate() ->
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_command_clamps_model_requested_max_output_tokens_to_policy() -> Result<()> {
     // TODO(anp): Remove after unified-exec fixtures use target-native commands.
-    skip_if_wine_exec!(Ok(()), "uses a POSIX-only command fixture");
+    skip_if_target_windows!(Ok(()), "uses a POSIX-only command fixture");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1919,7 +1909,7 @@ async fn exec_command_clamps_model_requested_max_output_tokens_to_policy() -> Re
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let call_id = "uexec-clamped-max-output";
     let args = serde_json::json!({
@@ -1968,10 +1958,9 @@ async fn exec_command_clamps_model_requested_max_output_tokens_to_policy() -> Re
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn write_stdin_clamps_model_requested_max_output_tokens_to_policy() -> Result<()> {
     // TODO(anp): Remove after unified-exec interactive fixtures support Windows/ConPTY.
-    skip_if_wine_exec!(Ok(()), "uses POSIX read/while and Unix TTY semantics");
+    skip_if_target_windows!(Ok(()), "uses POSIX read/while and Unix TTY semantics");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1983,7 +1972,7 @@ async fn write_stdin_clamps_model_requested_max_output_tokens_to_policy() -> Res
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let start_call_id = "uexec-stdin-clamp-start";
     let start_args = serde_json::json!({
@@ -2059,10 +2048,9 @@ async fn write_stdin_clamps_model_requested_max_output_tokens_to_policy() -> Res
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_defaults_to_pipe() -> Result<()> {
     // TODO(anp): Remove after unified-exec interactive fixtures support Windows/ConPTY.
-    skip_if_wine_exec!(Ok(()), "requires Python/Unix PTY support in the target");
+    skip_if_target_windows!(Ok(()), "requires Python/Unix PTY support in the target");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -2072,7 +2060,7 @@ async fn unified_exec_defaults_to_pipe() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let call_id = "uexec-default-pipe";
     let args = serde_json::json!({
@@ -2130,10 +2118,9 @@ async fn unified_exec_defaults_to_pipe() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_can_enable_tty() -> Result<()> {
     // TODO(anp): Remove after unified-exec interactive fixtures support Windows/ConPTY.
-    skip_if_wine_exec!(Ok(()), "requires Python/Unix PTY support in the target");
+    skip_if_target_windows!(Ok(()), "requires Python/Unix PTY support in the target");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -2143,7 +2130,7 @@ async fn unified_exec_can_enable_tty() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let call_id = "uexec-tty-enabled";
     let args = serde_json::json!({
@@ -2198,10 +2185,9 @@ async fn unified_exec_can_enable_tty() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
     // TODO(anp): Remove after unified-exec fixtures use target-native commands.
-    skip_if_wine_exec!(Ok(()), "uses a POSIX-only command fixture");
+    skip_if_target_windows!(Ok(()), "uses a POSIX-only command fixture");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -2211,7 +2197,7 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let call_id = "uexec-early-exit";
     let args = serde_json::json!({
@@ -2283,10 +2269,9 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
     // TODO(anp): Remove after unified-exec interactive fixtures support Windows/ConPTY.
-    skip_if_wine_exec!(Ok(()), "uses POSIX interactive-process and EOF semantics");
+    skip_if_target_windows!(Ok(()), "uses POSIX interactive-process and EOF semantics");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -2296,7 +2281,7 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let start_call_id = "uexec-cat-start";
     let send_call_id = "uexec-cat-send";
@@ -2437,8 +2422,8 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn write_stdin_ctrl_c_interrupts_non_tty_session() -> Result<()> {
-    // TODO(anp): Add a Wine-exec test for explicit interrupt handling on Windows.
-    skip_if_wine_exec!(Ok(()), "asserts Unix SIGINT and trap semantics");
+    // TODO(anp): Add a target-Windows test for explicit interrupt handling.
+    skip_if_target_windows!(Ok(()), "asserts Unix SIGINT and trap semantics");
     assert_write_stdin_ctrl_c_interrupts_non_tty_session(
         "trap",
         "trap 'echo INT-TRAP; exit 42' INT; echo READY; while true; do sleep 30; done",
@@ -2450,8 +2435,8 @@ async fn write_stdin_ctrl_c_interrupts_non_tty_session() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn write_stdin_ctrl_c_default_interrupt_reports_130_for_non_tty_session() -> Result<()> {
-    // TODO(anp): Add a Wine-exec test for Windows Ctrl+C termination and exit reporting.
-    skip_if_wine_exec!(Ok(()), "asserts Unix SIGINT and exit-code semantics");
+    // TODO(anp): Add a target-Windows test for Ctrl+C termination and exit reporting.
+    skip_if_target_windows!(Ok(()), "asserts Unix SIGINT and exit-code semantics");
     assert_write_stdin_ctrl_c_interrupts_non_tty_session(
         "default",
         "echo READY; exec sleep 30",
@@ -2469,7 +2454,6 @@ async fn assert_write_stdin_ctrl_c_interrupts_non_tty_session(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -2479,7 +2463,7 @@ async fn assert_write_stdin_ctrl_c_interrupts_non_tty_session(
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let start_call_id = format!("uexec-non-tty-interrupt-{test_name}-start");
     let interrupt_call_id = format!("uexec-non-tty-interrupt-{test_name}");
@@ -2597,7 +2581,7 @@ async fn write_stdin_ctrl_c_reports_unsupported_interrupt_to_model_on_windows() 
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let start_call_id = "uexec-windows-interrupt-start";
     let interrupt_call_id = "uexec-windows-interrupt";
@@ -2686,10 +2670,9 @@ async fn write_stdin_ctrl_c_reports_unsupported_interrupt_to_model_on_windows() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()> {
     // TODO(anp): Remove after unified-exec interactive fixtures support Windows/ConPTY.
-    skip_if_wine_exec!(Ok(()), "uses POSIX interactive-process and EOF semantics");
+    skip_if_target_windows!(Ok(()), "uses POSIX interactive-process and EOF semantics");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -2700,7 +2683,7 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let start_call_id = "uexec-end-on-exit-start";
     let start_args = serde_json::json!({
@@ -2781,7 +2764,7 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
 async fn unified_exec_keeps_long_running_session_after_turn_end() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
+    skip_if_host_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -2891,7 +2874,7 @@ async fn unified_exec_keeps_long_running_session_after_turn_end() -> Result<()> 
 async fn unified_exec_interrupt_preserves_long_running_session() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
+    skip_if_host_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -2988,10 +2971,9 @@ async fn unified_exec_interrupt_preserves_long_running_session() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
     // TODO(anp): Remove after unified-exec interactive fixtures support Windows/ConPTY.
-    skip_if_wine_exec!(Ok(()), "uses POSIX interactive-process and EOF semantics");
+    skip_if_target_windows!(Ok(()), "uses POSIX interactive-process and EOF semantics");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -3001,7 +2983,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let first_call_id = "uexec-start";
     let first_args = serde_json::json!({
@@ -3088,10 +3070,9 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_streams_after_lagged_output() -> Result<()> {
     // TODO(anp): Remove after output fixtures use target-native commands.
-    skip_if_wine_exec!(Ok(()), "requires Python/Unix PTY support in the target");
+    skip_if_target_windows!(Ok(()), "requires Python/Unix PTY support in the target");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -3102,7 +3083,7 @@ async fn unified_exec_streams_after_lagged_output() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let script = r#"python3 - <<'PY'
 import sys
@@ -3206,10 +3187,9 @@ PY
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
     // TODO(anp): Remove after unified-exec fixtures use target-native commands.
-    skip_if_wine_exec!(Ok(()), "uses a POSIX-only command fixture");
+    skip_if_target_windows!(Ok(()), "uses a POSIX-only command fixture");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -3219,7 +3199,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let first_call_id = "uexec-timeout";
     let first_args = serde_json::json!({
@@ -3297,13 +3277,12 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
 #[cfg(not(target_arch = "arm"))]
 async fn unified_exec_formats_large_output_summary() -> Result<()> {
     // TODO(anp): Remove after output fixtures use target-native commands.
-    skip_if_wine_exec!(
+    skip_if_target_windows!(
         Ok(()),
         "requires Python and POSIX heredoc support in the target"
     );
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -3313,7 +3292,7 @@ async fn unified_exec_formats_large_output_summary() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let script = r#"python3 - <<'PY'
 import sys
@@ -3374,7 +3353,7 @@ PY
 async fn unified_exec_runs_under_sandbox() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
+    skip_if_host_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -3760,7 +3739,7 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     let call_id = "uexec";
     let args = serde_json::json!({
@@ -3808,7 +3787,7 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
 async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
+    skip_if_host_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -3819,7 +3798,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     const MAX_SESSIONS_FOR_TEST: i32 = 64;
     const FILLER_SESSIONS: i32 = MAX_SESSIONS_FOR_TEST - 1;
