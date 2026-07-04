@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use codex_app_server_protocol::AuthMode;
 use codex_config::config_toml::AccountPoolDefinitionToml;
 use codex_config::config_toml::AccountPoolPolicyToml;
 use codex_core::config::Config;
 use codex_login::CodexAuth;
+use codex_protocol::auth::AuthMode;
 use codex_utils_cli::CliConfigOverrides;
 use serde_json::json;
 

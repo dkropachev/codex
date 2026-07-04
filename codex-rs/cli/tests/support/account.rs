@@ -15,13 +15,13 @@ use anyhow::Result;
 use anyhow::anyhow;
 use chrono::Duration as ChronoDuration;
 use chrono::Utc;
-use codex_app_server_protocol::AuthMode;
 use codex_login::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::TokenData;
 use codex_login::login_with_api_key;
 use codex_login::save_auth;
+use codex_protocol::auth::AuthMode;
 use serde_json::json;
 
 pub(crate) fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {

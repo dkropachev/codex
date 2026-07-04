@@ -4,6 +4,7 @@ use crate::config::edit::apply_blocking;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ProfileV2Name;
 use codex_config::RequirementSource;
@@ -4450,7 +4451,7 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
     let refreshed_layer_stack = ConfigLayerStack::new(
         vec![
             ConfigLayerEntry::new(
-                codex_app_server_protocol::ConfigLayerSource::User {
+                ConfigLayerSource::User {
                     file: user_file.clone(),
                     profile: None,
                 },
@@ -4465,7 +4466,7 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
                 .into(),
             ),
             ConfigLayerEntry::new(
-                codex_app_server_protocol::ConfigLayerSource::Project {
+                ConfigLayerSource::Project {
                     dot_codex_folder: project_dot_codex.clone(),
                 },
                 toml::toml! {
@@ -4475,7 +4476,7 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
                 .into(),
             ),
             ConfigLayerEntry::new(
-                codex_app_server_protocol::ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
+                ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
                 toml::toml! {
                     [mcp_servers.managed_overrides_session]
                     command = "managed-command"
@@ -4505,7 +4506,7 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
     let thread_layer_stack = ConfigLayerStack::new(
         vec![
             ConfigLayerEntry::new(
-                codex_app_server_protocol::ConfigLayerSource::User {
+                ConfigLayerSource::User {
                     file: user_file.clone(),
                     profile: None,
                 },
@@ -4520,7 +4521,7 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
                 .into(),
             ),
             ConfigLayerEntry::new(
-                codex_app_server_protocol::ConfigLayerSource::Project {
+                ConfigLayerSource::Project {
                     dot_codex_folder: project_dot_codex,
                 },
                 toml::toml! {
@@ -4530,7 +4531,7 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
                 .into(),
             ),
             ConfigLayerEntry::new(
-                codex_app_server_protocol::ConfigLayerSource::SessionFlags,
+                ConfigLayerSource::SessionFlags,
                 toml::toml! {
                     [mcp_servers.session_overrides_user]
                     command = "session-command"
@@ -4542,7 +4543,7 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
                 .into(),
             ),
             ConfigLayerEntry::new(
-                codex_app_server_protocol::ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
+                ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
                 toml::toml! {
                     [mcp_servers.managed_overrides_session]
                     command = "old-managed-command"
@@ -4636,7 +4637,7 @@ async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
     let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home.path());
     let refreshed_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            codex_app_server_protocol::ConfigLayerSource::User {
+            ConfigLayerSource::User {
                 file: user_file.clone(),
                 profile: None,
             },
@@ -4665,7 +4666,7 @@ async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
     .await?;
     let thread_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            codex_app_server_protocol::ConfigLayerSource::User {
+            ConfigLayerSource::User {
                 file: user_file,
                 profile: None,
             },
@@ -7242,7 +7243,7 @@ config_file = "./agents/researcher.toml"
     .expect("agent role layer config should parse");
     let config_layer_stack = codex_config::ConfigLayerStack::new(
         vec![codex_config::ConfigLayerEntry::new(
-            codex_app_server_protocol::ConfigLayerSource::User {
+            ConfigLayerSource::User {
                 file: codex_home.path().join(CONFIG_TOML_FILE).abs(),
                 profile: None,
             },
@@ -8728,6 +8729,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         hooks: None,
         mcp_servers: None,
         plugins: None,
+        marketplaces: None,
         apps: None,
         rules: None,
         enforce_residency: None,

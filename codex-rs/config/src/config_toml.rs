@@ -30,6 +30,7 @@ use crate::types::Tui;
 use crate::types::UriBasedFileOpener;
 use crate::types::WindowsToml;
 use codex_app_server_protocol::ForcedChatgptWorkspaceIds as ApiForcedChatgptWorkspaceIds;
+use codex_app_server_protocol::SandboxSettings as ApiSandboxSettings;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_features::FeaturesToml;
@@ -913,7 +914,14 @@ impl From<ConfigToml> for UserSavedConfig {
         Self {
             approval_policy: config_toml.approval_policy,
             sandbox_mode: config_toml.sandbox_mode,
-            sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
+            sandbox_settings: config_toml.sandbox_workspace_write.map(|settings| {
+                ApiSandboxSettings {
+                    writable_roots: settings.writable_roots,
+                    network_access: Some(settings.network_access),
+                    exclude_tmpdir_env_var: Some(settings.exclude_tmpdir_env_var),
+                    exclude_slash_tmp: Some(settings.exclude_slash_tmp),
+                }
+            }),
             forced_chatgpt_workspace_id: config_toml
                 .forced_chatgpt_workspace_id
                 .map(ForcedChatgptWorkspaceIds::into_api),
