@@ -999,11 +999,7 @@ See the Codex keymap documentation for supported actions and examples."
             )
         })?;
         #[cfg(not(debug_assertions))]
-        let upgrade_version = {
-            let upgrade_version = crate::updates::get_upgrade_version(&config);
-            crate::updates::spawn_background_update_checker(&config);
-            upgrade_version
-        };
+        let upgrade_version = { crate::updates::get_upgrade_version(&config) };
 
         let mut app = Self {
             model_catalog,
