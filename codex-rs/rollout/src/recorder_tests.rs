@@ -386,6 +386,7 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
             /*parent_thread_id*/ None,
             SessionSource::Exec,
             /*thread_source*/ None,
+            "test_originator".to_string(),
             BaseInstructions::default(),
             Vec::new(),
         )
@@ -478,6 +479,7 @@ async fn persist_reports_filesystem_error_and_retries_buffered_items() -> std::i
             /*parent_thread_id*/ None,
             SessionSource::Exec,
             /*thread_source*/ None,
+            "test_originator".to_string(),
             BaseInstructions::default(),
             Vec::new(),
         ),

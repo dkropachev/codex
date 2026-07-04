@@ -4,6 +4,7 @@ mod account_pool_app_server_account;
 mod analytics;
 mod app_list;
 mod attestation;
+mod auto_env;
 mod client_metadata;
 mod collaboration_mode_list;
 #[cfg(unix)]
