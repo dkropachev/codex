@@ -33,7 +33,7 @@ use wiremock::matchers::path;
 const INITIAL_ACCESS_TOKEN: &str = "initial-access-token";
 const INITIAL_REFRESH_TOKEN: &str = "initial-refresh-token";
 
-#[serial_test::serial(auth_refresh)]
+#[serial_test::serial(auth_env)]
 #[tokio::test]
 async fn refresh_token_uses_active_account_pool_member() -> Result<()> {
     skip_if_no_network!(Ok(()));
