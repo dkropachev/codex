@@ -332,6 +332,7 @@ async fn load_balance_pool(codex_home: &Path) -> Result<AccountPoolManager> {
         },
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        /*auth_route_config*/ None,
     )
     .await
     .context("account pool should be enabled")

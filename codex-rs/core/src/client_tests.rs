@@ -43,7 +43,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::InternalSessionSource;
-use codex_protocol::protocol::RealtimeConversationArchitecture;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -105,6 +104,7 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*item_ids_enabled*/ false,
         /*attestation_provider*/ None,
     )
 }
@@ -286,7 +286,7 @@ fn output_message(id: &str, text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -298,7 +298,7 @@ fn input_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -406,6 +406,7 @@ async fn account_pool_model_client(
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*item_ids_enabled*/ false,
         /*attestation_provider*/ None,
     )
 }
@@ -652,12 +653,11 @@ async fn realtime_webrtc_sideband_uses_same_account_pool_auth() -> anyhow::Resul
                 instructions: "test instructions".to_string(),
                 model: Some("gpt-realtime".to_string()),
                 session_id: Some("session-1".to_string()),
-                event_parser: RealtimeEventParser::RealtimeV2,
+                event_parser: RealtimeEventParser::V1,
                 session_mode: RealtimeSessionMode::Conversational,
                 output_modality: RealtimeOutputModality::Audio,
                 voice: RealtimeVoice::Marin,
             },
-            RealtimeConversationArchitecture::RealtimeApi,
             http::HeaderMap::new(),
             /*api_provider_override*/ None,
         )
@@ -958,6 +958,7 @@ fn model_client_with_counting_attestation(
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*item_ids_enabled*/ false,
         Some(Arc::new(CountingAttestationProvider {
             calls: attestation_calls.clone(),
         })),

@@ -11,6 +11,7 @@ use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
 use codex_login::AuthKeyringBackendKind;
+use codex_login::AuthRouteConfig;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
 use codex_login::ServerOptions;
@@ -122,11 +123,13 @@ async fn clear_existing_auth_before_login(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     auth_keyring_backend_kind: AuthKeyringBackendKind,
+    auth_route_config: Option<&AuthRouteConfig>,
 ) {
     if let Err(err) = logout_with_revoke(
         codex_home,
         auth_credentials_store_mode,
         auth_keyring_backend_kind,
+        auth_route_config,
     )
     .await
     {
@@ -139,11 +142,13 @@ pub async fn login_with_chatgpt(
     forced_chatgpt_workspace_id: Option<Vec<String>>,
     cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     auth_keyring_backend_kind: AuthKeyringBackendKind,
+    auth_route_config: Option<AuthRouteConfig>,
 ) -> std::io::Result<()> {
     clear_existing_auth_before_login(
         &codex_home,
         cli_auth_credentials_store_mode,
         auth_keyring_backend_kind,
+        auth_route_config.as_ref(),
     )
     .await;
 
@@ -153,6 +158,7 @@ pub async fn login_with_chatgpt(
         forced_chatgpt_workspace_id,
         cli_auth_credentials_store_mode,
         auth_keyring_backend_kind,
+        auth_route_config,
     );
     let server = run_login_server(opts)?;
 
@@ -198,12 +204,12 @@ pub async fn run_login_with_chatgpt(
     }
 
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
-
     match login_with_chatgpt(
         account_codex_home(&config.codex_home, account_id.as_deref()),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
+        config.auth_route_config(),
     )
     .await
     {
@@ -294,6 +300,7 @@ pub async fn run_login_with_access_token(
         std::process::exit(1);
     }
 
+    let auth_route_config = config.auth_route_config();
     match login_with_access_token(
         &config.codex_home,
         &access_token,
@@ -301,6 +308,7 @@ pub async fn run_login_with_access_token(
         config.forced_chatgpt_workspace_id.as_deref(),
         Some(&config.chatgpt_base_url),
         config.auth_keyring_backend_kind(),
+        auth_route_config.as_ref(),
     )
     .await
     {
@@ -378,10 +386,12 @@ pub async fn run_login_with_device_code(
         eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
+    let auth_route_config = config.auth_route_config();
     clear_existing_auth_before_login(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
+        auth_route_config.as_ref(),
     )
     .await;
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
@@ -391,6 +401,7 @@ pub async fn run_login_with_device_code(
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
+        auth_route_config,
     );
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
@@ -424,10 +435,12 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
+    let auth_route_config = config.auth_route_config();
     clear_existing_auth_before_login(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
+        auth_route_config.as_ref(),
     )
     .await;
 
@@ -438,6 +451,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
+        auth_route_config,
     );
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
@@ -481,12 +495,14 @@ pub async fn run_login_with_device_code_fallback_to_browser(
 
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
+    let auth_route_config = config.auth_route_config();
 
     match CodexAuth::from_auth_storage(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
         Some(&config.chatgpt_base_url),
         config.auth_keyring_backend_kind(),
+        auth_route_config.as_ref(),
     )
     .await
     {
@@ -535,6 +551,7 @@ pub async fn run_logout(
     all: bool,
 ) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
+    let auth_route_config = config.auth_route_config();
 
     let result = if all {
         logout_all_accounts(&config).await
@@ -544,6 +561,7 @@ pub async fn run_logout(
             &account_home,
             config.cli_auth_credentials_store_mode,
             config.auth_keyring_backend_kind(),
+            auth_route_config.as_ref(),
         )
         .await
     };
@@ -565,10 +583,12 @@ pub async fn run_logout(
 }
 
 async fn logout_all_accounts(config: &Config) -> std::io::Result<bool> {
+    let auth_route_config = config.auth_route_config();
     let mut removed = logout_with_revoke(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
+        auth_route_config.as_ref(),
     )
     .await?;
     let accounts_dir = config.codex_home.join("accounts");
@@ -584,6 +604,7 @@ async fn logout_all_accounts(config: &Config) -> std::io::Result<bool> {
             &path,
             config.cli_auth_credentials_store_mode,
             config.auth_keyring_backend_kind(),
+            auth_route_config.as_ref(),
         )
         .await?;
     }
@@ -647,6 +668,7 @@ mod tests {
             codex_home.path(),
             AuthCredentialsStoreMode::File,
             AuthKeyringBackendKind::default(),
+            /*auth_route_config*/ None,
         )
         .await;
 

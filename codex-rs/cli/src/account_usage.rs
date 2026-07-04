@@ -195,11 +195,13 @@ async fn credential_status(
     codex_home: &Path,
     require_chatgpt: bool,
 ) -> AccountCredentialStatus {
+    let auth_route_config = config.auth_route_config();
     match CodexAuth::from_auth_storage(
         codex_home,
         config.cli_auth_credentials_store_mode,
         Some(config.chatgpt_base_url.as_str()),
         config.auth_keyring_backend_kind(),
+        auth_route_config.as_ref(),
     )
     .await
     {
@@ -296,8 +298,10 @@ async fn render_account_usage(config: &Config, target: &AccountUsageTarget) -> S
         target.codex_home.clone(),
         /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
+        /*forced_chatgpt_workspace_id*/ None,
         Some(config.chatgpt_base_url.clone()),
         config.auth_keyring_backend_kind(),
+        config.auth_route_config(),
     )
     .await;
     let Some(auth) = manager.auth().await else {
