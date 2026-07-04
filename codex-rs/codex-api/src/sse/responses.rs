@@ -1,9 +1,11 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::SafetyBuffering;
+use crate::common::SafetyBufferingTreatment;
 use crate::error::ApiError;
 use crate::rate_limits::parse_all_rate_limits;
 use crate::rate_limits::parse_rate_limit_for_limit;
+use crate::safety_buffering::treatment_from_headers;
 use crate::telemetry::SseTelemetry;
 use chrono::DateTime;
 use chrono::Utc;
@@ -70,6 +72,8 @@ pub fn spawn_response_stream(
         .get(REQUEST_ID_HEADER)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
+    let safety_buffering_treatment =
+        treatment_from_headers(&stream_response.headers).unwrap_or_default();
     if let Some(turn_state) = turn_state.as_ref()
         && let Some(header_value) = stream_response
             .headers
@@ -94,12 +98,13 @@ pub fn spawn_response_stream(
                 .send(Ok(ResponseEvent::ServerReasoningIncluded(true)))
                 .await;
         }
-        process_sse(
+        process_sse_with_treatment(
             stream_response.bytes,
             tx_event,
             idle_timeout,
             telemetry,
             usage_limit_snapshot,
+            safety_buffering_treatment,
         )
         .await;
     });
@@ -171,7 +176,7 @@ struct ResponseCompletedOutputTokensDetails {
 pub struct ResponsesStreamEvent {
     #[serde(rename = "type")]
     pub(crate) kind: String,
-    headers: Option<Value>,
+    pub(crate) headers: Option<Value>,
     metadata: Option<Value>,
     response: Option<Value>,
     item: Option<Value>,
@@ -464,12 +469,32 @@ pub fn process_responses_event(
     Ok(None)
 }
 
+#[cfg(test)]
 pub async fn process_sse(
     stream: ByteStream,
     tx_event: mpsc::Sender<Result<ResponseEvent, ApiError>>,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     usage_limit_snapshot: Option<RateLimitSnapshot>,
+) {
+    process_sse_with_treatment(
+        stream,
+        tx_event,
+        idle_timeout,
+        telemetry,
+        usage_limit_snapshot,
+        SafetyBufferingTreatment::default(),
+    )
+    .await;
+}
+
+async fn process_sse_with_treatment(
+    stream: ByteStream,
+    tx_event: mpsc::Sender<Result<ResponseEvent, ApiError>>,
+    idle_timeout: Duration,
+    telemetry: Option<Arc<dyn SseTelemetry>>,
+    usage_limit_snapshot: Option<RateLimitSnapshot>,
+    safety_buffering_treatment: SafetyBufferingTreatment,
 ) {
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
@@ -514,7 +539,9 @@ pub async fn process_sse(
         };
         let model_verifications = event.model_verifications();
         let turn_moderation_metadata = event.turn_moderation_metadata();
-        let safety_buffering = event.safety_buffering();
+        let safety_buffering = event
+            .safety_buffering()
+            .map(|buffering| buffering.with_treatment(&safety_buffering_treatment));
 
         if let Some(model) = event.response_model()
             && last_server_model.as_deref() != Some(model.as_str())

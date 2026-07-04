@@ -182,17 +182,21 @@ async fn workflow_spawn_path_applies_planning_implementation_review_and_repair_r
 }
 
 fn workflow_agent_test_builder() -> TestCodexBuilder {
-    test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::Collab)
-            .expect("test config should allow feature update");
-        config
-            .features
-            .disable(Feature::EnableRequestCompression)
-            .expect("test config should allow feature update");
-        config.multi_agent_v2.hide_spawn_agent_metadata = false;
-    })
+    test_codex()
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.supports_search_tool = false;
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .disable(Feature::EnableRequestCompression)
+                .expect("test config should allow feature update");
+            config.multi_agent_v2.hide_spawn_agent_metadata = false;
+        })
 }
 
 fn spawn_agent_agent_type_description(body: &Value) -> Result<String> {

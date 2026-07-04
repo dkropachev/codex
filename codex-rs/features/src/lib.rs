@@ -157,7 +157,9 @@ pub enum Feature {
     EnableMcpApps,
     /// Removed compatibility flag for the legacy Apps MCP path override.
     AppsMcpPathOverride,
-    /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
+    /// Removed compatibility flag retained as a no-op now that tool_search is always enabled.
+    ToolSearch,
+    /// Removed compatibility flag. MCP tools are always deferred when tool_search is available.
     ToolSearchAlwaysDeferMcpTools,
     /// Expose MCP model-visible namespaces without the legacy `mcp__` prefix.
     NonPrefixedMcpToolNames,
@@ -175,6 +177,10 @@ pub enum Feature {
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
     BrowserUse,
+    /// Allow Browser Use integration to access the full Chrome DevTools Protocol surface.
+    ///
+    /// Requirements-only gate: this should be set from requirements, not user config.
+    BrowserUseFullCdpAccess,
     /// Allow Browser Use integration with external browsers.
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
@@ -473,7 +479,7 @@ impl Features {
                 "apply_patch_freeform" => {
                     continue;
                 }
-                "tool_search" | "apps_mcp_path_override" => {
+                "tool_search" | "tool_search_always_defer_mcp_tools" | "apps_mcp_path_override" => {
                     continue;
                 }
                 "image_detail_original" | "resize_all_images" => {
@@ -1075,8 +1081,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ToolSearchAlwaysDeferMcpTools,
         key: "tool_search_always_defer_mcp_tools",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Removed,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::NonPrefixedMcpToolNames,
@@ -1117,6 +1123,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::BrowserUse,
         key: "browser_use",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::BrowserUseFullCdpAccess,
+        key: "browser_use_full_cdp_access",
         stage: Stage::Stable,
         default_enabled: true,
     },

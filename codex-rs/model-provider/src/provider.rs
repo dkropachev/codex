@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use codex_api::ApiError;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
 use codex_login::AccountPoolAuthSelection;
@@ -18,6 +19,7 @@ use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::account::ProviderAccountPoolMember;
+use codex_protocol::error::CodexErr;
 use codex_protocol::openai_models::ModelsResponse;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
@@ -167,6 +169,11 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
 
     /// Returns the current app-visible account state for this provider.
     fn account_state(&self) -> ProviderAccountResult;
+
+    /// Maps an API client error into the provider's user-facing error representation.
+    fn map_api_error(&self, error: ApiError) -> CodexErr {
+        codex_api::map_api_error(error)
+    }
 
     /// Returns provider configuration adapted for the API client.
     fn api_provider(&self) -> ModelProviderFuture<'_, codex_protocol::error::Result<Provider>> {
