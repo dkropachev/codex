@@ -38,7 +38,6 @@ struct ReadExecOutputArgs {
 
 pub struct ReadExecOutputHandler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ReadExecOutputHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("read_exec_output")
@@ -48,69 +47,68 @@ impl ToolExecutor<ToolInvocation> for ReadExecOutputHandler {
         create_read_exec_output_tool()
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            payload,
-            ..
-        } = invocation;
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(async move {
+            let ToolInvocation {
+                session,
+                turn,
+                payload,
+                ..
+            } = invocation;
 
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
+            let arguments = match payload {
+                ToolPayload::Function { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "read_exec_output handler received unsupported payload".to_string(),
+                    ));
+                }
+            };
+
+            let args: ReadExecOutputArgs = parse_arguments(&arguments)?;
+            if args.pattern.is_some() && (args.line_start.is_some() || args.line_count.is_some()) {
                 return Err(FunctionCallError::RespondToModel(
-                    "read_exec_output handler received unsupported payload".to_string(),
-                ));
-            }
-        };
-
-        let args: ReadExecOutputArgs = parse_arguments(&arguments)?;
-        if args.pattern.is_some() && (args.line_start.is_some() || args.line_count.is_some()) {
-            return Err(FunctionCallError::RespondToModel(
                 "read_exec_output cannot combine `pattern` search with `line_start`/`line_count` slicing.".to_string(),
             ));
-        }
-        if matches!(args.line_start, Some(0)) {
-            return Err(FunctionCallError::RespondToModel(
-                "read_exec_output `line_start` must be at least 1.".to_string(),
-            ));
-        }
+            }
+            if matches!(args.line_start, Some(0)) {
+                return Err(FunctionCallError::RespondToModel(
+                    "read_exec_output `line_start` must be at least 1.".to_string(),
+                ));
+            }
 
-        let Some(raw_output) = session
-            .services
-            .unified_exec_manager
-            .read_archived_output(args.chunk_id.as_str())
-            .await
-        else {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "no archived exec output found for chunk_id `{}`",
-                args.chunk_id
-            )));
-        };
+            let Some(raw_output) = session
+                .services
+                .unified_exec_manager
+                .read_archived_output(args.chunk_id.as_str())
+                .await
+            else {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "no archived exec output found for chunk_id `{}`",
+                    args.chunk_id
+                )));
+            };
 
-        let raw_text = String::from_utf8_lossy(raw_output.as_slice()).to_string();
-        let selected = if let Some(pattern) = args.pattern {
-            search_output(
-                raw_text.as_str(),
-                pattern.as_str(),
-                args.context_lines.unwrap_or(DEFAULT_SEARCH_CONTEXT_LINES),
-            )?
-        } else {
-            slice_output(raw_text.as_str(), args.line_start, args.line_count)
-        };
-        let max_tokens =
-            resolve_max_tokens(args.max_output_tokens).min(turn.truncation_policy.token_budget());
-        let output = formatted_truncate_text(&selected, TruncationPolicy::Tokens(max_tokens));
-        let text = format!("Chunk ID: {}\nOutput:\n{output}", args.chunk_id);
+            let raw_text = String::from_utf8_lossy(raw_output.as_slice()).to_string();
+            let selected = if let Some(pattern) = args.pattern {
+                search_output(
+                    raw_text.as_str(),
+                    pattern.as_str(),
+                    args.context_lines.unwrap_or(DEFAULT_SEARCH_CONTEXT_LINES),
+                )?
+            } else {
+                slice_output(raw_text.as_str(), args.line_start, args.line_count)
+            };
+            let max_tokens = resolve_max_tokens(args.max_output_tokens)
+                .min(turn.truncation_policy.token_budget());
+            let output = formatted_truncate_text(&selected, TruncationPolicy::Tokens(max_tokens));
+            let text = format!("Chunk ID: {}\nOutput:\n{output}", args.chunk_id);
 
-        Ok(boxed_tool_output(FunctionToolOutput::from_text(
-            text,
-            Some(true),
-        )))
+            Ok(boxed_tool_output(FunctionToolOutput::from_text(
+                text,
+                Some(true),
+            )))
+        })
     }
 }
 

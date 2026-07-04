@@ -78,11 +78,15 @@ struct ThreadIdleCounter {
     tx: async_channel::Sender<usize>,
 }
 
-#[async_trait::async_trait]
 impl codex_extension_api::ThreadLifecycleContributor<Config> for ThreadIdleCounter {
-    async fn on_thread_idle(&self, _input: codex_extension_api::ThreadIdleInput<'_>) {
-        let count = self.count.fetch_add(1, Ordering::SeqCst) + 1;
-        let _ = self.tx.send(count).await;
+    fn on_thread_idle<'a>(
+        &'a self,
+        _input: codex_extension_api::ThreadIdleInput<'a>,
+    ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let count = self.count.fetch_add(1, Ordering::SeqCst) + 1;
+            let _ = self.tx.send(count).await;
+        })
     }
 }
 

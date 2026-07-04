@@ -9,6 +9,7 @@ use codex_config::config_toml::AccountPoolDefinitionToml;
 use codex_config::config_toml::AccountPoolPolicyToml;
 use codex_config::config_toml::AccountPoolToml;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_config::types::AuthKeyringBackendKind;
 use codex_protocol::account::PlanType;
 use serde_json::Value;
 
@@ -145,6 +146,7 @@ impl AccountPoolManager {
                             /*enable_codex_api_key_env*/ false,
                             auth_credentials_store_mode,
                             chatgpt_base_url.clone(),
+                            AuthKeyringBackendKind::default(),
                         )
                         .await,
                     ),

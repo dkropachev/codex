@@ -9,6 +9,7 @@ use codex_config::config_toml::AccountPoolPolicyToml;
 use codex_config::config_toml::AccountPoolToml;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
+use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::AuthManagerConfig;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
@@ -72,8 +73,14 @@ async fn refresh_token_uses_active_account_pool_member() -> Result<()> {
         last_refresh: Some(initial_last_refresh),
         agent_identity: None,
         personal_access_token: None,
+        bedrock_api_key: None,
     };
-    save_auth(&account_home, &initial_auth, AuthCredentialsStoreMode::File)?;
+    save_auth(
+        &account_home,
+        &initial_auth,
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
 
     let config = AccountPoolTestConfig {
         codex_home: codex_home.path().to_path_buf(),
@@ -101,8 +108,12 @@ async fn refresh_token_uses_active_account_pool_member() -> Result<()> {
         .await
         .context("pooled refresh should succeed")?;
 
-    let stored = load_auth_dot_json(&account_home, AuthCredentialsStoreMode::File)?
-        .context("member auth.json should exist")?;
+    let stored = load_auth_dot_json(
+        &account_home,
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?
+    .context("member auth.json should exist")?;
     let refreshed_tokens = TokenData {
         access_token: "new-access-token".to_string(),
         refresh_token: "new-refresh-token".to_string(),
@@ -136,6 +147,10 @@ impl AuthManagerConfig for AccountPoolTestConfig {
 
     fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode {
         AuthCredentialsStoreMode::File
+    }
+
+    fn auth_keyring_backend_kind(&self) -> AuthKeyringBackendKind {
+        AuthKeyringBackendKind::default()
     }
 
     fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {

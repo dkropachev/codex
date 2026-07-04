@@ -16,6 +16,7 @@ use codex_login::AccountPoolOperationKind;
 use codex_login::AccountPoolSelectionContext;
 use codex_login::AccountPoolUsageBucket;
 use codex_login::AuthDotJson;
+use codex_login::AuthKeyringBackendKind;
 use codex_login::auth::AccountPoolManager;
 use codex_login::save_auth;
 use codex_login::token_data::IdTokenInfo;
@@ -385,8 +386,10 @@ fn write_chatgpt_auth(codex_home: &Path, account_id: &str, email: &str) -> Resul
             last_refresh: Some(Utc::now()),
             agent_identity: None,
             personal_access_token: None,
+            bedrock_api_key: None,
         },
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )?;
     Ok(())
 }
