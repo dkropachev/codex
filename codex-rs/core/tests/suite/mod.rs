@@ -72,6 +72,8 @@ mod mcp_client_tool_calls;
 mod mcp_hooks;
 #[path = "mcp__openai_file.rs"]
 mod mcp_openai_file;
+#[cfg(unix)]
+mod mcp_refresh_cleanup;
 mod mcp_tool_exposure;
 #[path = "mcp__turn_metadata.rs"]
 mod mcp_turn_metadata;
