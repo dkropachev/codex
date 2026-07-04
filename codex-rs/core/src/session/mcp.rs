@@ -168,17 +168,17 @@ impl Session {
         let (tx_response, rx_response) = oneshot::channel();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
-            match active.as_mut() {
-                Some(at) => {
-                    let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_elicitation(
-                        server_name.clone(),
-                        request_id.clone(),
-                        tx_response,
-                    )
-                }
-                None => None,
-            }
+            let Some(at) = active.as_mut() else {
+                warn!(
+                    "Ignoring MCP elicitation without active turn for server_name: {server_name}, request_id: {request_id}"
+                );
+                return McpServerElicitationOutcome {
+                    response: None,
+                    sent: false,
+                };
+            };
+            let mut ts = at.turn_state.lock().await;
+            ts.insert_pending_elicitation(server_name.clone(), request_id.clone(), tx_response)
         };
         if prev_entry.is_some() {
             warn!(
@@ -317,8 +317,6 @@ impl Session {
         let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
         let mcp_servers =
             effective_mcp_servers_from_configured(mcp_servers, &mcp_config, auth.as_ref());
-        let host_owned_codex_apps_enabled =
-            host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
         let auth_statuses = compute_auth_statuses(
             mcp_servers.iter(),
             store_mode,
@@ -359,7 +357,6 @@ impl Session {
             mcp_runtime_context,
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
-            host_owned_codex_apps_enabled,
             mcp_config.prefix_mcp_tool_names,
             mcp_config.client_elicitation_capability,
             self.services
