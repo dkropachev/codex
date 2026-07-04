@@ -345,7 +345,7 @@ jobs:
           path: dist/${{ matrix.target }}/*
 
       - name: Check for a clean worktree
-        if: always() && !cancelled()
+        if: always() && !cancelled() && env.CAN_RUN_V8_TARGET == 'true'
         uses: ./.github/actions/check-clean-worktree
 
   build-windows-source:
