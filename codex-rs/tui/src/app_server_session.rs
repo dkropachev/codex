@@ -338,11 +338,6 @@ impl AppServerSession {
             .map_err(|err| bootstrap_request_error("account/read failed during TUI bootstrap", err))
     }
 
-    pub(crate) async fn read_account_ui_state(&mut self) -> Result<AccountUiState> {
-        let account = self.read_account().await?;
-        Ok(account_ui_state_from_response(&account))
-    }
-
     pub(crate) async fn external_agent_config_detect(
         &mut self,
         params: ExternalAgentConfigDetectParams,
@@ -1256,30 +1251,6 @@ pub(crate) fn account_ui_state_from_response(account: &GetAccountResponse) -> Ac
             feedback_audience: FeedbackAudience::External,
             has_chatgpt_account: false,
         },
-    }
-}
-
-pub(crate) fn account_ui_state_from_auth_mode(
-    auth_mode: Option<AuthMode>,
-    plan_type: Option<codex_protocol::account::PlanType>,
-) -> AccountUiState {
-    AccountUiState {
-        account_email: None,
-        auth_mode: auth_mode.map(|auth_mode| match auth_mode {
-            AuthMode::ApiKey => TelemetryAuthMode::ApiKey,
-            AuthMode::BedrockApiKey => TelemetryAuthMode::ApiKey,
-            AuthMode::Chatgpt
-            | AuthMode::ChatgptAuthTokens
-            | AuthMode::AgentIdentity
-            | AuthMode::PersonalAccessToken => TelemetryAuthMode::Chatgpt,
-        }),
-        status_account_display: status_account_display_from_auth_mode(auth_mode, plan_type),
-        plan_type,
-        feedback_audience: FeedbackAudience::External,
-        has_chatgpt_account: matches!(
-            auth_mode,
-            Some(AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens | AuthMode::PersonalAccessToken)
-        ),
     }
 }
 

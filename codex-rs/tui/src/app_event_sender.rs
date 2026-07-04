@@ -12,7 +12,6 @@ use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_protocol::ThreadId;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
-use std::path::PathBuf;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::app_event::AppEvent;
@@ -61,13 +60,6 @@ impl AppEventSender {
 
     pub(crate) fn review(&self, target: ReviewTarget) {
         self.send(AppEvent::CodexOp(AppCommand::review(target)));
-    }
-
-    pub(crate) fn list_skills(&self, cwds: Vec<PathBuf>, force_reload: bool) {
-        self.send(AppEvent::CodexOp(AppCommand::list_skills(
-            cwds,
-            force_reload,
-        )));
     }
 
     pub(crate) fn user_input_answer(&self, id: String, response: ToolRequestUserInputResponse) {
