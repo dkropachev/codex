@@ -3268,6 +3268,14 @@
         }
       ]
     },
+    "ResponseStyle": {
+      "description": "Preferred response length for ordinary Codex chat and status messages.",
+      "enum": [
+        "normal",
+        "terse"
+      ],
+      "type": "string"
+    },
     "RolloutBudgetConfigToml": {
       "additionalProperties": false,
       "properties": {

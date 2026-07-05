@@ -953,6 +953,7 @@ pub async fn login_with_agent_identity(
         /*forced_chatgpt_workspace_id*/ None,
         chatgpt_base_url,
         keyring_backend_kind,
+        /*auth_route_config*/ None,
     )
     .await
 }
@@ -1773,6 +1774,7 @@ pub struct AuthManager {
     refresh_lock: Semaphore,
     agent_identity_lock: Semaphore,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
+    account_pool: Option<Arc<AccountPoolManager>>,
     auth_route_config: Option<AuthRouteConfig>,
 }
 
@@ -1798,8 +1800,15 @@ pub trait AuthManagerConfig {
     /// Returns the ChatGPT backend base URL used for first-party backend authorization.
     fn chatgpt_base_url(&self) -> String;
 
+    /// Returns optional logical account pool configuration.
+    fn account_pool(&self) -> Option<AccountPoolToml> {
+        None
+    }
+
     /// Returns route-selection settings for auth-owned clients.
-    fn auth_route_config(&self) -> Option<AuthRouteConfig>;
+    fn auth_route_config(&self) -> Option<AuthRouteConfig> {
+        None
+    }
 }
 
 impl Debug for AuthManager {
@@ -1875,6 +1884,7 @@ impl AuthManager {
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
+            account_pool: None,
             auth_route_config,
         }
     }
@@ -1900,6 +1910,7 @@ impl AuthManager {
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
+            account_pool: None,
             auth_route_config: None,
         })
     }
@@ -1924,6 +1935,7 @@ impl AuthManager {
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
+            account_pool: None,
             auth_route_config: None,
         })
     }
@@ -1956,6 +1968,7 @@ impl AuthManager {
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
+            account_pool: None,
             auth_route_config: None,
         })
     }
@@ -1980,6 +1993,7 @@ impl AuthManager {
             external_auth: RwLock::new(Some(
                 Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
             )),
+            account_pool: None,
             auth_route_config: None,
         })
     }
@@ -2379,16 +2393,32 @@ impl AuthManager {
         config: &impl AuthManagerConfig,
         enable_codex_api_key_env: bool,
     ) -> Arc<Self> {
-        Self::shared(
-            config.codex_home(),
+        let codex_home = config.codex_home();
+        let auth_credentials_store_mode = config.cli_auth_credentials_store_mode();
+        let chatgpt_base_url = Some(config.chatgpt_base_url());
+        let account_pool_config = config.account_pool();
+        let mut manager = Self::new(
+            codex_home.clone(),
             enable_codex_api_key_env,
-            config.cli_auth_credentials_store_mode(),
+            auth_credentials_store_mode,
             config.forced_chatgpt_workspace_id(),
-            Some(config.chatgpt_base_url()),
+            chatgpt_base_url.clone(),
             config.auth_keyring_backend_kind(),
             config.auth_route_config(),
         )
-        .await
+        .await;
+        if let Some(account_pool_config) = account_pool_config {
+            manager.account_pool = AccountPoolManager::from_config(
+                &codex_home,
+                account_pool_config,
+                auth_credentials_store_mode,
+                chatgpt_base_url,
+                config.auth_route_config(),
+            )
+            .await
+            .map(Arc::new);
+        }
+        Arc::new(manager)
     }
 
     pub fn unauthorized_recovery(self: &Arc<Self>) -> UnauthorizedRecovery {

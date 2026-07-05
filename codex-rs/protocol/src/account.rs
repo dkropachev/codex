@@ -38,6 +38,11 @@ pub enum ProviderAccount {
         email: Option<String>,
         plan_type: PlanType,
     },
+    ChatgptPool {
+        id: String,
+        active_account_id: Option<String>,
+        members: Vec<ProviderAccountPoolMember>,
+    },
     AmazonBedrock {
         credential_source: AmazonBedrockCredentialSource,
     },

@@ -329,6 +329,7 @@ impl ExecCommandHandler {
                 chunk_id: String::new(),
                 wall_time: std::time::Duration::ZERO,
                 raw_output: output.into_text().into_bytes(),
+                compaction: None,
                 truncation_policy: turn.model_info.truncation_policy.into(),
                 max_output_tokens,
                 process_id: None,
@@ -371,7 +372,12 @@ impl ExecCommandHandler {
                 let original_token_count = approx_token_count(&output_text);
                 let chunk_id = generate_chunk_id();
                 let command = [hook_command.clone()];
-                let compaction = if turn.features.enabled(Feature::ExecOutputCompaction) {
+                let exec_output_compaction_enabled = turn
+                    .config
+                    .features
+                    .get()
+                    .enabled(Feature::ExecOutputCompaction);
+                let compaction = if exec_output_compaction_enabled {
                     compact_exec_output_for_turn(ExecOutputCompactionTurnRequest {
                         session: context.session.as_ref(),
                         turn: turn.as_ref(),
@@ -380,13 +386,13 @@ impl ExecCommandHandler {
                         command: &command,
                         output: output_text.as_str(),
                         max_output_tokens,
-                        truncation_policy: turn.truncation_policy,
+                        truncation_policy: turn.model_info.truncation_policy.into(),
                     })
                     .await
                 } else {
                     None
                 };
-                if turn.features.enabled(Feature::ExecOutputCompaction) {
+                if exec_output_compaction_enabled {
                     manager
                         .archive_completed_output(chunk_id.as_str(), output_text.as_bytes())
                         .await;
@@ -396,6 +402,7 @@ impl ExecCommandHandler {
                     chunk_id,
                     wall_time: output.duration,
                     raw_output: output_text.into_bytes(),
+                    compaction,
                     truncation_policy: turn.model_info.truncation_policy.into(),
                     max_output_tokens,
                     // Sandbox denial is terminal, so there is no live

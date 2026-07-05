@@ -307,48 +307,7 @@ impl AppServerSession {
         self.default_model = Some(default_model.clone());
         self.available_models = available_models.clone();
 
-        let (
-            account_email,
-            auth_mode,
-            status_account_display,
-            plan_type,
-            feedback_audience,
-            has_chatgpt_account,
-        ) = match account.account {
-            Some(Account::ApiKey {}) => (
-                None,
-                Some(TelemetryAuthMode::ApiKey),
-                Some(StatusAccountDisplay::ApiKey),
-                None,
-                FeedbackAudience::External,
-                false,
-            ),
-            Some(Account::Chatgpt { email, plan_type }) => {
-                let feedback_audience = if email
-                    .as_deref()
-                    .is_some_and(|email| email.ends_with("@openai.com"))
-                {
-                    FeedbackAudience::OpenAiEmployee
-                } else {
-                    FeedbackAudience::External
-                };
-                (
-                    email.clone(),
-                    Some(TelemetryAuthMode::Chatgpt),
-                    Some(StatusAccountDisplay::ChatGpt {
-                        email,
-                        plan: Some(plan_type_display_name(plan_type)),
-                    }),
-                    Some(plan_type),
-                    feedback_audience,
-                    true,
-                )
-            }
-            Some(Account::AmazonBedrock { .. }) => {
-                (None, None, None, None, FeedbackAudience::External, false)
-            }
-            None => (None, None, None, None, FeedbackAudience::External, false),
-        };
+        let account_ui = account_ui_state_from_response(&account);
         Ok(AppServerBootstrap {
             duration: started_at.elapsed(),
             account_email: account_ui.account_email,
@@ -1235,12 +1194,12 @@ pub(crate) fn account_ui_state_from_response(account: &GetAccountResponse) -> Ac
             has_chatgpt_account: false,
         },
         Some(Account::Chatgpt { email, plan_type }) => {
-            let feedback_audience = feedback_audience_for_email(Some(email.as_str()));
+            let feedback_audience = feedback_audience_for_email(email.as_deref());
             AccountUiState {
-                account_email: Some(email.clone()),
+                account_email: email.clone(),
                 auth_mode: Some(TelemetryAuthMode::Chatgpt),
                 status_account_display: Some(StatusAccountDisplay::ChatGpt {
-                    email: Some(email.clone()),
+                    email: email.clone(),
                     plan: Some(plan_type_display_name(*plan_type)),
                 }),
                 plan_type: Some(*plan_type),
@@ -1289,7 +1248,7 @@ pub(crate) fn account_ui_state_from_response(account: &GetAccountResponse) -> Ac
                 has_chatgpt_account: true,
             }
         }
-        Some(Account::AmazonBedrock {}) | None => AccountUiState {
+        Some(Account::AmazonBedrock { .. }) | None => AccountUiState {
             account_email: None,
             auth_mode: None,
             status_account_display: None,

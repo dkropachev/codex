@@ -1889,7 +1889,9 @@ async fn get_login_status(
     let account = app_server.read_account().await?;
     Ok(match account.account {
         Some(AppServerAccount::ApiKey {}) => LoginStatus::AuthMode(AppServerAuthMode::ApiKey),
-        Some(AppServerAccount::Chatgpt { .. }) => LoginStatus::AuthMode(AppServerAuthMode::Chatgpt),
+        Some(AppServerAccount::Chatgpt { .. } | AppServerAccount::ChatgptPool { .. }) => {
+            LoginStatus::AuthMode(AppServerAuthMode::Chatgpt)
+        }
         Some(AppServerAccount::AmazonBedrock { .. }) => LoginStatus::NotAuthenticated,
         None => LoginStatus::NotAuthenticated,
     })
@@ -2030,7 +2032,7 @@ mod tests {
         F: FnOnce() -> Fut + Send + 'static,
         Fut: std::future::Future<Output = color_eyre::Result<()>> + 'static,
     {
-        const TEST_STACK_SIZE_BYTES: usize = 4 * 1024 * 1024;
+        const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
         let handle = std::thread::Builder::new()
             .name(name.to_string())

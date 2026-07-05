@@ -3,6 +3,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::ModelsEndpointFuture;
 use codex_models_manager::manager::OpenAiModelsManager;
@@ -78,6 +79,7 @@ async fn refreshes_immediately_periodically_and_stops_when_dropped() {
         codex_home.path().to_path_buf(),
         endpoint.clone(),
         /*auth_manager*/ None,
+        CollaborationModesConfig::default(),
     ));
     let worker = spawn_with_interval(&models_manager, Duration::from_millis(10));
 

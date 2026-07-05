@@ -462,6 +462,7 @@ impl ModelClient {
             self.state.enable_request_compression,
             self.state.include_timing_metrics,
             self.state.beta_features_header.clone(),
+            self.state.item_ids_enabled,
             self.state.attestation_provider.clone(),
         )
         .with_prompt_cache_key_override(self.prompt_cache_key_override.clone());

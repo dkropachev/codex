@@ -145,9 +145,9 @@ fn extension_echo_router(session: &Session, turn: &TurnContext) -> ToolRouter {
     ToolRouter::from_turn_context(
         turn,
         ToolRouterParams {
+            tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: None,
-            discoverable_tools: None,
             extension_tool_executors: extension_tool_executors(session),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
@@ -162,7 +162,7 @@ fn extension_echo_call(call_id: &str) -> anyhow::Result<ToolCall> {
         namespace: Some("extension/".to_string()),
         arguments: json!({ "message": "hello" }).to_string(),
         call_id: call_id.to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     })?
     .expect("function_call should produce a tool call"))
 }
@@ -445,17 +445,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         .record_conversation_items(&turn, std::slice::from_ref(&history_item))
         .await;
 
-    let router = ToolRouter::from_turn_context(
-        &turn,
-        ToolRouterParams {
-            tool_suggest_candidates: None,
-            deferred_mcp_tools: None,
-            mcp_tools: None,
-            extension_tool_executors: extension_tool_executors(&session),
-            dynamic_tools: turn.dynamic_tools.as_slice(),
-        },
-        &Default::default(),
-    );
+    let router = extension_echo_router(&session, &turn);
 
     assert!(
         router.model_visible_specs().iter().any(
@@ -469,15 +459,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         "expected extension-provided tool to be visible to the model"
     );
 
-    let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
-        id: None,
-        name: "echo".to_string(),
-        namespace: Some("extension/".to_string()),
-        arguments: json!({ "message": "hello" }).to_string(),
-        call_id: "call-extension".to_string(),
-        internal_chat_message_metadata_passthrough: None,
-    })?
-    .expect("function_call should produce a tool call");
+    let call = extension_echo_call("call-extension")?;
     let result = router
         .dispatch_tool_call_with_code_mode_result(
             Arc::new(session),
@@ -538,7 +520,9 @@ async fn tool_router_disabled_preserves_output_and_skips_diagnostics() -> anyhow
 #[tokio::test]
 async fn tool_router_missing_state_db_still_returns_normal_output() -> anyhow::Result<()> {
     let (mut session, mut turn) = make_session_and_context().await;
-    turn.features.enable(Feature::ToolRouter)?;
+    Arc::make_mut(&mut turn.config)
+        .features
+        .enable(Feature::ToolRouter)?;
     session.services.extensions = extension_tool_test_registry();
 
     let router = extension_echo_router(&session, &turn);
@@ -564,7 +548,9 @@ async fn tool_router_records_direct_dispatch_diagnostics() -> anyhow::Result<()>
         codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
             .await?;
     let (mut session, mut turn) = make_session_and_context().await;
-    turn.features.enable(Feature::ToolRouter)?;
+    Arc::make_mut(&mut turn.config)
+        .features
+        .enable(Feature::ToolRouter)?;
     let repo_key = {
         #[allow(deprecated)]
         {
@@ -623,7 +609,9 @@ async fn tool_router_diagnostics_use_original_output_token_hint() -> anyhow::Res
         codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
             .await?;
     let (mut session, mut turn) = make_session_and_context().await;
-    turn.features.enable(Feature::ToolRouter)?;
+    Arc::make_mut(&mut turn.config)
+        .features
+        .enable(Feature::ToolRouter)?;
     session.services.state_db = Some(Arc::clone(&state_db));
     session.services.extensions = extension_tool_test_registry();
 
@@ -673,7 +661,9 @@ async fn tool_router_records_code_mode_diagnostics_without_changing_result() -> 
         codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
             .await?;
     let (mut session, mut turn) = make_session_and_context().await;
-    turn.features.enable(Feature::ToolRouter)?;
+    Arc::make_mut(&mut turn.config)
+        .features
+        .enable(Feature::ToolRouter)?;
     session.services.state_db = Some(Arc::clone(&state_db));
     session.services.extensions = extension_tool_test_registry();
 

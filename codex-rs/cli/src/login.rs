@@ -553,14 +553,20 @@ pub async fn run_logout(
     let config = load_config_or_exit(cli_config_overrides).await;
     let auth_route_config = config.auth_route_config();
 
-    match logout_with_revoke(
-        &config.codex_home,
-        config.cli_auth_credentials_store_mode,
-        config.auth_keyring_backend_kind(),
-        auth_route_config.as_ref(),
-    )
-    .await
-    {
+    let result = if all {
+        logout_all_accounts(&config).await
+    } else {
+        let account_home = account_codex_home(&config.codex_home, account_id.as_deref());
+        logout_with_revoke(
+            &account_home,
+            config.cli_auth_credentials_store_mode,
+            config.auth_keyring_backend_kind(),
+            auth_route_config.as_ref(),
+        )
+        .await
+    };
+
+    match result {
         Ok(true) => {
             eprintln!("Successfully logged out");
             std::process::exit(0);
@@ -577,10 +583,12 @@ pub async fn run_logout(
 }
 
 async fn logout_all_accounts(config: &Config) -> std::io::Result<bool> {
+    let auth_route_config = config.auth_route_config();
     let mut removed = logout_with_revoke(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
+        auth_route_config.as_ref(),
     )
     .await?;
     let accounts_dir = config.codex_home.join("accounts");
@@ -596,6 +604,7 @@ async fn logout_all_accounts(config: &Config) -> std::io::Result<bool> {
             &path,
             config.cli_auth_credentials_store_mode,
             config.auth_keyring_backend_kind(),
+            auth_route_config.as_ref(),
         )
         .await?;
     }

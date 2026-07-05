@@ -76,6 +76,27 @@ impl From<ProviderAccount> for Account {
         match account {
             ProviderAccount::ApiKey => Self::ApiKey {},
             ProviderAccount::Chatgpt { email, plan_type } => Self::Chatgpt { email, plan_type },
+            ProviderAccount::ChatgptPool {
+                id,
+                active_account_id,
+                members,
+            } => Self::ChatgptPool {
+                id,
+                active_account_id,
+                members: members
+                    .into_iter()
+                    .map(|member| AccountPoolMember {
+                        id: member.id,
+                        email: member.email,
+                        plan_type: member.plan_type,
+                        active: member.active,
+                        unavailable_reason: member.unavailable_reason,
+                        regular_remaining: member.regular_remaining,
+                        spark_remaining: member.spark_remaining,
+                        last_error: member.last_error,
+                    })
+                    .collect(),
+            },
             ProviderAccount::AmazonBedrock { credential_source } => {
                 Self::AmazonBedrock { credential_source }
             }

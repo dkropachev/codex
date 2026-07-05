@@ -59,6 +59,7 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
+use codex_features::Feature;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
@@ -666,8 +667,12 @@ impl UnifiedExecProcessManager {
         };
 
         let original_token_count = approx_token_count(&text);
-        let exec_output_compaction_enabled =
-            context.turn.features.enabled(Feature::ExecOutputCompaction);
+        let exec_output_compaction_enabled = context
+            .turn
+            .config
+            .features
+            .get()
+            .enabled(Feature::ExecOutputCompaction);
         let compaction = if response_process_id.is_none() && exec_output_compaction_enabled {
             compact_exec_output_for_turn(ExecOutputCompactionTurnRequest {
                 session: context.session.as_ref(),
@@ -677,7 +682,7 @@ impl UnifiedExecProcessManager {
                 command: &request.command,
                 output: text.as_str(),
                 max_output_tokens: request.max_output_tokens,
-                truncation_policy: context.turn.truncation_policy,
+                truncation_policy: context.turn.model_info.truncation_policy.into(),
             })
             .await
         } else {
@@ -692,6 +697,7 @@ impl UnifiedExecProcessManager {
             chunk_id,
             wall_time,
             raw_output: collected,
+            compaction,
             truncation_policy: context.turn.model_info.truncation_policy.into(),
             max_output_tokens: request.max_output_tokens,
             process_id: response_process_id,
@@ -991,11 +997,15 @@ impl UnifiedExecProcessManager {
             last_used: started_at,
             exec_output_compaction_enabled: context
                 .turn
+                .config
                 .features
+                .get()
                 .enabled(Feature::ExecOutputCompaction),
             tool_router_output_optimization_enabled: context
                 .turn
+                .config
                 .features
+                .get()
                 .enabled(Feature::ToolRouter),
             model_slug: context.turn.model_info.slug.clone(),
             model_provider: context.turn.config.model_provider_id.clone(),

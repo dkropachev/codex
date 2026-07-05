@@ -8653,7 +8653,7 @@ async fn workflow_output_records_assistant_message_for_next_context() {
             text: markdown.clone(),
         }],
         phase: Some(MessagePhase::FinalAnswer),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     let recorded = record_workflow_output(

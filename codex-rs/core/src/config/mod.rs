@@ -1152,6 +1152,20 @@ impl Default for CurrentTimeReminderConfig {
     }
 }
 
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelRouterAccounting {
+    pub(crate) task_key: String,
+    pub(crate) model_provider: String,
+    pub(crate) model: Option<String>,
+    pub(crate) account_id: Option<String>,
+    pub(crate) actual_price: Option<TokenPrice>,
+    pub(crate) actual_price_confidence: f64,
+    pub(crate) counterfactual_price: Option<TokenPrice>,
+    pub(crate) counterfactual_price_confidence: f64,
+    pub(crate) counterfactual_cached_input_tokens: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MultiAgentV2Config {
     pub max_concurrent_threads_per_session: usize,
@@ -1232,6 +1246,10 @@ impl AuthManagerConfig for Config {
 
     fn chatgpt_base_url(&self) -> String {
         self.chatgpt_base_url.clone()
+    }
+
+    fn account_pool(&self) -> Option<AccountPoolToml> {
+        self.account_pool.clone()
     }
 
     fn auth_route_config(&self) -> Option<AuthRouteConfig> {

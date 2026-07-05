@@ -212,6 +212,7 @@ mod handlers;
 mod inject;
 mod input_queue;
 mod mcp;
+mod model_router_turn;
 pub(crate) mod multi_agents;
 mod review;
 mod rollout_budget;

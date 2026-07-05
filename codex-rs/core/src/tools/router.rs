@@ -306,7 +306,7 @@ impl ToolRouter {
             source,
             result,
         } = input;
-        if !turn.features.enabled(Feature::ToolRouter) {
+        if !turn.config.features.get().enabled(Feature::ToolRouter) {
             return None;
         }
 

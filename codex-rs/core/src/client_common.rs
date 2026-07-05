@@ -1,4 +1,5 @@
 pub use codex_api::ResponseEvent;
+use codex_protocol::config_types::Verbosity;
 use codex_protocol::error::Result;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;

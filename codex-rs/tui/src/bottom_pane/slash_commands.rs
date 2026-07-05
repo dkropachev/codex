@@ -54,6 +54,7 @@ impl SlashCommandItem {
         match self {
             Self::Builtin(cmd) => cmd.available_during_task(),
             Self::ServiceTier(_) => true,
+            Self::Workflow(_) => false,
         }
     }
 }

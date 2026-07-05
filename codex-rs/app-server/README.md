@@ -1943,6 +1943,39 @@ Response examples:
 { "id": 1, "result": { "account": null, "requiresOpenaiAuth": true } }  // OpenAI auth required (typical for OpenAI-hosted models)
 { "id": 1, "result": { "account": { "type": "apiKey" }, "requiresOpenaiAuth": true } }
 { "id": 1, "result": { "account": { "type": "chatgpt", "email": "user@example.com", "planType": "pro" }, "requiresOpenaiAuth": true } }
+{
+  "id": 1,
+  "result": {
+    "account": {
+      "type": "chatgptPool",
+      "id": "codex-pro",
+      "activeAccountId": "work-pro",
+      "members": [
+        {
+          "id": "work-pro",
+          "email": "work@example.com",
+          "planType": "pro",
+          "active": true,
+          "unavailableReason": null,
+          "regularRemaining": 82,
+          "sparkRemaining": 40,
+          "lastError": null
+        },
+        {
+          "id": "personal-pro",
+          "email": null,
+          "planType": null,
+          "active": false,
+          "unavailableReason": "missing credentials",
+          "regularRemaining": null,
+          "sparkRemaining": null,
+          "lastError": "missing credentials"
+        }
+      ]
+    },
+    "requiresOpenaiAuth": true
+  }
+}
 { "id": 1, "result": { "account": { "type": "chatgpt", "email": null, "planType": "enterprise" }, "requiresOpenaiAuth": true } }
 { "id": 1, "result": { "account": { "type": "amazonBedrock", "credentialSource": "codexManaged" }, "requiresOpenaiAuth": false } }
 { "id": 1, "result": { "account": { "type": "amazonBedrock", "credentialSource": "awsManaged" }, "requiresOpenaiAuth": false } }

@@ -138,8 +138,16 @@ async fn exec_command_with_tty(
             network_approval: None,
             session: Arc::downgrade(session),
             last_used: started_at,
-            exec_output_compaction_enabled: turn.features.enabled(Feature::ExecOutputCompaction),
-            tool_router_output_optimization_enabled: turn.features.enabled(Feature::ToolRouter),
+            exec_output_compaction_enabled: turn
+                .config
+                .features
+                .get()
+                .enabled(Feature::ExecOutputCompaction),
+            tool_router_output_optimization_enabled: turn
+                .config
+                .features
+                .get()
+                .enabled(Feature::ToolRouter),
             model_slug: turn.model_info.slug.clone(),
             model_provider: turn.config.model_provider_id.clone(),
         };
@@ -197,6 +205,7 @@ async fn exec_command_with_tty(
         chunk_id: generate_chunk_id(),
         wall_time,
         raw_output: collected,
+        compaction: None,
         truncation_policy: turn.model_info.truncation_policy.into(),
         max_output_tokens: None,
         process_id: response_process_id,

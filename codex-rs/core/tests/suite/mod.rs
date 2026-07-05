@@ -65,7 +65,15 @@ mod image_rollout;
 mod items;
 mod json_result;
 mod live_cli;
+#[path = "mcp__client_tool_calls.rs"]
+mod mcp_client_tool_calls;
+#[cfg(not(target_os = "windows"))]
+#[path = "mcp__hooks.rs"]
+mod mcp_hooks;
+#[path = "mcp__openai_file.rs"]
+mod mcp_openai_file;
 mod mcp_tool_exposure;
+#[path = "mcp__turn_metadata.rs"]
 mod mcp_turn_metadata;
 mod model_overrides;
 mod model_router;
@@ -76,7 +84,6 @@ mod models_cache_ttl;
 mod models_etag_responses;
 mod multi_agent_mode;
 mod network_approval;
-mod openai_file_mcp;
 mod otel;
 mod override_updates;
 mod pending_input;
@@ -104,7 +111,6 @@ mod responses_lite;
 mod resume;
 mod resume_warning;
 mod review;
-mod rmcp_client;
 mod rollout_budget;
 mod rollout_list_find;
 mod safety_buffering;

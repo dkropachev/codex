@@ -289,9 +289,26 @@ impl ModelProvider for ConfiguredModelProvider {
         })
     }
 
-                        plan_type
-                            .map(|plan_type| ProviderAccount::Chatgpt { email, plan_type })
-                            .ok_or(ProviderAccountError::MissingChatgptAccountDetails)
+    fn auth_selection_for_model(
+        &self,
+        model: Option<&str>,
+        context: Option<AccountPoolSelectionContext>,
+    ) -> ModelProviderFuture<'_, ModelProviderAuthSelection> {
+        let bucket = account_pool_usage_bucket_for_model(model);
+        Box::pin(async move {
+            match self.auth_manager.as_ref() {
+                Some(auth_manager) => {
+                    if let Some(mut context) = context {
+                        context.bucket = bucket;
+                        if let Some(selection) = auth_manager
+                            .auth_for_account_pool_selection_context(context)
+                            .await
+                        {
+                            return ModelProviderAuthSelection {
+                                auth: Some(selection.auth.clone()),
+                                account_pool_selection: Some(selection),
+                            };
+                        }
                     }
                     ModelProviderAuthSelection {
                         auth: auth_manager.auth_for_account_pool_bucket(bucket).await,
@@ -345,14 +362,12 @@ impl ModelProvider for ConfiguredModelProvider {
                                     let email = auth.get_account_email();
                                     let plan_type = auth.account_plan_type();
 
-                                    match (email, plan_type) {
-                                        (Some(email), Some(plan_type)) => {
-                                            Ok(ProviderAccount::Chatgpt { email, plan_type })
-                                        }
-                                        _ => {
-                                            Err(ProviderAccountError::MissingChatgptAccountDetails)
-                                        }
-                                    }
+                                    plan_type
+                                        .map(|plan_type| ProviderAccount::Chatgpt {
+                                            email,
+                                            plan_type,
+                                        })
+                                        .ok_or(ProviderAccountError::MissingChatgptAccountDetails)
                                 }
                             })
                             .transpose()?

@@ -107,6 +107,7 @@ use codex_protocol::protocol::PlanDeltaEvent;
 use codex_protocol::protocol::ReasoningContentDeltaEvent;
 use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::SafetyBufferingEvent;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -152,8 +153,12 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<Option<String>> {
-    let mut client_session =
-        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let model_client = model_client_for_config(
+        &turn_context.config,
+        &sess.services.model_client,
+        &sess.services.auth_manager,
+    );
+    let mut client_session = prewarmed_client_session.unwrap_or_else(|| model_client.new_session());
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
@@ -2373,6 +2378,9 @@ async fn try_run_sampling_request(
                     &mut assistant_message_stream_parsers,
                 )
                 .await;
+                if let Some(token_usage) = token_usage.as_ref() {
+                    client_session.record_account_pool_cache_hint(token_usage);
+                }
                 let budget_result = sess
                     .record_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;

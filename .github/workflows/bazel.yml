@@ -19,9 +19,10 @@ concurrency:
 
 jobs:
   test:
-    # PRs use the sharded Windows cross-compiled test jobs below. Post-merge
-    # pushes to main also run the native Windows test job for broader Windows
-    # signal without putting PR latency back on the critical path. When
+    # Fork PRs use macOS and Linux Bazel test legs for pre-merge signal.
+    # Upstream PRs also use the sharded Windows cross-compiled test jobs below.
+    # Post-merge pushes to main run the native Windows test job for broader
+    # Windows signal without putting PR latency back on the critical path.
     # Code-mode unit tests run on every Bazel target. When authenticated RBE
     # is available, the Windows-cross shards exercise the source-built V8 path.
     timeout-minutes: 30

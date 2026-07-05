@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::SessionTask;
 use super::SessionTaskContext;
+use super::SessionTaskResult;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -84,7 +85,7 @@ impl SessionTask for WorkflowCommandTask {
         turn_context: Arc<TurnContext>,
         _input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> SessionTaskResult {
         session.session.services.session_telemetry.counter(
             "codex.task.workflow_command",
             /*inc*/ 1,
@@ -99,7 +100,7 @@ impl SessionTask for WorkflowCommandTask {
         .await
         {
             Ok(Some(markdown)) => markdown,
-            Ok(None) => return None,
+            Ok(None) => return Ok(None),
             Err(message) => {
                 session
                     .clone_session()
@@ -111,11 +112,13 @@ impl SessionTask for WorkflowCommandTask {
                         }),
                     )
                     .await;
-                return None;
+                return Ok(None);
             }
         };
 
-        Some(record_workflow_output(session.clone_session(), turn_context, markdown).await)
+        Ok(Some(
+            record_workflow_output(session.clone_session(), turn_context, markdown).await,
+        ))
     }
 }
 
@@ -135,7 +138,7 @@ pub(crate) async fn record_workflow_output(
                     text: markdown.clone(),
                 }],
                 phase: Some(MessagePhase::FinalAnswer),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
         )
         .await;

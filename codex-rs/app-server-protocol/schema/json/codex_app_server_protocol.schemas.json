@@ -5950,6 +5950,39 @@
           },
           {
             "properties": {
+              "activeAccountId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "members": {
+                "items": {
+                  "$ref": "#/definitions/v2/AccountPoolMember"
+                },
+                "type": "array"
+              },
+              "type": {
+                "enum": [
+                  "chatgptPool"
+                ],
+                "title": "ChatgptPoolAccountType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "members",
+              "type"
+            ],
+            "title": "ChatgptPoolAccount",
+            "type": "object"
+          },
+          {
+            "properties": {
               "credentialSource": {
                 "allOf": [
                   {

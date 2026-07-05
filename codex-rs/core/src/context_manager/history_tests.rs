@@ -1154,14 +1154,15 @@ fn record_items_uses_code_mode_exec_output_policy_when_larger() {
 text("ok");
 "#
         .to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     let long_output = "x".repeat(50_000);
     let output = ResponseItem::CustomToolCallOutput {
+        id: None,
         call_id: "call-200".to_string(),
         name: None,
         output: FunctionCallOutputPayload::from_text(long_output.clone()),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
 
     history.record_items([&call, &output], TruncationPolicy::Bytes(10_000));

@@ -142,7 +142,7 @@ async fn login_with_access_token_writes_agent_identity_jwt() {
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn stored_agent_identity_jwt_keeps_auth_json_unchanged() -> anyhow::Result<()> {
     let _access_token_guard = remove_access_token_env_var();
     let codex_home = tempdir()?;
@@ -204,7 +204,7 @@ async fn stored_agent_identity_jwt_keeps_auth_json_unchanged() -> anyhow::Result
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn login_with_access_token_writes_only_personal_access_token() {
     let dir = tempdir().unwrap();
     let auth_path = dir.path().join("auth.json");
@@ -351,7 +351,7 @@ async fn login_with_access_token_rejects_invalid_jwt() {
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     write_auth_file(
@@ -475,7 +475,7 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn chatgpt_auth_retries_transient_agent_identity_registration() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     write_auth_file(
@@ -541,7 +541,7 @@ async fn chatgpt_auth_retries_transient_agent_identity_registration() -> anyhow:
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn chatgpt_auth_registration_retry_exhaustion_is_fallback_eligible() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     write_auth_file(
@@ -593,7 +593,7 @@ async fn chatgpt_auth_registration_retry_exhaustion_is_fallback_eligible() -> an
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn chatgpt_auth_task_registration_retry_exhaustion_is_fallback_eligible() -> anyhow::Result<()>
 {
     let codex_home = tempdir()?;
@@ -658,7 +658,7 @@ async fn chatgpt_auth_task_registration_retry_exhaustion_is_fallback_eligible() 
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn chatgpt_auth_non_retryable_registration_error_is_hard_failure() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     write_auth_file(

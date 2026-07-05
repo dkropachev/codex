@@ -158,11 +158,13 @@ async fn credential_for_account_home(
     config: &Config,
     require_chatgpt: bool,
 ) -> Option<AccountCredential> {
+    let auth_route_config = config.auth_route_config();
     match CodexAuth::from_auth_storage(
         codex_home,
         config.cli_auth_credentials_store_mode,
         Some(config.chatgpt_base_url.as_str()),
         config.auth_keyring_backend_kind(),
+        auth_route_config.as_ref(),
     )
     .await
     {

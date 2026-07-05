@@ -50,6 +50,7 @@ pub(crate) struct ContextManager {
     /// also clear this when it trims a mixed initial-context developer bundle
     /// whose non-diff fragments no longer exist in the surviving history.
     reference_context_item: Option<TurnContextItem>,
+    code_mode_exec_output_policies: HashMap<String, TruncationPolicy>,
     /// Environment state most recently appended to model-visible history.
     environment_context_baseline: Option<EnvironmentContext>,
 }
@@ -63,6 +64,7 @@ impl ContextManager {
                 &None, &None, /*model_context_window*/ None,
             ),
             reference_context_item: None,
+            code_mode_exec_output_policies: HashMap::new(),
             environment_context_baseline: None,
         }
     }

@@ -138,6 +138,57 @@ fn message_input_text_contains(request: &ResponsesRequest, role: &str, needle: &
         .any(|text| text.contains(needle))
 }
 
+fn request_text_verbosity(request_body: &serde_json::Value) -> Option<&str> {
+    request_body
+        .get("text")
+        .and_then(|text| text.get("verbosity"))
+        .and_then(|verbosity| verbosity.as_str())
+}
+
+fn model_catalog_with_verbosity_model(model_slug: &str) -> ModelsResponse {
+    let model_catalog = bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    let mut model = model_catalog
+        .models
+        .into_iter()
+        .find(|model| model.slug == "gpt-5.4")
+        .unwrap_or_else(|| panic!("gpt-5.4 exists in bundled models.json"));
+    model.slug = model_slug.to_string();
+    model.display_name = model_slug.to_string();
+    model.support_verbosity = true;
+    model.default_verbosity = None;
+
+    ModelsResponse {
+        models: vec![model],
+    }
+}
+
+fn user_text_input(text: &str, final_output_json_schema: Option<serde_json::Value>) -> Op {
+    Op::UserInput {
+        items: vec![UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }],
+        final_output_json_schema,
+        responsesapi_client_metadata: None,
+        additional_context: Default::default(),
+        thread_settings: Default::default(),
+    }
+}
+
+fn response_style_artifact_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "summary": {
+                "type": "string"
+            }
+        },
+        "required": ["summary"],
+        "additionalProperties": false
+    })
+}
+
 fn response_message_item_id(request: &ResponsesRequest, role: &str, text: &str) -> String {
     request
         .inputs_of_type("message")

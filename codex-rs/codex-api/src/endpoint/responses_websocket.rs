@@ -736,7 +736,7 @@ async fn run_websocket_response_stream(
                         "response event consumer dropped".to_string(),
                     ));
                 }
-                match process_responses_event(event) {
+                match process_responses_event(event, latest_rate_limit_snapshot.as_ref()) {
                     Ok(Some(event)) => {
                         let is_completed = matches!(event, ResponseEvent::Completed { .. });
                         let _ = tx_event.send(Ok(event)).await;
