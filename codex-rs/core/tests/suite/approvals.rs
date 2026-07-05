@@ -795,9 +795,11 @@ async fn wait_for_completion_without_approval(test: &TestCodex) {
 }
 
 async fn wait_for_completion(test: &TestCodex) {
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(/*secs*/ 60),
+    )
     .await;
 }
 

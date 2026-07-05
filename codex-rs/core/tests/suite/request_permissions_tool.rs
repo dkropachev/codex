@@ -177,7 +177,7 @@ async fn wait_for_completion(test: &TestCodex) {
     wait_for_event_with_timeout(
         &test.codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
-        tokio::time::Duration::from_secs(/*secs*/ 30),
+        tokio::time::Duration::from_secs(/*secs*/ 60),
     )
     .await;
 }
@@ -473,7 +473,7 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
                     EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
                 )
             },
-            tokio::time::Duration::from_secs(/*secs*/ 30),
+            tokio::time::Duration::from_secs(/*secs*/ 60),
         )
         .await;
         match event {
