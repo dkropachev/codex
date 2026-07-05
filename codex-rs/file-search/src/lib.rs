@@ -820,22 +820,30 @@ mod tests {
 
     #[test]
     fn session_streams_updates_before_walk_complete() {
-        let dir = create_temp_tree(/*file_count*/ 600);
+        let dir = create_temp_tree(/*file_count*/ 10_000);
         let reporter = Arc::new(RecordingReporter::default());
         let session = create_session(
             vec![dir.path().to_path_buf()],
-            FileSearchOptions::default(),
+            FileSearchOptions {
+                threads: NonZero::new(/*n*/ 1).unwrap(),
+                ..Default::default()
+            },
             reporter.clone(),
             /*cancel_flag*/ None,
         )
         .expect("session");
 
         session.update_query("file-0");
+        let streamed_update = reporter.wait_until(
+            &reporter.updates,
+            &reporter.update_cv,
+            Duration::from_secs(5),
+            |updates| updates.iter().any(|snapshot| !snapshot.walk_complete),
+        );
         let completed = reporter.wait_for_complete(Duration::from_secs(5));
 
+        assert!(streamed_update);
         assert!(completed);
-        let updates = reporter.updates();
-        assert!(updates.iter().any(|snapshot| !snapshot.walk_complete));
     }
 
     #[test]
