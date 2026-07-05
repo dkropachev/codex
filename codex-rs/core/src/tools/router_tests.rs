@@ -145,9 +145,9 @@ fn extension_echo_router(session: &Session, turn: &TurnContext) -> ToolRouter {
     ToolRouter::from_turn_context(
         turn,
         ToolRouterParams {
+            tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: None,
-            discoverable_tools: None,
             extension_tool_executors: extension_tool_executors(session),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
@@ -162,7 +162,7 @@ fn extension_echo_call(call_id: &str) -> anyhow::Result<ToolCall> {
         namespace: Some("extension/".to_string()),
         arguments: json!({ "message": "hello" }).to_string(),
         call_id: call_id.to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     })?
     .expect("function_call should produce a tool call"))
 }
@@ -213,9 +213,9 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
     let router = ToolRouter::from_turn_context(
         &turn,
         ToolRouterParams {
+            tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: Some(mcp_tools),
-            discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
@@ -256,7 +256,7 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
         namespace: Some("mcp__codex_apps__calendar".to_string()),
         arguments: "{}".to_string(),
         call_id: "call-namespace".to_string(),
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     })?
     .expect("function_call should produce a tool call");
 
@@ -281,6 +281,7 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
     let router = ToolRouter::from_turn_context(
         &turn,
         ToolRouterParams {
+            tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: Some(vec![
                 mcp_tool_info(
@@ -296,7 +297,6 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
                     "query_with_delay",
                 ),
             ]),
-            discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
@@ -330,9 +330,9 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
     let router = ToolRouter::from_turn_context(
         &turn,
         ToolRouterParams {
+            tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: None,
-            discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
@@ -385,9 +385,9 @@ async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
     let router = ToolRouter::from_turn_context(
         &turn,
         ToolRouterParams {
+            tool_suggest_candidates: None,
             deferred_mcp_tools: None,
             mcp_tools: None,
-            discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: &dynamic_tools,
         },
@@ -439,7 +439,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
             text: "extension history".to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     };
     session
         .record_conversation_items(&turn, std::slice::from_ref(&history_item))
@@ -520,7 +520,9 @@ async fn tool_router_disabled_preserves_output_and_skips_diagnostics() -> anyhow
 #[tokio::test]
 async fn tool_router_missing_state_db_still_returns_normal_output() -> anyhow::Result<()> {
     let (mut session, mut turn) = make_session_and_context().await;
-    turn.features.enable(Feature::ToolRouter)?;
+    Arc::make_mut(&mut turn.config)
+        .features
+        .enable(Feature::ToolRouter)?;
     session.services.extensions = extension_tool_test_registry();
 
     let router = extension_echo_router(&session, &turn);
@@ -546,7 +548,9 @@ async fn tool_router_records_direct_dispatch_diagnostics() -> anyhow::Result<()>
         codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
             .await?;
     let (mut session, mut turn) = make_session_and_context().await;
-    turn.features.enable(Feature::ToolRouter)?;
+    Arc::make_mut(&mut turn.config)
+        .features
+        .enable(Feature::ToolRouter)?;
     let repo_key = {
         #[allow(deprecated)]
         {
@@ -605,7 +609,9 @@ async fn tool_router_diagnostics_use_original_output_token_hint() -> anyhow::Res
         codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
             .await?;
     let (mut session, mut turn) = make_session_and_context().await;
-    turn.features.enable(Feature::ToolRouter)?;
+    Arc::make_mut(&mut turn.config)
+        .features
+        .enable(Feature::ToolRouter)?;
     session.services.state_db = Some(Arc::clone(&state_db));
     session.services.extensions = extension_tool_test_registry();
 
@@ -655,7 +661,9 @@ async fn tool_router_records_code_mode_diagnostics_without_changing_result() -> 
         codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
             .await?;
     let (mut session, mut turn) = make_session_and_context().await;
-    turn.features.enable(Feature::ToolRouter)?;
+    Arc::make_mut(&mut turn.config)
+        .features
+        .enable(Feature::ToolRouter)?;
     session.services.state_db = Some(Arc::clone(&state_db));
     session.services.extensions = extension_tool_test_registry();
 

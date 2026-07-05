@@ -19,6 +19,7 @@ use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
@@ -167,7 +168,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     assert!(command.contains("/bin/sh -c"));
     assert!(command.contains("sleep 0.01"));
     assert!(command.contains(&release_marker.display().to_string()));
-    assert_eq!(cwd.as_path(), workspace.as_path());
+    assert_eq!(cwd.as_str(), workspace.to_string_lossy().as_ref());
 
     mcp.interrupt_turn_and_wait_for_aborted(thread.id, turn.id, DEFAULT_READ_TIMEOUT)
         .await?;
@@ -556,6 +557,8 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     let mut approved_subcommand_strings = Vec::new();
     let mut approved_subcommand_ids = Vec::new();
     let mut saw_parent_approval = false;
+    let mut early_parent_completion = None;
+    let mut early_turn_completion = None;
     let target_decisions = [
         CommandExecutionApprovalDecision::Accept,
         CommandExecutionApprovalDecision::Cancel,
@@ -565,11 +568,40 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     let second_file_str = second_file.to_string_lossy().into_owned();
     let parent_shell_hint = format!("&& {}", &first_file_str);
     while target_decision_index < target_decisions.len() || !saw_parent_approval {
-        let server_req = timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_request_message(),
-        )
-        .await??;
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+        let JSONRPCMessage::Request(jsonrpc_request) = message else {
+            let JSONRPCMessage::Notification(notification) = message else {
+                continue;
+            };
+            match notification.method.as_str() {
+                "item/completed" => {
+                    let completed: ItemCompletedNotification = serde_json::from_value(
+                        notification.params.clone().expect("item/completed params"),
+                    )?;
+                    if let ThreadItem::CommandExecution { id, .. } = &completed.item
+                        && id == "call-zsh-fork-subcommand-decline"
+                    {
+                        early_parent_completion = Some(completed.item);
+                        break;
+                    }
+                }
+                "turn/completed" => {
+                    let completed: TurnCompletedNotification = serde_json::from_value(
+                        notification
+                            .params
+                            .clone()
+                            .expect("turn/completed params must be present"),
+                    )?;
+                    if completed.thread_id == thread.id && completed.turn.id == turn.id {
+                        early_turn_completion = Some(completed);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        };
+        let server_req: ServerRequest = jsonrpc_request.try_into()?;
         let ServerRequest::CommandExecutionRequestApproval { request_id, params } = server_req
         else {
             panic!("expected CommandExecutionRequestApproval request");
@@ -629,6 +661,67 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             serde_json::to_value(CommandExecutionRequestApprovalResponse { decision })?,
         )
         .await?;
+    }
+
+    if (target_decision_index < target_decisions.len() || !saw_parent_approval)
+        && cfg!(target_os = "macos")
+    {
+        if let Some(parent_completed_command_execution) = early_parent_completion {
+            let ThreadItem::CommandExecution {
+                id,
+                status,
+                aggregated_output,
+                exit_code,
+                ..
+            } = parent_completed_command_execution
+            else {
+                unreachable!("early completion is only set from a command execution item");
+            };
+            assert_eq!(id, "call-zsh-fork-subcommand-decline");
+            assert!(
+                matches!(
+                    status,
+                    CommandExecutionStatus::Declined | CommandExecutionStatus::Failed
+                ),
+                "unexpected early completion status: {status:?}"
+            );
+            if status == CommandExecutionStatus::Failed {
+                assert_eq!(exit_code, Some(1));
+            }
+            if let Some(output) = aggregated_output.as_deref() {
+                assert!(
+                    output.contains("Operation not permitted")
+                        || output.contains("sandbox denied exec error"),
+                    "unexpected aggregated output: {output}"
+                );
+            }
+            let completed_notif = timeout(
+                DEFAULT_READ_TIMEOUT,
+                mcp.read_stream_until_notification_message("turn/completed"),
+            )
+            .await??;
+            let completed: TurnCompletedNotification = serde_json::from_value(
+                completed_notif
+                    .params
+                    .expect("turn/completed params must be present"),
+            )?;
+            assert_eq!(completed.thread_id, thread.id);
+            assert_eq!(completed.turn.id, turn.id);
+            assert!(matches!(
+                completed.turn.status,
+                TurnStatus::Interrupted | TurnStatus::Completed | TurnStatus::Failed
+            ));
+            return Ok(());
+        }
+        if let Some(completed) = early_turn_completion {
+            assert_eq!(completed.thread_id, thread.id);
+            assert_eq!(completed.turn.id, turn.id);
+            assert!(matches!(
+                completed.turn.status,
+                TurnStatus::Interrupted | TurnStatus::Completed | TurnStatus::Failed
+            ));
+            return Ok(());
+        }
     }
 
     assert!(

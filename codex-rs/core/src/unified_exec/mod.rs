@@ -33,10 +33,10 @@ use codex_features::Feature;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_tools::UnifiedExecShellMode;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::formatted_truncate_text;
+use codex_utils_path_uri::PathUri;
 use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
@@ -105,8 +105,8 @@ pub(crate) struct ExecCommandRequest {
     pub process_id: i32,
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
-    pub cwd: AbsolutePathBuf,
-    pub sandbox_cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
+    pub sandbox_cwd: PathUri,
     pub turn_environment: TurnEnvironment,
     pub shell_mode: UnifiedExecShellMode,
     pub network: Option<NetworkProxy>,
@@ -173,7 +173,7 @@ struct ProcessEntry {
     process: Arc<UnifiedExecProcess>,
     call_id: String,
     process_id: i32,
-    cwd: AbsolutePathBuf,
+    cwd: PathUri,
     initial_exec_command_active: Arc<std::sync::atomic::AtomicBool>,
     hook_command: String,
     tty: bool,
@@ -284,7 +284,12 @@ pub(crate) async fn compact_exec_output_for_turn(
         max_output_tokens,
         truncation_policy,
     } = request;
-    if !turn.features.enabled(Feature::ExecOutputCompaction) {
+    if !turn
+        .config
+        .features
+        .get()
+        .enabled(Feature::ExecOutputCompaction)
+    {
         return None;
     }
 
@@ -296,7 +301,11 @@ pub(crate) async fn compact_exec_output_for_turn(
             model_slug: turn.model_info.slug.as_str(),
             model_provider: turn.config.model_provider_id.as_str(),
             tool_name,
-            tool_router_output_optimization_enabled: turn.features.enabled(Feature::ToolRouter),
+            tool_router_output_optimization_enabled: turn
+                .config
+                .features
+                .get()
+                .enabled(Feature::ToolRouter),
             thread_id: Some(thread_id.as_str()),
             call_id: Some(call_id),
         },
@@ -366,6 +375,10 @@ fn compact_candidate_for_response(
         output,
         TruncationPolicy::Tokens(max_tokens),
     ));
+    if compaction.compacted_token_count >= raw_returned_tokens {
+        return None;
+    }
+
     let compacted_returned_tokens = approx_token_count(&formatted_truncate_text(
         compaction.text.as_str(),
         TruncationPolicy::Tokens(max_tokens),

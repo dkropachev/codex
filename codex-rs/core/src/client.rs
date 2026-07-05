@@ -82,7 +82,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::InternalSessionSource;
-use codex_protocol::protocol::RealtimeConversationArchitecture;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::W3cTraceContext;
@@ -184,6 +183,7 @@ struct ModelClientState {
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
+    item_ids_enabled: bool,
     include_attestation: bool,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     disable_websockets: AtomicBool,
@@ -405,6 +405,7 @@ impl ModelClient {
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
+        item_ids_enabled: bool,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
         let model_provider = create_model_provider(provider_info, auth_manager);
@@ -425,6 +426,7 @@ impl ModelClient {
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
+                item_ids_enabled,
                 include_attestation,
                 attestation_provider,
                 disable_websockets: AtomicBool::new(false),
@@ -460,6 +462,7 @@ impl ModelClient {
             self.state.enable_request_compression,
             self.state.include_timing_metrics,
             self.state.beta_features_header.clone(),
+            self.state.item_ids_enabled,
             self.state.attestation_provider.clone(),
         )
         .with_prompt_cache_key_override(self.prompt_cache_key_override.clone());
@@ -582,7 +585,7 @@ impl ModelClient {
         let ResponsesApiRequest {
             model,
             instructions,
-            input,
+            mut input,
             tools,
             parallel_tool_calls,
             reasoning,
@@ -591,6 +594,7 @@ impl ModelClient {
             text,
             ..
         } = request;
+        self.prepare_response_items_for_request(&mut input, /*store*/ false);
         let payload = ApiCompactionInput {
             model: &model,
             input: &input,
@@ -645,7 +649,6 @@ impl ModelClient {
         &self,
         sdp: String,
         session_config: ApiRealtimeSessionConfig,
-        architecture: RealtimeConversationArchitecture,
         mut extra_headers: ApiHeaderMap,
         api_provider_override: Option<ApiProvider>,
     ) -> Result<RealtimeWebrtcCallStart> {
@@ -668,12 +671,7 @@ impl ModelClient {
         let transport = ReqwestTransport::new(build_reqwest_client());
         let api_provider = api_provider_override.unwrap_or(client_setup.api_provider);
         let response = ApiRealtimeCallClient::new(transport, api_provider, client_setup.api_auth)
-            .create_with_session_architecture_and_headers(
-                sdp,
-                session_config,
-                architecture,
-                extra_headers,
-            )
+            .create_with_session_and_headers(sdp, session_config, extra_headers)
             .await
             .map_err(map_api_error)?;
         Ok(RealtimeWebrtcCallStart {
@@ -858,7 +856,9 @@ impl ModelClient {
         let instructions = &prompt.base_instructions.text;
         let mut input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
         if !self.state.provider.info().is_openai() {
-            input.iter_mut().for_each(ResponseItem::clear_metadata);
+            input
+                .iter_mut()
+                .for_each(ResponseItem::clear_internal_chat_message_metadata_passthrough);
         }
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let reasoning = Self::build_reasoning(model_info, effort, summary);
@@ -902,6 +902,16 @@ impl ModelClient {
             client_metadata: Some(responses_metadata.client_metadata()),
         };
         Ok(request)
+    }
+
+    fn prepare_response_items_for_request(&self, input: &mut [ResponseItem], store: bool) {
+        if self.state.item_ids_enabled || store {
+            return;
+        }
+
+        for item in input {
+            item.set_id(/*new_id*/ None);
+        }
     }
 
     /// Returns whether the Responses-over-WebSocket transport is active for this session.
@@ -1190,7 +1200,7 @@ impl ModelClientSession {
         if !self.client.state.provider.info().is_openai() {
             response_items
                 .iter_mut()
-                .for_each(ResponseItem::clear_metadata);
+                .for_each(ResponseItem::clear_internal_chat_message_metadata_passthrough);
         }
         let Some(incremental_items) = after_previous_input.strip_prefix(response_items.as_slice())
         else {
@@ -1456,7 +1466,7 @@ impl ModelClientSession {
                 )
                 .await;
 
-            let request = self.client.build_responses_request(
+            let mut request = self.client.build_responses_request(
                 &client_setup.api_provider,
                 prompt,
                 model_info,
@@ -1465,6 +1475,9 @@ impl ModelClientSession {
                 service_tier.clone(),
                 responses_metadata,
             )?;
+            let store = request.store;
+            self.client
+                .prepare_response_items_for_request(&mut request.input, store);
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
             inference_trace_attempt.record_started(&request);
@@ -1650,6 +1663,10 @@ impl ModelClientSession {
                 inference_trace.start_attempt()
             };
             stamp_ws_stream_request_start_ms(&mut ws_request);
+            let ResponsesWsRequest::ResponseCreate(ws_payload) = &mut ws_request;
+            let store = ws_payload.store;
+            self.client
+                .prepare_response_items_for_request(&mut ws_payload.input, store);
             if previous_response_id_from_untraced_warmup {
                 // The transport can reuse an untraced warmup response id and omit the
                 // already-sent input, but rollout replay needs the logical model-visible
