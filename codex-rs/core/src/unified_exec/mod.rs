@@ -29,6 +29,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
 
+use codex_features::Feature;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_tools::UnifiedExecShellMode;

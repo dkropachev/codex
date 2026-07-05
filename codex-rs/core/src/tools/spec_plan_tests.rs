@@ -793,6 +793,7 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
 
     let (_session, mut first_turn) = make_session_and_context().await;
     first_turn.model_info.supports_search_tool = true;
+    set_feature(&mut first_turn, Feature::ToolRouter, /*enabled*/ true);
     let first_router = ToolRouter::from_turn_context(
         &first_turn,
         ToolRouterParams {
@@ -808,6 +809,7 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
 
     let (_session, mut second_turn) = make_session_and_context().await;
     second_turn.model_info.supports_search_tool = true;
+    set_feature(&mut second_turn, Feature::ToolRouter, /*enabled*/ true);
     let second_router = ToolRouter::from_turn_context(
         &second_turn,
         ToolRouterParams {

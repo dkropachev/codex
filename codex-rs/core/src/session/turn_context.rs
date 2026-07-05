@@ -5,6 +5,8 @@ use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::path_utils;
 use crate::shell_snapshot::ShellSnapshotFile;
+use codex_config::types::ArtifactStyle;
+use codex_config::types::ResponseStyle;
 use codex_core_skills::HostLoadedSkills;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;

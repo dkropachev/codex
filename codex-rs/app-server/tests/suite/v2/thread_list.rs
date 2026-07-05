@@ -36,6 +36,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadSource as CoreThreadSource;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
@@ -106,6 +107,70 @@ async fn list_threads_with_sort(
     )
     .await??;
     to_response::<ThreadListResponse>(resp)
+}
+
+async fn start_thread_with_source(
+    mcp: &mut TestAppServer,
+    thread_source: ThreadSource,
+) -> Result<codex_app_server_protocol::Thread> {
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            thread_source: Some(thread_source),
+            ..Default::default()
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
+    Ok(thread)
+}
+
+async fn run_turn(mcp: &mut TestAppServer, thread_id: &str, text: &str) -> Result<()> {
+    let req_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread_id.to_string(),
+            client_user_message_id: None,
+            input: vec![UserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response::<TurnStartResponse>(resp)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    Ok(())
+}
+
+fn set_thread_source_on_fake_rollout(
+    codex_home: &Path,
+    filename_ts: &str,
+    thread_id: &str,
+    thread_source: CoreThreadSource,
+) -> Result<()> {
+    let path = rollout_path(codex_home, filename_ts, thread_id);
+    let contents = std::fs::read_to_string(&path)?;
+    let mut lines = contents.lines();
+    let session_meta = lines
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("fake rollout missing session meta"))?;
+    let mut session_meta: serde_json::Value = serde_json::from_str(session_meta)?;
+    session_meta["payload"]["thread_source"] = serde_json::to_value(thread_source)?;
+    let remaining = lines.collect::<Vec<_>>().join("\n");
+    std::fs::write(&path, format!("{session_meta}\n{remaining}\n"))?;
+    Ok(())
 }
 
 async fn list_threads_for_parent(

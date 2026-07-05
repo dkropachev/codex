@@ -12,6 +12,7 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ResponsesApiTool;
 use codex_extension_api::ToolCall as ExtensionToolCall;
 use codex_extension_api::ToolExecutor;
+use codex_features::Feature;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
@@ -150,6 +151,7 @@ fn extension_echo_router(session: &Session, turn: &TurnContext) -> ToolRouter {
             extension_tool_executors: extension_tool_executors(session),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
+        &Default::default(),
     )
 }
 
@@ -160,6 +162,7 @@ fn extension_echo_call(call_id: &str) -> anyhow::Result<ToolCall> {
         namespace: Some("extension/".to_string()),
         arguments: json!({ "message": "hello" }).to_string(),
         call_id: call_id.to_string(),
+        metadata: None,
     })?
     .expect("function_call should produce a tool call"))
 }
@@ -442,17 +445,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         .record_conversation_items(&turn, std::slice::from_ref(&history_item))
         .await;
 
-    let router = ToolRouter::from_turn_context(
-        &turn,
-        ToolRouterParams {
-            deferred_mcp_tools: None,
-            mcp_tools: None,
-            discoverable_tools: None,
-            extension_tool_executors: extension_tool_executors(&session),
-            dynamic_tools: turn.dynamic_tools.as_slice(),
-        },
-        &Default::default(),
-    );
+    let router = extension_echo_router(&session, &turn);
 
     assert!(
         router.model_visible_specs().iter().any(
@@ -466,15 +459,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         "expected extension-provided tool to be visible to the model"
     );
 
-    let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
-        id: None,
-        name: "echo".to_string(),
-        namespace: Some("extension/".to_string()),
-        arguments: json!({ "message": "hello" }).to_string(),
-        call_id: "call-extension".to_string(),
-        metadata: None,
-    })?
-    .expect("function_call should produce a tool call");
+    let call = extension_echo_call("call-extension")?;
     let result = router
         .dispatch_tool_call_with_code_mode_result(
             Arc::new(session),

@@ -6,6 +6,7 @@ mod approval_policy;
 mod auth_env;
 mod ephemeral;
 mod hooks;
+#[path = "mcp__required_exit.rs"]
 mod mcp_required_exit;
 mod originator;
 mod output_schema;
