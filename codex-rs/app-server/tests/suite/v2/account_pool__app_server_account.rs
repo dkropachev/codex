@@ -400,6 +400,7 @@ accounts = ["work-pro", "personal-pro"]
                 .into_iter()
                 .collect(),
             ),
+            rate_limit_reset_credits: None,
         }
     );
 

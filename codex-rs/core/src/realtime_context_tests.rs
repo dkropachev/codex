@@ -76,6 +76,7 @@ fn message(role: &str, content: ContentItem) -> ResponseItem {
         role: role.to_string(),
         content: vec![content],
         phase: None,
+        metadata: None,
     }
 }
 
