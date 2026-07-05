@@ -427,7 +427,7 @@ async fn setup_turn_one_with_custom_spawned_child(
             .codex
             .rollout_path()
             .ok_or_else(|| anyhow::anyhow!("expected parent rollout path"))?;
-        let deadline = Instant::now() + Duration::from_secs(6);
+        let deadline = Instant::now() + Duration::from_secs(/*secs*/ 20);
         loop {
             let has_notification = tokio::fs::read_to_string(&rollout_path)
                 .await

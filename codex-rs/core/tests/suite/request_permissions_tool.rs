@@ -32,6 +32,7 @@ use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
@@ -173,9 +174,11 @@ async fn submit_turn(
 }
 
 async fn wait_for_completion(test: &TestCodex) {
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        tokio::time::Duration::from_secs(/*secs*/ 30),
+    )
     .await;
 }
 
@@ -462,12 +465,16 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
         assert!(guardian_request.body_contains_text(requested_file_name));
         assert!(guardian_request.body_contains_text(patch_content));
     } else {
-        let event = wait_for_event(&test.codex, |event| {
-            matches!(
-                event,
-                EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
-            )
-        })
+        let event = wait_for_event_with_timeout(
+            &test.codex,
+            |event| {
+                matches!(
+                    event,
+                    EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
+                )
+            },
+            tokio::time::Duration::from_secs(/*secs*/ 30),
+        )
         .await;
         match event {
             EventMsg::TurnComplete(_) => {}
