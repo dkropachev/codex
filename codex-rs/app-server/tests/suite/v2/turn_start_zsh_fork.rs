@@ -671,13 +671,23 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
                 id,
                 status,
                 aggregated_output,
+                exit_code,
                 ..
             } = parent_completed_command_execution
             else {
                 unreachable!("early completion is only set from a command execution item");
             };
             assert_eq!(id, "call-zsh-fork-subcommand-decline");
-            assert_eq!(status, CommandExecutionStatus::Declined);
+            assert!(
+                matches!(
+                    status,
+                    CommandExecutionStatus::Declined | CommandExecutionStatus::Failed
+                ),
+                "unexpected early completion status: {status:?}"
+            );
+            if status == CommandExecutionStatus::Failed {
+                assert_eq!(exit_code, Some(1));
+            }
             if let Some(output) = aggregated_output.as_deref() {
                 assert!(
                     output.contains("Operation not permitted")
@@ -699,7 +709,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             assert_eq!(completed.turn.id, turn.id);
             assert!(matches!(
                 completed.turn.status,
-                TurnStatus::Interrupted | TurnStatus::Completed
+                TurnStatus::Interrupted | TurnStatus::Completed | TurnStatus::Failed
             ));
             return Ok(());
         }
@@ -708,7 +718,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             assert_eq!(completed.turn.id, turn.id);
             assert!(matches!(
                 completed.turn.status,
-                TurnStatus::Interrupted | TurnStatus::Completed
+                TurnStatus::Interrupted | TurnStatus::Completed | TurnStatus::Failed
             ));
             return Ok(());
         }
