@@ -247,10 +247,8 @@ async fn account_pool_websocket_failover_reconnects_with_next_member() -> Result
 
     let work_retry = connections[0][2].body_json();
     assert_eq!(work_retry["type"].as_str(), Some("response.create"));
-    assert_eq!(
-        work_retry["previous_response_id"].as_str(),
-        Some("resp-work")
-    );
+    assert_eq!(work_retry.get("previous_response_id"), None);
+    assert!(work_retry.to_string().contains("second websocket turn"));
 
     let personal_retry = connections[1][0].body_json();
     assert_eq!(personal_retry["type"].as_str(), Some("response.create"));

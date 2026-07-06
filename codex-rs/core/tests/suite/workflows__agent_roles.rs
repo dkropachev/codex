@@ -10,8 +10,9 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::ev_tool_search_call;
 use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -27,6 +28,7 @@ use wiremock::MockServer;
 const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
 const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
 const DISCOVERY_PROMPT: &str = "inspect the built-in workflow roles";
+const DISCOVERY_SEARCH_CALL_ID: &str = "call-discover-workflow-roles";
 const WORKFLOW_EXECUTION_PROMPT: &str = "run the workflow role sequence";
 const REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(/*millis*/ 20);
 const TURN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 15);
@@ -111,13 +113,26 @@ async fn built_in_workflow_roles_are_discoverable_from_spawn_agent_tool() -> Res
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mock = mount_sse_once(
+    let mock = mount_sse_sequence(
         &server,
-        sse(vec![
-            ev_response_created("resp-discovery-1"),
-            ev_assistant_message("msg-discovery-1", "done"),
-            ev_completed("resp-discovery-1"),
-        ]),
+        vec![
+            sse(vec![
+                ev_response_created("resp-discovery-1"),
+                ev_tool_search_call(
+                    DISCOVERY_SEARCH_CALL_ID,
+                    &json!({
+                        "query": "spawn agent workflow roles",
+                        "limit": 8,
+                    }),
+                ),
+                ev_completed("resp-discovery-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-discovery-2"),
+                ev_assistant_message("msg-discovery-1", "done"),
+                ev_completed("resp-discovery-2"),
+            ]),
+        ],
     )
     .await;
 
@@ -125,8 +140,10 @@ async fn built_in_workflow_roles_are_discoverable_from_spawn_agent_tool() -> Res
     let test = builder.build(&server).await?;
     test.submit_turn(DISCOVERY_PROMPT).await?;
 
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
     let agent_type_description =
-        spawn_agent_agent_type_description(&mock.single_request().body_json())?;
+        spawn_agent_agent_type_description(&requests[1], DISCOVERY_SEARCH_CALL_ID)?;
     let missing_roles: Vec<&str> = WORKFLOW_ROLES
         .iter()
         .filter(|role| {
@@ -195,8 +212,9 @@ fn workflow_agent_test_builder() -> TestCodexBuilder {
     })
 }
 
-fn spawn_agent_agent_type_description(body: &Value) -> Result<String> {
-    namespace_child_tool(body, MULTI_AGENT_V1_NAMESPACE, SPAWN_AGENT_TOOL_NAME)
+fn spawn_agent_agent_type_description(request: &ResponsesRequest, call_id: &str) -> Result<String> {
+    let output = request.tool_search_output(call_id);
+    namespace_child_tool(&output, MULTI_AGENT_V1_NAMESPACE, SPAWN_AGENT_TOOL_NAME)
         .and_then(|tool| tool_parameter_description(tool, "agent_type"))
         .ok_or_else(|| anyhow!("spawn_agent agent_type description should be present"))
 }

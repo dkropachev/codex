@@ -8719,7 +8719,7 @@ async fn run_user_shell_command_does_not_set_reference_context_item() {
 async fn workflow_output_records_assistant_message_for_next_context() {
     let (session, turn_context, rx) = make_session_and_context_with_rx().await;
     let markdown = "# Workflow report\n\nBody".to_string();
-    let expected_item = ResponseItem::Message {
+    let mut expected_item = ResponseItem::Message {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
@@ -8728,6 +8728,7 @@ async fn workflow_output_records_assistant_message_for_next_context() {
         phase: Some(MessagePhase::FinalAnswer),
         internal_chat_message_metadata_passthrough: None,
     };
+    expected_item.set_turn_id_if_missing(&turn_context.sub_id);
 
     let recorded = record_workflow_output(
         Arc::clone(&session),
