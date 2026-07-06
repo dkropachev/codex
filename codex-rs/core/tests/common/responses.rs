@@ -686,7 +686,7 @@ pub fn user_message_item(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -1251,14 +1251,62 @@ pub async fn start_websocket_server_with_headers(
                         Ok(value) => value,
                         Err(_) => return,
                     };
+                    // Ordinary HTTP probes can share this listener with websocket tests. Only a
+                    // successful websocket handshake should consume a scripted connection.
                     let connection = {
-                        let mut pending = pending_connections.lock().unwrap();
-                        pending.pop_front()
+                        let pending = pending_connections.lock().unwrap();
+                        pending.front().cloned()
                     };
 
                     let Some(connection) = connection else {
                         continue;
                     };
+
+                    if let Some(delay) = connection.accept_delay {
+                        tokio::time::sleep(delay).await;
+                    }
+
+                    let response_headers = connection.response_headers.clone();
+                    let handshake_log = Arc::clone(&logged_handshakes);
+                    let callback = move |req: &Request, mut response: Response| {
+                        let headers = req
+                            .headers()
+                            .iter()
+                            .filter_map(|(name, value)| {
+                                value.to_str().ok().map(|value| {
+                                    (name.as_str().to_string(), value.to_string())
+                                })
+                            })
+                            .collect();
+                        handshake_log.lock().unwrap().push(WebSocketHandshake {
+                            uri: req.uri().to_string(),
+                            headers,
+                        });
+
+                        let headers_mut = response.headers_mut();
+                        for (name, value) in &response_headers {
+                            if let (Ok(name), Ok(value)) = (
+                                HeaderName::from_bytes(name.as_bytes()),
+                                HeaderValue::from_str(value),
+                            ) {
+                                headers_mut.insert(name, value);
+                            }
+                        }
+
+                        Ok(response)
+                    };
+
+                    let mut ws_stream = match accept_hdr_async_with_config(
+                        stream,
+                        callback,
+                        Some(websocket_accept_config()),
+                    )
+                    .await
+                    {
+                        Ok(ws) => ws,
+                        Err(_) => continue,
+                    };
+                    pending_connections.lock().unwrap().pop_front();
 
                     let connection_index = {
                         let mut log = logged_connections.lock().unwrap();
@@ -1266,56 +1314,10 @@ pub async fn start_websocket_server_with_headers(
                         log.len() - 1
                     };
                     let requests = Arc::clone(&logged_connections);
-                    let handshakes = Arc::clone(&logged_handshakes);
                     let request_log = Arc::clone(&request_log);
                     let mut shutdown_signal = shutdown_signal_rx.clone();
 
                     connection_tasks.spawn(async move {
-                        if let Some(delay) = connection.accept_delay {
-                            tokio::time::sleep(delay).await;
-                        }
-
-                        let response_headers = connection.response_headers.clone();
-                        let handshake_log = Arc::clone(&handshakes);
-                        let callback = move |req: &Request, mut response: Response| {
-                            let headers = req
-                                .headers()
-                                .iter()
-                                .filter_map(|(name, value)| {
-                                    value.to_str().ok().map(|value| {
-                                        (name.as_str().to_string(), value.to_string())
-                                    })
-                                })
-                                .collect();
-                            handshake_log.lock().unwrap().push(WebSocketHandshake {
-                                uri: req.uri().to_string(),
-                                headers,
-                            });
-
-                            let headers_mut = response.headers_mut();
-                            for (name, value) in &response_headers {
-                                if let (Ok(name), Ok(value)) = (
-                                    HeaderName::from_bytes(name.as_bytes()),
-                                    HeaderValue::from_str(value),
-                                ) {
-                                    headers_mut.insert(name, value);
-                                }
-                            }
-
-                            Ok(response)
-                        };
-
-                        let mut ws_stream = match accept_hdr_async_with_config(
-                            stream,
-                            callback,
-                            Some(websocket_accept_config()),
-                        )
-                        .await
-                        {
-                            Ok(ws) => ws,
-                            Err(_) => return,
-                        };
-
                         let close_after_requests = connection.close_after_requests;
                         for request_events in connection.requests {
                             let Some(Ok(message)) = ws_stream.next().await else {

@@ -99,8 +99,9 @@ impl ToolExecutor<ToolInvocation> for ReadExecOutputHandler {
             } else {
                 slice_output(raw_text.as_str(), args.line_start, args.line_count)
             };
-            let max_tokens = resolve_max_tokens(args.max_output_tokens)
-                .min(turn.truncation_policy.token_budget());
+            let truncation_policy: TruncationPolicy = turn.model_info.truncation_policy.into();
+            let max_tokens =
+                resolve_max_tokens(args.max_output_tokens).min(truncation_policy.token_budget());
             let output = formatted_truncate_text(&selected, TruncationPolicy::Tokens(max_tokens));
             let text = format!("Chunk ID: {}\nOutput:\n{output}", args.chunk_id);
 

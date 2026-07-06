@@ -35,7 +35,7 @@ pub enum PlanType {
 pub enum ProviderAccount {
     ApiKey,
     Chatgpt {
-        email: String,
+        email: Option<String>,
         plan_type: PlanType,
     },
     ChatgptPool {
@@ -43,7 +43,17 @@ pub enum ProviderAccount {
         active_account_id: Option<String>,
         members: Vec<ProviderAccountPoolMember>,
     },
-    AmazonBedrock,
+    AmazonBedrock {
+        credential_source: AmazonBedrockCredentialSource,
+    },
+}
+
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum AmazonBedrockCredentialSource {
+    CodexManaged,
+    AwsManaged,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

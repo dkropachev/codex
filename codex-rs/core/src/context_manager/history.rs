@@ -1,3 +1,4 @@
+use crate::context::EnvironmentContext;
 use crate::context_manager::normalize;
 use crate::event_mapping::has_non_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_dev_message_content;
@@ -50,6 +51,8 @@ pub(crate) struct ContextManager {
     /// whose non-diff fragments no longer exist in the surviving history.
     reference_context_item: Option<TurnContextItem>,
     code_mode_exec_output_policies: HashMap<String, TruncationPolicy>,
+    /// Environment state most recently appended to model-visible history.
+    environment_context_baseline: Option<EnvironmentContext>,
 }
 
 impl ContextManager {
@@ -62,6 +65,7 @@ impl ContextManager {
             ),
             reference_context_item: None,
             code_mode_exec_output_policies: HashMap::new(),
+            environment_context_baseline: None,
         }
     }
 
@@ -79,6 +83,17 @@ impl ContextManager {
 
     pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
         self.reference_context_item.clone()
+    }
+
+    pub(crate) fn update_environment_context_baseline(
+        &mut self,
+        context: &EnvironmentContext,
+    ) -> bool {
+        if self.environment_context_baseline.as_ref() == Some(context) {
+            return false;
+        }
+        self.environment_context_baseline = Some(context.clone());
+        true
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
@@ -198,12 +213,14 @@ impl ContextManager {
             // its corresponding counterpart to keep the invariants intact without
             // running a full normalization pass.
             normalize::remove_corresponding_for(&mut self.items, &removed);
+            self.environment_context_baseline = None;
         }
     }
 
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
         self.history_version = self.history_version.saturating_add(1);
+        self.environment_context_baseline = None;
     }
 
     /// Replace image content in the last turn if it originated from a tool output.
@@ -374,24 +391,28 @@ impl ContextManager {
         let policy_with_serialization_budget = policy * 1.2;
         match item {
             ResponseItem::FunctionCallOutput {
+                id,
                 call_id,
                 output,
-                metadata,
+                internal_chat_message_metadata_passthrough: metadata,
             } => ResponseItem::FunctionCallOutput {
+                id: id.clone(),
                 call_id: call_id.clone(),
                 output: truncate_function_output_payload(output, policy_with_serialization_budget),
-                metadata: metadata.clone(),
+                internal_chat_message_metadata_passthrough: metadata.clone(),
             },
             ResponseItem::CustomToolCallOutput {
+                id,
                 call_id,
                 name,
                 output,
-                metadata,
+                internal_chat_message_metadata_passthrough: metadata,
             } => ResponseItem::CustomToolCallOutput {
+                id: id.clone(),
                 call_id: call_id.clone(),
                 name: name.clone(),
                 output: truncate_function_output_payload(output, policy_with_serialization_budget),
-                metadata: metadata.clone(),
+                internal_chat_message_metadata_passthrough: metadata.clone(),
             },
             ResponseItem::Message { .. }
             | ResponseItem::AgentMessage { .. }

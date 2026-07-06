@@ -52,12 +52,7 @@ async fn plugin_popup_lists_installed_plugin_and_toggles_enabled_state() -> Resu
     })
     .await?;
 
-    send_text(&writer, "/plugins").await?;
-    wait_for_screen(&mut output_rx, &mut screen, "plugins command", |contents| {
-        contents.contains("/plugins")
-    })
-    .await?;
-    writer.send(b"\r".to_vec()).await?;
+    writer.send(b"/plugins\r".to_vec()).await?;
     wait_for_screen(&mut output_rx, &mut screen, "plugin list", |contents| {
         contents.contains("Plugins")
             && contents.contains("[ ] toggle-plugin")

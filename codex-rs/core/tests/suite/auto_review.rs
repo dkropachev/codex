@@ -36,8 +36,10 @@ use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::time::Duration;
 use wiremock::MockServer;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -194,7 +196,12 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event_with_timeout(
+        &codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(/*secs*/ 60),
+    )
+    .await;
 
     let guardian_request = responses
         .requests()

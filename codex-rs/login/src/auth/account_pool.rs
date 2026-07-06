@@ -14,6 +14,7 @@ use codex_protocol::account::PlanType;
 use serde_json::Value;
 
 use crate::CodexAuth;
+use crate::outbound_proxy::AuthRouteConfig;
 
 use super::account_pool_selection::AccountPoolAssignmentKey;
 use super::account_pool_selection::AccountPoolAuthSelection;
@@ -125,6 +126,7 @@ impl AccountPoolManager {
         config: AccountPoolToml,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<String>,
+        auth_route_config: Option<AuthRouteConfig>,
     ) -> Option<Self> {
         if !config.enabled {
             return None;
@@ -145,8 +147,10 @@ impl AccountPoolManager {
                             codex_home.join("accounts").join(account_id),
                             /*enable_codex_api_key_env*/ false,
                             auth_credentials_store_mode,
+                            /*forced_chatgpt_workspace_id*/ None,
                             chatgpt_base_url.clone(),
                             AuthKeyringBackendKind::default(),
+                            auth_route_config.clone(),
                         )
                         .await,
                     ),
@@ -1708,6 +1712,7 @@ mod tests {
             },
             AuthCredentialsStoreMode::File,
             chatgpt_base_url,
+            /*auth_route_config*/ None,
         )
         .await
         .expect("account pool should be enabled")

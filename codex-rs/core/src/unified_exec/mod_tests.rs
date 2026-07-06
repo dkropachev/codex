@@ -20,6 +20,7 @@ use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteResponse;
 use codex_exec_server::WriteStatus;
 use codex_sandboxing::SandboxType;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use core_test_support::get_remote_test_env;
@@ -77,6 +78,7 @@ fn test_exec_request(
         cwd,
         env,
         network,
+        /*network_environment_id*/ None,
         ExecExpiration::DefaultTimeout,
         ExecCapturePolicy::ShellTool,
         SandboxType::None,
@@ -107,7 +109,7 @@ async fn exec_command_with_tty(
 
     let process = Arc::new(
         manager
-            .open_session_with_exec_env(
+            .open_session_with_prepared_exec_env(
                 process_id,
                 &request,
                 tty,
@@ -129,15 +131,23 @@ async fn exec_command_with_tty(
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id,
-            cwd: cwd.clone(),
+            cwd: cwd.clone().into(),
             initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             hook_command: cmd.to_string(),
             tty,
             network_approval: None,
             session: Arc::downgrade(session),
             last_used: started_at,
-            exec_output_compaction_enabled: turn.features.enabled(Feature::ExecOutputCompaction),
-            tool_router_output_optimization_enabled: turn.features.enabled(Feature::ToolRouter),
+            exec_output_compaction_enabled: turn
+                .config
+                .features
+                .get()
+                .enabled(Feature::ExecOutputCompaction),
+            tool_router_output_optimization_enabled: turn
+                .config
+                .features
+                .get()
+                .enabled(Feature::ToolRouter),
             model_slug: turn.model_info.slug.clone(),
             model_provider: turn.config.model_provider_id.clone(),
         };
@@ -196,7 +206,7 @@ async fn exec_command_with_tty(
         wall_time,
         raw_output: collected,
         compaction: None,
-        truncation_policy: turn.truncation_policy,
+        truncation_policy: turn.model_info.truncation_policy.into(),
         max_output_tokens: None,
         process_id: response_process_id,
         exit_code,
@@ -232,6 +242,7 @@ impl BlockingTerminateExecProcess {
             exit_code: None,
             closed: false,
             failure: None,
+            sandbox_denied: false,
         })
     }
 
@@ -290,17 +301,14 @@ async fn blocking_terminate_unified_process(
 ) -> anyhow::Result<Arc<UnifiedExecProcess>> {
     let (wake_tx, _wake_rx) = watch::channel(0);
     Ok(Arc::new(
-        UnifiedExecProcess::from_exec_server_started(
-            StartedExecProcess {
-                process: Arc::new(BlockingTerminateExecProcess {
-                    process_id: process_id.to_string().into(),
-                    terminate_started,
-                    allow_terminate,
-                    wake_tx,
-                }),
-            },
-            SandboxType::None,
-        )
+        UnifiedExecProcess::from_exec_server_started(StartedExecProcess {
+            process: Arc::new(BlockingTerminateExecProcess {
+                process_id: process_id.to_string().into(),
+                terminate_started,
+                allow_terminate,
+                wake_tx,
+            }),
+        })
         .await?,
     ))
 }
@@ -662,7 +670,7 @@ async fn unified_exec_persists_across_requests() -> anyhow::Result<()> {
             item_id: "call".to_string(),
             process_id: process_id.to_string(),
             command: "bash -i".to_string(),
-            cwd,
+            cwd: cwd.into(),
         }]
     );
 
@@ -966,7 +974,7 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
             process,
             call_id: "call".to_string(),
             process_id,
-            cwd,
+            cwd: cwd.into(),
             initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             hook_command: "sleep 60".to_string(),
             tty: true,
@@ -1043,7 +1051,7 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
             process: Arc::clone(&process),
             call_id: "call".to_string(),
             process_id,
-            cwd,
+            cwd: cwd.into(),
             initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hook_command: "sleep 60".to_string(),
             tty: true,
@@ -1109,7 +1117,7 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
 
     let environment = codex_exec_server::Environment::default_for_tests();
     let process = UnifiedExecProcessManager::default()
-        .open_session_with_exec_env(
+        .open_session_with_prepared_exec_env(
             /*process_id*/ 1234,
             &request,
             /*tty*/ false,
@@ -1151,7 +1159,7 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
 
     let manager = UnifiedExecProcessManager::default();
     let process = manager
-        .open_session_with_exec_env(
+        .open_session_with_prepared_exec_env(
             /*process_id*/ 1234,
             &request,
             /*tty*/ true,
@@ -1208,7 +1216,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
 
     let manager = UnifiedExecProcessManager::default();
     let err = manager
-        .open_session_with_exec_env(
+        .open_session_with_prepared_exec_env(
             /*process_id*/ 1234,
             &request,
             /*tty*/ true,

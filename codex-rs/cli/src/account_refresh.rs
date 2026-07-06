@@ -51,11 +51,13 @@ async fn refresh_single_account(config: &Config, account_id: &str) -> ! {
     } else {
         account_codex_home(&config.codex_home, Some(account_id))
     };
+    let auth_route_config = config.auth_route_config();
     match CodexAuth::from_auth_storage(
         &account_home,
         config.cli_auth_credentials_store_mode,
         Some(config.chatgpt_base_url.as_str()),
         config.auth_keyring_backend_kind(),
+        auth_route_config.as_ref(),
     )
     .await
     {
@@ -64,8 +66,10 @@ async fn refresh_single_account(config: &Config, account_id: &str) -> ! {
                 account_home,
                 /*enable_codex_api_key_env*/ false,
                 config.cli_auth_credentials_store_mode,
+                /*forced_chatgpt_workspace_id*/ None,
                 Some(config.chatgpt_base_url.clone()),
                 config.auth_keyring_backend_kind(),
+                auth_route_config,
             )
             .await;
             if access_token_expired(&auth)

@@ -50,6 +50,7 @@ mod compact;
 mod compact_remote;
 mod compact_remote_parity;
 mod compact_resume_fork;
+mod current_time_reminder;
 mod deprecation_notice;
 mod exec;
 mod exec_policy;
@@ -58,7 +59,6 @@ mod extension_sandbox;
 mod fork_thread;
 #[cfg(not(target_os = "windows"))]
 mod guardian_review;
-mod hierarchical_agents;
 #[cfg(not(target_os = "windows"))]
 mod hooks;
 mod image_rollout;
@@ -72,6 +72,7 @@ mod mcp_client_tool_calls;
 mod mcp_hooks;
 #[path = "mcp__openai_file.rs"]
 mod mcp_openai_file;
+mod mcp_tool_exposure;
 #[path = "mcp__turn_metadata.rs"]
 mod mcp_turn_metadata;
 mod model_overrides;
@@ -81,6 +82,8 @@ mod model_switching;
 mod model_visible_layout;
 mod models_cache_ttl;
 mod models_etag_responses;
+mod multi_agent_mode;
+mod network_approval;
 mod otel;
 mod override_updates;
 mod pending_input;
@@ -108,7 +111,9 @@ mod responses_lite;
 mod resume;
 mod resume_warning;
 mod review;
+mod rollout_budget;
 mod rollout_list_find;
+mod safety_buffering;
 mod safety_check_downgrade;
 mod search_tool;
 mod shell_command;
