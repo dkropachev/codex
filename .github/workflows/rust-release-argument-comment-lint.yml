@@ -3,6 +3,9 @@ name: rust-release-argument-comment-lint
 on:
   workflow_call:
     inputs:
+      release_tag:
+        required: true
+        type: string
       publish:
         required: true
         type: boolean
@@ -11,6 +14,7 @@ on:
 # nested submodules. Prefer the system git CLI across every Cargo invocation.
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  RELEASE_TAG: ${{ inputs.release_tag }}
 
 jobs:
   skip:
@@ -63,6 +67,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0

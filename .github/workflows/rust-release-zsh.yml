@@ -2,8 +2,13 @@ name: rust-release-zsh
 
 on:
   workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
 
 env:
+  RELEASE_TAG: ${{ inputs.release_tag }}
   ZSH_COMMIT: 77045ef899e53b9598bebc5a41db93a548a40ca6
   ZSH_PATCH: codex-rs/shell-escalation/patches/zsh-exec-wrapper.patch
 
@@ -47,6 +52,7 @@ jobs:
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
 
       - name: Build, smoke-test, and stage zsh artifact
@@ -89,6 +95,7 @@ jobs:
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
 
       - name: Build, smoke-test, and stage zsh artifact
