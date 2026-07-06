@@ -682,7 +682,7 @@ fn apply_compatibility_repairs(target: &RepairWorkflowTarget) -> anyhow::Result<
         if repaired != contents {
             fs::write(&workflow_yaml, repaired)?;
             repairs.push(format!(
-                "Updated {} with code-review autocomplete metadata",
+                "Updated {} with code-review workflow metadata",
                 workflow_yaml.display()
             ));
         }
@@ -719,79 +719,8 @@ fn repair_code_review_workflow_metadata(contents: &str) -> String {
         "userDescription",
         "Run a code review and repro workflow on the current branch.",
     );
-    if !has_workflow_usage_options(&repaired) {
-        if !repaired.ends_with('\n') {
-            repaired.push('\n');
-        }
-        repaired.push_str(CODE_REVIEW_USAGE_OPTIONS_YAML);
-    }
     repaired
 }
-
-const CODE_REVIEW_USAGE_OPTIONS_YAML: &str = r#"usage:
-  options:
-    - flag: --action
-      valueHint: <review|read-report|list-reports|incremental|resume>
-      description: Run mode: review, read-report, list-reports, incremental, or resume.
-    - flag: --working-directory
-      valueHint: <string>
-      description: Repository path or report-list directory filter.
-    - flag: --target-ref
-      valueHint: <string>
-      description: Branch or commit to review.
-    - flag: --base-ref
-      valueHint: <string>
-      description: Upstream/base reference for branch comparison.
-    - flag: --scope
-      valueHint: <branch|repo>
-      description: Review branch changes or the whole repository.
-    - flag: --review-id
-      valueHint: <string>
-      description: Existing review ID for read-report, incremental, or resume.
-    - flag: --review-model
-      valueHint: <string>
-      description: Model override for initial review agents.
-    - flag: --repro-model
-      valueHint: <string>
-      description: Model override for reproduction agents.
-    - flag: --limit
-      valueHint: <integer>
-      description: Maximum kept findings sent to reproduction.
-    - flag: --chunk-size-bytes
-      valueHint: <integer>
-      description: Maximum chunk size in bytes.
-    - flag: --module-depth
-      valueHint: <integer>
-      description: Directory depth used for chunk grouping.
-    - flag: --severity-threshold
-      valueHint: <number>
-      description: Minimum severity from 0 to 10.
-    - flag: --confidence-threshold
-      valueHint: <number>
-      description: Minimum confidence from 0 to 100.
-    - flag: --include-preexisting
-      description: Keep preexisting findings in branch scope.
-    - flag: --include-skipped-by-limit
-      description: Incremental mode also replays findings skipped by the previous limit.
-    - flag: --allowed-areas
-      valueHint: <Test|Code|Docs|Comment|Else>
-      description: Allowed finding areas.
-    - flag: --database-path
-      valueHint: <string>
-      description: SQLite audit store path.
-    - flag: --artifacts-dir
-      valueHint: <string>
-      description: Artifact root directory.
-    - flag: --output
-      valueHint: <json|md>
-      description: Return json or markdown wrapper output.
-    - flag: --report-type
-      valueHint: <default|github-review>
-      description: Render default markdown or a GitHub review draft.
-    - flag: --findings
-      valueHint: <confirmed|filtered|both>
-      description: Return confirmed, filtered, or both finding sets.
-"#;
 
 fn default_command_from_id(id: &str) -> String {
     slugify(id.rsplit('/').next().unwrap_or(id))
@@ -1193,32 +1122,6 @@ fn strip_inline_comment(value: &str) -> &str {
         }
     }
     value
-}
-
-fn has_workflow_usage_options(contents: &str) -> bool {
-    let mut in_usage = false;
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let indent = line.len().saturating_sub(line.trim_start().len());
-        if indent == 0 {
-            in_usage = trimmed
-                .split_once(':')
-                .is_some_and(|(line_key, _)| line_key.trim() == "usage");
-            continue;
-        }
-        if in_usage
-            && indent == 2
-            && trimmed
-                .split_once(':')
-                .is_some_and(|(line_key, _)| line_key.trim() == "options")
-        {
-            return true;
-        }
-    }
-    false
 }
 
 fn set_top_level_yaml_scalar(contents: &str, key: &str, value: &str) -> String {
