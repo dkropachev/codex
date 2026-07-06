@@ -247,6 +247,8 @@ mod history_replay;
 mod mcp_startup;
 mod permissions;
 mod plan_mode;
+#[path = "tests/plugin_catalog_tests.rs"]
+mod plugin_catalog;
 #[path = "tests/plugins__popups.rs"]
 mod plugins_popups;
 mod popups_and_settings;
