@@ -22,7 +22,7 @@ controls should reflect availability and selection state consistently with app-s
 
 ## Entry Points
 
-- [codex-rs/core-skills/src/manager.rs](../core-skills/src/manager.rs)
+- [codex-rs/core-skills/src/service.rs](../core-skills/src/service.rs)
 - [codex-rs/core-skills/src/loader.rs](../core-skills/src/loader.rs)
 - [codex-rs/core-skills/src/injection.rs](../core-skills/src/injection.rs)
 - [codex-rs/core/src/skills.rs](../core/src/skills.rs)
@@ -41,7 +41,7 @@ controls should reflect availability and selection state consistently with app-s
 #### Entry Points
 
 - [codex-rs/core-skills/src/loader.rs](../core-skills/src/loader.rs)
-- [codex-rs/core-skills/src/manager.rs](../core-skills/src/manager.rs)
+- [codex-rs/core-skills/src/service.rs](../core-skills/src/service.rs)
 - [codex-rs/core-skills/src/config_rules.rs](../core-skills/src/config_rules.rs)
 - [codex-rs/app-server/src/request_processors/catalog_processor.rs](../app-server/src/request_processors/catalog_processor.rs)
 - [codex-rs/app-server/src/skills_watcher.rs](../app-server/src/skills_watcher.rs)
