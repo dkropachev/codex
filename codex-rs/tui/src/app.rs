@@ -1148,6 +1148,7 @@ See the Codex keymap documentation for supported actions and examples."
                 &mut app_server,
                 AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
                     latest_version,
+                    app.update_action,
                 ))),
             ))
             .await?;

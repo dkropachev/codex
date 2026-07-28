@@ -646,7 +646,8 @@ async fn review_uses_model_policy_override_when_configured() {
         matches!(
             ev,
             EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
-                review_output: None
+                review_output: None,
+                ..
             })
         )
     })

@@ -1,27 +1,31 @@
 //! Informational, warning, update, and policy notice history cells.
 
 use super::*;
+use crate::UpdateAction;
 
 #[cfg_attr(debug_assertions, allow(dead_code))]
 #[derive(Debug)]
 pub(crate) struct UpdateAvailableHistoryCell {
     current_version: String,
     latest_version: String,
+    update_action: Option<UpdateAction>,
 }
 
 #[cfg_attr(debug_assertions, allow(dead_code))]
 impl UpdateAvailableHistoryCell {
-    pub(crate) fn new(latest_version: String) -> Self {
-        Self::new_with_current_version(CODEX_CLI_VERSION.to_string(), latest_version)
+    pub(crate) fn new(latest_version: String, update_action: Option<UpdateAction>) -> Self {
+        Self::new_with_current_version(CODEX_CLI_VERSION.to_string(), latest_version, update_action)
     }
 
     pub(crate) fn new_with_current_version(
         current_version: String,
         latest_version: String,
+        update_action: Option<UpdateAction>,
     ) -> Self {
         Self {
             current_version,
             latest_version,
+            update_action,
         }
     }
 }
@@ -32,6 +36,17 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         use ratatui_macros::text;
         let current_version = &self.current_version;
         let latest_version = &self.latest_version;
+        let update_instruction = if let Some(update_action) = self.update_action {
+            line!["Run ", update_action.command_str().cyan(), " to update."]
+        } else {
+            line![
+                "Download the latest release:",
+                " ",
+                "https://github.com/dkropachev/codex/releases/latest"
+                    .cyan()
+                    .underlined(),
+            ]
+        };
 
         let content = text![
             line![
@@ -40,7 +55,9 @@ impl HistoryCell for UpdateAvailableHistoryCell {
                 " ",
                 format!("{current_version} -> {latest_version}").bold(),
             ],
-            "Download the latest release:",
+            update_instruction,
+            "",
+            "See full release notes:",
             "https://github.com/dkropachev/codex/releases/latest"
                 .cyan()
                 .underlined(),
@@ -57,10 +74,18 @@ impl HistoryCell for UpdateAvailableHistoryCell {
     fn raw_lines(&self) -> Vec<Line<'static>> {
         let current_version = &self.current_version;
         let latest_version = &self.latest_version;
+        let update_instruction = if let Some(update_action) = self.update_action {
+            format!("Run {} to update.", update_action.command_str())
+        } else {
+            "Download the latest release: https://github.com/dkropachev/codex/releases/latest"
+                .to_string()
+        };
         vec![
             Line::from("Update available!"),
             Line::from(format!("{current_version} -> {latest_version}")),
-            Line::from("Download the latest release:"),
+            Line::from(update_instruction),
+            Line::from(""),
+            Line::from("See full release notes:"),
             Line::from("https://github.com/dkropachev/codex/releases/latest"),
         ]
     }

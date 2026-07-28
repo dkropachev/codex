@@ -1666,6 +1666,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         ModelsResponse {
             models: vec![review_model],
         },
+        CollaborationModesConfig::default(),
     ));
     let memory_extension = Arc::new(GuardianMemoryContextProbe);
     let mut extensions = codex_extension_api::ExtensionRegistryBuilder::<Config>::new();

@@ -61,7 +61,11 @@ async fn thread_workflow_command_records_assistant_output_and_next_turn_context(
     )?;
 
     let env = [("PATH", Some(path_value.as_str()))];
-    let mut mcp = TestAppServer::new_with_env(codex_home.as_path(), &env).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.as_path())
+        .with_env_overrides(&env)
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp

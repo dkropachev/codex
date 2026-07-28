@@ -1,6 +1,7 @@
 //! Coverage for history-cell rendering, wrapping, and transcript behavior.
 
 use super::*;
+use crate::UpdateAction;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCall;
 use crate::exec_cell::ExecCell;
@@ -1143,6 +1144,7 @@ fn github_update_available_history_cell_snapshot() {
     let cell = UpdateAvailableHistoryCell::new_with_current_version(
         "<VERSION>".to_string(),
         "9.9.9".to_string(),
+        None,
     );
     let rendered = render_lines(&cell.display_lines(/*width*/ 110)).join("\n");
 
