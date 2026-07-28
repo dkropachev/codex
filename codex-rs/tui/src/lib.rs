@@ -3,7 +3,6 @@
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 #![deny(clippy::disallowed_methods)]
-use crate::legacy_core::check_execpolicy_for_warnings;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
@@ -13,7 +12,6 @@ use crate::legacy_core::config::resolve_bootstrap_auth_keyring_backend_kind;
 use crate::legacy_core::config::resolve_bootstrap_auth_route_config;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
-use crate::legacy_core::format_exec_policy_error_with_source;
 use crate::session_resume::ResolveCwdOutcome;
 use crate::session_resume::resolve_cwd_for_resume_or_fork;
 pub use crate::startup_error::LocalStateDbStartupError;
@@ -32,7 +30,6 @@ use codex_app_server_client::RemoteAppServerConnectArgs;
 pub use codex_app_server_client::RemoteAppServerEndpoint;
 use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AskForApproval;
-use codex_app_server_protocol::AuthMode as AppServerAuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::Thread as AppServerThread;
 use codex_app_server_protocol::ThreadListCwdFilter;
@@ -51,6 +48,7 @@ use codex_login::default_client::originator;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
 use codex_protocol::ThreadId;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 #[cfg(target_os = "windows")]
@@ -91,6 +89,7 @@ mod app_backtrack;
 mod app_command;
 mod app_event;
 mod app_event_sender;
+mod app_info;
 mod app_server_approval_conversions;
 mod app_server_session;
 mod approval_events;
@@ -137,6 +136,7 @@ mod line_truncation;
 pub(crate) mod live_wrap;
 pub use live_wrap::RowBuilder;
 mod local_chatgpt_auth;
+mod managed_new_thread_defaults;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
@@ -187,7 +187,6 @@ mod tui;
 mod ui_consts;
 pub(crate) mod update_action;
 pub use update_action::UpdateAction;
-pub mod workflow_commands;
 #[cfg(not(debug_assertions))]
 pub use update_action::get_update_action;
 mod update_prompt;
@@ -200,6 +199,7 @@ mod version;
 mod width;
 #[cfg(any(target_os = "windows", test))]
 mod windows_sandbox;
+pub mod workflow_commands;
 mod workspace_command;
 mod workspace_messages;
 
@@ -628,6 +628,7 @@ async fn lookup_session_target_by_name_with_app_server(
                 source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
                 archived: Some(false),
                 parent_thread_id: None,
+                ancestor_thread_id: None,
                 cwd: None,
                 use_state_db_only: false,
                 search_term: Some(name.to_string()),
@@ -741,6 +742,7 @@ fn latest_session_lookup_params(
         source_kinds: Some(resume_source_kinds(include_non_interactive)),
         archived: Some(false),
         parent_thread_id: None,
+        ancestor_thread_id: None,
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().to_string())),
         use_state_db_only: match lookup_mode {
             LatestSessionLookupMode::StateDbOnly => true,
@@ -1138,18 +1140,6 @@ pub async fn run_main(
         .effective_config()
         .as_table()
         .is_some_and(|table| table.contains_key("log_dir"));
-
-    #[allow(clippy::print_stderr)]
-    match check_execpolicy_for_warnings(&config.config_layer_stack).await {
-        Ok(None) => {}
-        Ok(Some(err)) | Err(err) => {
-            eprintln!(
-                "Error loading rules:\n{}",
-                format_exec_policy_error_with_source(&err)
-            );
-            std::process::exit(1);
-        }
-    }
 
     set_default_client_residency_requirement(config.enforce_residency.value());
 
@@ -1871,7 +1861,7 @@ fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScree
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginStatus {
-    AuthMode(AppServerAuthMode),
+    AuthMode(AuthMode),
     NotAuthenticated,
 }
 
@@ -1888,9 +1878,9 @@ async fn get_login_status(
 
     let account = app_server.read_account().await?;
     Ok(match account.account {
-        Some(AppServerAccount::ApiKey {}) => LoginStatus::AuthMode(AppServerAuthMode::ApiKey),
+        Some(AppServerAccount::ApiKey {}) => LoginStatus::AuthMode(AuthMode::ApiKey),
         Some(AppServerAccount::Chatgpt { .. } | AppServerAccount::ChatgptPool { .. }) => {
-            LoginStatus::AuthMode(AppServerAuthMode::Chatgpt)
+            LoginStatus::AuthMode(AuthMode::Chatgpt)
         }
         Some(AppServerAccount::AmazonBedrock { .. }) => LoginStatus::NotAuthenticated,
         None => LoginStatus::NotAuthenticated,
@@ -2572,130 +2562,120 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn fork_last_filters_latest_session_by_cwd_unless_show_all() -> color_eyre::Result<()> {
-        run_current_thread_test_with_stack(
-            "fork_last_filters_latest_session_by_cwd_unless_show_all",
-            || async {
-                let temp_dir = TempDir::new()?;
-                let project_cwd = temp_dir.path().join("project");
-                let other_cwd = temp_dir.path().join("other-project");
-                std::fs::create_dir_all(&project_cwd)?;
-                std::fs::create_dir_all(&other_cwd)?;
+    #[tokio::test]
+    async fn fork_last_filters_latest_session_by_cwd_unless_show_all() -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let project_cwd = temp_dir.path().join("project");
+        let other_cwd = temp_dir.path().join("other-project");
+        std::fs::create_dir_all(&project_cwd)?;
+        std::fs::create_dir_all(&other_cwd)?;
 
-                let config = ConfigBuilder::default()
-                    .codex_home(temp_dir.path().to_path_buf())
-                    .harness_overrides(ConfigOverrides {
-                        cwd: Some(project_cwd.clone()),
-                        ..Default::default()
-                    })
-                    .build()
-                    .await?;
-                let model_provider = config.model_provider_id.as_str();
-                let project_thread_id = write_session_rollout(
-                    temp_dir.path(),
-                    "2025-01-02T10-00-00",
-                    "2025-01-02T10:00:00Z",
-                    "older project session",
-                    model_provider,
-                    &project_cwd,
-                )?;
-                let other_thread_id = write_session_rollout(
-                    temp_dir.path(),
-                    "2025-01-02T12-00-00",
-                    "2025-01-02T12:00:00Z",
-                    "newer other project session",
-                    model_provider,
-                    &other_cwd,
-                )?;
+        let config = ConfigBuilder::default()
+            .codex_home(temp_dir.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(project_cwd.clone()),
+                ..Default::default()
+            })
+            .build()
+            .await?;
+        let model_provider = config.model_provider_id.as_str();
+        let project_thread_id = write_session_rollout(
+            temp_dir.path(),
+            "2025-01-02T10-00-00",
+            "2025-01-02T10:00:00Z",
+            "older project session",
+            model_provider,
+            &project_cwd,
+        )?;
+        let other_thread_id = write_session_rollout(
+            temp_dir.path(),
+            "2025-01-02T12-00-00",
+            "2025-01-02T12:00:00Z",
+            "newer other project session",
+            model_provider,
+            &other_cwd,
+        )?;
 
-                let mut app_server = AppServerSession::new(
-                    codex_app_server_client::AppServerClient::InProcess(
-                        start_test_embedded_app_server(config.clone()).await?,
-                    ),
-                    ThreadParamsMode::Embedded,
-                );
-                let filter_cwd = latest_session_cwd_filter(
-                    /*uses_remote_workspace*/ false, /*remote_cwd_override*/ None,
-                    &config, /*show_all*/ false,
-                );
-                let scoped_target = lookup_latest_session_target_with_app_server(
-                    &mut app_server,
-                    &config,
-                    filter_cwd,
-                    /*include_non_interactive*/ false,
-                )
-                .await?
-                .expect("expected project-scoped fork --last target");
-                let show_all_filter_cwd = latest_session_cwd_filter(
-                    /*uses_remote_workspace*/ false, /*remote_cwd_override*/ None,
-                    &config, /*show_all*/ true,
-                );
-                let show_all_target = lookup_latest_session_target_with_app_server(
-                    &mut app_server,
-                    &config,
-                    show_all_filter_cwd,
-                    /*include_non_interactive*/ false,
-                )
-                .await?
-                .expect("expected global fork --last target");
-                app_server.shutdown().await?;
-
-                assert_eq!(scoped_target.thread_id, project_thread_id);
-                assert_eq!(show_all_target.thread_id, other_thread_id);
-                Ok(())
-            },
+        let mut app_server = AppServerSession::new(
+            codex_app_server_client::AppServerClient::InProcess(
+                start_test_embedded_app_server(config.clone()).await?,
+            ),
+            ThreadParamsMode::Embedded,
+        );
+        let filter_cwd = latest_session_cwd_filter(
+            /*uses_remote_workspace*/ false, /*remote_cwd_override*/ None, &config,
+            /*show_all*/ false,
+        );
+        let scoped_target = lookup_latest_session_target_with_app_server(
+            &mut app_server,
+            &config,
+            filter_cwd,
+            /*include_non_interactive*/ false,
         )
+        .await?
+        .expect("expected project-scoped fork --last target");
+        let show_all_filter_cwd = latest_session_cwd_filter(
+            /*uses_remote_workspace*/ false, /*remote_cwd_override*/ None, &config,
+            /*show_all*/ true,
+        );
+        let show_all_target = lookup_latest_session_target_with_app_server(
+            &mut app_server,
+            &config,
+            show_all_filter_cwd,
+            /*include_non_interactive*/ false,
+        )
+        .await?
+        .expect("expected global fork --last target");
+        app_server.shutdown().await?;
+
+        assert_eq!(scoped_target.thread_id, project_thread_id);
+        assert_eq!(show_all_target.thread_id, other_thread_id);
+        Ok(())
     }
 
-    #[test]
-    fn latest_session_lookup_falls_back_for_rollout_missing_from_state_db() -> color_eyre::Result<()>
-    {
-        run_current_thread_test_with_stack(
-            "latest_session_lookup_falls_back_for_rollout_missing_from_state_db",
-            || async {
-                let temp_dir = TempDir::new()?;
-                let project_cwd = temp_dir.path().join("project");
-                std::fs::create_dir_all(&project_cwd)?;
-                let config = ConfigBuilder::default()
-                    .codex_home(temp_dir.path().to_path_buf())
-                    .harness_overrides(ConfigOverrides {
-                        cwd: Some(project_cwd.clone()),
-                        ..Default::default()
-                    })
-                    .build()
-                    .await?;
-                let mut app_server = AppServerSession::new(
-                    codex_app_server_client::AppServerClient::InProcess(
-                        start_test_embedded_app_server(config.clone()).await?,
-                    ),
-                    ThreadParamsMode::Embedded,
-                );
+    #[tokio::test]
+    async fn latest_session_lookup_falls_back_for_rollout_missing_from_state_db()
+    -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let project_cwd = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project_cwd)?;
+        let config = ConfigBuilder::default()
+            .codex_home(temp_dir.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(project_cwd.clone()),
+                ..Default::default()
+            })
+            .build()
+            .await?;
+        let mut app_server = AppServerSession::new(
+            codex_app_server_client::AppServerClient::InProcess(
+                start_test_embedded_app_server(config.clone()).await?,
+            ),
+            ThreadParamsMode::Embedded,
+        );
 
-                // Simulate a legacy writer creating a rollout after the state DB backfill completed.
-                let thread_id = write_session_rollout(
-                    temp_dir.path(),
-                    "2025-01-02T10-00-00",
-                    "2025-01-02T10:00:00Z",
-                    "legacy writer session",
-                    config.model_provider_id.as_str(),
-                    &project_cwd,
-                )?;
+        // Simulate a legacy writer creating a rollout after the state DB backfill completed.
+        let thread_id = write_session_rollout(
+            temp_dir.path(),
+            "2025-01-02T10-00-00",
+            "2025-01-02T10:00:00Z",
+            "legacy writer session",
+            config.model_provider_id.as_str(),
+            &project_cwd,
+        )?;
 
-                let target = lookup_latest_session_target_with_app_server(
-                    &mut app_server,
-                    &config,
-                    Some(project_cwd.as_path()),
-                    /*include_non_interactive*/ false,
-                )
-                .await?
-                .expect("expected scan-and-repair fallback to find the rollout");
-                app_server.shutdown().await?;
-
-                assert_eq!(target.thread_id, thread_id);
-                Ok(())
-            },
+        let target = lookup_latest_session_target_with_app_server(
+            &mut app_server,
+            &config,
+            Some(project_cwd.as_path()),
+            /*include_non_interactive*/ false,
         )
+        .await?
+        .expect("expected scan-and-repair fallback to find the rollout");
+        app_server.shutdown().await?;
+
+        assert_eq!(target.thread_id, thread_id);
+        Ok(())
     }
 
     #[tokio::test]
@@ -2818,97 +2798,90 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn embedded_app_server_supports_thread_start_rpc() -> color_eyre::Result<()> {
-        run_current_thread_test_with_stack(
-            "embedded_app_server_supports_thread_start_rpc",
-            || async {
-                let temp_dir = TempDir::new()?;
-                let config = build_config(&temp_dir).await?;
-                let app_server = start_test_embedded_app_server(config).await?;
-                let response: ThreadStartResponse = app_server
-                    .request_typed(ClientRequest::ThreadStart {
-                        request_id: RequestId::Integer(1),
-                        params: ThreadStartParams {
-                            ephemeral: Some(true),
-                            ..ThreadStartParams::default()
-                        },
-                    })
-                    .await
-                    .expect("thread/start should succeed");
-                assert!(!response.thread.id.is_empty());
+    #[tokio::test]
+    async fn embedded_app_server_supports_thread_start_rpc() -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+        let app_server = start_test_embedded_app_server(config).await?;
+        let response: ThreadStartResponse = app_server
+            .request_typed(ClientRequest::ThreadStart {
+                request_id: RequestId::Integer(1),
+                params: ThreadStartParams {
+                    ephemeral: Some(true),
+                    ..ThreadStartParams::default()
+                },
+            })
+            .await
+            .expect("thread/start should succeed");
+        assert!(!response.thread.id.is_empty());
 
-                app_server.shutdown().await?;
-                Ok(())
-            },
-        )
+        app_server.shutdown().await?;
+        Ok(())
     }
 
-    #[test]
-    fn lookup_session_target_by_name_uses_backend_title_search() -> color_eyre::Result<()> {
-        run_current_thread_test_with_stack(
-            "lookup_session_target_by_name_uses_backend_title_search",
-            || async {
-                let temp_dir = TempDir::new()?;
-                let config = build_config(&temp_dir).await?;
-                let thread_id = ThreadId::new();
-                let rollout_path = temp_dir
-                    .path()
-                    .join("sessions/2025/02/01")
-                    .join(format!("rollout-2025-02-01T10-00-00-{thread_id}.jsonl"));
-                let rollout_dir = rollout_path.parent().expect("rollout parent");
-                std::fs::create_dir_all(rollout_dir)?;
-                std::fs::write(&rollout_path, "")?;
+    #[tokio::test]
+    async fn lookup_session_target_by_name_uses_backend_title_search() -> color_eyre::Result<()> {
+        Box::pin(async {
+            let temp_dir = TempDir::new()?;
+            let config = build_config(&temp_dir).await?;
+            let thread_id = ThreadId::new();
+            let rollout_path = temp_dir
+                .path()
+                .join("sessions/2025/02/01")
+                .join(format!("rollout-2025-02-01T10-00-00-{thread_id}.jsonl"));
+            let rollout_dir = rollout_path.parent().expect("rollout parent");
+            std::fs::create_dir_all(rollout_dir)?;
+            std::fs::write(&rollout_path, "")?;
 
-                let state_runtime = codex_state::StateRuntime::init(
-                    config.codex_home.to_path_buf(),
-                    config.model_provider_id.clone(),
-                )
+            let state_runtime = codex_state::StateRuntime::init(
+                config.codex_home.to_path_buf(),
+                config.model_provider_id.clone(),
+            )
+            .await
+            .map_err(std::io::Error::other)?;
+            state_runtime
+                .mark_backfill_complete(/*last_watermark*/ None)
                 .await
                 .map_err(std::io::Error::other)?;
-                state_runtime
-                    .mark_backfill_complete(/*last_watermark*/ None)
-                    .await
-                    .map_err(std::io::Error::other)?;
 
-                let session_cwd = temp_dir.path().join("project");
-                std::fs::create_dir_all(&session_cwd)?;
-                let created_at = chrono::DateTime::parse_from_rfc3339("2025-02-01T10:00:00Z")
-                    .expect("timestamp should parse")
-                    .with_timezone(&chrono::Utc);
-                let mut builder = codex_state::ThreadMetadataBuilder::new(
-                    thread_id,
-                    rollout_path.clone(),
-                    created_at,
-                    serde_json::from_value(serde_json::json!("cli"))
-                        .expect("cli session source should deserialize"),
-                );
-                builder.cwd = session_cwd;
-                let mut metadata = builder.build(config.model_provider_id.as_str());
-                metadata.title = "saved-session".to_string();
-                metadata.first_user_message = Some("preview text".to_string());
-                state_runtime
-                    .upsert_thread(&metadata)
-                    .await
-                    .map_err(std::io::Error::other)?;
+            let session_cwd = temp_dir.path().join("project");
+            std::fs::create_dir_all(&session_cwd)?;
+            let created_at = chrono::DateTime::parse_from_rfc3339("2025-02-01T10:00:00Z")
+                .expect("timestamp should parse")
+                .with_timezone(&chrono::Utc);
+            let mut builder = codex_state::ThreadMetadataBuilder::new(
+                thread_id,
+                rollout_path.clone(),
+                created_at,
+                serde_json::from_value(serde_json::json!("cli"))
+                    .expect("cli session source should deserialize"),
+            );
+            builder.cwd = session_cwd;
+            let mut metadata = builder.build(config.model_provider_id.as_str());
+            metadata.title = "saved-session".to_string();
+            metadata.first_user_message = Some("preview text".to_string());
+            state_runtime
+                .upsert_thread(&metadata)
+                .await
+                .map_err(std::io::Error::other)?;
 
-                let mut app_server = AppServerSession::new(
-                    codex_app_server_client::AppServerClient::InProcess(
-                        start_test_embedded_app_server(config).await?,
-                    ),
-                    ThreadParamsMode::Embedded,
-                );
-                let target =
-                    lookup_session_target_by_name_with_app_server(&mut app_server, "saved-session")
-                        .await?;
-                let target = target.expect("name lookup should find the saved thread");
-                assert_eq!(target.path, Some(rollout_path));
-                assert_eq!(target.thread_id, thread_id);
+            let mut app_server = AppServerSession::new(
+                codex_app_server_client::AppServerClient::InProcess(
+                    start_test_embedded_app_server(config).await?,
+                ),
+                ThreadParamsMode::Embedded,
+            );
+            let target =
+                lookup_session_target_by_name_with_app_server(&mut app_server, "saved-session")
+                    .await?;
+            let target = target.expect("name lookup should find the saved thread");
+            assert_eq!(target.path, Some(rollout_path));
+            assert_eq!(target.thread_id, thread_id);
 
-                app_server.shutdown().await?;
-                Ok(())
-            },
-        )
+            app_server.shutdown().await?;
+            Ok(())
+        })
+        .await
     }
 
     #[tokio::test]

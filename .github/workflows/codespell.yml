@@ -3,6 +3,7 @@
 name: Codespell
 
 on:
+  workflow_call:
   push:
     branches: [main, "forked-rust-v*"]
   pull_request:
@@ -28,3 +29,7 @@ jobs:
         uses: codespell-project/actions-codespell@8f01853be192eb0f849a5c7d721450e7a467c579 # v2.2
         with:
           ignore_words_file: .codespellignore
+
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree

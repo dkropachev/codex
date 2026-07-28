@@ -33,6 +33,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -566,6 +567,11 @@ async fn snapshot_rollback_past_compaction_replays_append_only_history() -> Resu
 /// diffs should trim those context updates so the next request includes them
 /// only once.
 async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "rollback follow-up event ordering is not stable under Wine-exec"
+    );
+
     if network_disabled() {
         println!("Skipping test because network is disabled in this sandbox");
         return Ok(());

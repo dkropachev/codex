@@ -77,6 +77,7 @@ pub(super) use codex_app_server_protocol::MarketplaceUpgradeResponse;
 pub(super) use codex_app_server_protocol::McpServerStartupState;
 pub(super) use codex_app_server_protocol::McpServerStatusDetail;
 pub(super) use codex_app_server_protocol::McpServerStatusUpdatedNotification;
+pub(super) use codex_app_server_protocol::ModelSafetyBufferingUpdatedNotification;
 pub(super) use codex_app_server_protocol::ModelVerification as AppServerModelVerification;
 pub(super) use codex_app_server_protocol::ModelVerificationNotification;
 pub(super) use codex_app_server_protocol::NonSteerableTurnKind;
@@ -243,7 +244,7 @@ mod goal_validation;
 mod guardian;
 pub(crate) mod helpers;
 mod history_replay;
-#[path = "tests/mcp__startup.rs"]
+#[path = "tests/mcp_startup.rs"]
 mod mcp_startup;
 mod permissions;
 mod plan_mode;

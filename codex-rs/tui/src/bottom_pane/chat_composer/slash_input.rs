@@ -159,6 +159,16 @@ impl<'a> SlashInput<'a> {
     }
 
     pub(super) fn is_editing_command_name(&self, first_line: &str, cursor: usize) -> bool {
+        if let Some((name, _rest, rest_offset)) = parse_slash_name(first_line)
+            && cursor >= rest_offset
+            && self
+                .workflow_commands
+                .iter()
+                .any(|command| command.command == name && !command.option_hints.is_empty())
+        {
+            return true;
+        }
+
         let Some((name, rest)) = command_under_cursor(first_line, cursor) else {
             return false;
         };
@@ -659,6 +669,13 @@ pub(super) fn args_elements(
 }
 
 pub(super) fn command_popup_filter_text(first_line: &str, cursor: usize) -> Option<String> {
+    if let Some((_name, _rest, rest_offset)) = parse_slash_name(first_line)
+        && cursor >= rest_offset
+        && cursor <= first_line.len()
+    {
+        return Some(first_line.to_string());
+    }
+
     let (name, _rest) = command_under_cursor(first_line, cursor)?;
     Some(format!("/{name}"))
 }

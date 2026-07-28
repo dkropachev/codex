@@ -130,6 +130,7 @@ pub(crate) fn model_router_failure_scope(err: &CodexErr) -> Option<ModelRouterFa
         | CodexErr::Sandbox(_)
         | CodexErr::LandlockSandboxExecutableNotProvided
         | CodexErr::ThreadNotFound(_)
+        | CodexErr::SessionBudgetExceeded
         | CodexErr::AgentLimitReached { .. }
         | CodexErr::Spawn
         | CodexErr::SessionConfiguredNotFirstEvent

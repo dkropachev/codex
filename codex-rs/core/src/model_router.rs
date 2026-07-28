@@ -362,6 +362,7 @@ fn apply_model_router_with_overlays_and_exclusions(
     Ok(Some(applied_route))
 }
 
+#[allow(dead_code)]
 pub(crate) async fn record_model_router_request_usage(
     state_db: Option<&StateRuntime>,
     accounting: Option<&ModelRouterAccounting>,
@@ -934,6 +935,7 @@ fn promoted_policy_route_index(
     None
 }
 
+#[allow(dead_code)]
 pub(crate) fn auth_manager_for_config(
     _config: &Config,
     parent: &Arc<AuthManager>,
@@ -941,6 +943,7 @@ pub(crate) fn auth_manager_for_config(
     Arc::clone(parent)
 }
 
+#[allow(dead_code)]
 pub(crate) fn model_client_for_config(
     config: &Config,
     parent: &ModelClient,
@@ -956,6 +959,7 @@ pub(crate) fn model_client_for_config(
     )
 }
 
+#[allow(dead_code)]
 pub(crate) async fn record_model_router_request_usage_for_config(
     state_db: Option<&StateRuntime>,
     config: &Config,
@@ -1439,6 +1443,7 @@ fn price_confidence(price: Option<TokenPrice>) -> f64 {
     if price.is_some() { 1.0 } else { 0.0 }
 }
 
+#[allow(dead_code)]
 fn cost_estimate_for_price(
     token_usage: &TokenUsage,
     price: Option<&TokenPrice>,
@@ -1449,6 +1454,7 @@ fn cost_estimate_for_price(
         .unwrap_or_else(|| CostEstimate::zero_with_confidence(/*confidence*/ 0.0))
 }
 
+#[allow(dead_code)]
 fn counterfactual_token_usage(
     token_usage: &TokenUsage,
     accounting: &ModelRouterAccounting,

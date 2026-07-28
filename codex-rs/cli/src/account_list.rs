@@ -7,6 +7,7 @@ use codex_config::config_toml::AccountPoolDefinitionToml;
 use codex_config::config_toml::AccountPoolPolicyToml;
 use codex_core::config::Config;
 use codex_login::CodexAuth;
+use codex_protocol::auth::AuthMode as ProtocolAuthMode;
 use codex_utils_cli::CliConfigOverrides;
 use serde_json::json;
 
@@ -176,7 +177,7 @@ async fn credential_for_account_home(
             };
             Some(AccountCredential {
                 status,
-                auth_mode: Some(auth.auth_mode()),
+                auth_mode: Some(app_server_auth_mode(auth.auth_mode())),
             })
         }
         Ok(None) => {
@@ -196,6 +197,17 @@ async fn credential_for_account_home(
             status: CredentialStatus::Invalid,
             auth_mode: None,
         }),
+    }
+}
+
+fn app_server_auth_mode(auth_mode: ProtocolAuthMode) -> AuthMode {
+    match auth_mode {
+        ProtocolAuthMode::ApiKey => AuthMode::ApiKey,
+        ProtocolAuthMode::Chatgpt => AuthMode::Chatgpt,
+        ProtocolAuthMode::ChatgptAuthTokens => AuthMode::ChatgptAuthTokens,
+        ProtocolAuthMode::AgentIdentity => AuthMode::AgentIdentity,
+        ProtocolAuthMode::PersonalAccessToken => AuthMode::PersonalAccessToken,
+        ProtocolAuthMode::BedrockApiKey => AuthMode::BedrockApiKey,
     }
 }
 

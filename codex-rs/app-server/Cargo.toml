@@ -12,6 +12,10 @@ path = "src/main.rs"
 name = "codex-app-server-test-notify-capture"
 path = "src/bin/notify_capture.rs"
 
+[[bin]]
+name = "test_stdio_server"
+path = "src/bin/test_stdio_server.rs"
+
 [lib]
 name = "codex_app_server"
 path = "src/lib.rs"
@@ -19,6 +23,9 @@ doctest = false
 
 [lints]
 workspace = true
+
+[package.metadata.cargo-shear]
+ignored = ["rmcp"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -33,6 +40,7 @@ codex-analytics = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-cloud-config = { workspace = true }
 codex-config = { workspace = true }
+codex-connectors = { workspace = true }
 codex-core = { workspace = true }
 codex-core-plugins = { workspace = true }
 codex-home = { workspace = true }
@@ -80,6 +88,12 @@ codex-utils-path-uri = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true }
+rmcp = { workspace = true, default-features = false, features = [
+    "elicitation",
+    "server",
+    "transport-async-rw",
+    "transport-streamable-http-server",
+] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
@@ -119,11 +133,6 @@ opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls"] }
-rmcp = { workspace = true, default-features = false, features = [
-    "elicitation",
-    "server",
-    "transport-streamable-http-server",
-] }
 serial_test = { workspace = true }
 sha2 = { workspace = true }
 shlex = { workspace = true }

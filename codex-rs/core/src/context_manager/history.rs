@@ -1,5 +1,6 @@
 use crate::context::ContextualUserFragment;
 use crate::context::world_state::WorldState;
+use crate::context::world_state::WorldStateSnapshot;
 use crate::context_manager::normalize;
 use crate::event_mapping::has_non_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_dev_message_content;
@@ -19,6 +20,7 @@ use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
+use codex_protocol::protocol::WorldStateItem;
 use codex_utils_cache::BlockingLruCache;
 use codex_utils_cache::sha1_digest;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -30,7 +32,6 @@ use codex_utils_output_truncation::truncate_text;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
-use std::sync::Arc;
 use std::sync::LazyLock;
 
 /// Transcript of thread history
@@ -54,7 +55,7 @@ pub(crate) struct ContextManager {
     reference_context_item: Option<TurnContextItem>,
     code_mode_exec_output_policies: HashMap<String, TruncationPolicy>,
     /// World state most recently appended to model-visible history.
-    world_state_baseline: Option<Arc<WorldState>>,
+    world_state_baseline: Option<WorldStateSnapshot>,
 }
 
 impl ContextManager {
@@ -89,18 +90,25 @@ impl ContextManager {
 
     pub(crate) fn update_world_state(
         &mut self,
-        world_state: WorldState,
-    ) -> Vec<Box<dyn ContextualUserFragment>> {
-        let fragments = self.world_state_baseline.as_deref().map_or_else(
-            || world_state.render_full(),
-            |previous| world_state.render_diff(previous),
+        world_state: &WorldState,
+    ) -> (Vec<Box<dyn ContextualUserFragment>>, Option<WorldStateItem>) {
+        let snapshot = world_state.snapshot();
+        let fragments =
+            world_state.render_history_diff(self.world_state_baseline.as_ref(), &self.items);
+        let rollout_item = self.world_state_baseline.as_ref().map_or_else(
+            || Some(WorldStateItem::full(snapshot.clone().into_value())),
+            |previous| {
+                snapshot
+                    .merge_patch_from(previous)
+                    .map(WorldStateItem::patch)
+            },
         );
-        self.world_state_baseline = Some(Arc::new(world_state));
-        fragments
+        self.world_state_baseline = Some(snapshot);
+        (fragments, rollout_item)
     }
 
-    pub(crate) fn set_world_state_baseline(&mut self, world_state: WorldState) {
-        self.world_state_baseline = Some(Arc::new(world_state));
+    pub(crate) fn set_world_state_baseline(&mut self, snapshot: WorldStateSnapshot) {
+        self.world_state_baseline = Some(snapshot);
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
@@ -421,7 +429,8 @@ impl ContextManager {
                 output: truncate_function_output_payload(output, policy_with_serialization_budget),
                 internal_chat_message_metadata_passthrough: metadata.clone(),
             },
-            ResponseItem::Message { .. }
+            ResponseItem::AdditionalTools { .. }
+            | ResponseItem::Message { .. }
             | ResponseItem::AgentMessage { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
@@ -511,7 +520,8 @@ pub(crate) fn truncate_function_output_payload(
 fn is_api_message(message: &ResponseItem) -> bool {
     match message {
         ResponseItem::Message { role, .. } => role.as_str() != "system",
-        ResponseItem::AgentMessage { .. }
+        ResponseItem::AdditionalTools { .. }
+        | ResponseItem::AgentMessage { .. }
         | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::ToolSearchCall { .. }
@@ -757,7 +767,8 @@ fn is_model_generated_item(item: &ResponseItem) -> bool {
         | ResponseItem::Compaction { .. }
         | ResponseItem::ContextCompaction { .. } => true,
         ResponseItem::CompactionTrigger { .. } => false,
-        ResponseItem::FunctionCallOutput { .. }
+        ResponseItem::AdditionalTools { .. }
+        | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::ToolSearchOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::AgentMessage { .. }
