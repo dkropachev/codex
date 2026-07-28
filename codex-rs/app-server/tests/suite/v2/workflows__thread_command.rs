@@ -20,6 +20,7 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_protocol::models::MessagePhase;
+use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -33,6 +34,11 @@ const WORKFLOW_MARKDOWN: &str = "# Workflow E2E\n\nmarker=workflow-e2e\n";
 
 #[tokio::test]
 async fn thread_workflow_command_records_assistant_output_and_next_turn_context() -> Result<()> {
+    skip_if_remote!(
+        Ok(()),
+        "`thread/workflowCommand` runs on the app-server local environment"
+    );
+
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;
