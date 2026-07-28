@@ -1,6 +1,7 @@
 //! Coverage for history-cell rendering, wrapping, and transcript behavior.
 
 use super::*;
+use crate::UpdateAction;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCall;
 use crate::exec_cell::ExecCell;
@@ -1143,7 +1144,17 @@ fn github_update_available_history_cell_snapshot() {
     let cell = UpdateAvailableHistoryCell::new_with_current_version(
         "<VERSION>".to_string(),
         "9.9.9".to_string(),
+        /*update_action*/ None,
     );
+    let rendered = render_lines(&cell.display_lines(/*width*/ 110)).join("\n");
+
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn pnpm_update_available_history_cell_snapshot() {
+    let cell =
+        UpdateAvailableHistoryCell::new("9.9.9".to_string(), Some(UpdateAction::PnpmGlobalLatest));
     let rendered = render_lines(&cell.display_lines(/*width*/ 110)).join("\n");
 
     insta::assert_snapshot!(rendered);
@@ -1981,7 +1992,7 @@ fn ran_cell_multiline_with_stderr_snapshot() {
 }
 #[test]
 fn user_history_cell_wraps_and_prefixes_each_line_snapshot() {
-    let msg = "one two three four five six seven";
+    let msg = "_count_r\x1b[13;2:3uows";
     let cell = UserHistoryCell {
         message: msg.to_string(),
         text_elements: Vec::new(),
@@ -1994,6 +2005,7 @@ fn user_history_cell_wraps_and_prefixes_each_line_snapshot() {
     let lines = cell.display_lines(width);
     let rendered = render_lines(&lines).join("\n");
 
+    assert_eq!(render_lines(&cell.raw_lines()), ["_count_rows"]);
     insta::assert_snapshot!(rendered);
 }
 

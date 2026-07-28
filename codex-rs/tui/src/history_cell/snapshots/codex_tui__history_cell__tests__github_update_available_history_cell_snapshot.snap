@@ -1,9 +1,12 @@
 ---
 source: tui/src/history_cell/tests.rs
+assertion_line: 1151
 expression: rendered
 ---
-╭─────────────────────────────────────────────────────╮
-│ ✨ Update available! <VERSION> -> 9.9.9             │
-│ Download the latest release:                        │
-│ https://github.com/dkropachev/codex/releases/latest │
-╰─────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────╮
+│ ✨ Update available! <VERSION> -> 9.9.9                                          │
+│ Download the latest release: https://github.com/dkropachev/codex/releases/latest │
+│                                                                                  │
+│ See full release notes:                                                          │
+│ https://github.com/dkropachev/codex/releases/latest                              │
+╰──────────────────────────────────────────────────────────────────────────────────╯

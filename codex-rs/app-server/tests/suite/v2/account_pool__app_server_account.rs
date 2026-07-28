@@ -323,8 +323,11 @@ accounts = ["work-pro", "personal-pro"]
         .mount(&server)
         .await;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let expected_account = GetAccountResponse {
@@ -479,8 +482,11 @@ accounts = ["work-pro", "personal-pro"]
         .mount(&server)
         .await;
 
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let expected_account = GetAccountResponse {
@@ -543,7 +549,11 @@ accounts = ["work-pro", "personal-pro"]
 }
 
 async fn read_account_response(codex_home: &Path) -> Result<GetAccountResponse> {
-    let mut mcp = TestAppServer::new_with_env(codex_home, &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home)
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     read_account_response_from(&mut mcp).await

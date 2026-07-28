@@ -208,6 +208,7 @@ fn app_server_auth_mode(auth_mode: ProtocolAuthMode) -> AuthMode {
         ProtocolAuthMode::AgentIdentity => AuthMode::AgentIdentity,
         ProtocolAuthMode::PersonalAccessToken => AuthMode::PersonalAccessToken,
         ProtocolAuthMode::BedrockApiKey => AuthMode::BedrockApiKey,
+        ProtocolAuthMode::Headers => AuthMode::Headers,
     }
 }
 
@@ -415,6 +416,7 @@ fn auth_mode_name(auth_mode: AuthMode) -> &'static str {
         AuthMode::AgentIdentity => "agentIdentity",
         AuthMode::PersonalAccessToken => "personalAccessToken",
         AuthMode::BedrockApiKey => "bedrockApiKey",
+        AuthMode::Headers => "headers",
     }
 }
 

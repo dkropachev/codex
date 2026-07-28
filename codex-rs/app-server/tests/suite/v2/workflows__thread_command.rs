@@ -3,12 +3,18 @@ use anyhow::Result;
 use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
+use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
@@ -18,8 +24,10 @@ use codex_app_server_protocol::ThreadWorkflowCommandParams;
 use codex_app_server_protocol::ThreadWorkflowCommandResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_protocol::models::MessagePhase;
+use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -33,6 +41,11 @@ const WORKFLOW_MARKDOWN: &str = "# Workflow E2E\n\nmarker=workflow-e2e\n";
 
 #[tokio::test]
 async fn thread_workflow_command_records_assistant_output_and_next_turn_context() -> Result<()> {
+    skip_if_remote!(
+        Ok(()),
+        "`thread/workflowCommand` runs on the app-server local environment"
+    );
+
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;
@@ -61,11 +74,15 @@ async fn thread_workflow_command_records_assistant_output_and_next_turn_context(
     )?;
 
     let env = [("PATH", Some(path_value.as_str()))];
-    let mut mcp = TestAppServer::new_with_env(codex_home.as_path(), &env).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.as_path())
+        .with_env_overrides(&env)
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
     let start_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -164,6 +181,128 @@ async fn thread_workflow_command_records_assistant_output_and_next_turn_context(
     assert!(request_body.contains("follow up after workflow"));
     assert!(request_body.contains("# Workflow E2E"));
     assert!(request_body.contains("marker=workflow-e2e"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_workflow_command_rejects_active_turn() -> Result<()> {
+    skip_if_remote!(
+        Ok(()),
+        "`thread/workflowCommand` runs on the app-server local environment"
+    );
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+    let workflow_dir = tmp.path().join("workflow");
+    std::fs::create_dir(&workflow_dir)?;
+
+    let responses = vec![
+        create_shell_command_sse_response(
+            vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(42)".to_string(),
+            ],
+            /*workdir*/ None,
+            Some(5000),
+            "call-approve",
+        )?,
+        create_final_assistant_message_sse_response("done after decline")?,
+    ];
+    let server = create_mock_responses_server_sequence(responses).await;
+    write_mock_responses_config_toml(
+        codex_home.as_path(),
+        &server.uri(),
+        &BTreeMap::default(),
+        i64::MAX,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "Summarize the conversation.",
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.as_path())
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            client_user_message_id: None,
+            input: vec![V2UserInput::Text {
+                text: "run python".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(workspace),
+            approval_policy: Some(AskForApproval::UnlessTrusted),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let server_req = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::CommandExecutionRequestApproval { request_id, .. } = server_req else {
+        panic!("expected approval request");
+    };
+
+    let workflow_id = mcp
+        .send_thread_workflow_command_request(ThreadWorkflowCommandParams {
+            thread_id: thread.id.clone(),
+            workflow_dir: workflow_dir.to_string_lossy().to_string(),
+            input: json!({}),
+        })
+        .await?;
+    let workflow_error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(workflow_id)),
+    )
+    .await??;
+    assert_eq!(
+        workflow_error.error.message,
+        "Cannot run workflow command while a turn is in progress."
+    );
+
+    mcp.send_response(
+        request_id,
+        serde_json::to_value(CommandExecutionRequestApprovalResponse {
+            decision: CommandExecutionApprovalDecision::Decline,
+        })?,
+    )
+    .await?;
+    let completed: TurnCompletedNotification = serde_json::from_value(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??
+        .params
+        .context("missing turn/completed params")?,
+    )?;
+    assert_eq!(completed.turn.id, turn.id);
 
     Ok(())
 }

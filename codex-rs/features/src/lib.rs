@@ -198,12 +198,10 @@ pub enum Feature {
     PluginSharing,
     /// Removed compatibility flag retained as a no-op.
     ExternalMigration,
-    /// Allow the model to invoke the built-in image generation tool.
+    /// Enable extension-backed image generation.
     ImageGeneration,
     /// Enable tool-router backed discovery and routing surfaces.
     ToolRouter,
-    /// Replace hosted image generation with the standalone image-generation extension.
-    ImageGenExt,
     /// Removed compatibility flag for always-on centralized image preparation.
     ResizeAllImages,
     /// Generate Responses API item IDs for client-created history items.
@@ -502,6 +500,10 @@ impl Features {
                     );
                 }
                 _ => {}
+            }
+            if k == "imagegenext" && m.contains_key(Feature::ImageGeneration.key()) {
+                self.record_legacy_usage(k, Feature::ImageGeneration);
+                continue;
             }
             match feature_for_key(k) {
                 Some(feat) => {
@@ -870,8 +872,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CodeModeHost,
         key: "code_mode_host",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::CodeModeOnly,
@@ -1182,12 +1184,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ImageGenExt,
-        key: "imagegenext",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::ResizeAllImages,
         key: "resize_all_images",
         stage: Stage::Removed,
@@ -1286,8 +1282,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::AuthElicitation,
         key: "auth_elicitation",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Personality,
