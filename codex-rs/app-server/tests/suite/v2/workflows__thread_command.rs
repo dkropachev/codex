@@ -69,7 +69,7 @@ async fn thread_workflow_command_records_assistant_output_and_next_turn_context(
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
     let start_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
