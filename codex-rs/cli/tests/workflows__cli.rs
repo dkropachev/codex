@@ -107,7 +107,7 @@ fn write_workflow_source(workflow_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn assert_code_review_autocomplete_metadata(workflow_dir: &Path) -> Result<()> {
+fn assert_code_review_static_metadata_without_legacy_usage(workflow_dir: &Path) -> Result<()> {
     let workflow_yaml = fs::read_to_string(workflow_dir.join("workflow.yaml"))?;
     assert!(
         workflow_yaml.contains("id: code-review") || workflow_yaml.contains("id: \"code-review\"")
@@ -116,14 +116,23 @@ fn assert_code_review_autocomplete_metadata(workflow_dir: &Path) -> Result<()> {
         workflow_yaml.contains("command: code-review")
             || workflow_yaml.contains("command: \"code-review\"")
     );
-    assert!(workflow_yaml.contains("usage:"));
-    assert!(workflow_yaml.contains("options:"));
-    assert!(workflow_yaml.contains("flag: --action"));
-    assert!(
-        workflow_yaml.contains("valueHint: <review|read-report|list-reports|incremental|resume>")
-    );
-    assert!(workflow_yaml.contains("flag: --review-id"));
-    assert!(workflow_yaml.contains("flag: --include-skipped-by-limit"));
+    assert!(workflow_yaml.contains("title:"));
+    assert!(workflow_yaml.contains("userDescription:"));
+    assert!(!workflow_yaml.contains("usage:\n  options:"));
+    for legacy_fragment in [
+        "read-report",
+        "list-reports",
+        "incremental",
+        "--action",
+        "--review-id",
+        "--target-ref",
+        "--base-ref",
+        "--review-model",
+        "--repro-model",
+        "--include-skipped-by-limit",
+    ] {
+        assert!(!workflow_yaml.contains(legacy_fragment));
+    }
     Ok(())
 }
 
@@ -646,11 +655,46 @@ fn workflow_fix_repairs_workflow_without_running_unsupported_fix_action() -> Res
             "Repairing workflow code-review with compatibility mode.",
         ))
         .stdout(contains("Updated "))
-        .stdout(contains("with code-review autocomplete metadata"))
+        .stdout(contains("with code-review workflow metadata"))
         .stdout(contains("code-review repair check completed."));
 
     assert!(!fake_bun.was_invoked());
-    assert_code_review_autocomplete_metadata(&workflow_dir)?;
+    assert_code_review_static_metadata_without_legacy_usage(&workflow_dir)?;
+
+    Ok(())
+}
+
+#[test]
+fn workflow_fix_keeps_valid_code_review_workflow_without_usage_options() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let project = TempDir::new()?;
+    enable_workflows(codex_home.path())?;
+    let workflow_yaml = r#"id: code-review
+command: code-review
+title: "/code-review"
+userDescription: "Run a code review and repro workflow on the current branch."
+"#;
+    let workflow_dir = write_workflow(
+        &codex_home.path().join("workflows"),
+        "code-review",
+        workflow_yaml,
+    )?;
+    write_workflow_source(&workflow_dir)?;
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    cmd.args(["workflow", "fix", "code-review"])
+        .assert()
+        .success()
+        .stdout(contains(
+            "No compatibility repairs were needed for code-review.",
+        ))
+        .stdout(contains("code-review repair check completed."));
+
+    assert_eq!(
+        fs::read_to_string(workflow_dir.join("workflow.yaml"))?,
+        workflow_yaml
+    );
+    assert_code_review_static_metadata_without_legacy_usage(&workflow_dir)?;
 
     Ok(())
 }
@@ -697,11 +741,11 @@ fn workflow_fix_tolerates_broken_metadata_and_source_without_running_workflow() 
             "Repairing workflow code-review with compatibility mode.",
         ))
         .stdout(contains("Updated "))
-        .stdout(contains("with code-review autocomplete metadata"))
+        .stdout(contains("with code-review workflow metadata"))
         .stdout(contains("code-review repair check completed."));
 
     assert!(!fake_bun.was_invoked());
-    assert_code_review_autocomplete_metadata(&workflow_dir)?;
+    assert_code_review_static_metadata_without_legacy_usage(&workflow_dir)?;
 
     Ok(())
 }
@@ -730,7 +774,7 @@ fn workflow_fix_scaffolds_missing_workflow_source_for_discovery_fallback() -> Re
         .stdout(contains("code-review repair check completed."));
 
     assert!(workflow_dir.join("src").join("workflow.ts").is_file());
-    assert_code_review_autocomplete_metadata(&workflow_dir)?;
+    assert_code_review_static_metadata_without_legacy_usage(&workflow_dir)?;
 
     Ok(())
 }
@@ -758,11 +802,11 @@ fn workflow_repair_alias_repairs_workflow_without_running_workflow_runtime() -> 
             "Repairing workflow code-review with compatibility mode.",
         ))
         .stdout(contains("Updated "))
-        .stdout(contains("with code-review autocomplete metadata"))
+        .stdout(contains("with code-review workflow metadata"))
         .stdout(contains("code-review repair check completed."));
 
     assert!(!fake_bun.was_invoked());
-    assert_code_review_autocomplete_metadata(&workflow_dir)?;
+    assert_code_review_static_metadata_without_legacy_usage(&workflow_dir)?;
 
     Ok(())
 }
