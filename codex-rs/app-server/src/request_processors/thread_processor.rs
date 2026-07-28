@@ -1969,6 +1969,11 @@ impl ThreadRequestProcessor {
         }
 
         let (_, thread) = self.load_thread(&thread_id).await?;
+        if matches!(thread.agent_status().await, AgentStatus::Running) {
+            return Err(invalid_request(
+                "Cannot run workflow command while a turn is in progress.",
+            ));
+        }
         self.submit_core_op(
             request_id,
             thread.as_ref(),

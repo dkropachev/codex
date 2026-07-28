@@ -337,6 +337,19 @@ pub async fn run_workflow_command(
     workflow_dir: std::path::PathBuf,
     input: Value,
 ) {
+    let has_active_turn = { sess.active_turn.lock().await.is_some() };
+    if has_active_turn {
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::Error(ErrorEvent {
+                message: "Cannot run workflow command while a turn is in progress.".to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            }),
+        })
+        .await;
+        return;
+    }
+
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
     sess.spawn_task(
         Arc::clone(&turn_context),
