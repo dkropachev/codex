@@ -16,6 +16,10 @@ path = "src/bin/notify_capture.rs"
 name = "test_stdio_server"
 path = "src/bin/test_stdio_server.rs"
 
+[[bin]]
+name = "exec-server"
+path = "src/bin/exec_server.rs"
+
 [lib]
 name = "codex_app_server"
 path = "src/lib.rs"
@@ -54,6 +58,7 @@ codex-guardian = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-file-watcher = { workspace = true }
 codex-hooks = { workspace = true }
+codex-http-client = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-shell-command = { workspace = true }
