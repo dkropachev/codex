@@ -1,9 +1,7 @@
 name: sdk
 
 on:
-  push:
-    branches: [main, "forked-rust-v*"]
-  pull_request: {}
+  workflow_call:
 
 jobs:
   python-sdk:
@@ -39,8 +37,12 @@ jobs:
               /tmp/uv/bin/uv run --frozen --no-sync pytest
             '
 
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
+
   sdks:
-    if: ${{ github.repository == 'openai/codex' }}
+    if: github.repository == 'openai/codex'
     runs-on:
       group: ${{ github.event.repository.name }}-runners
       labels: ${{ github.event.repository.name }}-linux-x64
@@ -153,10 +155,14 @@ jobs:
         run: pnpm -r --filter ./sdk/typescript run test
 
       - name: Save bazel repository cache
-        if: always() && !cancelled() && steps.setup_bazel.outputs.cache-hit != 'true'
+        if: always() && !cancelled()
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
             ~/.cache/bazel-repo-cache
           key: bazel-cache-x86_64-unknown-linux-gnu-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
+
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree

@@ -8,6 +8,7 @@ use codex_protocol::error::UsageLimitReachedError;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AccountPoolFailoverDecision {
     Switch(AccountPoolUsageBucket),
@@ -15,6 +16,7 @@ pub(crate) enum AccountPoolFailoverDecision {
     NoSafeRetry,
 }
 
+#[allow(dead_code)]
 pub(crate) fn decide_account_pool_failover(
     selection: Option<&AccountPoolAuthSelection>,
     error: &UsageLimitReachedError,

@@ -1,6 +1,7 @@
 name: cargo-deny
 
 on:
+  workflow_call:
   pull_request:
   push:
     branches:
@@ -25,6 +26,8 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
+      - uses: ./.github/actions/setup-ci
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
 
@@ -33,3 +36,7 @@ jobs:
         with:
           rust-version: 1.95.0
           manifest-path: ./codex-rs/Cargo.toml
+
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree

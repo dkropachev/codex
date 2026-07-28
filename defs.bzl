@@ -377,6 +377,7 @@ def codex_rust_crate(
             crate_name = binary.replace("-", "_"),
             crate_root = main,
             deps = all_crate_deps() + maybe_deps + deps_extra,
+            compile_data = compile_data,
             edition = crate_edition,
             rustc_flags = rustc_flags_extra + WINDOWS_RUSTC_LINK_FLAGS,
             srcs = native.glob(["src/**/*.rs"]),
@@ -571,7 +572,9 @@ def codex_rust_crate(
                 test_bin = "//codex-rs/exec-server/testing:wine-exec-test-runner",
                 workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
                 target_compatible_with = WINE_TEST_TARGET_COMPATIBLE_WITH,
-                tags = test_tags + ["manual"],
+                # This wrapper has no Rust sources and transitions a data
+                # dependency to a Windows toolchain the lint does not register.
+                tags = test_tags + ["no-argument-comment-lint"],
                 **wine_test_kwargs
             )
 

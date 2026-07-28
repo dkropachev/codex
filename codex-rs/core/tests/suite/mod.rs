@@ -29,8 +29,6 @@ pub static CODEX_ALIASES_TEMP_DIR: Option<TestBinaryDispatchGuard> = {
 
 #[cfg(not(target_os = "windows"))]
 mod abort_tasks;
-#[path = "account_pool__routing.rs"]
-mod account_pool_routing;
 mod additional_context;
 mod agent_execution;
 mod agent_jobs;
@@ -61,22 +59,17 @@ mod fork_thread;
 mod guardian_review;
 #[cfg(not(target_os = "windows"))]
 mod hooks;
+#[cfg(not(target_os = "windows"))]
+mod hooks_mcp;
 mod image_rollout;
 mod items;
 mod json_result;
 mod live_cli;
-#[path = "mcp__client_tool_calls.rs"]
-mod mcp_client_tool_calls;
-#[cfg(not(target_os = "windows"))]
-#[path = "mcp__hooks.rs"]
-mod mcp_hooks;
-#[path = "mcp__openai_file.rs"]
-mod mcp_openai_file;
+#[cfg(unix)]
+mod mcp_refresh_cleanup;
 mod mcp_tool_exposure;
-#[path = "mcp__turn_metadata.rs"]
 mod mcp_turn_metadata;
 mod model_overrides;
-mod model_router;
 mod model_runtime_selectors;
 mod model_switching;
 mod model_visible_layout;
@@ -84,16 +77,14 @@ mod models_cache_ttl;
 mod models_etag_responses;
 mod multi_agent_mode;
 mod network_approval;
+mod openai_file_mcp;
 mod otel;
 mod override_updates;
 mod pending_input;
 mod permissions_messages;
 mod personality;
 mod personality_migration;
-#[path = "plugins__agent_context.rs"]
-mod plugins_agent_context;
-#[path = "plugins__request_install.rs"]
-mod plugins_request_install;
+mod plugins;
 mod prompt_caching;
 mod prompt_debug_tests;
 mod quota_exceeded;
@@ -105,12 +96,14 @@ mod request_compression;
 mod request_permissions;
 #[cfg(not(target_os = "windows"))]
 mod request_permissions_tool;
+mod request_plugin_install;
 mod request_user_input;
 mod responses_api_proxy_headers;
 mod responses_lite;
 mod resume;
 mod resume_warning;
 mod review;
+mod rmcp_client;
 mod rollout_budget;
 mod rollout_list_find;
 mod safety_buffering;
@@ -119,10 +112,8 @@ mod search_tool;
 mod shell_command;
 mod shell_serialization;
 mod shell_snapshot;
-#[path = "skills__agent_context.rs"]
-mod skills_agent_context;
-#[path = "skills__approval.rs"]
-mod skills_approval;
+mod skill_approval;
+mod skills;
 mod spawn_agent_description;
 mod sqlite_state;
 mod stream_error_allows_next_turn;
@@ -135,6 +126,7 @@ mod tools;
 mod truncation;
 mod turn_state;
 mod unified_exec;
+mod unified_exec_process_events;
 #[cfg(unix)]
 mod unified_exec_zsh_fork_approvals;
 mod unstable_features_warning;
@@ -146,5 +138,6 @@ mod websocket_fallback;
 mod window_headers;
 #[cfg(target_os = "windows")]
 mod windows_sandbox;
+#[cfg(not(target_os = "windows"))]
 #[path = "workflows__agent_roles.rs"]
 mod workflows_agent_roles;

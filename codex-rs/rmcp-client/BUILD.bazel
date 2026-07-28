@@ -1,5 +1,7 @@
 load("//:defs.bzl", "codex_rust_crate")
 
+exports_files(["src/bin/test_stdio_server.rs"])
+
 codex_rust_crate(
     name = "rmcp-client",
     crate_name = "codex_rmcp_client",

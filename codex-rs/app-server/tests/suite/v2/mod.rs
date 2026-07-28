@@ -4,6 +4,7 @@ mod account_pool_app_server_account;
 mod analytics;
 mod app_list;
 mod attestation;
+mod auto_env;
 mod client_metadata;
 mod collaboration_mode_list;
 #[cfg(unix)]
@@ -16,6 +17,8 @@ mod connection_handling_websocket_unix;
 mod current_time;
 mod dynamic_tools;
 mod environment_add;
+mod environment_info;
+mod exec_server_test_support;
 #[cfg(not(target_os = "windows"))]
 mod executor_mcp;
 mod executor_skills;
@@ -26,13 +29,12 @@ mod fs;
 mod hooks_list;
 mod imagegen_extension;
 mod initialize;
-#[path = "mcp__resource.rs"]
+mod marketplace_add;
+mod marketplace_remove;
+mod marketplace_upgrade;
 mod mcp_resource;
-#[path = "mcp__server_elicitation.rs"]
 mod mcp_server_elicitation;
-#[path = "mcp__server_status.rs"]
 mod mcp_server_status;
-#[path = "mcp__tool.rs"]
 mod mcp_tool;
 mod memory_reset;
 mod model_list;
@@ -40,22 +42,11 @@ mod model_provider_capabilities_read;
 mod output_schema;
 mod permission_profile_list;
 mod plan_item;
-#[path = "plugins__install.rs"]
 mod plugin_install;
-#[path = "plugins__list.rs"]
 mod plugin_list;
-#[path = "plugins__read.rs"]
 mod plugin_read;
-#[path = "plugins__share.rs"]
 mod plugin_share;
-#[path = "plugins__uninstall.rs"]
 mod plugin_uninstall;
-#[path = "plugins__marketplace_add.rs"]
-mod plugins_marketplace_add;
-#[path = "plugins__marketplace_remove.rs"]
-mod plugins_marketplace_remove;
-#[path = "plugins__marketplace_upgrade.rs"]
-mod plugins_marketplace_upgrade;
 mod process_exec;
 mod rate_limit_reset_credits;
 mod rate_limits;
@@ -69,7 +60,9 @@ mod request_user_input;
 mod request_validation;
 mod review;
 mod safety_check_downgrade;
-#[path = "skills__list.rs"]
+#[cfg(not(target_os = "windows"))]
+mod selected_capability_stack;
+mod selected_environment;
 mod skills_list;
 mod sleep;
 mod thread_archive;
@@ -90,12 +83,12 @@ mod thread_start;
 mod thread_status;
 mod thread_unarchive;
 mod thread_unsubscribe;
-#[cfg(unix)]
-#[path = "workflows__thread_command.rs"]
-mod thread_workflow_command;
 mod turn_interrupt;
 mod turn_start;
 mod turn_start_zsh_fork;
 mod turn_steer;
 mod web_search;
 mod windows_sandbox_setup;
+#[cfg(unix)]
+#[path = "workflows__thread_command.rs"]
+mod workflows_thread_command;

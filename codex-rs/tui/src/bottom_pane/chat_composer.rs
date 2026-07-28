@@ -246,7 +246,7 @@ use crate::history_cell;
 use crate::skills_helpers::skill_display_name;
 use crate::tui::FrameRequester;
 use crate::ui_consts::LIVE_PREFIX_COLS;
-use codex_app_server_protocol::AppInfo;
+use codex_connectors::AppInfo;
 #[cfg(test)]
 use codex_core_skills::model::SkillInterface;
 use codex_core_skills::model::SkillMetadata;
@@ -1851,42 +1851,10 @@ impl ChatComposer {
                 };
 
                 let sel_path = sel.to_string_lossy().to_string();
-                if Self::is_image_path(&sel_path) {
-                    let path_buf = PathBuf::from(&sel_path);
-                    match image::image_dimensions(&path_buf) {
-                        Ok((width, height)) => {
-                            tracing::debug!("selected image dimensions={}x{}", width, height);
-                            let cursor_offset = self.draft.textarea.cursor();
-                            let text = self.draft.textarea.text();
-                            let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-                            let before_cursor = &text[..safe_cursor];
-                            let after_cursor = &text[safe_cursor..];
-
-                            let start_idx = before_cursor
-                                .char_indices()
-                                .rfind(|(_, c)| c.is_whitespace())
-                                .map(|(idx, c)| idx + c.len_utf8())
-                                .unwrap_or(0);
-                            let end_rel_idx = after_cursor
-                                .char_indices()
-                                .find(|(_, c)| c.is_whitespace())
-                                .map(|(idx, _)| idx)
-                                .unwrap_or(after_cursor.len());
-                            let end_idx = safe_cursor + end_rel_idx;
-
-                            self.draft.textarea.replace_range(start_idx..end_idx, "");
-                            self.draft.textarea.set_cursor(start_idx);
-
-                            self.attach_image(path_buf);
-                            self.draft.textarea.insert_str(" ");
-                        }
-                        Err(err) => {
-                            tracing::trace!("image dimensions lookup failed: {err}");
-                            self.insert_selected_path(&sel_path);
-                        }
-                    }
-                } else {
-                    self.insert_selected_path(&sel_path);
+                if let Some((token_range, _)) =
+                    self.current_editable_at_token_range_with_options(/*allow_empty*/ false)
+                {
+                    self.insert_selected_file_path(token_range, &sel_path);
                 }
                 self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
@@ -1960,8 +1928,10 @@ impl ChatComposer {
         };
 
         if close_popup {
-            if let Some((insert_text, path)) = selected_mention {
-                self.insert_selected_mention(&insert_text, path.as_deref());
+            if let Some((insert_text, path)) = selected_mention
+                && let Some((token_range, _)) = self.current_mention_token_range()
+            {
+                self.insert_selected_mention(token_range, &insert_text, path.as_deref());
             }
             self.popups.active = ActivePopup::None;
         }
@@ -2065,13 +2035,19 @@ impl ChatComposer {
         };
 
         if close_popup {
-            if let Some(selected) = selected {
+            let token_range = self
+                .current_editable_at_token_range_with_options(/*allow_empty*/ true)
+                .map(|(range, _)| range);
+            if let (Some(selected), Some(token_range)) = (selected, token_range) {
                 match selected {
                     MentionV2Selection::File(path) => {
-                        self.insert_selected_file_path(path.to_string_lossy().as_ref());
+                        self.insert_selected_file_path(
+                            token_range,
+                            path.to_string_lossy().as_ref(),
+                        );
                     }
                     MentionV2Selection::Tool { insert_text, path } => {
-                        self.insert_selected_mention(&insert_text, path.as_deref());
+                        self.insert_selected_mention(token_range, &insert_text, path.as_deref());
                     }
                 }
             }
@@ -2093,42 +2069,25 @@ impl ChatComposer {
             || lower.ends_with(".webp")
     }
 
-    fn insert_selected_file_path(&mut self, selected_path: &str) {
+    fn insert_selected_file_path(&mut self, token_range: Range<usize>, selected_path: &str) {
         if Self::is_image_path(selected_path) {
             let path_buf = PathBuf::from(selected_path);
             match image::image_dimensions(&path_buf) {
                 Ok((width, height)) => {
                     tracing::debug!("selected image dimensions={}x{}", width, height);
-                    let cursor_offset = self.draft.textarea.cursor();
-                    let text = self.draft.textarea.text();
-                    let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-                    let before_cursor = &text[..safe_cursor];
-                    let after_cursor = &text[safe_cursor..];
-
-                    let start_idx = before_cursor
-                        .char_indices()
-                        .rfind(|(_, c)| c.is_whitespace())
-                        .map(|(idx, c)| idx + c.len_utf8())
-                        .unwrap_or(0);
-                    let end_rel_idx = after_cursor
-                        .char_indices()
-                        .find(|(_, c)| c.is_whitespace())
-                        .map(|(idx, _)| idx)
-                        .unwrap_or(after_cursor.len());
-                    let end_idx = safe_cursor + end_rel_idx;
-
-                    self.draft.textarea.replace_range(start_idx..end_idx, "");
+                    let start_idx = token_range.start;
+                    self.draft.textarea.replace_range(token_range, "");
                     self.draft.textarea.set_cursor(start_idx);
                     self.attach_image(path_buf);
                     self.draft.textarea.insert_str(" ");
                 }
                 Err(err) => {
                     tracing::trace!("image dimensions lookup failed: {err}");
-                    self.insert_selected_path(selected_path);
+                    self.insert_selected_path(token_range, selected_path);
                 }
             }
         } else {
-            self.insert_selected_path(selected_path);
+            self.insert_selected_path(token_range, selected_path);
         }
     }
 
@@ -2397,7 +2356,10 @@ impl ChatComposer {
         Self::current_prefixed_token(textarea, '@', /*allow_empty*/ false)
     }
 
-    fn current_editable_at_token_with_options(&self, allow_empty: bool) -> Option<String> {
+    fn current_editable_at_token_range_with_options(
+        &self,
+        allow_empty: bool,
+    ) -> Option<(Range<usize>, String)> {
         let (range, token) =
             Self::current_prefixed_token_range(&self.draft.textarea, '@', allow_empty)?;
         if self
@@ -2427,55 +2389,43 @@ impl ChatComposer {
             return None;
         }
 
-        Some(token)
+        Some((range, token))
+    }
+
+    fn current_editable_at_token_with_options(&self, allow_empty: bool) -> Option<String> {
+        self.current_editable_at_token_range_with_options(allow_empty)
+            .map(|(_, token)| token)
     }
 
     fn current_editable_at_token(&self) -> Option<String> {
         self.current_editable_at_token_with_options(/*allow_empty*/ false)
     }
 
-    fn current_mentions_v2_token(&self) -> Option<String> {
+    fn current_mentions_v2_token_range(&self) -> Option<(Range<usize>, String)> {
         if !self.mentions_v2_enabled {
             return None;
         }
-        self.current_editable_at_token_with_options(/*allow_empty*/ true)
+        self.current_editable_at_token_range_with_options(/*allow_empty*/ true)
     }
 
-    fn current_mention_token(&self) -> Option<String> {
+    fn current_mentions_v2_token(&self) -> Option<String> {
+        self.current_mentions_v2_token_range()
+            .map(|(_, token)| token)
+    }
+
+    fn current_mention_token_range(&self) -> Option<(Range<usize>, String)> {
         if !self.mentions_enabled() {
             return None;
         }
-        Self::current_prefixed_token(&self.draft.textarea, '$', /*allow_empty*/ true)
+        Self::current_prefixed_token_range(&self.draft.textarea, '$', /*allow_empty*/ true)
+    }
+
+    fn current_mention_token(&self) -> Option<String> {
+        self.current_mention_token_range().map(|(_, token)| token)
     }
 
     /// Replace the active `@token` (the one under the cursor) with `path`.
-    ///
-    /// The algorithm mirrors `current_at_token` so replacement works no matter
-    /// where the cursor is within the token and regardless of how many
-    /// `@tokens` exist in the line.
-    fn insert_selected_path(&mut self, path: &str) {
-        let cursor_offset = self.draft.textarea.cursor();
-        let text = self.draft.textarea.text();
-        // Clamp to a valid char boundary to avoid panics when slicing.
-        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-
-        let before_cursor = &text[..safe_cursor];
-        let after_cursor = &text[safe_cursor..];
-
-        // Determine token boundaries.
-        let start_idx = before_cursor
-            .char_indices()
-            .rfind(|(_, c)| c.is_whitespace())
-            .map(|(idx, c)| idx + c.len_utf8())
-            .unwrap_or(0);
-
-        let end_rel_idx = after_cursor
-            .char_indices()
-            .find(|(_, c)| c.is_whitespace())
-            .map(|(idx, _)| idx)
-            .unwrap_or(after_cursor.len());
-        let end_idx = safe_cursor + end_rel_idx;
-
+    fn insert_selected_path(&mut self, token_range: Range<usize>, path: &str) {
         // If the path contains whitespace, wrap it in double quotes so the
         // local prompt arg parser treats it as a single argument. Avoid adding
         // quotes when the path already contains one to keep behavior simple.
@@ -2488,36 +2438,23 @@ impl ChatComposer {
 
         // Replace just the active `@token` so unrelated text elements, such as
         // large-paste placeholders, remain atomic and can still expand on submit.
+        let start_idx = token_range.start;
         self.draft
             .textarea
-            .replace_range(start_idx..end_idx, &format!("{inserted} "));
+            .replace_range(token_range, &format!("{inserted} "));
         let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
         self.draft.textarea.set_cursor(new_cursor);
     }
 
-    fn insert_selected_mention(&mut self, insert_text: &str, path: Option<&str>) {
-        let cursor_offset = self.draft.textarea.cursor();
-        let text = self.draft.textarea.text();
-        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-
-        let before_cursor = &text[..safe_cursor];
-        let after_cursor = &text[safe_cursor..];
-
-        let start_idx = before_cursor
-            .char_indices()
-            .rfind(|(_, c)| c.is_whitespace())
-            .map(|(idx, c)| idx + c.len_utf8())
-            .unwrap_or(0);
-
-        let end_rel_idx = after_cursor
-            .char_indices()
-            .find(|(_, c)| c.is_whitespace())
-            .map(|(idx, _)| idx)
-            .unwrap_or(after_cursor.len());
-        let end_idx = safe_cursor + end_rel_idx;
-
+    fn insert_selected_mention(
+        &mut self,
+        token_range: Range<usize>,
+        insert_text: &str,
+        path: Option<&str>,
+    ) {
         // Remove the active token and insert the selected mention as an atomic element.
-        self.draft.textarea.replace_range(start_idx..end_idx, "");
+        let start_idx = token_range.start;
+        self.draft.textarea.replace_range(token_range, "");
         self.draft.textarea.set_cursor(start_idx);
         let id = self.draft.textarea.insert_element(insert_text);
 
@@ -2773,9 +2710,7 @@ impl ChatComposer {
                 | InputResult::Queued { .. }
                 | InputResult::Command(_)
                 | InputResult::ServiceTierCommand(_)
-                | InputResult::WorkflowCommand(_)
                 | InputResult::CommandWithArgs(_, _, _)
-                | InputResult::WorkflowCommandWithArgs(_, _, _)
         ) {
             self.draft.textarea.enter_vim_normal_mode();
         }
@@ -2966,12 +2901,12 @@ impl ChatComposer {
             SlashCommandItem::Builtin(cmd) => {
                 InputResult::CommandWithArgs(cmd, trimmed_rest.to_string(), args_elements)
             }
+            SlashCommandItem::ServiceTier(_) => return None,
             SlashCommandItem::Workflow(command) => InputResult::WorkflowCommandWithArgs(
                 command,
                 trimmed_rest.to_string(),
                 args_elements,
             ),
-            SlashCommandItem::ServiceTier(_) => return None,
         })
     }
 
@@ -3640,18 +3575,9 @@ impl ChatComposer {
             && self
                 .slash_input()
                 .is_editing_command_name(first_line, cursor);
-        let is_workflow_argument_context = caret_on_first_line
-            && cursor == first_line_end
-            && self
-                .workflow_command_for_line(first_line)
-                .is_some_and(|command| !command.option_hints.is_empty());
-        let command_filter_text = if is_workflow_argument_context {
-            Some(first_line.to_string())
-        } else {
-            caret_on_first_line
-                .then(|| slash_input::command_popup_filter_text(first_line, cursor))
-                .flatten()
-        };
+        let command_filter_text = caret_on_first_line
+            .then(|| slash_input::command_popup_filter_text(first_line, cursor))
+            .flatten();
 
         // If the cursor is currently positioned within an `@token`, prefer the
         // file-search popup over the slash popup so users can insert a file path
@@ -3664,7 +3590,7 @@ impl ChatComposer {
         }
         match &mut self.popups.active {
             ActivePopup::Command(popup) => {
-                if is_editing_slash_command_name || is_workflow_argument_context {
+                if is_editing_slash_command_name {
                     if let Some(command_filter_text) = command_filter_text.as_deref() {
                         popup.on_composer_text_change(command_filter_text.to_string());
                     }
@@ -3673,7 +3599,7 @@ impl ChatComposer {
                 }
             }
             _ => {
-                if (is_editing_slash_command_name || is_workflow_argument_context)
+                if is_editing_slash_command_name
                     && let Some(command_filter_text) = command_filter_text.as_deref()
                 {
                     let command_popup = self.slash_input().command_popup(command_filter_text);
@@ -3681,19 +3607,6 @@ impl ChatComposer {
                 }
             }
         }
-    }
-
-    fn workflow_command_for_line(&self, first_line: &str) -> Option<&WorkflowCommand> {
-        if !self.workflow_commands_enabled {
-            return None;
-        }
-        let (name, _rest, _rest_offset) = parse_slash_name(first_line)?;
-        if name.contains('/') {
-            return None;
-        }
-        self.workflow_commands
-            .iter()
-            .find(|command| command.command == name)
     }
 
     /// Synchronize the legacy file-search popup with the current `@` token.
@@ -6188,6 +6101,8 @@ mod tests {
             description: Some("Workspace docs".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -6230,6 +6145,8 @@ mod tests {
             description: Some("Workspace docs".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -6245,6 +6162,39 @@ mod tests {
             matches!(composer.popups.active, ActivePopup::None),
             "disabled connectors should not appear in the mention popup"
         );
+    }
+
+    #[test]
+    fn set_plugin_mentions_refreshes_open_mention_popup() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_text_content("$".to_string(), Vec::new(), Vec::new());
+        assert!(matches!(composer.popups.active, ActivePopup::None));
+
+        composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+            config_name: "sample@test".to_string(),
+            display_name: "Sample Plugin".to_string(),
+            description: None,
+            has_skills: true,
+            mcp_server_names: vec!["sample".to_string()],
+            app_connector_ids: Vec::new(),
+        }]));
+
+        let ActivePopup::Skill(popup) = &composer.popups.active else {
+            panic!("expected mention popup to open after plugin update");
+        };
+        let mention = popup
+            .selected_mention()
+            .expect("expected plugin mention to be selected");
+        assert_eq!(mention.insert_text, "$sample".to_string());
+        assert_eq!(mention.path, Some("plugin://sample@test".to_string()));
     }
 
     #[test]
@@ -6282,6 +6232,83 @@ mod tests {
             .expect("expected skill mention to be selected");
         assert_eq!(mention.insert_text, "$codex".to_string());
         assert_eq!(mention.path, Some(skill_path.display().to_string()));
+    }
+
+    #[test]
+    fn mention_items_show_plugin_owned_skill_and_app_duplicates() {
+        let skill_path = test_path_buf("/tmp/repo/google-calendar/SKILL.md").abs();
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_connectors_enabled(/*enabled*/ true);
+        composer.set_text_content("$goog".to_string(), Vec::new(), Vec::new());
+        composer.set_skill_mentions(Some(vec![SkillMetadata {
+            name: "google-calendar:availability".to_string(),
+            description: "Find availability and plan event changes".to_string(),
+            short_description: None,
+            interface: Some(SkillInterface {
+                display_name: Some("Google Calendar".to_string()),
+                short_description: None,
+                icon_small: None,
+                icon_large: None,
+                brand_color: None,
+                default_prompt: None,
+            }),
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: skill_path.clone(),
+            scope: crate::test_support::skill_scope_repo(),
+            plugin_id: None,
+        }]));
+        composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+            config_name: "google-calendar@debug".to_string(),
+            display_name: "Google Calendar".to_string(),
+            description: Some(
+                "Connect Google Calendar for scheduling, availability, and event management."
+                    .to_string(),
+            ),
+            has_skills: true,
+            mcp_server_names: vec!["google-calendar".to_string()],
+            app_connector_ids: vec![AppConnectorId("google_calendar".to_string())],
+        }]));
+        composer.set_connector_mentions(Some(ConnectorsSnapshot {
+            connectors: vec![AppInfo {
+                id: "google_calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: Some("Look up events and availability".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                icon_assets: None,
+                icon_dark_assets: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/google-calendar".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: vec!["Google Calendar".to_string()],
+            }],
+        }));
+
+        let mentions = composer.mention_items();
+        assert_eq!(mentions.len(), 3);
+        assert_eq!(mentions[0].category_tag, Some("[Skill]".to_string()));
+        assert_eq!(mentions[0].path, Some(skill_path.display().to_string()));
+        assert_eq!(mentions[0].display_name, "Google Calendar".to_string());
+        assert_eq!(mentions[1].category_tag, Some("[Plugin]".to_string()));
+        assert_eq!(
+            mentions[1].path,
+            Some("plugin://google-calendar@debug".to_string())
+        );
+        assert_eq!(mentions[2].category_tag, Some("[App]".to_string()));
+        assert_eq!(mentions[2].path, Some("app://google_calendar".to_string()));
     }
 
     #[test]
@@ -6373,6 +6400,8 @@ mod tests {
                         description: Some("Look up events and availability".to_string()),
                         logo_url: None,
                         logo_url_dark: None,
+                        icon_assets: None,
+                        icon_dark_assets: None,
                         distribution_channel: None,
                         branding: None,
                         app_metadata: None,
@@ -6407,6 +6436,8 @@ mod tests {
             description: Some("Workspace docs".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -6898,6 +6929,62 @@ mod tests {
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         assert_eq!(composer.draft.textarea.cursor(), "go".len());
         assert!(matches!(composer.popups.active, ActivePopup::None));
+    }
+
+    #[test]
+    fn restored_bound_at_mentions_do_not_open_mention_popup() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        for (text, move_cursor_to_end) in [
+            ("@sample".to_string(), false),
+            ("Please ask @sample.".to_string(), true),
+        ] {
+            let (tx, _rx) = unbounded_channel::<AppEvent>();
+            let sender = AppEventSender::new(tx);
+            let mut composer = ChatComposer::new(
+                /*has_input_focus*/ true,
+                sender,
+                /*enhanced_keys_supported*/ false,
+                "Ask Codex to do anything".to_string(),
+                /*disable_paste_burst*/ false,
+            );
+            composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+                config_name: "sample@test".to_string(),
+                display_name: "sample".to_string(),
+                description: None,
+                has_skills: true,
+                mcp_server_names: vec!["sample".to_string()],
+                app_connector_ids: Vec::new(),
+            }]));
+
+            composer.set_text_content_with_mention_bindings(
+                text.clone(),
+                Vec::new(),
+                Vec::new(),
+                vec![MentionBinding {
+                    sigil: '@',
+                    mention: "sample".to_string(),
+                    path: "plugin://sample@test".to_string(),
+                }],
+            );
+            if move_cursor_to_end {
+                composer.move_cursor_to_end();
+            }
+
+            assert!(matches!(composer.popups.active, ActivePopup::None));
+
+            let (result, consumed) =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            assert!(consumed);
+            match result {
+                InputResult::Submitted {
+                    text: submitted, ..
+                } => assert_eq!(submitted, text),
+                _ => panic!("expected restored bound mention to submit"),
+            }
+        }
     }
 
     #[test]
@@ -8133,14 +8220,14 @@ mod tests {
             InputResult::WorkflowCommand(command) => {
                 panic!("expected init command, got workflow {command:?}")
             }
+            InputResult::WorkflowCommandWithArgs(command, _, _) => {
+                panic!("expected init command, got workflow with args {command:?}")
+            }
             InputResult::Submitted { text, .. } => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch, but composer queued literal text")
-            }
-            InputResult::WorkflowCommandWithArgs(_, _, _) => {
-                panic!("expected command dispatch without args for '/init'")
             }
             InputResult::None => panic!("expected Command result for '/init'"),
         }
@@ -8646,14 +8733,14 @@ mod tests {
             InputResult::WorkflowCommand(command) => {
                 panic!("expected diff command, got workflow {command:?}")
             }
+            InputResult::WorkflowCommandWithArgs(command, _, _) => {
+                panic!("expected diff command, got workflow with args {command:?}")
+            }
             InputResult::Submitted { text, .. } => {
                 panic!("expected command dispatch after Tab completion, got literal submit: {text}")
             }
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch after Tab completion, got literal queue")
-            }
-            InputResult::WorkflowCommandWithArgs(_, _, _) => {
-                panic!("expected command dispatch without args for '/diff'")
             }
             InputResult::None => panic!("expected Command result for '/diff'"),
         }
@@ -8849,14 +8936,14 @@ mod tests {
             InputResult::WorkflowCommand(command) => {
                 panic!("expected mention command, got workflow {command:?}")
             }
+            InputResult::WorkflowCommandWithArgs(command, _, _) => {
+                panic!("expected mention command, got workflow with args {command:?}")
+            }
             InputResult::Submitted { text, .. } => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch, but composer queued literal text")
-            }
-            InputResult::WorkflowCommandWithArgs(_, _, _) => {
-                panic!("expected command dispatch without args for '/mention'")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
         }

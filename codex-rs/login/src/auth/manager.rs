@@ -15,13 +15,14 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
 use tokio::sync::Semaphore;
 use tokio::sync::watch;
 use tracing::instrument;
 
 use codex_agent_identity::ChatGptEnvironment;
-use codex_app_server_protocol::AuthMode;
-use codex_app_server_protocol::AuthMode as ApiAuthMode;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 
@@ -54,9 +55,9 @@ use crate::outbound_proxy::AuthRouteConfig;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
 use crate::token_data::parse_jwt_expiration;
-use codex_client::CodexHttpClient;
 use codex_config::config_toml::AccountPoolToml;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_http_client::HttpClient;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::PlanType as InternalPlanType;
 use codex_protocol::auth::RefreshTokenFailedError;
@@ -96,6 +97,63 @@ pub enum AgentIdentityAuthPolicy {
     ChatGptAuth,
 }
 
+const AGENT_IDENTITY_BOOTSTRAP_FAILURE_COOLDOWN: Duration = Duration::from_secs(60 * 60);
+
+#[derive(Debug)]
+struct CachedAgentIdentityBootstrapFailure {
+    account_id: String,
+    authapi_base_url: String,
+    retry_at: Instant,
+    error: AgentIdentityAuthError,
+}
+
+#[derive(Debug, Default)]
+struct AgentIdentityBootstrapCooldown {
+    failure: Option<CachedAgentIdentityBootstrapFailure>,
+}
+
+impl AgentIdentityBootstrapCooldown {
+    fn error_for(
+        &mut self,
+        account_id: &str,
+        authapi_base_url: &str,
+        now: Instant,
+    ) -> Option<AgentIdentityAuthError> {
+        let error = self
+            .failure
+            .as_ref()
+            .filter(|failure| {
+                failure.account_id == account_id
+                    && failure.authapi_base_url == authapi_base_url
+                    && failure.retry_at > now
+            })
+            .map(|failure| failure.error.clone());
+        if error.is_none() {
+            self.clear();
+        }
+        error
+    }
+
+    fn record_failure(
+        &mut self,
+        account_id: String,
+        authapi_base_url: String,
+        error: AgentIdentityAuthError,
+        now: Instant,
+    ) {
+        self.failure = Some(CachedAgentIdentityBootstrapFailure {
+            account_id,
+            authapi_base_url,
+            retry_at: now + AGENT_IDENTITY_BOOTSTRAP_FAILURE_COOLDOWN,
+            error,
+        });
+    }
+
+    fn clear(&mut self) {
+        self.failure = None;
+    }
+}
+
 impl PartialEq for CodexAuth {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -125,7 +183,7 @@ pub struct ChatgptAuthTokens {
 #[derive(Debug, Clone)]
 struct ChatgptAuthState {
     auth_dot_json: Arc<Mutex<Option<AuthDotJson>>>,
-    client: CodexHttpClient,
+    client: HttpClient,
 }
 
 const TOKEN_REFRESH_INTERVAL: i64 = 8;
@@ -254,13 +312,13 @@ impl CodexAuth {
         auth_route_config: Option<&AuthRouteConfig>,
     ) -> std::io::Result<Self> {
         let auth_mode = auth_dot_json.resolved_mode();
-        if auth_mode == ApiAuthMode::ApiKey {
+        if auth_mode == AuthMode::ApiKey {
             let Some(api_key) = auth_dot_json.openai_api_key.as_deref() else {
                 return Err(std::io::Error::other("API key auth is missing a key."));
             };
             return Ok(Self::from_api_key(api_key));
         }
-        if auth_mode == ApiAuthMode::AgentIdentity {
+        if auth_mode == AuthMode::AgentIdentity {
             let Some(agent_identity) = auth_dot_json.agent_identity.clone() else {
                 return Err(std::io::Error::other(
                     "agent identity auth is missing agent identity auth material.",
@@ -294,7 +352,7 @@ impl CodexAuth {
                 }
             }
         }
-        if auth_mode == ApiAuthMode::PersonalAccessToken {
+        if auth_mode == AuthMode::PersonalAccessToken {
             let Some(personal_access_token) = auth_dot_json.personal_access_token.as_deref() else {
                 return Err(std::io::Error::other(
                     "personal access token auth is missing a personal access token.",
@@ -303,7 +361,7 @@ impl CodexAuth {
             return Self::from_personal_access_token(personal_access_token, auth_route_config)
                 .await;
         }
-        if auth_mode == ApiAuthMode::BedrockApiKey {
+        if auth_mode == AuthMode::BedrockApiKey {
             let Some(auth) = auth_dot_json.bedrock_api_key else {
                 return Err(std::io::Error::other(
                     "Bedrock API key auth is missing a Bedrock API key.",
@@ -320,7 +378,7 @@ impl CodexAuth {
         };
 
         match auth_mode {
-            ApiAuthMode::Chatgpt => {
+            AuthMode::Chatgpt => {
                 let storage = create_auth_storage(
                     codex_home.to_path_buf(),
                     storage_mode,
@@ -328,15 +386,13 @@ impl CodexAuth {
                 );
                 Ok(Self::Chatgpt(ChatgptAuth { state, storage }))
             }
-            ApiAuthMode::ChatgptAuthTokens => {
-                Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens { state }))
-            }
-            ApiAuthMode::ApiKey => unreachable!("api key mode is handled above"),
-            ApiAuthMode::AgentIdentity => unreachable!("agent identity mode is handled above"),
-            ApiAuthMode::PersonalAccessToken => {
+            AuthMode::ChatgptAuthTokens => Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens { state })),
+            AuthMode::ApiKey => unreachable!("api key mode is handled above"),
+            AuthMode::AgentIdentity => unreachable!("agent identity mode is handled above"),
+            AuthMode::PersonalAccessToken => {
                 unreachable!("personal access token mode is handled above")
             }
-            ApiAuthMode::BedrockApiKey => unreachable!("bedrock api key mode is handled above"),
+            AuthMode::BedrockApiKey => unreachable!("bedrock api key mode is handled above"),
         }
     }
 
@@ -407,6 +463,9 @@ impl CodexAuth {
         ))
     }
 
+    /// Returns the effective backend auth mode.
+    ///
+    /// Externally managed ChatGPT tokens are normalized to [`AuthMode::Chatgpt`].
     pub fn auth_mode(&self) -> AuthMode {
         match self {
             Self::ApiKey(_) => AuthMode::ApiKey,
@@ -417,14 +476,15 @@ impl CodexAuth {
         }
     }
 
-    pub fn api_auth_mode(&self) -> ApiAuthMode {
+    /// Returns the precise kind of credentials backing this authentication.
+    pub fn api_auth_mode(&self) -> AuthMode {
         match self {
-            Self::ApiKey(_) => ApiAuthMode::ApiKey,
-            Self::Chatgpt(_) => ApiAuthMode::Chatgpt,
-            Self::ChatgptAuthTokens(_) => ApiAuthMode::ChatgptAuthTokens,
-            Self::AgentIdentity(_) => ApiAuthMode::AgentIdentity,
-            Self::PersonalAccessToken(_) => ApiAuthMode::PersonalAccessToken,
-            Self::BedrockApiKey(_) => ApiAuthMode::BedrockApiKey,
+            Self::ApiKey(_) => AuthMode::ApiKey,
+            Self::Chatgpt(_) => AuthMode::Chatgpt,
+            Self::ChatgptAuthTokens(_) => AuthMode::ChatgptAuthTokens,
+            Self::AgentIdentity(_) => AuthMode::AgentIdentity,
+            Self::PersonalAccessToken(_) => AuthMode::PersonalAccessToken,
+            Self::BedrockApiKey(_) => AuthMode::BedrockApiKey,
         }
     }
 
@@ -672,7 +732,7 @@ impl CodexAuth {
     /// Consider this private to integration tests.
     pub fn create_dummy_chatgpt_auth_for_testing() -> Self {
         let auth_dot_json = AuthDotJson {
-            auth_mode: Some(ApiAuthMode::Chatgpt),
+            auth_mode: Some(AuthMode::Chatgpt),
             openai_api_key: None,
             tokens: Some(TokenData {
                 id_token: Default::default(),
@@ -757,7 +817,7 @@ impl ChatgptAuth {
         &self.storage
     }
 
-    fn client(&self) -> &CodexHttpClient {
+    fn client(&self) -> &HttpClient {
         &self.state.client
     }
 
@@ -863,7 +923,7 @@ pub fn login_with_api_key(
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<()> {
     let auth_dot_json = AuthDotJson {
-        auth_mode: Some(ApiAuthMode::ApiKey),
+        auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some(api_key.to_string()),
         tokens: None,
         last_refresh: None,
@@ -912,7 +972,7 @@ pub async fn login_with_access_token(
                 .to_string();
             verified_record_from_jwt(jwt, &base_url, auth_route_config).await?;
             AuthDotJson {
-                auth_mode: Some(ApiAuthMode::AgentIdentity),
+                auth_mode: Some(AuthMode::AgentIdentity),
                 openai_api_key: None,
                 tokens: None,
                 last_refresh: None,
@@ -1303,7 +1363,7 @@ fn persist_tokens(
 // The caller is responsible for persisting any returned tokens.
 async fn request_chatgpt_token_refresh(
     refresh_token: String,
-    client: &CodexHttpClient,
+    client: &HttpClient,
 ) -> Result<RefreshResponse, RefreshTokenError> {
     let refresh_request = RefreshRequest {
         client_id: oauth_client_id(),
@@ -1451,7 +1511,7 @@ impl AuthDotJson {
         };
 
         Ok(Self {
-            auth_mode: Some(ApiAuthMode::ChatgptAuthTokens),
+            auth_mode: Some(AuthMode::ChatgptAuthTokens),
             openai_api_key: None,
             tokens: Some(tokens),
             last_refresh: Some(Utc::now()),
@@ -1474,27 +1534,27 @@ impl AuthDotJson {
         Self::from_external_tokens(&external)
     }
 
-    pub(super) fn resolved_mode(&self) -> ApiAuthMode {
+    pub(super) fn resolved_mode(&self) -> AuthMode {
         if let Some(mode) = self.auth_mode {
             return mode;
         }
         if self.personal_access_token.is_some() {
-            return ApiAuthMode::PersonalAccessToken;
+            return AuthMode::PersonalAccessToken;
         }
         if self.bedrock_api_key.is_some() {
-            return ApiAuthMode::BedrockApiKey;
+            return AuthMode::BedrockApiKey;
         }
         if self.openai_api_key.is_some() {
-            return ApiAuthMode::ApiKey;
+            return AuthMode::ApiKey;
         }
-        ApiAuthMode::Chatgpt
+        AuthMode::Chatgpt
     }
 
     fn storage_mode(
         &self,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> AuthCredentialsStoreMode {
-        if self.resolved_mode() == ApiAuthMode::ChatgptAuthTokens {
+        if self.resolved_mode() == AuthMode::ChatgptAuthTokens {
             AuthCredentialsStoreMode::Ephemeral
         } else {
             auth_credentials_store_mode
@@ -1773,6 +1833,7 @@ pub struct AuthManager {
     agent_identity_authapi_base_url: Option<String>,
     refresh_lock: Semaphore,
     agent_identity_lock: Semaphore,
+    agent_identity_bootstrap_cooldown: Mutex<AgentIdentityBootstrapCooldown>,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
     account_pool: Option<Arc<AccountPoolManager>>,
     auth_route_config: Option<AuthRouteConfig>,
@@ -1800,13 +1861,11 @@ pub trait AuthManagerConfig {
     /// Returns the ChatGPT backend base URL used for first-party backend authorization.
     fn chatgpt_base_url(&self) -> String;
 
+    /// Returns route-selection settings for auth-owned clients.
+    fn auth_route_config(&self) -> Option<AuthRouteConfig>;
+
     /// Returns optional logical account pool configuration.
     fn account_pool(&self) -> Option<AccountPoolToml> {
-        None
-    }
-
-    /// Returns route-selection settings for auth-owned clients.
-    fn auth_route_config(&self) -> Option<AuthRouteConfig> {
         None
     }
 }
@@ -1883,6 +1942,7 @@ impl AuthManager {
             agent_identity_authapi_base_url,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
+            agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
             account_pool: None,
             auth_route_config,
@@ -1909,6 +1969,7 @@ impl AuthManager {
             agent_identity_authapi_base_url: default_agent_identity_authapi_base_url(),
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
+            agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
             account_pool: None,
             auth_route_config: None,
@@ -1934,6 +1995,7 @@ impl AuthManager {
             agent_identity_authapi_base_url: default_agent_identity_authapi_base_url(),
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
+            agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
             account_pool: None,
             auth_route_config: None,
@@ -1967,6 +2029,7 @@ impl AuthManager {
             ),
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
+            agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
             account_pool: None,
             auth_route_config: None,
@@ -1990,6 +2053,7 @@ impl AuthManager {
             agent_identity_authapi_base_url: default_agent_identity_authapi_base_url(),
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
+            agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(Some(
                 Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
             )),
@@ -2102,15 +2166,44 @@ impl AuthManager {
                 .acquire()
                 .await
                 .map_err(std::io::Error::other)?;
-            return auth
+            let forced_chatgpt_workspace_id = self.forced_chatgpt_workspace_id();
+            let cooldown_key = ManagedChatGptAgentIdentityBinding::from_auth(
+                &auth,
+                forced_chatgpt_workspace_id.clone(),
+            )
+            .and_then(|binding| {
+                self.agent_identity_authapi_base_url
+                    .as_ref()
+                    .map(|base_url| (binding.account_id, base_url.clone()))
+            });
+            if let Some((account_id, authapi_base_url)) = cooldown_key.as_ref()
+                && let Ok(mut cooldown) = self.agent_identity_bootstrap_cooldown.lock()
+                && let Some(error) =
+                    cooldown.error_for(account_id, authapi_base_url, Instant::now())
+            {
+                tracing::warn!("agent identity bootstrap retry suppressed during shared cooldown");
+                return Err(std::io::Error::other(error));
+            }
+
+            let result = auth
                 .agent_identity_auth(
                     policy,
                     self.agent_identity_authapi_base_url.as_deref(),
-                    self.forced_chatgpt_workspace_id(),
+                    forced_chatgpt_workspace_id,
                     self.auth_route_config.as_ref(),
                     session_source,
                 )
                 .await;
+            if let Ok(mut cooldown) = self.agent_identity_bootstrap_cooldown.lock() {
+                if let (Err(err), Some((account_id, authapi_base_url))) = (&result, cooldown_key)
+                    && let Some(error) = AgentIdentityAuthError::bootstrap_unavailable(err).cloned()
+                {
+                    cooldown.record_failure(account_id, authapi_base_url, error, Instant::now());
+                } else {
+                    cooldown.clear();
+                }
+            }
+            return result;
         }
         auth.agent_identity_auth(
             policy,
@@ -2169,19 +2262,19 @@ impl AuthManager {
         match (a, b) {
             (None, None) => true,
             (Some(a), Some(b)) => match (a.api_auth_mode(), b.api_auth_mode()) {
-                (ApiAuthMode::ApiKey, ApiAuthMode::ApiKey) => a.api_key() == b.api_key(),
-                (ApiAuthMode::Chatgpt, ApiAuthMode::Chatgpt)
-                | (ApiAuthMode::ChatgptAuthTokens, ApiAuthMode::ChatgptAuthTokens) => {
+                (AuthMode::ApiKey, AuthMode::ApiKey) => a.api_key() == b.api_key(),
+                (AuthMode::Chatgpt, AuthMode::Chatgpt)
+                | (AuthMode::ChatgptAuthTokens, AuthMode::ChatgptAuthTokens) => {
                     a.get_current_auth_json() == b.get_current_auth_json()
                 }
-                (ApiAuthMode::AgentIdentity, ApiAuthMode::AgentIdentity) => match (a, b) {
+                (AuthMode::AgentIdentity, AuthMode::AgentIdentity) => match (a, b) {
                     (CodexAuth::AgentIdentity(a), CodexAuth::AgentIdentity(b)) => {
                         a.record() == b.record()
                     }
                     _ => false,
                 },
-                (ApiAuthMode::PersonalAccessToken, ApiAuthMode::PersonalAccessToken) => a == b,
-                (ApiAuthMode::BedrockApiKey, ApiAuthMode::BedrockApiKey) => a == b,
+                (AuthMode::PersonalAccessToken, AuthMode::PersonalAccessToken) => a == b,
+                (AuthMode::BedrockApiKey, AuthMode::BedrockApiKey) => a == b,
                 _ => false,
             },
             _ => false,
@@ -2283,6 +2376,16 @@ impl AuthManager {
         self.external_auth().is_some()
     }
 
+    pub fn is_external_chatgpt_auth_active(&self) -> bool {
+        self.auth_cached()
+            .as_ref()
+            .is_some_and(CodexAuth::is_external_chatgpt_tokens)
+    }
+
+    pub fn codex_api_key_env_enabled(&self) -> bool {
+        self.enable_codex_api_key_env
+    }
+
     pub fn account_pool_status(&self) -> Option<AccountPoolStatus> {
         self.account_pool.as_ref().and_then(|pool| pool.status())
     }
@@ -2301,8 +2404,6 @@ impl AuthManager {
         self.account_pool.as_ref().is_some_and(|pool| {
             let has_available_member = pool.mark_active_exhausted(bucket, error.clone());
             if bucket == AccountPoolUsageBucket::Spark {
-                // A Spark limit response can arrive after the regular auth path selected this
-                // member, so mark the regular bucket too to avoid immediately selecting it again.
                 pool.mark_active_exhausted(AccountPoolUsageBucket::Regular, error);
             }
             has_available_member
@@ -2352,16 +2453,6 @@ impl AuthManager {
     ) -> Option<AccountPoolUsageRefreshReport> {
         let pool = self.account_pool.as_ref()?;
         Some(pool.refresh_usage_with_report(pool_id).await)
-    }
-
-    pub fn is_external_chatgpt_auth_active(&self) -> bool {
-        self.auth_cached()
-            .as_ref()
-            .is_some_and(CodexAuth::is_external_chatgpt_tokens)
-    }
-
-    pub fn codex_api_key_env_enabled(&self) -> bool {
-        self.enable_codex_api_key_env
     }
 
     /// Convenience constructor returning an `Arc` wrapper.
@@ -2592,13 +2683,15 @@ impl AuthManager {
         Ok(result)
     }
 
-    pub fn get_api_auth_mode(&self) -> Option<ApiAuthMode> {
+    /// Returns the precise kind of credentials backing the current authentication.
+    pub fn get_api_auth_mode(&self) -> Option<AuthMode> {
         if self.has_external_api_key_auth() {
-            return Some(ApiAuthMode::ApiKey);
+            return Some(AuthMode::ApiKey);
         }
         self.auth_cached().as_ref().map(CodexAuth::api_auth_mode)
     }
 
+    /// Returns the effective backend auth mode for the current authentication.
     pub fn auth_mode(&self) -> Option<AuthMode> {
         if self.has_external_api_key_auth() {
             return Some(AuthMode::ApiKey);

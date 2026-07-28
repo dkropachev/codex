@@ -1116,8 +1116,8 @@ mod tests {
 
     use base64::Engine;
     use chrono::Utc;
-    use codex_app_server_protocol::AuthMode;
     use codex_config::config_toml::AccountPoolDefinitionToml;
+    use codex_protocol::auth::AuthMode;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use wiremock::Mock;

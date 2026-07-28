@@ -5,12 +5,8 @@
 
 use super::*;
 
-const CONFIG_IMPLEMENT_CLEAR_CONTEXT_PREFIX: &str = concat!(
-    "A previous agent produced the Codex configuration plan below. ",
-    "Implement that plan in a fresh context. Treat the plan as the source of ",
-    "user intent, re-read files as needed, write only under the Codex config ",
-    "directory or /tmp, and do not modify the target workspace/repository."
-);
+const SAFETY_ACCESS_BLOCK_PREFIX: &str =
+    "Invalid prompt: we've limited access to this content for safety reasons.";
 
 impl ChatWidget {
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
@@ -55,6 +51,7 @@ impl ChatWidget {
 
     pub(super) fn on_task_started(&mut self) {
         self.input_queue.user_turn_pending_start = false;
+        self.reset_safety_buffering_for_turn_start();
         self.turn_lifecycle.start(Instant::now());
         self.transcript.reset_turn_flags();
         self.adaptive_chunking.reset();
@@ -173,6 +170,7 @@ impl ChatWidget {
         self.input_queue.user_turn_pending_start = false;
         self.clear_active_hook_cell();
         self.turn_lifecycle.finish();
+        self.clear_safety_buffering();
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -242,33 +240,28 @@ impl ChatWidget {
     }
 
     pub(super) fn open_plan_implementation_prompt(&mut self) {
-        let config_mode =
-            crate::config_mode::is_config_mask(self.active_collaboration_mask.as_ref());
-        let default_mask = if config_mode {
-            Some(crate::config_mode::config_edit_mask(
-                &self.config.cwd,
-                &self.config.codex_home,
-            ))
-        } else {
-            collaboration_modes::default_mode_mask(self.model_catalog.as_ref())
-        };
+        let default_mask = collaboration_modes::default_mode_mask(self.model_catalog.as_ref());
         let context_usage_label = self.plan_implementation_context_usage_label();
 
-        let params = if config_mode {
-            plan_implementation::config_selection_view_params(
-                default_mask,
-                self.transcript.latest_proposed_plan_markdown.as_deref(),
-                context_usage_label.as_deref(),
-                CONFIG_IMPLEMENT_CLEAR_CONTEXT_PREFIX,
-            )
-        } else {
-            plan_implementation::selection_view_params(
-                default_mask,
-                self.transcript.latest_proposed_plan_markdown.as_deref(),
-                context_usage_label.as_deref(),
-            )
-        };
-        self.bottom_pane.show_selection_view(params);
+        let selection_view_params =
+            if crate::config_mode::is_config_mask(self.active_collaboration_mask.as_ref()) {
+                let config_edit_mask =
+                    crate::config_mode::config_edit_mask(&self.config.cwd, &self.config.codex_home);
+                plan_implementation::config_selection_view_params(
+                    Some(config_edit_mask),
+                    self.transcript.latest_proposed_plan_markdown.as_deref(),
+                    context_usage_label.as_deref(),
+                    plan_implementation::PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX,
+                )
+            } else {
+                plan_implementation::selection_view_params(
+                    default_mask,
+                    self.transcript.latest_proposed_plan_markdown.as_deref(),
+                    context_usage_label.as_deref(),
+                )
+            };
+
+        self.bottom_pane.show_selection_view(selection_view_params);
         self.notify(Notification::PlanModePrompt {
             title: PLAN_IMPLEMENTATION_TITLE.to_string(),
         });
@@ -322,6 +315,7 @@ impl ChatWidget {
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
     /// and should continue to drive the bottom-pane running indicator while it is in progress.
     pub(super) fn finalize_turn(&mut self) {
+        self.clear_safety_buffering();
         // Drop preview-only stream tail content on any termination path before
         // failed-cell finalization, so transient tail cells are never persisted.
         self.clear_active_stream_tail();
@@ -449,6 +443,18 @@ impl ChatWidget {
             .is_some_and(is_app_server_cyber_policy_error)
         {
             self.on_cyber_policy_error();
+        } else if message.starts_with(SAFETY_ACCESS_BLOCK_PREFIX)
+            || serde_json::from_str::<serde_json::Value>(&message).is_ok_and(|response| {
+                response["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.starts_with(SAFETY_ACCESS_BLOCK_PREFIX))
+            })
+        {
+            self.input_queue.submit_pending_steers_after_interrupt = false;
+            self.finalize_turn();
+            self.add_to_history(history_cell::new_safety_access_block_event());
+            self.request_redraw();
+            self.maybe_send_next_queued_input();
         } else if let Some(info) = codex_error_info
             .as_ref()
             .and_then(app_server_rate_limit_error_kind)

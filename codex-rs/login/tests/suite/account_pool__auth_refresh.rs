@@ -3,7 +3,6 @@ use anyhow::Result;
 use base64::Engine;
 use chrono::Duration;
 use chrono::Utc;
-use codex_app_server_protocol::AuthMode;
 use codex_config::config_toml::AccountPoolDefinitionToml;
 use codex_config::config_toml::AccountPoolPolicyToml;
 use codex_config::config_toml::AccountPoolToml;
@@ -12,11 +11,13 @@ use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::AuthManagerConfig;
+use codex_login::AuthRouteConfig;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::load_auth_dot_json;
 use codex_login::save_auth;
 use codex_login::token_data::IdTokenInfo;
 use codex_login::token_data::TokenData;
+use codex_protocol::auth::AuthMode;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
@@ -159,6 +160,10 @@ impl AuthManagerConfig for AccountPoolTestConfig {
 
     fn chatgpt_base_url(&self) -> String {
         self.chatgpt_base_url.clone()
+    }
+
+    fn auth_route_config(&self) -> Option<AuthRouteConfig> {
+        None
     }
 
     fn account_pool(&self) -> Option<AccountPoolToml> {
