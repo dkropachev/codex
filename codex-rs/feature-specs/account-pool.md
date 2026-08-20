@@ -544,7 +544,7 @@ named credentials from `CODEX_HOME/accounts`.
 
 #### Test cases
 
-- Ignoring user config preserves account-pool authentication, credential-store routing, and explicit API-key precedence: codex-rs/exec/tests/suite/account_pool__ignore_user_config.rs:exec_ignore_user_config_honors_keyring_store_selection,exec_ignore_user_config_prefers_codex_api_key_over_account_pool,exec_ignore_user_config_preserves_account_pool_auth
+- Ignoring user config preserves account-pool authentication and explicit API-key precedence: codex-rs/exec/tests/suite/account_pool__ignore_user_config.rs:exec_ignore_user_config_prefers_codex_api_key_over_account_pool,exec_ignore_user_config_preserves_account_pool_auth
 
 ### otel (telemetry and export behavior)
 

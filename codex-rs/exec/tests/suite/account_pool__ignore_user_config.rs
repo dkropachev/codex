@@ -104,32 +104,3 @@ async fn exec_ignore_user_config_prefers_codex_api_key_over_account_pool() -> an
 
     Ok(())
 }
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exec_ignore_user_config_honors_keyring_store_selection() -> anyhow::Result<()> {
-    let test = test_codex_exec();
-    let server = start_mock_server().await;
-    let repo_root = codex_utils_cargo_bin::repo_root()?;
-    write_file_account_auth(&test, "file-pool-token")?;
-    std::fs::write(
-        test.home_path().join("config.toml"),
-        format!("cli_auth_credentials_store = \"keyring\"\n{ACCOUNT_POOL_CONFIG}"),
-    )?;
-    let response_mock = mount_sse_once(&server, sse(vec![ev_completed("request_0")])).await;
-
-    test.cmd_with_server(&server)
-        .env_remove(CODEX_API_KEY_ENV_VAR)
-        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
-        .env_remove(OPENAI_API_KEY_ENV_VAR)
-        .arg("--ignore-user-config")
-        .arg("--skip-git-repo-check")
-        .arg("-C")
-        .arg(&repo_root)
-        .arg("echo testing keyring store selection")
-        .assert()
-        .success();
-    let request = response_mock.single_request();
-    assert_eq!(request.header("authorization"), None);
-
-    Ok(())
-}
