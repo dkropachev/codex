@@ -105,6 +105,174 @@ impl ExecutorFileSystem for TestFileSystem {
 }
 
 #[tokio::test]
+async fn ignored_user_config_keeps_only_account_pool_auth_routing() {
+    let tmp = tempdir().expect("tempdir");
+    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, tmp.path());
+    std::fs::write(
+        user_file.as_path(),
+        r#"
+model = "ignored-model"
+cli_auth_credentials_store = "keyring"
+
+[features]
+secret_auth_storage = true
+web_search_request = true
+
+[account_pool]
+enabled = true
+default_pool = "primary"
+
+[account_pool.pools.primary]
+provider = "openai"
+policy = "drain"
+accounts = ["member"]
+
+[mcp_servers.ignored]
+command = "ignored-command"
+"#,
+    )
+    .expect("write user config");
+
+    let actual = load_user_config_layer(
+        &TestFileSystem,
+        &user_file,
+        /*profile*/ None,
+        /*ignore_user_config*/ true,
+        /*strict_config*/ true,
+    )
+    .await
+    .expect("load ignored user config");
+    let expected_config = toml::from_str(
+        r#"
+cli_auth_credentials_store = "keyring"
+
+[features]
+secret_auth_storage = true
+
+[account_pool]
+enabled = true
+default_pool = "primary"
+
+[account_pool.pools.primary]
+provider = "openai"
+policy = "drain"
+accounts = ["member"]
+"#,
+    )
+    .expect("parse expected config");
+
+    assert_eq!(
+        actual,
+        ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: user_file,
+                profile: None,
+            },
+            expected_config,
+        )
+    );
+}
+
+#[tokio::test]
+async fn ignored_profile_config_preserves_partial_account_pool_overlay() {
+    let tmp = tempdir().expect("tempdir");
+    let selected_config = tmp.path().join("work.config.toml");
+    let base_config = r#"
+[account_pool]
+enabled = true
+default_pool = "primary"
+
+[account_pool.pools.primary]
+provider = "openai"
+policy = "drain"
+accounts = ["primary-member"]
+
+[account_pool.pools.secondary]
+provider = "openai"
+policy = "drain"
+accounts = ["secondary-member"]
+"#;
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), base_config).expect("write base user config");
+    std::fs::write(
+        &selected_config,
+        r#"
+[account_pool]
+default_pool = "secondary"
+"#,
+    )
+    .expect("write selected user config");
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.user_config_path = Some(
+        AbsolutePathBuf::from_absolute_path(&selected_config).expect("absolute selected config"),
+    );
+    overrides.user_config_profile = Some("work".parse().expect("profile-v2 name"));
+    overrides.ignore_user_config = true;
+
+    let layers = load_config_layers_state(
+        &TestFileSystem,
+        tmp.path(),
+        /*cwd*/ None,
+        &[],
+        overrides,
+        &crate::NoopThreadConfigLoader,
+    )
+    .await
+    .expect("load ignored profile config");
+    let config: ConfigToml = layers
+        .effective_config()
+        .try_into()
+        .expect("deserialize merged config");
+    let mut expected: ConfigToml = toml::from_str(base_config).expect("parse base config");
+    expected
+        .account_pool
+        .as_mut()
+        .expect("base account pool")
+        .default_pool = Some("secondary".to_string());
+
+    assert_eq!(config, expected);
+}
+
+#[tokio::test]
+async fn ignored_user_config_drops_invalid_account_pool_auth_routing() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        r#"
+model = "ignored-model"
+
+[account_pool]
+enabled = true
+"#,
+    )
+    .expect("write invalid account pool");
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.ignore_user_config = true;
+
+    let layers = load_config_layers_state(
+        &TestFileSystem,
+        tmp.path(),
+        /*cwd*/ None,
+        &[],
+        overrides,
+        &crate::NoopThreadConfigLoader,
+    )
+    .await
+    .expect("ignore invalid account pool");
+    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, tmp.path());
+
+    assert_eq!(
+        layers.get_active_user_layer().expect("active user layer"),
+        &ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: user_file,
+                profile: None,
+            },
+            TomlValue::Table(toml::map::Map::new()),
+        )
+    );
+}
+
+#[tokio::test]
 async fn profile_v2_rejects_matching_legacy_profile_in_base_user_config() {
     let tmp = tempdir().expect("tempdir");
     let selected_config = tmp.path().join("work.config.toml");

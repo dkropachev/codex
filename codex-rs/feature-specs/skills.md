@@ -101,8 +101,8 @@ skill exclusion, and bounded model-context injection during agent turns.
 
 #### Test cases
 
-- Skill model-context behavior is covered: codex-rs/core/tests/suite/skills__agent_context.rs:user_turn_includes_skill_instructions
-- Skill script sandbox behavior is covered: codex-rs/core/tests/suite/skills__approval.rs:shell_zsh_fork_skill_scripts_ignore_declared_permissions,shell_zsh_fork_still_enforces_workspace_write_sandbox
+- Skill model-context behavior is covered: codex-rs/core/tests/suite/skills.rs:user_turn_includes_skill_instructions
+- Skill script sandbox behavior is covered: codex-rs/core/tests/suite/skill_approval.rs:shell_zsh_fork_skill_scripts_ignore_declared_permissions,shell_zsh_fork_still_enforces_workspace_write_sandbox
 
 ### app-server-api (app-server API behavior)
 
@@ -112,7 +112,7 @@ App-server coverage should exercise skill listing APIs before a model turn start
 
 #### Test cases
 
-- Skill list API behavior is covered: codex-rs/app-server/tests/suite/v2/skills__list.rs:skills_changed_notification_is_emitted_after_skill_change,skills_extra_roots_set_updates_process_runtime_roots,skills_list_accepts_relative_cwds,skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disabled,skills_list_loads_remote_installed_plugin_skills_from_cache,skills_list_preserves_requested_cwd_order,skills_list_skips_cwd_roots_when_environment_disabled,skills_list_uses_cached_result_until_force_reload
+- Skill list API behavior is covered: codex-rs/app-server/tests/suite/v2/skills_list.rs:skills_changed_notification_is_emitted_after_skill_change,skills_extra_roots_set_updates_process_runtime_roots,skills_list_accepts_relative_cwds,skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disabled,skills_list_loads_remote_installed_plugin_skills_from_cache,skills_list_preserves_requested_cwd_order,skills_list_skips_cwd_roots_when_environment_disabled,skills_list_uses_cached_result_until_force_reload
 
 ### cli (main CLI command behavior)
 

@@ -2039,6 +2039,12 @@ impl AuthManager {
 
     /// Current cached auth (clone) without attempting a refresh.
     pub fn auth_cached(&self) -> Option<CodexAuth> {
+        if !self.has_external_auth()
+            && self.account_pool.is_some()
+            && let Some(auth) = self.codex_api_key_env_auth()
+        {
+            return Some(auth);
+        }
         if let Some(account_pool) = self.account_pool.as_ref() {
             return account_pool.auth_cached();
         }
@@ -2073,6 +2079,11 @@ impl AuthManager {
             self.reload().await;
             return self.auth_cached();
         }
+        if self.account_pool.is_some()
+            && let Some(auth) = self.codex_api_key_env_auth()
+        {
+            return Some(auth);
+        }
         if let Some(account_pool) = self.account_pool.as_ref() {
             return account_pool.auth().await;
         }
@@ -2088,6 +2099,9 @@ impl AuthManager {
         if let Some(auth) = self.resolve_external_api_key_auth().await {
             return Some(auth);
         }
+        if let Some(auth) = self.codex_api_key_env_auth() {
+            return Some(auth);
+        }
         if let Some(account_pool) = self.account_pool.as_ref() {
             return account_pool.auth_for_bucket(bucket).await;
         }
@@ -2100,6 +2114,9 @@ impl AuthManager {
         context: AccountPoolSelectionContext,
     ) -> Option<AccountPoolAuthSelection> {
         if self.resolve_external_api_key_auth().await.is_some() {
+            return None;
+        }
+        if self.codex_api_key_env_auth().is_some() {
             return None;
         }
         let account_pool = self.account_pool.as_ref()?;
@@ -2536,6 +2553,13 @@ impl AuthManager {
         }
     }
 
+    fn codex_api_key_env_auth(&self) -> Option<CodexAuth> {
+        if !self.enable_codex_api_key_env {
+            return None;
+        }
+        read_codex_api_key_from_env().map(|api_key| CodexAuth::from_api_key(&api_key))
+    }
+
     async fn resolve_external_auth(
         &self,
         external_auth: &Arc<dyn ExternalAuth>,
@@ -2553,6 +2577,9 @@ impl AuthManager {
     /// we can assume that the source already refreshed it. Otherwise, ask the
     /// token authority to refresh.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
+        if !self.has_external_auth() && self.codex_api_key_env_auth().is_some() {
+            return Ok(());
+        }
         if let Some(account_pool) = self.account_pool.as_ref() {
             return account_pool.refresh_active_token().await;
         }

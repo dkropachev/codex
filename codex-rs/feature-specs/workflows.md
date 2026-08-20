@@ -96,6 +96,7 @@ notifications, and next-turn context after workflow output is recorded.
 #### Test cases
 
 - Workflow command RPC records assistant output and next-turn context: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_records_assistant_output_and_next_turn_context
+- Workflow command RPC rejects execution during an active turn: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_rejects_active_turn
 
 ### cli (main CLI command behavior)
 
