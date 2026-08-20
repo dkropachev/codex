@@ -539,12 +539,12 @@ Not covered
 
 #### Description
 
-Account-pool behavior is covered by the account CLI and agent paths, not by non-interactive exec mode
-semantics.
+Exec isolation ignores user runtime settings while preserving account-pool metadata needed to load
+named credentials from `CODEX_HOME/accounts`.
 
-#### Status
+#### Test cases
 
-Not covered
+- Ignoring user config preserves account-pool authentication: codex-rs/exec/tests/suite/account_pool__ignore_user_config.rs:exec_ignore_user_config_preserves_account_pool_auth
 
 ### otel (telemetry and export behavior)
 

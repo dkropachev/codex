@@ -13,8 +13,10 @@ use crate::RequirementsLayerEntry;
 use crate::compose_requirements;
 use crate::config_requirements::RequirementSource;
 use crate::config_requirements::SandboxModeRequirement;
+use crate::config_toml::AccountPoolToml;
 use crate::config_toml::ConfigToml;
 use crate::config_toml::ProjectConfig;
+use crate::config_toml::validate_account_pool;
 use crate::diagnostics::ConfigError;
 use crate::diagnostics::config_error_from_toml;
 use crate::diagnostics::first_layer_config_error_from_entries as typed_first_layer_config_error_from_entries;
@@ -32,6 +34,7 @@ use crate::strict_config::ignored_toml_value_field;
 use crate::strict_config::unknown_feature_toml_value_field;
 use crate::thread_config::ThreadConfigContext;
 use crate::thread_config::ThreadConfigLoader;
+use crate::types::AuthCredentialsStoreMode;
 use codex_file_system::ExecutorFileSystem;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -287,6 +290,36 @@ pub async fn load_config_layers_state(
             .await?,
         );
     }
+    if ignore_user_config {
+        // Validate the merged pool definition rather than each user layer so profile-v2 files can
+        // contain partial overlays. Invalid user auth routing is discarded, preserving the flag's
+        // best-effort behavior while leaving lower-precedence managed configuration intact.
+        let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
+        for layer in &layers {
+            if !layer.is_disabled() {
+                merge_toml_values(&mut merged_so_far, &layer.config);
+            }
+        }
+        let account_pool_is_valid = merged_so_far.get("account_pool").is_none_or(|value| {
+            value
+                .clone()
+                .try_into::<AccountPoolToml>()
+                .is_ok_and(|account_pool| validate_account_pool(&account_pool).is_ok())
+        });
+        if !account_pool_is_valid {
+            for layer in &mut layers {
+                if matches!(&layer.name, ConfigLayerSource::User { .. }) {
+                    let mut config = layer.config.clone();
+                    if config
+                        .as_table_mut()
+                        .is_some_and(|config| config.remove("account_pool").is_some())
+                    {
+                        *layer = ConfigLayerEntry::new(layer.name.clone(), config);
+                    }
+                }
+            }
+        }
+    }
 
     let mut startup_warnings = None;
     if let Some(cwd) = cwd {
@@ -428,24 +461,57 @@ async fn load_user_config_layer(
     strict_config: bool,
 ) -> io::Result<ConfigLayerEntry> {
     let profile = profile.map(ToString::to_string);
+    let source = ConfigLayerSource::User {
+        file: user_file.clone(),
+        profile,
+    };
     if ignore_user_config {
-        return Ok(ConfigLayerEntry::new(
-            ConfigLayerSource::User {
-                file: user_file.clone(),
-                profile,
+        // Credential storage and account-pool membership are auth-routing metadata: without them,
+        // credentials in the keyring or under CODEX_HOME/accounts become unreachable. Preserve
+        // only those settings while ignoring every other user setting. Reading and validation
+        // stay best-effort so malformed user config remains ignorable under this flag.
+        let loaded = load_config_toml_for_required_layer(
+            fs,
+            user_file,
+            /*strict_config*/ false,
+            |config_toml| {
+                let mut retained = toml::map::Map::new();
+                if let Some(value) = config_toml.get("account_pool") {
+                    // Keep the raw table so profile-v2 layers can partially overlay the base user
+                    // account-pool definition before the merged config is validated.
+                    retained.insert("account_pool".to_string(), value.clone());
+                }
+                if let Some(value) = config_toml.get("cli_auth_credentials_store")
+                    && let Ok(mode) = value.clone().try_into::<AuthCredentialsStoreMode>()
+                    && let Ok(value) = TomlValue::try_from(mode)
+                {
+                    retained.insert("cli_auth_credentials_store".to_string(), value);
+                }
+                if let Some(secret_auth_storage) = config_toml
+                    .get("features")
+                    .and_then(TomlValue::as_table)
+                    .and_then(|features| features.get("secret_auth_storage"))
+                    .and_then(TomlValue::as_bool)
+                {
+                    retained.insert(
+                        "features".to_string(),
+                        TomlValue::Table(toml::map::Map::from_iter([(
+                            "secret_auth_storage".to_string(),
+                            TomlValue::Boolean(secret_auth_storage),
+                        )])),
+                    );
+                }
+                ConfigLayerEntry::new(source.clone(), TomlValue::Table(retained))
             },
-            TomlValue::Table(toml::map::Map::new()),
-        ));
+        )
+        .await;
+        return Ok(loaded.unwrap_or_else(|_| {
+            ConfigLayerEntry::new(source, TomlValue::Table(toml::map::Map::new()))
+        }));
     }
 
     load_config_toml_for_required_layer(fs, user_file, strict_config, |config_toml| {
-        ConfigLayerEntry::new(
-            ConfigLayerSource::User {
-                file: user_file.clone(),
-                profile: profile.clone(),
-            },
-            config_toml,
-        )
+        ConfigLayerEntry::new(source, config_toml)
     })
     .await
 }
