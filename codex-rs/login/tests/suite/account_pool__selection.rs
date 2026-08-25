@@ -1,5 +1,8 @@
+use std::any::Any;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Context;
@@ -10,17 +13,28 @@ use codex_config::config_toml::AccountPoolDefinitionToml;
 use codex_config::config_toml::AccountPoolPolicyToml;
 use codex_config::config_toml::AccountPoolToml;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_keyring_store::CredentialStoreError;
+use codex_keyring_store::KeyringStore;
+use codex_keyring_store::tests::MockKeyringStore;
 use codex_login::AccountPoolCacheHint;
 use codex_login::AccountPoolOperationKind;
 use codex_login::AccountPoolSelectionContext;
 use codex_login::AccountPoolUsageBucket;
 use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
+use codex_login::AuthManager;
+use codex_login::AuthManagerConfig;
+use codex_login::AuthRouteConfig;
 use codex_login::auth::AccountPoolManager;
 use codex_login::save_auth;
 use codex_login::token_data::IdTokenInfo;
 use codex_login::token_data::TokenData;
 use codex_protocol::auth::AuthMode;
+use keyring::Error as KeyringError;
+use keyring::credential::Credential;
+use keyring::credential::CredentialApi;
+use keyring::credential::CredentialBuilderApi;
+use keyring::credential::CredentialPersistence;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -50,6 +64,43 @@ async fn cached_auth_read_does_not_activate_or_switch_pool_members() -> Result<(
             ("work-pro".to_string(), false),
             ("personal-pro".to_string(), false),
         ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[serial_test::serial(keyring_builder)]
+async fn configured_keyring_backend_loads_pool_member_auth() -> Result<()> {
+    keyring::set_default_credential_builder(Box::new(KeyringStoreCredentialBuilder {
+        keyring_store: Arc::new(MockKeyringStore::default()),
+    }));
+    let codex_home = TempDir::new()?;
+    let keyring_backend_kind = match AuthKeyringBackendKind::default() {
+        AuthKeyringBackendKind::Direct => AuthKeyringBackendKind::Secrets,
+        AuthKeyringBackendKind::Secrets => AuthKeyringBackendKind::Direct,
+    };
+    write_chatgpt_auth_to_store(
+        codex_home.path(),
+        "work-pro",
+        "work@example.com",
+        AuthCredentialsStoreMode::Keyring,
+        keyring_backend_kind,
+    )?;
+    let config = AccountPoolAuthConfig {
+        codex_home: codex_home.path().to_path_buf(),
+        auth_credentials_store_mode: AuthCredentialsStoreMode::Keyring,
+        keyring_backend_kind,
+    };
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+
+    let auth = auth_manager
+        .auth_cached()
+        .context("cached auth should exist")?;
+
+    assert_eq!(
+        auth.get_account_email().as_deref(),
+        Some("work@example.com")
     );
     Ok(())
 }
@@ -317,19 +368,7 @@ async fn assignments_are_separate_by_affinity_key_and_usage_bucket() -> Result<(
 async fn load_balance_pool(codex_home: &Path) -> Result<AccountPoolManager> {
     AccountPoolManager::from_config(
         codex_home,
-        AccountPoolToml {
-            enabled: true,
-            default_pool: Some("codex-pro".to_string()),
-            pools: [(
-                "codex-pro".to_string(),
-                AccountPoolDefinitionToml {
-                    provider: "openai".to_string(),
-                    policy: AccountPoolPolicyToml::LoadBalance,
-                    accounts: vec!["work-pro".to_string(), "personal-pro".to_string()],
-                },
-            )]
-            .into(),
-        },
+        load_balance_account_pool_config(),
         AuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
         /*chatgpt_base_url*/ None,
@@ -337,6 +376,22 @@ async fn load_balance_pool(codex_home: &Path) -> Result<AccountPoolManager> {
     )
     .await
     .context("account pool should be enabled")
+}
+
+fn load_balance_account_pool_config() -> AccountPoolToml {
+    AccountPoolToml {
+        enabled: true,
+        default_pool: Some("codex-pro".to_string()),
+        pools: [(
+            "codex-pro".to_string(),
+            AccountPoolDefinitionToml {
+                provider: "openai".to_string(),
+                policy: AccountPoolPolicyToml::LoadBalance,
+                accounts: vec!["work-pro".to_string(), "personal-pro".to_string()],
+            },
+        )]
+        .into(),
+    }
 }
 
 fn selection_context(
@@ -361,6 +416,22 @@ fn selection_context_for_operation(
 }
 
 fn write_chatgpt_auth(codex_home: &Path, account_id: &str, email: &str) -> Result<()> {
+    write_chatgpt_auth_to_store(
+        codex_home,
+        account_id,
+        email,
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )
+}
+
+fn write_chatgpt_auth_to_store(
+    codex_home: &Path,
+    account_id: &str,
+    email: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> Result<()> {
     let account_home = codex_home.join("accounts").join(account_id);
     fs::create_dir_all(&account_home)?;
     let tokens = TokenData {
@@ -390,8 +461,8 @@ fn write_chatgpt_auth(codex_home: &Path, account_id: &str, email: &str) -> Resul
             personal_access_token: None,
             bedrock_api_key: None,
         },
-        AuthCredentialsStoreMode::File,
-        AuthKeyringBackendKind::default(),
+        auth_credentials_store_mode,
+        keyring_backend_kind,
     )?;
     Ok(())
 }
@@ -403,4 +474,109 @@ fn fake_jwt(payload: serde_json::Value) -> Result<String> {
         Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
     };
     Ok(format!("{}.{}.sig", encode(header)?, encode(payload)?))
+}
+
+struct AccountPoolAuthConfig {
+    codex_home: PathBuf,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+}
+
+impl AuthManagerConfig for AccountPoolAuthConfig {
+    fn codex_home(&self) -> PathBuf {
+        self.codex_home.clone()
+    }
+
+    fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode {
+        self.auth_credentials_store_mode
+    }
+
+    fn auth_keyring_backend_kind(&self) -> AuthKeyringBackendKind {
+        self.keyring_backend_kind
+    }
+
+    fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {
+        None
+    }
+
+    fn chatgpt_base_url(&self) -> String {
+        "https://chatgpt.com/backend-api".to_string()
+    }
+
+    fn auth_route_config(&self) -> Option<AuthRouteConfig> {
+        None
+    }
+
+    fn account_pool(&self) -> Option<AccountPoolToml> {
+        Some(load_balance_account_pool_config())
+    }
+}
+
+#[derive(Debug)]
+struct KeyringStoreCredentialBuilder {
+    keyring_store: Arc<dyn KeyringStore>,
+}
+
+impl CredentialBuilderApi for KeyringStoreCredentialBuilder {
+    fn build(
+        &self,
+        _target: Option<&str>,
+        service: &str,
+        user: &str,
+    ) -> keyring::Result<Box<Credential>> {
+        Ok(Box::new(KeyringStoreCredential {
+            keyring_store: Arc::clone(&self.keyring_store),
+            service: service.to_string(),
+            user: user.to_string(),
+        }))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn persistence(&self) -> CredentialPersistence {
+        CredentialPersistence::ProcessOnly
+    }
+}
+
+#[derive(Debug)]
+struct KeyringStoreCredential {
+    keyring_store: Arc<dyn KeyringStore>,
+    service: String,
+    user: String,
+}
+
+impl CredentialApi for KeyringStoreCredential {
+    fn set_secret(&self, secret: &[u8]) -> keyring::Result<()> {
+        let password = String::from_utf8(secret.to_vec())
+            .map_err(|err| KeyringError::BadEncoding(err.into_bytes()))?;
+        self.keyring_store
+            .save(&self.service, &self.user, &password)
+            .map_err(CredentialStoreError::into_error)
+    }
+
+    fn get_secret(&self) -> keyring::Result<Vec<u8>> {
+        self.keyring_store
+            .load(&self.service, &self.user)
+            .map_err(CredentialStoreError::into_error)?
+            .map(String::into_bytes)
+            .ok_or(KeyringError::NoEntry)
+    }
+
+    fn delete_credential(&self) -> keyring::Result<()> {
+        if self
+            .keyring_store
+            .delete(&self.service, &self.user)
+            .map_err(CredentialStoreError::into_error)?
+        {
+            Ok(())
+        } else {
+            Err(KeyringError::NoEntry)
+        }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
