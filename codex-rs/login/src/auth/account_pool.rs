@@ -125,6 +125,7 @@ impl AccountPoolManager {
         codex_home: &Path,
         config: AccountPoolToml,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
         chatgpt_base_url: Option<String>,
         auth_route_config: Option<AuthRouteConfig>,
     ) -> Option<Self> {
@@ -149,7 +150,7 @@ impl AccountPoolManager {
                             auth_credentials_store_mode,
                             /*forced_chatgpt_workspace_id*/ None,
                             chatgpt_base_url.clone(),
-                            AuthKeyringBackendKind::default(),
+                            keyring_backend_kind,
                             auth_route_config.clone(),
                         )
                         .await,
@@ -1711,6 +1712,7 @@ mod tests {
                 .into(),
             },
             AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
             chatgpt_base_url,
             /*auth_route_config*/ None,
         )

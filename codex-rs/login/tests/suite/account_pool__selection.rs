@@ -331,6 +331,7 @@ async fn load_balance_pool(codex_home: &Path) -> Result<AccountPoolManager> {
             .into(),
         },
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
         /*chatgpt_base_url*/ None,
         /*auth_route_config*/ None,
     )
