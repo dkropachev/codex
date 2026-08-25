@@ -2496,6 +2496,7 @@ impl AuthManager {
     ) -> Arc<Self> {
         let codex_home = config.codex_home();
         let auth_credentials_store_mode = config.cli_auth_credentials_store_mode();
+        let keyring_backend_kind = config.auth_keyring_backend_kind();
         let chatgpt_base_url = Some(config.chatgpt_base_url());
         let account_pool_config = config.account_pool();
         let mut manager = Self::new(
@@ -2504,7 +2505,7 @@ impl AuthManager {
             auth_credentials_store_mode,
             config.forced_chatgpt_workspace_id(),
             chatgpt_base_url.clone(),
-            config.auth_keyring_backend_kind(),
+            keyring_backend_kind,
             config.auth_route_config(),
         )
         .await;
@@ -2513,6 +2514,7 @@ impl AuthManager {
                 &codex_home,
                 account_pool_config,
                 auth_credentials_store_mode,
+                keyring_backend_kind,
                 chatgpt_base_url,
                 config.auth_route_config(),
             )

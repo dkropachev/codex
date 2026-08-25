@@ -16,6 +16,26 @@ use support::account::write_invalid_auth;
 use tempfile::TempDir;
 
 #[test]
+fn login_status_uses_configured_account_pool_auth() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(codex_home.path(), &account_pool_config(""))?;
+    write_chatgpt_auth(
+        &codex_home.path().join("accounts").join("work-pro"),
+        "work-pro",
+        "work@example.com",
+    )?;
+
+    let mut cmd = codex_command(codex_home.path())?;
+    cmd.args(["login", "status"])
+        .assert()
+        .success()
+        .stdout("")
+        .stderr("Logged in using ChatGPT\n");
+
+    Ok(())
+}
+
+#[test]
 fn account_list_human_groups_pool_members_and_statuses() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(codex_home.path(), &account_pool_config(""))?;

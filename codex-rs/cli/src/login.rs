@@ -10,6 +10,7 @@
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
 use codex_login::AuthKeyringBackendKind;
+use codex_login::AuthManager;
 use codex_login::AuthRouteConfig;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
@@ -495,17 +496,27 @@ pub async fn run_login_with_device_code_fallback_to_browser(
 
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
-    let auth_route_config = config.auth_route_config();
-
-    match CodexAuth::from_auth_storage(
-        &config.codex_home,
-        config.cli_auth_credentials_store_mode,
-        Some(&config.chatgpt_base_url),
-        config.auth_keyring_backend_kind(),
-        auth_route_config.as_ref(),
-    )
-    .await
+    let auth = if config
+        .account_pool
+        .as_ref()
+        .is_some_and(|account_pool| account_pool.enabled)
     {
+        let auth_manager =
+            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+        Ok(auth_manager.auth_cached())
+    } else {
+        let auth_route_config = config.auth_route_config();
+        CodexAuth::from_auth_storage(
+            &config.codex_home,
+            config.cli_auth_credentials_store_mode,
+            Some(&config.chatgpt_base_url),
+            config.auth_keyring_backend_kind(),
+            auth_route_config.as_ref(),
+        )
+        .await
+    };
+
+    match auth {
         Ok(Some(auth)) => match auth.auth_mode() {
             AuthMode::ApiKey => match auth.get_token() {
                 Ok(api_key) => {
