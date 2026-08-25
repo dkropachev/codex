@@ -94,7 +94,8 @@ CODEX_HOME/
 
 Pool members must use managed ChatGPT auth. Missing credentials or non-ChatGPT auth do not
 invalidate the whole pool; that member is unavailable and selection continues with the next eligible
-member. Member-level errors are surfaced in pool status.
+member. Member-level errors are surfaced in pool status. Pool member auth uses the configured
+credential store mode and resolved keyring backend, matching the default account.
 
 ### Selection Semantics
 
@@ -224,6 +225,8 @@ The CLI supports account-pool inspection and maintenance:
 - `codex account limits`: show Codex usage limits for default, named, and pool member accounts.
 - `codex account refresh --pool <pool-id>`: refresh token and usage snapshots for all members in a
   pool.
+- `codex login status`: report ChatGPT login when the default pool has a usable member without
+  activating or switching the selected member.
 - `codex login --account <account-id>`: allow logging in a named member account.
 - `codex logout --account <account-id>`: allow logging out a named member account.
 
@@ -320,6 +323,7 @@ state. If account-pool config is removed, Codex returns to default auth behavior
 - [codex-rs/cli/src/account_list.rs](../cli/src/account_list.rs)
 - [codex-rs/cli/src/account_refresh.rs](../cli/src/account_refresh.rs)
 - [codex-rs/cli/src/account_usage.rs](../cli/src/account_usage.rs)
+- [codex-rs/cli/src/login.rs](../cli/src/login.rs)
 
 ## Subfeatures
 
@@ -386,6 +390,7 @@ state. If account-pool config is removed, Codex returns to default auth behavior
 - [codex-rs/tui/src/app/event_dispatch.rs](../tui/src/app/event_dispatch.rs)
 - [codex-rs/cli/src/account_list.rs](../cli/src/account_list.rs)
 - [codex-rs/cli/src/account_usage.rs](../cli/src/account_usage.rs)
+- [codex-rs/cli/src/login.rs](../cli/src/login.rs)
 
 #### Invariants
 
@@ -394,6 +399,7 @@ state. If account-pool config is removed, Codex returns to default auth behavior
 - Rate-limit status reads and updates do not select or switch pool members.
 - CLI account commands show configured pools and member diagnostics without duplicating pool members
   as ordinary named accounts.
+- CLI login status reflects usable default-pool credentials without activating a member.
 
 ## Invariants
 
@@ -456,6 +462,7 @@ the main Codex command surface.
 
 - Account list displays account-pool members and credential state: codex-rs/cli/tests/account_pool__account.rs:account_list_human_groups_pool_members_and_statuses,account_list_human_marks_invalid_pool_members,account_list_json_includes_pool_metadata_and_memberships
 - Account limits displays account-pool member status: codex-rs/cli/tests/account_pool__account.rs:account_limits_groups_pool_members_and_reports_missing_invalid_in_config_order
+- Login status recognizes usable default-pool credentials: codex-rs/cli/tests/account_pool__account.rs:login_status_uses_configured_account_pool_auth
 - Account refresh reports account-pool member outcomes: codex-rs/cli/tests/account_pool__account.rs:account_refresh_pool_reports_all_missing_credentials,account_refresh_pool_reports_partial_success,account_refresh_pool_reports_blocked_member_and_succeeds_when_another_member_refreshes,account_refresh_pool_fails_when_all_members_are_blocked,account_refresh_pool_fails_when_stale_credentials_cannot_refresh,account_refresh_pool_reports_missing_pool
 
 ### tui-e2e (full terminal TUI behavior)
@@ -493,6 +500,7 @@ load balancing for account-pool members.
 #### Test cases
 
 - Active member token refresh preserves selected pool member semantics: codex-rs/login/tests/suite/account_pool__auth_refresh.rs:refresh_token_uses_active_account_pool_member
+- Configured keyring backend loads pool member credentials: codex-rs/login/tests/suite/account_pool__selection.rs:configured_keyring_backend_loads_pool_member_auth
 - Cached auth reads do not activate or switch pool members: codex-rs/login/tests/suite/account_pool__selection.rs:cached_auth_read_does_not_activate_or_switch_pool_members
 - Cold load-balance selection chooses healthiest fresh remaining quota: codex-rs/login/tests/suite/account_pool__selection.rs:cold_load_balance_selection_chooses_healthiest_remaining_quota
 - Cold load-balance selection accounts for existing active affinities: codex-rs/login/tests/suite/account_pool__selection.rs:cold_load_balance_selection_penalizes_existing_affinity_assignments
@@ -578,6 +586,7 @@ Generate tests for these behaviors:
 - Warm `load_balance` selection rebalances when another member has materially healthier quota.
 - Assignments are independent by pool id, usage bucket, and affinity key.
 - Cached auth reads return a usable auth without setting `activeAccountId`.
+- CLI login status reports usable default-pool auth without activating a pool member.
 - Each ModelClient operation selects auth once and pins that account for the operation.
 - Starting a new agent/subagent does not switch account unless a request hits an allowed failover
   boundary.
