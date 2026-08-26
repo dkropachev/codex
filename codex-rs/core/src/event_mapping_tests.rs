@@ -2,6 +2,7 @@ use super::has_non_contextual_dev_message_content;
 use super::is_contextual_dev_message_content;
 use super::parse_turn_item;
 use crate::context::ContextualUserFragment;
+use crate::context::CyberPolicyAutoRecovery;
 use crate::context::InternalContextSource;
 use crate::context::InternalModelContextFragment;
 use codex_protocol::items::AgentMessageContent;
@@ -30,6 +31,18 @@ fn recognizes_skills_instructions_as_contextual_developer_content() {
             text: format!("{SKILLS_INSTRUCTIONS_OPEN_TAG}\n## Skills"),
         },
     ]));
+}
+
+#[test]
+fn recognizes_cyber_policy_auto_recovery_as_contextual_developer_content() {
+    let ResponseItem::Message { content, .. } =
+        ContextualUserFragment::into(CyberPolicyAutoRecovery)
+    else {
+        panic!("expected developer message");
+    };
+
+    assert!(is_contextual_dev_message_content(&content));
+    assert!(!has_non_contextual_dev_message_content(&content));
 }
 
 #[test]

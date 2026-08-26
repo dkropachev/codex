@@ -132,6 +132,8 @@ pub enum Feature {
     ShellSnapshot,
     /// Allow turns to start while selected executors are still starting.
     DeferredExecutor,
+    /// Retry blocked agent sampling once with explicit policy-compliant guidance.
+    CyberPolicyAutoRecovery,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
     /// Enable startup memory extraction and file-backed memory consolidation.
@@ -854,6 +856,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::DeferredExecutor,
         key: "deferred_executor",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CyberPolicyAutoRecovery,
+        key: "cyber_policy_auto_recovery",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

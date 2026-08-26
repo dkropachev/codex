@@ -17,6 +17,7 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
 use crate::connectors;
 use crate::context::ContextualUserFragment;
+use crate::context::CyberPolicyAutoRecovery;
 use crate::feedback_tags;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
@@ -208,6 +209,7 @@ pub(crate) async fn run_turn(
 
     let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
+    let mut cyber_policy_auto_recovery_attempted = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(
@@ -418,6 +420,24 @@ pub(crate) async fn run_turn(
             }
             Err(err @ CodexErr::TurnAborted) => {
                 return Err(err);
+            }
+            Err(CodexErr::CyberPolicy { .. })
+                if turn_context
+                    .config
+                    .features
+                    .enabled(Feature::CyberPolicyAutoRecovery)
+                    && !cyber_policy_auto_recovery_attempted =>
+            {
+                cyber_policy_auto_recovery_attempted = true;
+                let recovery_item = ContextualUserFragment::into(CyberPolicyAutoRecovery);
+                sess.record_conversation_items(
+                    turn_context.as_ref(),
+                    std::slice::from_ref(&recovery_item),
+                )
+                .await;
+                turn_context.turn_timing_state.record_sampling_retry();
+                info!("cyber policy blocked sampling request; retrying with safe guidance");
+                continue;
             }
             Err(codex_error @ CodexErr::InvalidImageRequest()) => {
                 {
