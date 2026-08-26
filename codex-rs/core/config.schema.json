@@ -540,6 +540,9 @@
             "current_time_reminder": {
               "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
             },
+            "cyber_policy_auto_recovery": {
+              "type": "boolean"
+            },
             "default_mode_request_user_input": {
               "type": "boolean"
             },
@@ -5492,6 +5495,9 @@
         },
         "current_time_reminder": {
           "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
+        },
+        "cyber_policy_auto_recovery": {
+          "type": "boolean"
         },
         "default_mode_request_user_input": {
           "type": "boolean"

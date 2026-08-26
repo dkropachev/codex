@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_features::Feature;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
@@ -34,6 +35,31 @@ const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
 
 const CYBER_POLICY_MESSAGE: &str =
     "This request has been flagged for potentially high-risk cyber activity.";
+const FIRST_RECOVERY_PROMPT: &str = "trigger cyber policy recovery";
+const SECOND_RECOVERY_PROMPT: &str = "trigger cyber policy recovery again";
+const SAFE_RECOVERY_RESPONSE: &str = "I can help with defensive guidance.";
+const SECOND_SAFE_RECOVERY_RESPONSE: &str = "I can still help with defensive guidance.";
+const CYBER_POLICY_AUTO_RECOVERY_FRAGMENT: &str = concat!(
+    "<cyber_policy_auto_recovery>\n",
+    "Previous sampling request was blocked by cyber safety checks. Continue the turn ",
+    "without repeating the blocked approach. Choose a policy-compliant path that advances ",
+    "the user's underlying goal, limiting content to benign, defensive, educational, or ",
+    "high-level assistance. Do not provide details that enable harmful activity or attempt ",
+    "to bypass safeguards. If no compliant path can complete the request, explain the ",
+    "limitation and offer the closest safe alternative.\n",
+    "</cyber_policy_auto_recovery>"
+);
+
+fn cyber_policy_error_response() -> ResponseTemplate {
+    ResponseTemplate::new(400).set_body_json(serde_json::json!({
+        "error": {
+            "message": CYBER_POLICY_MESSAGE,
+            "type": "invalid_request",
+            "param": null,
+            "code": "cyber_policy"
+        }
+    }))
+}
 
 fn disabled_text_turn(test: &TestCodex, text: &str) -> Op {
     let (sandbox_policy, permission_profile) =
@@ -62,6 +88,20 @@ fn disabled_text_turn(test: &TestCodex, text: &str) -> Op {
             ..Default::default()
         },
     }
+}
+
+async fn collect_turn_outcome(test: &TestCodex) -> (Vec<String>, Vec<String>) {
+    let mut errors = Vec::new();
+    let mut messages = Vec::new();
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::Error(error) => errors.push(error.message),
+            EventMsg::AgentMessage(message) => messages.push(message.message),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+    (errors, messages)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -111,15 +151,7 @@ async fn cyber_policy_response_emits_typed_error_without_retry() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let response = ResponseTemplate::new(400).set_body_json(serde_json::json!({
-        "error": {
-            "message": CYBER_POLICY_MESSAGE,
-            "type": "invalid_request",
-            "param": null,
-            "code": "cyber_policy"
-        }
-    }));
-    let mock = mount_response_once(&server, response).await;
+    let mock = mount_response_once(&server, cyber_policy_error_response()).await;
 
     let mut builder = test_codex().with_model(REQUESTED_MODEL);
     let test = builder.build(&server).await?;
@@ -136,6 +168,157 @@ async fn cyber_policy_response_emits_typed_error_without_retry() -> Result<()> {
     assert_eq!(error.codex_error_info, Some(CodexErrorInfo::CyberPolicy));
 
     mock.single_request();
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cyber_policy_response_retries_with_safe_guidance_on_each_turn_when_enabled() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let first_recovery_response = sse_response(sse(vec![
+        ev_response_created("resp-recovery"),
+        ev_assistant_message("msg-recovery", SAFE_RECOVERY_RESPONSE),
+        core_test_support::responses::ev_completed("resp-recovery"),
+    ]));
+    let second_recovery_response = sse_response(sse(vec![
+        ev_response_created("resp-second-recovery"),
+        ev_assistant_message("msg-second-recovery", SECOND_SAFE_RECOVERY_RESPONSE),
+        core_test_support::responses::ev_completed("resp-second-recovery"),
+    ]));
+    let mock = mount_response_sequence(
+        &server,
+        vec![
+            cyber_policy_error_response(),
+            first_recovery_response,
+            cyber_policy_error_response(),
+            second_recovery_response,
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_model(REQUESTED_MODEL)
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::CyberPolicyAutoRecovery);
+        });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(disabled_text_turn(&test, FIRST_RECOVERY_PROMPT))
+        .await?;
+    let first_outcome = collect_turn_outcome(&test).await;
+    assert_eq!(
+        first_outcome,
+        (
+            Vec::<String>::new(),
+            vec![SAFE_RECOVERY_RESPONSE.to_string()]
+        )
+    );
+
+    test.codex
+        .submit(disabled_text_turn(&test, SECOND_RECOVERY_PROMPT))
+        .await?;
+    let second_outcome = collect_turn_outcome(&test).await;
+    assert_eq!(
+        second_outcome,
+        (
+            Vec::<String>::new(),
+            vec![SECOND_SAFE_RECOVERY_RESPONSE.to_string()]
+        )
+    );
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| {
+                request
+                    .message_input_texts("developer")
+                    .into_iter()
+                    .filter(|text| text.starts_with("<cyber_policy_auto_recovery>"))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            Vec::<String>::new(),
+            vec![CYBER_POLICY_AUTO_RECOVERY_FRAGMENT.to_string()],
+            vec![CYBER_POLICY_AUTO_RECOVERY_FRAGMENT.to_string()],
+            vec![
+                CYBER_POLICY_AUTO_RECOVERY_FRAGMENT.to_string(),
+                CYBER_POLICY_AUTO_RECOVERY_FRAGMENT.to_string(),
+            ],
+        ]
+    );
+    assert_eq!(
+        [(1, FIRST_RECOVERY_PROMPT), (3, SECOND_RECOVERY_PROMPT)]
+            .into_iter()
+            .map(|(request_index, expected_prompt)| {
+                requests[request_index]
+                    .message_input_texts("user")
+                    .into_iter()
+                    .filter(|text| text == expected_prompt)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            vec![FIRST_RECOVERY_PROMPT.to_string()],
+            vec![SECOND_RECOVERY_PROMPT.to_string()],
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cyber_policy_auto_recovery_stops_after_repeated_block() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mock = mount_response_sequence(
+        &server,
+        vec![cyber_policy_error_response(), cyber_policy_error_response()],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_model(REQUESTED_MODEL)
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::CyberPolicyAutoRecovery);
+        });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(disabled_text_turn(
+            &test,
+            "trigger repeated cyber policy error",
+        ))
+        .await?;
+
+    let error = wait_for_event(&test.codex, |event| matches!(event, EventMsg::Error(_))).await;
+    let EventMsg::Error(error) = error else {
+        panic!("expected error event");
+    };
+    assert_eq!(error.message, CYBER_POLICY_MESSAGE);
+    assert_eq!(error.codex_error_info, Some(CodexErrorInfo::CyberPolicy));
+    let _ = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1]
+            .message_input_texts("developer")
+            .into_iter()
+            .filter(|text| text.starts_with("<cyber_policy_auto_recovery>"))
+            .collect::<Vec<_>>(),
+        vec![CYBER_POLICY_AUTO_RECOVERY_FRAGMENT.to_string()]
+    );
 
     Ok(())
 }

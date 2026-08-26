@@ -26,6 +26,7 @@ use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::context::CYBER_POLICY_AUTO_RECOVERY_OPEN_TAG;
 use crate::context::is_contextual_user_fragment;
 use crate::context::parse_visible_hook_prompt_message;
 use crate::web_search::web_search_action_detail;
@@ -33,6 +34,7 @@ use crate::web_search::web_search_action_detail;
 const CONTEXTUAL_DEVELOPER_PREFIXES: &[&str] = &[
     "<permissions instructions>",
     "<model_switch>",
+    CYBER_POLICY_AUTO_RECOVERY_OPEN_TAG,
     APPS_INSTRUCTIONS_OPEN_TAG,
     COLLABORATION_MODE_OPEN_TAG,
     MULTI_AGENT_MODE_OPEN_TAG,
