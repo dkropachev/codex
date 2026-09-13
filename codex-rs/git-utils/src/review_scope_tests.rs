@@ -15,13 +15,13 @@ async fn current_branch_pull_request_wins_and_its_base_is_preferred() {
     let runner = FakeRunner::new(vec![
         response(
             &["gh", "pr", "view", "--json", "number,url,state,baseRefName"],
-            0,
+            /*exit_code*/ 0,
             r#"{"number":42,"url":"https://github.com/acme/repo/pull/42","state":"OPEN","baseRefName":"develop"}"#,
         ),
-        response(&["git", "remote"], 0, "origin\n"),
+        response(&["git", "remote"], /*exit_code*/ 0, "origin\n"),
         response(
             &["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
-            0,
+            /*exit_code*/ 0,
             "refs/remotes/origin/main\n",
         ),
         response(
@@ -32,19 +32,23 @@ async fn current_branch_pull_request_wins_and_its_base_is_preferred() {
                 "--quiet",
                 "refs/remotes/origin/main",
             ],
-            0,
+            /*exit_code*/ 0,
             "main-sha\n",
         ),
-        response(&["git", "branch", "--show-current"], 0, "feature\n"),
+        response(
+            &["git", "branch", "--show-current"],
+            /*exit_code*/ 0,
+            "feature\n",
+        ),
         response(
             &["git", "for-each-ref", "--format=%(refname)", "refs/heads"],
-            0,
+            /*exit_code*/ 0,
             "refs/heads/main\nrefs/heads/develop\nrefs/heads/feature\n",
         ),
-        response(&["git", "remote"], 0, "origin\n"),
+        response(&["git", "remote"], /*exit_code*/ 0, "origin\n"),
         response(
             &["git", "remote", "get-url", "origin"],
-            0,
+            /*exit_code*/ 0,
             "https://github.com/acme/repo.git\n",
         ),
         response(
@@ -54,7 +58,7 @@ async fn current_branch_pull_request_wins_and_its_base_is_preferred() {
                 "--verify",
                 "refs/remotes/origin/develop^{commit}",
             ],
-            0,
+            /*exit_code*/ 0,
             "develop-sha\n",
         ),
     ]);
@@ -91,13 +95,17 @@ async fn pull_request_base_matching_default_uses_base_repository_remote() {
     let runner = FakeRunner::new(vec![
         response(
             &["gh", "pr", "view", "--json", "number,url,state,baseRefName"],
-            0,
+            /*exit_code*/ 0,
             r#"{"number":42,"url":"https://github.com/acme/repo/pull/42","state":"OPEN","baseRefName":"main"}"#,
         ),
-        response(&["git", "remote"], 0, "origin\nupstream\n"),
+        response(
+            &["git", "remote"],
+            /*exit_code*/ 0,
+            "origin\nupstream\n",
+        ),
         response(
             &["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
-            0,
+            /*exit_code*/ 0,
             "refs/remotes/origin/main\n",
         ),
         response(
@@ -108,24 +116,32 @@ async fn pull_request_base_matching_default_uses_base_repository_remote() {
                 "--quiet",
                 "refs/remotes/origin/main",
             ],
-            0,
+            /*exit_code*/ 0,
             "main-sha\n",
         ),
-        response(&["git", "branch", "--show-current"], 0, "feature\n"),
+        response(
+            &["git", "branch", "--show-current"],
+            /*exit_code*/ 0,
+            "feature\n",
+        ),
         response(
             &["git", "for-each-ref", "--format=%(refname)", "refs/heads"],
-            0,
+            /*exit_code*/ 0,
             "refs/heads/main\nrefs/heads/feature\n",
         ),
-        response(&["git", "remote"], 0, "origin\nupstream\n"),
+        response(
+            &["git", "remote"],
+            /*exit_code*/ 0,
+            "origin\nupstream\n",
+        ),
         response(
             &["git", "remote", "get-url", "origin"],
-            0,
+            /*exit_code*/ 0,
             "https://github.com/example/repo-fork.git\n",
         ),
         response(
             &["git", "remote", "get-url", "upstream"],
-            0,
+            /*exit_code*/ 0,
             "https://github.com/acme/repo.git\n",
         ),
         response(
@@ -135,7 +151,7 @@ async fn pull_request_base_matching_default_uses_base_repository_remote() {
                 "--verify",
                 "refs/remotes/upstream/main^{commit}",
             ],
-            0,
+            /*exit_code*/ 0,
             "main-sha\n",
         ),
     ]);
@@ -163,13 +179,17 @@ async fn head_lookup_searches_parent_before_fork_and_uses_lowest_open_number() {
     let runner = FakeRunner::new(vec![
         response(
             &["gh", "pr", "view", "--json", "number,url,state,baseRefName"],
-            1,
+            /*exit_code*/ 1,
             "",
         ),
-        response(&["git", "rev-parse", "HEAD"], 0, "head-sha\n"),
+        response(
+            &["git", "rev-parse", "HEAD"],
+            /*exit_code*/ 0,
+            "head-sha\n",
+        ),
         response(
             &["gh", "repo", "view", "--json", "nameWithOwner,parent"],
-            0,
+            /*exit_code*/ 0,
             r#"{"nameWithOwner":"fork/repo","parent":{"nameWithOwner":"upstream/repo"}}"#,
         ),
         response(
@@ -182,7 +202,7 @@ async fn head_lookup_searches_parent_before_fork_and_uses_lowest_open_number() {
                 "Accept: application/vnd.github+json",
                 "repos/upstream/repo/commits/head-sha/pulls",
             ],
-            0,
+            /*exit_code*/ 0,
             r#"[[{"number":1,"html_url":"https://github.com/upstream/repo/pull/1","state":"closed","base":{"ref":"main"}}]]"#,
         ),
         response(
@@ -195,13 +215,13 @@ async fn head_lookup_searches_parent_before_fork_and_uses_lowest_open_number() {
                 "Accept: application/vnd.github+json",
                 "repos/fork/repo/commits/head-sha/pulls",
             ],
-            0,
+            /*exit_code*/ 0,
             r#"[[{"number":9,"html_url":"https://github.com/fork/repo/pull/9","state":"open","base":{"ref":"main"}}],[{"number":2,"html_url":"https://github.com/fork/repo/pull/2","state":"OPEN","base":{"ref":"trunk"}}]]"#,
         ),
-        response(&["git", "remote"], 0, ""),
+        response(&["git", "remote"], /*exit_code*/ 0, ""),
         response(
             &["git", "rev-parse", "--verify", "--quiet", "refs/heads/main"],
-            1,
+            /*exit_code*/ 1,
             "",
         ),
         response(
@@ -212,19 +232,23 @@ async fn head_lookup_searches_parent_before_fork_and_uses_lowest_open_number() {
                 "--quiet",
                 "refs/heads/master",
             ],
-            1,
+            /*exit_code*/ 1,
             "",
         ),
-        response(&["git", "branch", "--show-current"], 0, "feature\n"),
+        response(
+            &["git", "branch", "--show-current"],
+            /*exit_code*/ 0,
+            "feature\n",
+        ),
         response(
             &["git", "for-each-ref", "--format=%(refname)", "refs/heads"],
-            0,
+            /*exit_code*/ 0,
             "refs/heads/feature\n",
         ),
-        response(&["git", "remote"], 0, "origin\n"),
+        response(&["git", "remote"], /*exit_code*/ 0, "origin\n"),
         response(
             &["git", "remote", "get-url", "origin"],
-            0,
+            /*exit_code*/ 0,
             "https://github.com/fork/repo.git\n",
         ),
         response(
@@ -234,7 +258,7 @@ async fn head_lookup_searches_parent_before_fork_and_uses_lowest_open_number() {
                 "--verify",
                 "refs/remotes/origin/trunk^{commit}",
             ],
-            0,
+            /*exit_code*/ 0,
             "trunk-sha\n",
         ),
     ]);
@@ -278,14 +302,14 @@ async fn detected_default_branch_is_inserted_once_at_the_front() {
     let runner = FakeRunner::new(vec![
         response(
             &["gh", "pr", "view", "--json", "number,url,state,baseRefName"],
-            1,
+            /*exit_code*/ 1,
             "",
         ),
-        response(&["git", "rev-parse", "HEAD"], 1, ""),
-        response(&["git", "remote"], 0, "origin\n"),
+        response(&["git", "rev-parse", "HEAD"], /*exit_code*/ 1, ""),
+        response(&["git", "remote"], /*exit_code*/ 0, "origin\n"),
         response(
             &["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
-            0,
+            /*exit_code*/ 0,
             "refs/remotes/origin/main\n",
         ),
         response(
@@ -296,13 +320,17 @@ async fn detected_default_branch_is_inserted_once_at_the_front() {
                 "--quiet",
                 "refs/remotes/origin/main",
             ],
-            0,
+            /*exit_code*/ 0,
             "main-sha\n",
         ),
-        response(&["git", "branch", "--show-current"], 0, "feature\n"),
+        response(
+            &["git", "branch", "--show-current"],
+            /*exit_code*/ 0,
+            "feature\n",
+        ),
         response(
             &["git", "for-each-ref", "--format=%(refname)", "refs/heads"],
-            0,
+            /*exit_code*/ 0,
             "refs/heads/topic\nrefs/heads/main\nrefs/heads/feature\nrefs/heads/main\n",
         ),
     ]);
@@ -332,19 +360,19 @@ async fn remote_show_default_branch_uses_verified_remote_target() {
     let runner = FakeRunner::new(vec![
         response(
             &["gh", "pr", "view", "--json", "number,url,state,baseRefName"],
-            1,
+            /*exit_code*/ 1,
             "",
         ),
-        response(&["git", "rev-parse", "HEAD"], 1, ""),
-        response(&["git", "remote"], 0, "origin\n"),
+        response(&["git", "rev-parse", "HEAD"], /*exit_code*/ 1, ""),
+        response(&["git", "remote"], /*exit_code*/ 0, "origin\n"),
         response(
             &["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
-            1,
+            /*exit_code*/ 1,
             "",
         ),
         response(
             &["git", "remote", "show", "origin"],
-            0,
+            /*exit_code*/ 0,
             "  HEAD branch: trunk\n",
         ),
         response(
@@ -355,13 +383,17 @@ async fn remote_show_default_branch_uses_verified_remote_target() {
                 "--quiet",
                 "refs/remotes/origin/trunk",
             ],
-            0,
+            /*exit_code*/ 0,
             "trunk-sha\n",
         ),
-        response(&["git", "branch", "--show-current"], 0, "feature\n"),
+        response(
+            &["git", "branch", "--show-current"],
+            /*exit_code*/ 0,
+            "feature\n",
+        ),
         response(
             &["git", "for-each-ref", "--format=%(refname)", "refs/heads"],
-            0,
+            /*exit_code*/ 0,
             "refs/heads/feature\nrefs/heads/trunk\n",
         ),
     ]);
@@ -387,14 +419,14 @@ async fn local_default_branch_is_used_when_remote_detection_fails() {
     let runner = FakeRunner::new(vec![
         response(
             &["gh", "pr", "view", "--json", "number,url,state,baseRefName"],
-            1,
+            /*exit_code*/ 1,
             "",
         ),
-        response(&["git", "rev-parse", "HEAD"], 1, ""),
-        response(&["git", "remote"], 0, ""),
+        response(&["git", "rev-parse", "HEAD"], /*exit_code*/ 1, ""),
+        response(&["git", "remote"], /*exit_code*/ 0, ""),
         response(
             &["git", "rev-parse", "--verify", "--quiet", "refs/heads/main"],
-            1,
+            /*exit_code*/ 1,
             "",
         ),
         response(
@@ -405,13 +437,17 @@ async fn local_default_branch_is_used_when_remote_detection_fails() {
                 "--quiet",
                 "refs/heads/master",
             ],
-            0,
+            /*exit_code*/ 0,
             "master-sha\n",
         ),
-        response(&["git", "branch", "--show-current"], 0, "feature\n"),
+        response(
+            &["git", "branch", "--show-current"],
+            /*exit_code*/ 0,
+            "feature\n",
+        ),
         response(
             &["git", "for-each-ref", "--format=%(refname)", "refs/heads"],
-            0,
+            /*exit_code*/ 0,
             "refs/heads/feature\nrefs/heads/master\n",
         ),
     ]);

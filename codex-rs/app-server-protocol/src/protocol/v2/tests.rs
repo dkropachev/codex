@@ -100,7 +100,7 @@ fn review_resolve_scope_request_and_response_round_trip() {
     };
     let request = crate::ClientRequest::ReviewResolveScope {
         request_id: crate::RequestId::Integer(7),
-        params: params,
+        params,
     };
     let request_value = serde_json::to_value(&request).expect("serialize scope request");
     assert_eq!(

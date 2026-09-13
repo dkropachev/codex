@@ -86,7 +86,7 @@ impl ChatWidget {
             includes_uncommitted = true;
             items.push(review_target_item(
                 "Review uncommitted changes".to_string(),
-                None,
+                /*description*/ None,
                 thread_id,
                 cwd.clone(),
                 ReviewTarget::UncommittedChanges,
@@ -96,7 +96,7 @@ impl ChatWidget {
         if !includes_uncommitted {
             items.push(review_target_item(
                 "Review uncommitted changes".to_string(),
-                None,
+                /*description*/ None,
                 thread_id,
                 cwd.clone(),
                 ReviewTarget::UncommittedChanges,
