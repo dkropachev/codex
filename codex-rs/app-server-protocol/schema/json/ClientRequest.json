@@ -3164,6 +3164,17 @@
       ],
       "type": "string"
     },
+    "ReviewResolveScopeParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ReviewStartParams": {
       "properties": {
         "delivery": {
@@ -3257,6 +3268,27 @@
             "type"
           ],
           "title": "CommitReviewTarget",
+          "type": "object"
+        },
+        {
+          "description": "Review the changes associated with a pull request.",
+          "properties": {
+            "type": {
+              "enum": [
+                "pullRequest"
+              ],
+              "title": "PullRequestReviewTargetType",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "title": "PullRequestReviewTarget",
           "type": "object"
         },
         {
@@ -6152,6 +6184,30 @@
         "params"
       ],
       "title": "Review/startRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "review/resolveScope"
+          ],
+          "title": "Review/resolveScopeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ReviewResolveScopeParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Review/resolveScopeRequest",
       "type": "object"
     },
     {

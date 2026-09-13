@@ -1,10 +1,12 @@
 use super::session::Session;
 use super::step_context::StepContext;
 use crate::connectors;
+use crate::context::PullRequestContext;
 use crate::context::world_state::AgentsMdState;
 use crate::context::world_state::AppsInstructionsState;
 use crate::context::world_state::EnvironmentsState;
 use crate::context::world_state::PluginsInstructionsState;
+use crate::context::world_state::PullRequestContextState;
 use crate::context::world_state::WorldState;
 use codex_extension_api::WorldStateContributionInput;
 
@@ -38,6 +40,13 @@ impl Session {
                 )
                 .with_subagents(environment_subagents),
             );
+        }
+        if let Some(context) = self
+            .services
+            .thread_extension_data
+            .get::<PullRequestContext>()
+        {
+            world_state.add_section(PullRequestContextState::new(context));
         }
         let apps_available =
             if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {

@@ -253,6 +253,8 @@ mod plugin_catalog;
 #[path = "tests/plugins__popups.rs"]
 mod plugins_popups;
 mod popups_and_settings;
+#[path = "tests/review_flow.rs"]
+mod review_flow;
 mod review_mode;
 mod side;
 mod slash_commands;

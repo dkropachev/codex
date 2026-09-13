@@ -178,6 +178,7 @@ Example with notification opt-out:
 - `thread/realtime/appendSpeech` — append text that the realtime model should speak to the user (experimental); returns `{}`.
 - `thread/realtime/stop` — stop the active realtime session for the thread (experimental); returns `{}`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
+- `review/resolveScope` — inspect the selected thread environment for pull-request and branch review targets without starting a turn or modifying thread history.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `command/exec/write` — write base64-decoded stdin bytes to a running `command/exec` session or close stdin; returns `{}`.
 - `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.
@@ -992,11 +993,43 @@ manual compaction), the request fails with an `invalid request` error.
 
 ### Example: Request a code review
 
+Before opening a review target picker, use `review/resolveScope` to inspect the checkout selected by
+the thread. Resolution runs in the thread's primary environment, so remote threads report branches
+from the remote checkout rather than the app-server host. Missing Git or GitHub metadata is returned
+as `null` or an empty list rather than making the request fail.
+
+```json
+{ "method": "review/resolveScope", "id": 39, "params": {
+    "threadId": "thr_123"
+} }
+{ "id": 39, "result": {
+    "pullRequest": {
+        "number": 123,
+        "url": "https://github.com/openai/codex/pull/123",
+        "baseBranch": "main",
+        "baseBranchTarget": "refs/remotes/origin/main"
+    },
+    "defaultBranch": {
+        "displayName": "main",
+        "target": "refs/remotes/origin/main"
+    },
+    "currentBranch": "feature/review-picker",
+    "branches": ["refs/remotes/origin/main", "refs/heads/feature/review-picker"]
+} }
+```
+
+`pullRequest` is the open pull request associated with the current branch or `HEAD`, if one can be
+resolved. Its `baseBranchTarget` is the exact ref for the base when local and remote refs resolve
+unambiguously. `defaultBranch` carries both a user-facing branch name and the exact ref to pass in
+a `baseBranch` review target. `currentBranch` is `null` for a detached head, and `branches`
+contains the available explicit base-branch targets with the preferred target first.
+
 Use `review/start` to run Codex’s reviewer on the currently checked-out project. The request takes the thread id plus a `target` describing what should be reviewed:
 
 - `{"type":"uncommittedChanges"}` — staged, unstaged, and untracked files.
 - `{"type":"baseBranch","branch":"main"}` — diff against the provided branch’s upstream (see prompt for the exact `git merge-base`/`git diff` instructions Codex will run).
 - `{"type":"commit","sha":"abc1234","title":"Optional subject"}` — review a specific commit.
+- `{"type":"pullRequest","url":"https://github.com/openai/codex/pull/123"}` — resolve the pull request metadata in the selected thread environment and review that checkout against its base. The pull request title and body provide scope context only.
 - `{"type":"custom","instructions":"Free-form reviewer instructions"}` — fallback prompt equivalent to the legacy manual review request.
 - `delivery` (`"inline"` or `"detached"`, default `"inline"`) — where the review runs:
   - `"inline"`: run the review as a new turn on the existing thread. The response’s `reviewThreadId` equals the original `threadId`, and no new `thread/started` notification is emitted.
@@ -1051,13 +1084,14 @@ containing an `exitedReviewMode` item with the final review text:
     "item": {
       "type": "exitedReviewMode",
       "id": "turn_900",
-      "review": "Looks solid overall...\n\n- Prefer Stylize helpers — app.rs:10-20\n  ..."
+      "review": "Looks solid overall...\n\n- Prefer Stylize helpers — app.rs:10-20\n  ...",
+      "findingCount": 1
     }
   }
 }
 ```
 
-The `review` string is plain text that already bundles the overall explanation plus a bullet list for each structured finding (matching `ThreadItem::ExitedReviewMode` in the generated schema). Use this notification to render the reviewer output in your client.
+The `review` string is plain text that already bundles the overall explanation plus a bullet list for each structured finding (matching `ThreadItem::ExitedReviewMode` in the generated schema). `findingCount` is the number of structured findings and is zero when none are available. Use this notification to render the reviewer output in your client.
 
 ### Example: One-off command execution
 
@@ -1379,7 +1413,7 @@ Today both notifications carry an empty `items` array even when item events were
 - `imageView` — `{id, path}` emitted when the agent invokes the image viewer tool.
 - `sleep` — `{id, durationMs}` emitted while the agent waits for a duration or new input.
 - `enteredReviewMode` — `{id, review}` sent when the reviewer starts; `review` is a short user-facing label such as `"current changes"` or the requested target description.
-- `exitedReviewMode` — `{id, review}` emitted when the reviewer finishes; `review` is the full plain-text review (usually, overall notes plus bullet point findings).
+- `exitedReviewMode` — `{id, review, findingCount}` emitted when the reviewer finishes; `review` is the full plain-text review (usually, overall notes plus bullet point findings), and `findingCount` is the number of structured findings.
 - `contextCompaction` — `{id}` emitted when codex compacts the conversation history. This can happen automatically.
 - `compacted` - `{threadId, turnId}` when codex compacts the conversation history. This can happen automatically. **Deprecated:** Use `contextCompaction` instead.
 

@@ -161,10 +161,14 @@ impl ChatWidget {
             }
             ThreadItem::EnteredReviewMode { review, .. } => {
                 if from_replay {
+                    self.clear_review_action();
                     self.enter_review_mode_with_hint(review, /*from_replay*/ true);
                 }
             }
             ThreadItem::ExitedReviewMode { .. } => {
+                if from_replay {
+                    self.clear_review_action();
+                }
                 self.exit_review_mode_after_item();
             }
             ThreadItem::ContextCompaction { .. } => {

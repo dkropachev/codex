@@ -283,6 +283,39 @@ impl TurnRequestProcessor {
             .map(|()| None)
     }
 
+    pub(crate) async fn review_resolve_scope(
+        &self,
+        params: ReviewResolveScopeParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let (_, thread) = self.load_thread(&params.thread_id).await?;
+        let resolution = thread
+            .resolve_review_scope()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve review scope: {err}")))?;
+
+        Ok(Some(
+            ReviewResolveScopeResponse {
+                pull_request: resolution
+                    .pull_request
+                    .map(|pull_request| ReviewScopePullRequest {
+                        number: pull_request.number,
+                        url: pull_request.url,
+                        base_branch: pull_request.base_branch,
+                        base_branch_target: pull_request.base_branch_target,
+                    }),
+                default_branch: resolution
+                    .default_branch
+                    .map(|default_branch| ReviewScopeBranch {
+                        display_name: default_branch.display_name,
+                        target: default_branch.target,
+                    }),
+                current_branch: resolution.current_branch,
+                branches: resolution.branches,
+            }
+            .into(),
+        ))
+    }
+
     fn track_error_response(
         &self,
         request_id: &ConnectionRequestId,
@@ -374,6 +407,13 @@ impl TurnRequestProcessor {
                     .filter(|t| !t.is_empty());
                 ApiReviewTarget::Commit { sha, title }
             }
+            ApiReviewTarget::PullRequest { url } => {
+                let url = url.trim().to_string();
+                if url.is_empty() {
+                    return Err(invalid_request("url must not be empty".to_string()));
+                }
+                ApiReviewTarget::PullRequest { url }
+            }
             ApiReviewTarget::Custom { instructions } => {
                 let trimmed = instructions.trim().to_string();
                 if trimmed.is_empty() {
@@ -391,6 +431,7 @@ impl TurnRequestProcessor {
             ApiReviewTarget::UncommittedChanges => CoreReviewTarget::UncommittedChanges,
             ApiReviewTarget::BaseBranch { branch } => CoreReviewTarget::BaseBranch { branch },
             ApiReviewTarget::Commit { sha, title } => CoreReviewTarget::Commit { sha, title },
+            ApiReviewTarget::PullRequest { url } => CoreReviewTarget::PullRequest { url },
             ApiReviewTarget::Custom { instructions } => CoreReviewTarget::Custom { instructions },
         };
 

@@ -17,6 +17,8 @@ use crate::session::session::SessionSettingsUpdate;
 
 use crate::config::Config;
 use crate::review_prompts::resolve_review_request;
+use crate::review_prompts::resolve_review_request_with_runner;
+use crate::session::review_command_runner::ExecutorReviewCommandRunner;
 use crate::session::spawn_review_thread;
 use crate::tasks::CompactTask;
 use crate::tasks::UserShellCommandMode;
@@ -39,6 +41,7 @@ use codex_protocol::protocol::RealtimeConversationListVoicesResponseEvent;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
+use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadRolledBackEvent;
@@ -46,6 +49,7 @@ use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
@@ -710,13 +714,53 @@ pub async fn review(
     sub_id: String,
     review_request: ReviewRequest,
 ) {
+    let scope_requires_executor = matches!(
+        &review_request.target,
+        ReviewTarget::BaseBranch { .. } | ReviewTarget::PullRequest { .. }
+    );
+    let mut environment_error = None;
+    if scope_requires_executor
+        && let Err(err) = sess
+            .services
+            .turn_environments
+            .resolve_primary_environment()
+            .await
+    {
+        environment_error = Some(anyhow::anyhow!(
+            "failed to start review scope environment: {err}"
+        ));
+    }
     let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
     sess.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
         .await;
     sess.refresh_mcp_servers_if_requested(&turn_context, Some(sess.mcp_elicitation_reviewer()))
         .await;
-    #[allow(deprecated)]
-    match resolve_review_request(review_request, &turn_context.cwd) {
+    let resolved = if let Some(err) = environment_error {
+        Err(err)
+    } else {
+        match &review_request.target {
+            ReviewTarget::BaseBranch { .. } | ReviewTarget::PullRequest { .. } => {
+                if let Some(environment) = turn_context.environments.primary() {
+                    let runner = ExecutorReviewCommandRunner::new(
+                        environment.environment.get_exec_backend(),
+                        &turn_context.config.permissions.shell_environment_policy,
+                    );
+                    resolve_review_request_with_runner(review_request, &runner, environment.cwd())
+                        .await
+                } else {
+                    Err(anyhow::anyhow!(
+                        "cannot resolve review scope without a selected environment"
+                    ))
+                }
+            }
+            _ =>
+            {
+                #[allow(deprecated)]
+                resolve_review_request(review_request, &turn_context.cwd).await
+            }
+        }
+    };
+    match resolved {
         Ok(resolved) => {
             spawn_review_thread(
                 Arc::clone(sess),
@@ -728,14 +772,28 @@ pub async fn review(
             .await;
         }
         Err(err) => {
-            let event = Event {
-                id: sub_id,
-                msg: EventMsg::Error(ErrorEvent {
+            let error = CodexErrorInfo::Other;
+            sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
+                .await;
+            sess.send_event(
+                &turn_context,
+                EventMsg::Error(ErrorEvent {
                     message: err.to_string(),
-                    codex_error_info: Some(CodexErrorInfo::Other),
+                    codex_error_info: Some(error),
                 }),
-            };
-            sess.send_event(&turn_context, event.msg).await;
+            )
+            .await;
+            sess.send_event(
+                &turn_context,
+                EventMsg::TurnComplete(TurnCompleteEvent {
+                    turn_id: sub_id,
+                    last_agent_message: None,
+                    completed_at: None,
+                    duration_ms: None,
+                    time_to_first_token_ms: None,
+                }),
+            )
+            .await;
         }
     }
 }

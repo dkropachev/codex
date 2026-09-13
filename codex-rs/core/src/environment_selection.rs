@@ -216,6 +216,17 @@ impl ThreadEnvironments {
         }
     }
 
+    /// Resolves the first configured environment without falling through to a ready secondary.
+    pub(crate) async fn resolve_primary_environment(
+        &self,
+    ) -> Result<Option<TurnEnvironment>, Arc<ExecServerError>> {
+        let current = self.environments.load_full();
+        let Some(primary) = current.first() else {
+            return Ok(None);
+        };
+        primary.resolution.clone().await.map(Some)
+    }
+
     pub(crate) fn environment_manager(&self) -> Arc<EnvironmentManager> {
         Arc::clone(&self.environment_manager)
     }
@@ -691,6 +702,72 @@ url = "ws://127.0.0.1:8765"
             vec![remote.clone(), local.clone()]
         );
         assert_eq!(attached.to_selections(), vec![remote, local]);
+        server.await.expect("server task");
+    }
+
+    #[tokio::test]
+    async fn resolving_primary_waits_for_first_selection_before_ready_secondary() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind websocket listener");
+        let manager = Arc::new(
+            EnvironmentManager::create_for_tests_with_local(
+                Some(format!(
+                    "ws://{}",
+                    listener.local_addr().expect("listener address")
+                )),
+                test_runtime_paths(),
+            )
+            .await,
+        );
+        let cwd = PathUri::from_abs_path(&AbsolutePathBuf::current_dir().expect("cwd"));
+        let remote = TurnEnvironmentSelection {
+            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+            cwd: cwd.clone(),
+        };
+        let local = TurnEnvironmentSelection {
+            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+            cwd,
+        };
+        let environments = Arc::new(ThreadEnvironments::new(
+            manager,
+            crate::shell::default_user_shell(),
+            ShellSnapshot::disabled(),
+            TurnEnvironmentSnapshot::default(),
+            /*non_blocking_snapshots*/ true,
+        ));
+        environments.update_selections(&[remote.clone(), local]);
+
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let snapshot = environments.snapshot().await;
+                if snapshot
+                    .primary()
+                    .is_some_and(|environment| environment.environment_id == LOCAL_ENVIRONMENT_ID)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("local secondary should become ready");
+
+        let primary_task = tokio::spawn({
+            let environments = Arc::clone(&environments);
+            async move { environments.resolve_primary_environment().await }
+        });
+        tokio::task::yield_now().await;
+        assert!(!primary_task.is_finished());
+
+        let server = tokio::spawn(serve_environment_info(listener));
+        let primary = timeout(Duration::from_secs(5), primary_task)
+            .await
+            .expect("primary resolution should finish")
+            .expect("primary task")
+            .expect("primary environment should resolve")
+            .expect("configured primary environment");
+        assert_eq!(primary.selection(), remote);
         server.await.expect("server task");
     }
 

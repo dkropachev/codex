@@ -198,13 +198,29 @@ async fn queued_slash_compact_dispatches_after_active_turn() {
 
 #[tokio::test]
 async fn queued_slash_review_with_args_dispatches_after_active_turn() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
     handle_turn_started(&mut chat, "turn-1");
 
     queue_composer_text_with_tab(&mut chat, "/review check regressions");
 
     complete_turn_with_message(&mut chat, "turn-1", Some("done"));
+
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Choose a review action"));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let (thread_id, cwd, target, action) = loop {
+        if let AppEvent::StartReview {
+            thread_id,
+            cwd,
+            target,
+            action,
+        } = rx.try_recv().expect("review action event")
+        {
+            break (thread_id, cwd, target, action);
+        }
+    };
+    assert_eq!(action, ReviewAction::Report);
+    chat.start_review_for_thread(thread_id, cwd, target, action);
 
     match op_rx.try_recv() {
         Ok(Op::Review { target }) => assert_eq!(

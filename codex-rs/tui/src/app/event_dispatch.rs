@@ -2015,14 +2015,41 @@ impl App {
             AppEvent::OpenPermissionsPopup => {
                 self.chat_widget.open_permissions_popup();
             }
-            AppEvent::OpenReviewBranchPicker(cwd) => {
-                self.chat_widget.show_review_branch_picker(&cwd).await;
+            AppEvent::OpenReviewBranchPicker { thread_id, cwd } => {
+                self.chat_widget.show_review_branch_picker(thread_id, &cwd);
             }
-            AppEvent::OpenReviewCommitPicker(cwd) => {
-                self.chat_widget.show_review_commit_picker(&cwd).await;
+            AppEvent::OpenReviewCommitPicker { thread_id, cwd } => {
+                self.chat_widget
+                    .show_review_commit_picker(thread_id, &cwd)
+                    .await;
             }
-            AppEvent::OpenReviewCustomPrompt => {
-                self.chat_widget.show_review_custom_prompt();
+            AppEvent::OpenReviewCustomPrompt { thread_id, cwd } => {
+                self.chat_widget.show_review_custom_prompt(thread_id, &cwd);
+            }
+            AppEvent::ReviewScopesResolved {
+                request_id,
+                cwd,
+                resolution,
+            } => {
+                self.chat_widget
+                    .apply_review_scope_resolution(request_id, cwd, resolution);
+            }
+            AppEvent::OpenReviewActionPicker {
+                thread_id,
+                cwd,
+                target,
+            } => {
+                self.chat_widget
+                    .show_review_action_picker(thread_id, cwd, target);
+            }
+            AppEvent::StartReview {
+                thread_id,
+                cwd,
+                target,
+                action,
+            } => {
+                self.chat_widget
+                    .start_review_for_thread(thread_id, cwd, target, action);
             }
             AppEvent::SubmitUserMessageWithMode {
                 text,

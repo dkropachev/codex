@@ -50,6 +50,10 @@ pub(crate) fn review_output_text(output: Option<&ReviewOutputEvent>) -> String {
         .unwrap_or_else(|| REVIEW_FALLBACK_MESSAGE.to_string())
 }
 
+pub(crate) fn review_finding_count(output: Option<&ReviewOutputEvent>) -> usize {
+    output.map_or(0, |output| output.findings.len())
+}
+
 pub fn build_file_change_approval_request_item(
     payload: &ApplyPatchApprovalRequestEvent,
 ) -> ThreadItem {

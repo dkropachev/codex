@@ -10,6 +10,7 @@ use super::UserInput;
 use super::shared::v2_enum_from_core;
 use crate::protocol::item_builders::command_actions_for_path_uri;
 use crate::protocol::item_builders::convert_patch_changes;
+use crate::protocol::item_builders::review_finding_count;
 use crate::protocol::item_builders::review_output_text;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_extension_items::ExtensionItem;
@@ -387,6 +388,8 @@ pub enum ThreadItem {
     ExitedReviewMode {
         id: String,
         review: String,
+        #[serde(default)]
+        finding_count: usize,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -931,6 +934,7 @@ impl From<CoreTurnItem> for ThreadItem {
             CoreTurnItem::ExitedReviewMode(review) => ThreadItem::ExitedReviewMode {
                 id: review.id,
                 review: review_output_text(review.review_output.as_ref()),
+                finding_count: review_finding_count(review.review_output.as_ref()),
             },
             CoreTurnItem::FileChange(file_change) => ThreadItem::FileChange {
                 id: file_change.id,

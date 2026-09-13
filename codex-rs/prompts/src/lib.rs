@@ -22,5 +22,6 @@ pub use review_exit::render_review_exit_success;
 pub use review_request::REVIEW_PROMPT;
 pub use review_request::ResolvedReviewRequest;
 pub use review_request::resolve_review_request;
+pub use review_request::resolve_review_request_with_runner;
 pub use review_request::review_prompt;
 pub use review_request::user_facing_hint;

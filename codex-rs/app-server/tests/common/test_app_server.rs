@@ -77,6 +77,7 @@ use codex_app_server_protocol::RemoteControlClientsRevokeParams;
 use codex_app_server_protocol::RemoteControlPairingStartParams;
 use codex_app_server_protocol::RemoteControlPairingStatusParams;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ReviewResolveScopeParams;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
 use codex_app_server_protocol::ServerRequest;
@@ -1223,6 +1224,15 @@ impl TestAppServer {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("review/start", params).await
+    }
+
+    /// Send a `review/resolveScope` JSON-RPC request (v2).
+    pub async fn send_review_resolve_scope_request(
+        &mut self,
+        params: ReviewResolveScopeParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("review/resolveScope", params).await
     }
 
     pub async fn send_windows_sandbox_setup_start_request(

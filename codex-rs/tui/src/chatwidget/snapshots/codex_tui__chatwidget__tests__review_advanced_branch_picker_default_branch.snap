@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/review_flow.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Select a base branch
+
+  Type to search branches
+› feature/review -> main (default)
+  feature/review -> feature/review
+
+  Press enter to confirm or esc to go back

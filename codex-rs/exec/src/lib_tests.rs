@@ -165,6 +165,16 @@ fn builds_custom_review_request_trims_prompt() {
 }
 
 #[test]
+fn converts_pull_request_review_target_to_api() {
+    let url = "https://github.com/openai/codex/pull/123".to_string();
+
+    assert_eq!(
+        review_target_to_api(ReviewTarget::PullRequest { url: url.clone() }),
+        ApiReviewTarget::PullRequest { url }
+    );
+}
+
+#[test]
 fn decode_prompt_bytes_strips_utf8_bom() {
     let input = [0xEF, 0xBB, 0xBF, b'h', b'i', b'\n'];
 

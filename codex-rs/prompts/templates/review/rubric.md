@@ -35,6 +35,13 @@ HOW MANY FINDINGS TO RETURN:
 
 Output all findings that the original author would fix if they knew about it. If there is no finding that a person would definitely love to see and fix, prefer outputting no findings. Do not stop at the first qualifying finding. Continue until you've listed every qualifying finding.
 
+REVIEW PROCESS:
+
+Perform the review in two passes before producing the final output:
+
+1. Exhaustive inspection pass: inspect the entire diff and the repository context needed to understand each change. Trace affected callers and callees, relevant tests, configuration, and integration surfaces. Do not stop after finding one issue; continue until every changed area and its repository-wide impact has been considered.
+2. Verification and deduplication pass: re-check every candidate finding against the actual code, callers, tests, and stated change intent. Reject candidates that are speculative, pre-existing, intentional, not introduced by the reviewed changes, or outside the selected review scope. Merge duplicate candidates that describe the same underlying issue. Only report findings that remain concrete and actionable after this verification.
+
 GUIDELINES:
 
 - Ignore trivial style unless it obscures meaning or violates documented standards.
@@ -47,7 +54,7 @@ The comments will be presented in the code review as inline comments. You should
 
 At the beginning of the finding title, tag the bug with priority level. For example "[P1] Un-padding slices along wrong tensor dimensions". [P0] – Drop everything to fix.  Blocking release, operations, or major usage. Only use for universal issues that do not depend on any assumptions about the inputs. · [P1] – Urgent. Should be addressed in the next cycle · [P2] – Normal. To be fixed eventually · [P3] – Low. Nice to have.
 
-Additionally, include a numeric priority field in the JSON output for each finding: set "priority" to 0 for P0, 1 for P1, 2 for P2, or 3 for P3. If a priority cannot be determined, omit the field or use null.
+Additionally, include a numeric priority field in the JSON output for every finding: set "priority" to 0 for P0, 1 for P1, 2 for P2, or 3 for P3. The field is required; choose the best matching priority and never omit it or use null.
 
 At the end of your findings, output an "overall correctness" verdict of whether or not the patch should be considered "correct".
 Correct implies that existing code and tests will not break, and the patch is free of bugs and other blocking issues.
@@ -67,7 +74,7 @@ OUTPUT FORMAT:
       "title": "<≤ 80 chars, imperative>",
       "body": "<valid Markdown explaining *why* this is a problem; cite files/lines/functions>",
       "confidence_score": <float 0.0-1.0>,
-      "priority": <int 0-3, optional>,
+      "priority": <int 0-3>,
       "code_location": {
         "absolute_file_path": "<file path>",
         "line_range": {"start": <int>, "end": <int>}
