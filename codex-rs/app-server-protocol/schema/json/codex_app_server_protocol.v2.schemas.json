@@ -2638,6 +2638,30 @@
             },
             "method": {
               "enum": [
+                "review/resolveScope"
+              ],
+              "title": "Review/resolveScopeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ReviewResolveScopeParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Review/resolveScopeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "model/list"
               ],
               "title": "Model/listRequestMethod",
@@ -12619,6 +12643,113 @@
       ],
       "type": "string"
     },
+    "ReviewResolveScopeParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ReviewResolveScopeParams",
+      "type": "object"
+    },
+    "ReviewResolveScopeResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "branches": {
+          "description": "Available explicit base-branch targets, with the preferred target first.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "currentBranch": {
+          "description": "Currently checked-out branch, or `null` for a detached head or non-repository cwd.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "defaultBranch": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReviewScopeBranch"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Detected repository default branch, when one was found."
+        },
+        "pullRequest": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReviewScopePullRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Open pull request associated with the selected checkout, when one was found."
+        }
+      },
+      "required": [
+        "branches"
+      ],
+      "title": "ReviewResolveScopeResponse",
+      "type": "object"
+    },
+    "ReviewScopeBranch": {
+      "properties": {
+        "displayName": {
+          "description": "Human-readable branch name presented to the user.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Exact local or remote ref used as the review target.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "displayName",
+        "target"
+      ],
+      "type": "object"
+    },
+    "ReviewScopePullRequest": {
+      "properties": {
+        "baseBranch": {
+          "description": "Display name of the pull request's base branch, when supplied by GitHub.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "baseBranchTarget": {
+          "description": "Exact local or remote ref for the pull request base, when it resolved unambiguously.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "number": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "number",
+        "url"
+      ],
+      "type": "object"
+    },
     "ReviewStartParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -12732,6 +12863,27 @@
             "type"
           ],
           "title": "CommitReviewTarget",
+          "type": "object"
+        },
+        {
+          "description": "Review the changes associated with a pull request.",
+          "properties": {
+            "type": {
+              "enum": [
+                "pullRequest"
+              ],
+              "title": "PullRequestReviewTargetType",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "title": "PullRequestReviewTarget",
           "type": "object"
         },
         {
@@ -16390,6 +16542,12 @@
         },
         {
           "properties": {
+            "findingCount": {
+              "default": 0,
+              "format": "uint",
+              "minimum": 0.0,
+              "type": "integer"
+            },
             "id": {
               "type": "string"
             },

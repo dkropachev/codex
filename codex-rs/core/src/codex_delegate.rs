@@ -5,6 +5,7 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use codex_analytics::GuardianApprovalRequestSource;
 use codex_async_utils::OrCancelExt;
+use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::LoadedUserInstructions;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
@@ -82,6 +83,7 @@ pub(crate) async fn run_codex_thread_interactive(
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
     initial_history: Option<InitialHistory>,
+    thread_extension_init: ExtensionDataInit,
 ) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -123,7 +125,7 @@ pub(crate) async fn run_codex_thread_interactive(
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         parent_trace: None,
         environment_selections: parent_ctx.environments.to_selections(),
-        thread_extension_init: codex_extension_api::ExtensionDataInit::default(),
+        thread_extension_init,
         supports_openai_form_elicitation: parent_session
             .services
             .supports_openai_form_elicitation
@@ -204,6 +206,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     subagent_source: SubAgentSource,
     final_output_json_schema: Option<Value>,
     initial_history: Option<InitialHistory>,
+    thread_extension_init: ExtensionDataInit,
 ) -> Result<Codex, CodexErr> {
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
@@ -217,6 +220,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         child_cancel.clone(),
         subagent_source,
         initial_history,
+        thread_extension_init,
     ))
     .await?;
 

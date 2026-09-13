@@ -23,7 +23,7 @@ impl ChatWidget {
         self.bottom_pane
             .set_queue_submissions(/*queue_submissions*/ false);
         if previous_thread_id != self.thread_id {
-            self.review.recent_auto_review_denials = RecentAutoReviewDenials::default();
+            self.review.reset_for_thread_change();
         }
         self.refresh_plan_mode_nudge();
         self.turn_lifecycle.reset_thread();

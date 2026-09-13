@@ -946,13 +946,44 @@ pub(crate) enum AppEvent {
     OpenPermissionsPopup,
 
     /// Open the branch picker option from the review popup.
-    OpenReviewBranchPicker(PathBuf),
+    OpenReviewBranchPicker {
+        thread_id: Option<ThreadId>,
+        cwd: PathBuf,
+    },
 
     /// Open the commit picker option from the review popup.
-    OpenReviewCommitPicker(PathBuf),
+    OpenReviewCommitPicker {
+        thread_id: Option<ThreadId>,
+        cwd: PathBuf,
+    },
 
     /// Open the custom prompt option from the review popup.
-    OpenReviewCustomPrompt,
+    OpenReviewCustomPrompt {
+        thread_id: Option<ThreadId>,
+        cwd: PathBuf,
+    },
+
+    /// Replace the review loading picker with resolved repository scopes.
+    ReviewScopesResolved {
+        request_id: uuid::Uuid,
+        cwd: PathBuf,
+        resolution: crate::review_scope::ReviewScopeResolution,
+    },
+
+    /// Open the action picker after a review scope has been selected.
+    OpenReviewActionPicker {
+        thread_id: Option<ThreadId>,
+        cwd: PathBuf,
+        target: codex_app_server_protocol::ReviewTarget,
+    },
+
+    /// Start a review and retain the selected post-review action in the TUI.
+    StartReview {
+        thread_id: Option<ThreadId>,
+        cwd: PathBuf,
+        target: codex_app_server_protocol::ReviewTarget,
+        action: crate::chatwidget::ReviewAction,
+    },
 
     /// Submit a user message with an explicit collaboration mask.
     SubmitUserMessageWithMode {

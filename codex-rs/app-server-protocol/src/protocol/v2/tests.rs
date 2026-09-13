@@ -73,6 +73,118 @@ fn test_absolute_path() -> AbsolutePathBuf {
 }
 
 #[test]
+fn pull_request_review_target_round_trips() {
+    let target = ReviewTarget::PullRequest {
+        url: "https://github.com/openai/codex/pull/123".to_string(),
+    };
+    let value = serde_json::to_value(&target).expect("serialize pull request review target");
+
+    assert_eq!(
+        value,
+        json!({
+            "type": "pullRequest",
+            "url": "https://github.com/openai/codex/pull/123"
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<ReviewTarget>(value)
+            .expect("deserialize pull request review target"),
+        target
+    );
+}
+
+#[test]
+fn review_resolve_scope_request_and_response_round_trip() {
+    let params = ReviewResolveScopeParams {
+        thread_id: "thr_123".to_string(),
+    };
+    let request = crate::ClientRequest::ReviewResolveScope {
+        request_id: crate::RequestId::Integer(7),
+        params: params,
+    };
+    let request_value = serde_json::to_value(&request).expect("serialize scope request");
+    assert_eq!(
+        request_value,
+        json!({
+            "method": "review/resolveScope",
+            "id": 7,
+            "params": { "threadId": "thr_123" }
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<crate::ClientRequest>(request_value)
+            .expect("deserialize scope request"),
+        request
+    );
+    assert_eq!(
+        request.serialization_scope(),
+        Some(crate::ClientRequestSerializationScope::Thread {
+            thread_id: "thr_123".to_string(),
+        })
+    );
+
+    let response = ReviewResolveScopeResponse {
+        pull_request: Some(ReviewScopePullRequest {
+            number: 123,
+            url: "https://github.com/openai/codex/pull/123".to_string(),
+            base_branch: Some("main".to_string()),
+            base_branch_target: Some("refs/remotes/origin/main".to_string()),
+        }),
+        default_branch: Some(ReviewScopeBranch {
+            display_name: "main".to_string(),
+            target: "refs/remotes/origin/main".to_string(),
+        }),
+        current_branch: Some("feature/review-picker".to_string()),
+        branches: vec![
+            "refs/remotes/origin/main".to_string(),
+            "refs/heads/feature/review-picker".to_string(),
+        ],
+    };
+    let response_value = serde_json::to_value(&response).expect("serialize scope response");
+    assert_eq!(
+        response_value,
+        json!({
+            "pullRequest": {
+                "number": 123,
+                "url": "https://github.com/openai/codex/pull/123",
+                "baseBranch": "main",
+                "baseBranchTarget": "refs/remotes/origin/main"
+            },
+            "defaultBranch": {
+                "displayName": "main",
+                "target": "refs/remotes/origin/main"
+            },
+            "currentBranch": "feature/review-picker",
+            "branches": ["refs/remotes/origin/main", "refs/heads/feature/review-picker"]
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<ReviewResolveScopeResponse>(response_value)
+            .expect("deserialize scope response"),
+        response
+    );
+}
+
+#[test]
+fn exited_review_mode_defaults_missing_finding_count() {
+    let item = serde_json::from_value::<ThreadItem>(json!({
+        "type": "exitedReviewMode",
+        "id": "review-1",
+        "review": "Looks good."
+    }))
+    .expect("deserialize legacy exited review mode item");
+
+    assert_eq!(
+        item,
+        ThreadItem::ExitedReviewMode {
+            id: "review-1".to_string(),
+            review: "Looks good.".to_string(),
+            finding_count: 0,
+        }
+    );
+}
+
+#[test]
 fn thread_sources_round_trip_as_scalar_labels() {
     for (source, label) in [
         (ThreadSource::User, "user"),

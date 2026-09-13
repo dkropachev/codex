@@ -2,6 +2,7 @@ mod agents_md;
 mod apps_instructions;
 mod environment;
 mod plugins_instructions;
+mod pull_request_context;
 
 use crate::context::ContextualUserFragment;
 use codex_extension_api::PreviousWorldStateSection;
@@ -21,6 +22,7 @@ pub(crate) use agents_md::AgentsMdState;
 pub(crate) use apps_instructions::AppsInstructionsState;
 pub(crate) use environment::EnvironmentsState;
 pub(crate) use plugins_instructions::PluginsInstructionsState;
+pub(crate) use pull_request_context::PullRequestContextState;
 
 trait ErasedWorldStateSection: Send + Sync {
     fn snapshot(&self) -> Option<Value>;

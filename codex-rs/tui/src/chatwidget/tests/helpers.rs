@@ -194,6 +194,7 @@ pub(super) async fn make_chatwidget_manual_with_auth(
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx,
         workspace_command_runner: None,
+        review_scope_resolver: None,
         initial_user_message: None,
         enhanced_keys_supported: false,
         has_chatgpt_account,
@@ -592,6 +593,10 @@ pub(super) fn replay_entered_review_mode(chat: &mut ChatWidget, review: impl Int
 }
 
 pub(super) fn handle_exited_review_mode(chat: &mut ChatWidget) {
+    handle_exited_review_mode_with_findings(chat, /*finding_count*/ 0);
+}
+
+pub(super) fn handle_exited_review_mode_with_findings(chat: &mut ChatWidget, finding_count: usize) {
     chat.handle_server_notification(
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: thread_id(chat),
@@ -604,6 +609,7 @@ pub(super) fn handle_exited_review_mode(chat: &mut ChatWidget) {
             item: AppServerThreadItem::ExitedReviewMode {
                 id: "review-end".to_string(),
                 review: String::new(),
+                finding_count,
             },
         }),
         /*replay_kind*/ None,

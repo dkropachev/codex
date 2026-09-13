@@ -129,7 +129,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
 
     // Confirm we see the ExitedReviewMode marker (with review text)
     // on the same turn. Ignore any other items the stream surfaces.
-    let mut review_body: Option<String> = None;
+    let mut review_result: Option<(String, usize)> = None;
     for _ in 0..10 {
         let review_notif: JSONRPCNotification = timeout(
             DEFAULT_READ_TIMEOUT,
@@ -139,18 +139,23 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         let completed: ItemCompletedNotification =
             serde_json::from_value(review_notif.params.expect("params must be present"))?;
         match completed.item {
-            ThreadItem::ExitedReviewMode { review, .. } => {
+            ThreadItem::ExitedReviewMode {
+                review,
+                finding_count,
+                ..
+            } => {
                 assert_eq!(completed.turn_id, turn_id);
-                review_body = Some(review);
+                review_result = Some((review, finding_count));
                 break;
             }
             _ => continue,
         }
     }
 
-    let review = review_body.expect("did not observe a code review item");
+    let (review, finding_count) = review_result.expect("did not observe a code review item");
     assert!(review.contains("Prefer Stylize helpers"));
     assert!(review.contains("/tmp/file.rs:10-20"));
+    assert_eq!(finding_count, 1);
 
     Ok(())
 }
@@ -252,6 +257,43 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn review_start_rejects_empty_pull_request_url() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let thread_id = start_default_thread(&mut mcp).await?;
+
+    let request_id = mcp
+        .send_review_start_request(ReviewStartParams {
+            thread_id,
+            delivery: Some(ReviewDelivery::Inline),
+            target: ReviewTarget::PullRequest {
+                url: "   ".to_string(),
+            },
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert!(
+        error.error.message.contains("url must not be empty"),
+        "unexpected message: {}",
+        error.error.message
+    );
 
     Ok(())
 }
@@ -507,7 +549,10 @@ async fn materialize_thread_rollout(mcp: &mut TestAppServer, thread_id: &str) ->
     Ok(())
 }
 
-fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
+pub(super) fn create_config_toml(
+    codex_home: &std::path::Path,
+    server_uri: &str,
+) -> std::io::Result<()> {
     create_config_toml_with_approval_policy(codex_home, server_uri, "never")
 }
 

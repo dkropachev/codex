@@ -356,6 +356,10 @@ export type { RemoteControlStatusChangedNotification } from "./RemoteControlStat
 export type { RequestPermissionProfile } from "./RequestPermissionProfile";
 export type { ResidencyRequirement } from "./ResidencyRequirement";
 export type { ReviewDelivery } from "./ReviewDelivery";
+export type { ReviewResolveScopeParams } from "./ReviewResolveScopeParams";
+export type { ReviewResolveScopeResponse } from "./ReviewResolveScopeResponse";
+export type { ReviewScopeBranch } from "./ReviewScopeBranch";
+export type { ReviewScopePullRequest } from "./ReviewScopePullRequest";
 export type { ReviewStartParams } from "./ReviewStartParams";
 export type { ReviewStartResponse } from "./ReviewStartResponse";
 export type { ReviewTarget } from "./ReviewTarget";

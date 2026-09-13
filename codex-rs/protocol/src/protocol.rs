@@ -3381,6 +3381,11 @@ pub enum ReviewTarget {
         title: Option<String>,
     },
 
+    /// Review the changes associated with a pull request.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    PullRequest { url: String },
+
     /// Arbitrary instructions provided by the user.
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]

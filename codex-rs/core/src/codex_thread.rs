@@ -5,6 +5,7 @@ use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
 use codex_features::Feature;
+use codex_git_utils::ReviewScopeResolution;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -627,6 +628,12 @@ impl CodexThread {
 
     pub async fn environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
         self.codex.thread_environment_selections().await
+    }
+
+    /// Resolves repository metadata for a review-scope picker beside this thread's primary
+    /// environment, without starting a model turn or changing thread state.
+    pub async fn resolve_review_scope(&self) -> anyhow::Result<ReviewScopeResolution> {
+        self.codex.session.resolve_review_scope().await
     }
 
     pub async fn read_mcp_resource(

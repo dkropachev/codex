@@ -5,6 +5,7 @@ use codex_config::config_toml::ModelPolicyToml;
 use codex_core::CodexThread;
 use codex_core::REVIEW_PROMPT;
 use codex_core::config::Config;
+use codex_features::Feature;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -794,9 +795,15 @@ async fn review_input_isolated_from_parent_history() {
             .await
             .unwrap();
     }
-    let codex =
-        resume_conversation_for_server(&server, codex_home.clone(), session_file.clone(), |_| {})
-            .await;
+    let codex = resume_conversation_for_server(
+        &server,
+        codex_home.clone(),
+        session_file.clone(),
+        |config| {
+            let _ = config.features.enable(Feature::TokenBudget);
+        },
+    )
+    .await;
 
     // Submit review request; it must start fresh (no parent history in `input`).
     let review_prompt = "Please review only this".to_string();
@@ -829,6 +836,18 @@ async fn review_input_isolated_from_parent_history() {
     let request = request_log.single_request();
     assert_eq!(request.path(), "/v1/responses");
     let body = request.body_json();
+    assert!(
+        !body.to_string().contains("<context_window>"),
+        "review child should not inherit token-budget context"
+    );
+    let tool_names = body["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool.get("name").and_then(serde_json::Value::as_str))
+        .collect::<Vec<_>>();
+    assert!(!tool_names.contains(&"new_context"));
+    assert!(!tool_names.contains(&"get_context_remaining"));
     let input = body["input"].as_array().expect("input array");
     assert!(
         input.len() >= 2,

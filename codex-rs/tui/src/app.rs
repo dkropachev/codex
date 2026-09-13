@@ -66,6 +66,8 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 use crate::resume_picker::SessionTarget;
+use crate::review_scope::AppServerReviewScopeResolver;
+use crate::review_scope::SharedReviewScopeResolver;
 use crate::session_state::ThreadSessionState;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
@@ -506,6 +508,7 @@ pub(crate) struct App {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
     workspace_command_runner: Option<WorkspaceCommandRunner>,
+    review_scope_resolver: Option<SharedReviewScopeResolver>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) state_db: Option<StateDbHandle>,
@@ -734,6 +737,7 @@ impl App {
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
             workspace_command_runner: self.workspace_command_runner.clone(),
+            review_scope_resolver: self.review_scope_resolver.clone(),
             initial_user_message,
             enhanced_keys_supported: self.enhanced_keys_supported,
             has_chatgpt_account: self.chat_widget.has_chatgpt_account(),
@@ -864,9 +868,11 @@ impl App {
 
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
         let terminal_title_invalid_items_warned = Arc::new(AtomicBool::new(false));
-        let workspace_command_runner: WorkspaceCommandRunner = Arc::new(
-            AppServerWorkspaceCommandRunner::new(app_server.request_handle()),
-        );
+        let request_handle = app_server.request_handle();
+        let workspace_command_runner: WorkspaceCommandRunner =
+            Arc::new(AppServerWorkspaceCommandRunner::new(request_handle.clone()));
+        let review_scope_resolver: SharedReviewScopeResolver =
+            Arc::new(AppServerReviewScopeResolver::new(request_handle));
         let runtime_model_provider_started_at = Instant::now();
         let runtime_model_provider_base_url =
             resolve_runtime_model_provider_base_url(&config.model_provider).await;
@@ -898,6 +904,7 @@ impl App {
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     workspace_command_runner: Some(workspace_command_runner.clone()),
+                    review_scope_resolver: Some(review_scope_resolver.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
                         initial_images.clone(),
@@ -934,6 +941,7 @@ impl App {
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     workspace_command_runner: Some(workspace_command_runner.clone()),
+                    review_scope_resolver: Some(review_scope_resolver.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
                         initial_images.clone(),
@@ -973,6 +981,7 @@ impl App {
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     workspace_command_runner: Some(workspace_command_runner.clone()),
+                    review_scope_resolver: Some(review_scope_resolver.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
                         initial_images.clone(),
@@ -1020,6 +1029,7 @@ See the Codex keymap documentation for supported actions and examples."
             app_event_tx,
             chat_widget,
             workspace_command_runner: Some(workspace_command_runner),
+            review_scope_resolver: Some(review_scope_resolver),
             config,
             state_db,
             cli_kv_overrides,

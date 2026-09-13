@@ -129,9 +129,7 @@ use codex_features::FEATURES;
 use codex_features::Feature;
 #[cfg(test)]
 use codex_git_utils::CommitLogEntry;
-use codex_git_utils::current_branch_name;
 use codex_git_utils::get_git_repo_root;
-use codex_git_utils::local_git_branches;
 use codex_git_utils::recent_commits;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
@@ -265,7 +263,6 @@ use crate::app_event::RateLimitRefreshOrigin;
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
 use crate::auto_review_denials;
-use crate::auto_review_denials::RecentAutoReviewDenials;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
@@ -394,6 +391,7 @@ mod rendering;
 mod replay;
 mod review;
 mod review_popups;
+pub(crate) use self::review::ReviewAction;
 use self::review::ReviewState;
 #[cfg(test)]
 pub(crate) use self::review_popups::show_review_commit_picker_with_entries;
@@ -448,6 +446,7 @@ use self::user_messages::user_message_preview_text;
 mod warnings;
 use self::warnings::WarningDisplayState;
 pub(crate) use crate::branch_summary::StatusLineGitSummary;
+use crate::review_scope::SharedReviewScopeResolver;
 use crate::streaming::chunking::AdaptiveChunkingPolicy;
 use crate::streaming::commit_tick::CommitTickScope;
 use crate::streaming::commit_tick::run_commit_tick;
@@ -489,6 +488,8 @@ pub(crate) struct ChatWidgetInit {
     /// Tests that do not exercise git status-line refreshes may leave this unset. Production TUI
     /// construction provides a runner for the active app-server session.
     pub(crate) workspace_command_runner: Option<WorkspaceCommandRunner>,
+    /// Thread-scoped app-server resolver used by the review picker.
+    pub(crate) review_scope_resolver: Option<SharedReviewScopeResolver>,
     pub(crate) initial_user_message: Option<UserMessage>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) has_chatgpt_account: bool,
@@ -694,6 +695,8 @@ pub(crate) struct ChatWidget {
     current_cwd: Option<PathBuf>,
     // App-server-backed command runner for status-line workspace metadata lookups.
     workspace_command_runner: Option<WorkspaceCommandRunner>,
+    // Thread-scoped repository metadata resolver for the review picker.
+    review_scope_resolver: Option<SharedReviewScopeResolver>,
     // Instruction source files loaded for the current session, supplied by app-server.
     instruction_source_paths: Vec<PathUri>,
     // Runtime network proxy bind addresses from SessionConfigured.

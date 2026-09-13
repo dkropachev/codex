@@ -209,6 +209,7 @@ mod mcp_runtime;
 mod model_router_turn;
 pub(crate) mod multi_agents;
 mod review;
+mod review_command_runner;
 mod rollout_budget;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]

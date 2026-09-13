@@ -1294,6 +1294,9 @@ impl MessageProcessor {
             ClientRequest::ReviewStart { params, .. } => {
                 self.turn_processor.review_start(&request_id, params).await
             }
+            ClientRequest::ReviewResolveScope { params, .. } => {
+                self.turn_processor.review_resolve_scope(params).await
+            }
             ClientRequest::McpServerOauthLogin { params, .. } => {
                 self.mcp_processor.mcp_server_oauth_login(params).await
             }

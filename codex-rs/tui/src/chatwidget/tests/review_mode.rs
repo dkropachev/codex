@@ -1043,6 +1043,17 @@ async fn review_popup_custom_prompt_action_sends_event() {
 
     // Open the preset selection popup
     chat.open_review_popup();
+    let (request_id, cwd, resolution) = loop {
+        if let AppEvent::ReviewScopesResolved {
+            request_id,
+            cwd,
+            resolution,
+        } = rx.recv().await.expect("scope resolution")
+        {
+            break (request_id, cwd, resolution);
+        }
+    };
+    assert!(chat.apply_review_scope_resolution(request_id, cwd, resolution));
 
     // Move selection down to the fourth item: "Custom review instructions"
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -1054,7 +1065,7 @@ async fn review_popup_custom_prompt_action_sends_event() {
     // Drain events and ensure we saw the OpenReviewCustomPrompt request
     let mut found = false;
     while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::OpenReviewCustomPrompt = ev {
+        if let AppEvent::OpenReviewCustomPrompt { .. } = ev {
             found = true;
             break;
         }
@@ -1123,21 +1134,21 @@ async fn review_commit_picker_shows_subjects_without_timestamps() {
     );
 }
 
-/// Submitting the custom prompt view sends Op::Review with the typed prompt
-/// and uses the same text for the user-facing hint.
+/// Submitting the custom prompt view sends its target to the action picker.
 #[tokio::test]
-async fn custom_prompt_submit_sends_review_op() {
+async fn custom_prompt_submit_opens_review_action_picker() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.show_review_custom_prompt();
+    let cwd = chat.config.cwd.to_path_buf();
+    chat.show_review_custom_prompt(chat.thread_id, &cwd);
     // Paste prompt text via ChatWidget handler, then submit
     chat.handle_paste("  please audit dependencies  ".to_string());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    // Expect AppEvent::CodexOp(Op::Review { .. }) with trimmed prompt
+    // Expect the action picker request with a trimmed custom target.
     let evt = rx.try_recv().expect("expected one app event");
     match evt {
-        AppEvent::CodexOp(Op::Review { target }) => {
+        AppEvent::OpenReviewActionPicker { target, .. } => {
             assert_eq!(
                 target,
                 ReviewTarget::Custom {
@@ -1154,7 +1165,8 @@ async fn custom_prompt_submit_sends_review_op() {
 async fn custom_prompt_enter_empty_does_not_send() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.show_review_custom_prompt();
+    let cwd = chat.config.cwd.to_path_buf();
+    chat.show_review_custom_prompt(chat.thread_id, &cwd);
     // Enter without any text
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -1339,7 +1351,8 @@ async fn review_custom_prompt_escape_navigates_back_then_dismisses() {
     chat.open_review_popup();
 
     // Open the custom prompt submenu (child view) directly.
-    chat.show_review_custom_prompt();
+    let cwd = chat.config.cwd.to_path_buf();
+    chat.show_review_custom_prompt(chat.thread_id, &cwd);
 
     // Verify child view is on top.
     let header = render_bottom_first_row(&chat, /*width*/ 60);
@@ -1352,7 +1365,7 @@ async fn review_custom_prompt_escape_navigates_back_then_dismisses() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     let header = render_bottom_first_row(&chat, /*width*/ 60);
     assert!(
-        header.contains("Select a review preset"),
+        header.contains("Select a review scope"),
         "expected to return to parent review popup: {header:?}"
     );
 
@@ -1373,9 +1386,9 @@ async fn review_branch_picker_escape_navigates_back_then_dismisses() {
     // Open the Review presets parent popup.
     chat.open_review_popup();
 
-    // Open the branch picker submenu (child view). Using a temp cwd with no git repo is fine.
-    let cwd = std::env::temp_dir();
-    chat.show_review_branch_picker(&cwd).await;
+    // Open the branch picker submenu (child view) for the current review scope.
+    let cwd = chat.config.cwd.to_path_buf();
+    chat.show_review_branch_picker(chat.thread_id, &cwd);
 
     // Verify child view header.
     let header = render_bottom_first_row(&chat, /*width*/ 60);
@@ -1388,7 +1401,7 @@ async fn review_branch_picker_escape_navigates_back_then_dismisses() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     let header = render_bottom_first_row(&chat, /*width*/ 60);
     assert!(
-        header.contains("Select a review preset"),
+        header.contains("Select a review scope"),
         "expected to return to parent review popup: {header:?}"
     );
 

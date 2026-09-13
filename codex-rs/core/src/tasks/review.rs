@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use codex_extension_api::ExtensionDataInit;
+use codex_features::Feature;
 use codex_prompts::render_review_exit_interrupted;
 use codex_prompts::render_review_exit_success;
 use codex_protocol::config_types::WebSearchMode;
@@ -16,18 +18,19 @@ use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::review_format::format_review_findings_block;
 use codex_protocol::review_format::render_review_output_text;
+use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::config::Constrained;
+use crate::context::ContextualUserFragment;
+use crate::context::PullRequestContext;
 use crate::model_policy::ModelPolicySource;
 use crate::model_policy::apply_model_policy;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
-use codex_features::Feature;
-use codex_protocol::user_input::UserInput;
 
 use super::SessionTask;
 use super::SessionTaskContext;
@@ -114,6 +117,9 @@ async fn start_review_conversation(
     let _ = sub_agent_config.features.disable(Feature::SpawnCsv);
     let _ = sub_agent_config.features.disable(Feature::Collab);
     let _ = sub_agent_config.features.disable(Feature::MultiAgentV2);
+    // Review children must retain the exact selected-scope user prompt; token-budget compaction
+    // replaces history with world state and would otherwise drop that separate prompt.
+    let _ = sub_agent_config.features.disable(Feature::TokenBudget);
 
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
@@ -124,17 +130,27 @@ async fn start_review_conversation(
         .clone()
         .unwrap_or_else(|| ctx.model_info.slug.clone());
     sub_agent_config.model = Some(model);
+    let pull_request_context = ctx.extension_data.get::<PullRequestContext>();
+    let pull_request_context_bytes = pull_request_context
+        .as_deref()
+        .map(ContextualUserFragment::render)
+        .map_or(0, |context| context.len());
     let prompt_bytes = input
         .iter()
         .filter_map(|item| serde_json::to_vec(item).ok())
         .map(|item| item.len())
-        .sum::<usize>();
+        .sum::<usize>()
+        .saturating_add(pull_request_context_bytes);
     if let Err(err) = apply_model_policy(
         &mut sub_agent_config,
         ModelPolicySource::SubAgent(SubAgentSource::Review),
         prompt_bytes,
     ) {
         tracing::warn!("failed to apply review model policy: {err}");
+    }
+    let mut thread_extension_init = ExtensionDataInit::default();
+    if let Some(context) = pull_request_context {
+        thread_extension_init.insert(context.as_ref().clone());
     }
     (run_codex_thread_one_shot(
         sub_agent_config,
@@ -147,6 +163,7 @@ async fn start_review_conversation(
         SubAgentSource::Review,
         /*final_output_json_schema*/ None,
         /*initial_history*/ None,
+        thread_extension_init,
     )
     .await)
         .ok()

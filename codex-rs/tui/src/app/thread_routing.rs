@@ -711,7 +711,21 @@ impl App {
                 Ok(true)
             }
             AppCommand::Review { target } => {
-                let response = app_server.review_start(thread_id, target.clone()).await?;
+                let response = match app_server.review_start(thread_id, target.clone()).await {
+                    Ok(response) => response,
+                    Err(err) => {
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget.clear_review_action();
+                        }
+                        return Err(err);
+                    }
+                };
+                if self.chat_widget.thread_id() == Some(thread_id) {
+                    self.chat_widget.bind_live_review_action(
+                        &response.review_thread_id,
+                        response.turn.id.clone(),
+                    );
+                }
                 let review_thread_id = ThreadId::from_string(&response.review_thread_id)
                     .wrap_err("review/start returned invalid review thread id")?;
                 let store = Arc::clone(&self.ensure_thread_channel(review_thread_id).store);

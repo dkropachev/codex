@@ -4,6 +4,7 @@ use crate::protocol::item_builders::build_file_change_approval_request_item;
 use crate::protocol::item_builders::build_file_change_begin_item;
 use crate::protocol::item_builders::build_file_change_end_item;
 use crate::protocol::item_builders::build_item_from_guardian_event;
+use crate::protocol::item_builders::review_finding_count;
 use crate::protocol::item_builders::review_output_text;
 use crate::protocol::v2::CollabAgentState;
 use crate::protocol::v2::CollabAgentTool;
@@ -1145,13 +1146,18 @@ impl ThreadHistoryBuilder {
         payload: &codex_protocol::protocol::ExitedReviewModeEvent,
     ) {
         let review = review_output_text(payload.review_output.as_ref());
+        let finding_count = review_finding_count(payload.review_output.as_ref());
         let id = payload
             .item_id
             .clone()
             .unwrap_or_else(|| self.next_item_id());
         self.upsert_review_mode_item(
             payload.turn_id.as_deref(),
-            ThreadItem::ExitedReviewMode { id, review },
+            ThreadItem::ExitedReviewMode {
+                id,
+                review,
+                finding_count,
+            },
         );
     }
 
@@ -1617,6 +1623,10 @@ mod tests {
     use codex_protocol::protocol::McpInvocation;
     use codex_protocol::protocol::McpToolCallEndEvent;
     use codex_protocol::protocol::PatchApplyBeginEvent;
+    use codex_protocol::protocol::ReviewCodeLocation;
+    use codex_protocol::protocol::ReviewFinding;
+    use codex_protocol::protocol::ReviewLineRange;
+    use codex_protocol::protocol::ReviewOutputEvent;
     use codex_protocol::protocol::ReviewTarget;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
@@ -1743,7 +1753,23 @@ mod tests {
     }
 
     #[test]
-    fn review_mode_events_replay_persisted_ids() {
+    fn review_mode_events_replay_persisted_ids_and_finding_count() {
+        let review_output = ReviewOutputEvent {
+            findings: vec![ReviewFinding {
+                title: "Fix the bug".into(),
+                body: "This can fail.".into(),
+                confidence_score: 0.9,
+                priority: 1,
+                code_location: ReviewCodeLocation {
+                    absolute_file_path: PathBuf::from("/tmp/file.rs"),
+                    line_range: ReviewLineRange { start: 10, end: 10 },
+                },
+            }],
+            overall_correctness: "incorrect".into(),
+            overall_explanation: "Found one issue.".into(),
+            overall_confidence_score: 0.9,
+        };
+        let review = review_output_text(Some(&review_output));
         let events = vec![
             EventMsg::EnteredReviewMode(EnteredReviewModeEvent {
                 target: ReviewTarget::Custom {
@@ -1756,7 +1782,7 @@ mod tests {
             EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
                 turn_id: Some("turn-1".into()),
                 item_id: Some("exited-review".into()),
-                review_output: None,
+                review_output: Some(review_output),
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-1".into(),
@@ -1783,7 +1809,8 @@ mod tests {
                 },
                 ThreadItem::ExitedReviewMode {
                     id: "exited-review".into(),
-                    review: REVIEW_FALLBACK_MESSAGE.into(),
+                    review,
+                    finding_count: 1,
                 },
             ]
         );
@@ -1842,6 +1869,7 @@ mod tests {
                 ThreadItem::ExitedReviewMode {
                     id: "exited-review".into(),
                     review: REVIEW_FALLBACK_MESSAGE.into(),
+                    finding_count: 0,
                 },
             ]
         );

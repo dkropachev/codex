@@ -1238,6 +1238,12 @@
         },
         {
           "properties": {
+            "findingCount": {
+              "default": 0,
+              "format": "uint",
+              "minimum": 0.0,
+              "type": "integer"
+            },
             "id": {
               "type": "string"
             },

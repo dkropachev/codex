@@ -77,6 +77,27 @@
           "type": "object"
         },
         {
+          "description": "Review the changes associated with a pull request.",
+          "properties": {
+            "type": {
+              "enum": [
+                "pullRequest"
+              ],
+              "title": "PullRequestReviewTargetType",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "title": "PullRequestReviewTarget",
+          "type": "object"
+        },
+        {
           "description": "Arbitrary instructions, equivalent to the old free-form prompt.",
           "properties": {
             "instructions": {

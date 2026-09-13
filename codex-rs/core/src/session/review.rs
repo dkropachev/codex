@@ -1,4 +1,5 @@
 use super::*;
+use crate::context::PullRequestContext;
 use std::sync::atomic::AtomicBool;
 
 /// Spawn a review thread using the given prompt.
@@ -9,6 +10,12 @@ pub(super) async fn spawn_review_thread(
     sub_id: String,
     resolved: crate::review_prompts::ResolvedReviewRequest,
 ) {
+    let crate::review_prompts::ResolvedReviewRequest {
+        target,
+        prompt: review_prompt,
+        user_facing_hint,
+        pull_request_context,
+    } = resolved;
     let model = config
         .review_model
         .clone()
@@ -39,7 +46,6 @@ pub(super) async fn spawn_review_thread(
         sess.services.main_execve_wrapper_exe.as_ref(),
     );
 
-    let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.provider.clone();
     let auth_manager = parent_turn_context.auth_manager.clone();
     let model_info = review_model_info.clone();
@@ -107,6 +113,9 @@ pub(super) async fn spawn_review_thread(
         review_turn_id.clone(),
     ));
     extension_data.insert(parent_turn_context.turn_skills.snapshot.clone());
+    if let Some(metadata) = pull_request_context {
+        extension_data.insert(PullRequestContext::new(metadata));
+    }
 
     let review_turn_context = TurnContext {
         sub_id: review_turn_id.clone(),
@@ -163,17 +172,20 @@ pub(super) async fn spawn_review_thread(
     if tc.environments.single_local_environment_cwd().is_some() {
         tc.turn_metadata_state.spawn_git_enrichment_task();
     }
-    // TODO(ccunningham): Review turns currently rely on `spawn_task` for TurnComplete but do not
-    // emit a parent TurnStarted. Consider giving review a full parent turn lifecycle
-    // (TurnStarted + TurnComplete) for consistency with other standalone tasks.
-    sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
-
-    // Announce entering review mode so UIs can switch modes.
+    sess.abort_all_tasks(TurnAbortReason::Replaced).await;
+    sess.clear_connector_selection().await;
+    // Announce review mode before the task starts so even an immediately completing reviewer has
+    // a correctly ordered entered/exited lifecycle.
     let item = TurnItem::EnteredReviewMode(EnteredReviewModeItem {
         id: uuid::Uuid::now_v7().to_string(),
-        target: resolved.target,
-        user_facing_hint: resolved.user_facing_hint,
+        target,
+        user_facing_hint,
     });
     sess.emit_turn_item_started(&tc, &item).await;
     sess.emit_turn_item_completed(&tc, item).await;
+
+    // TODO(ccunningham): Review turns currently rely on `spawn_task` for TurnComplete but do not
+    // emit a parent TurnStarted. Consider giving review a full parent turn lifecycle
+    // (TurnStarted + TurnComplete) for consistency with other standalone tasks.
+    sess.start_task(tc.clone(), input, ReviewTask::new()).await;
 }

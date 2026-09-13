@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests/review_flow.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Select a review scope
+
+› 1. Review changes against main  Detected default branch
+  2. Review uncommitted changes
+  3. Choose a base branch         Select a specific branch
+  4. Review a commit
+  5. Custom review instructions
+
+  Press enter to confirm or esc to go back

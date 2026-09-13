@@ -3192,11 +3192,13 @@ dependencies = [
  "regex",
  "schemars 0.8.22",
  "serde",
+ "serde_json",
  "similar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "ts-rs",
+ "url",
  "walkdir",
 ]
 
@@ -3786,8 +3788,10 @@ dependencies = [
  "codex-git-utils",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-path-uri",
  "codex-utils-template",
  "pretty_assertions",
+ "tokio",
 ]
 
 [[package]]
