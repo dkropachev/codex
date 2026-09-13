@@ -15,7 +15,11 @@ pub(super) async fn spawn_review_thread(
         prompt: review_prompt,
         user_facing_hint,
         pull_request_context,
+        verification,
+        action,
+        checkout_root,
     } = resolved;
+    let coding_model = parent_turn_context.model_info.slug.clone();
     let model = config
         .review_model
         .clone()
@@ -162,7 +166,7 @@ pub(super) async fn spawn_review_thread(
     // Seed the child task with the review prompt as the initial user message.
     let input = vec![TurnInput::UserInput {
         content: vec![UserInput::Text {
-            text: review_prompt,
+            text: review_prompt.clone(),
             // Review prompt is synthesized; no UI element ranges to preserve.
             text_elements: Vec::new(),
         }],
@@ -178,7 +182,7 @@ pub(super) async fn spawn_review_thread(
     // a correctly ordered entered/exited lifecycle.
     let item = TurnItem::EnteredReviewMode(EnteredReviewModeItem {
         id: uuid::Uuid::now_v7().to_string(),
-        target,
+        target: target.clone(),
         user_facing_hint,
     });
     sess.emit_turn_item_started(&tc, &item).await;
@@ -187,5 +191,18 @@ pub(super) async fn spawn_review_thread(
     // TODO(ccunningham): Review turns currently rely on `spawn_task` for TurnComplete but do not
     // emit a parent TurnStarted. Consider giving review a full parent turn lifecycle
     // (TurnStarted + TurnComplete) for consistency with other standalone tasks.
-    sess.start_task(tc.clone(), input, ReviewTask::new()).await;
+    sess.start_task(
+        tc.clone(),
+        input,
+        ReviewTask::new(ReviewTaskConfig {
+            target,
+            target_instructions: review_prompt,
+            verification,
+            action,
+            review_model: model,
+            coding_model,
+            checkout_root,
+        }),
+    )
+    .await;
 }

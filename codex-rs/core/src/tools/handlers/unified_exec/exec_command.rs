@@ -52,6 +52,7 @@ use super::shell_mode_for_environment;
 pub(crate) struct ExecCommandHandlerOptions {
     pub(crate) allow_login_shell: bool,
     pub(crate) exec_permission_approvals_enabled: bool,
+    pub(crate) sandbox_override_allowed: bool,
     pub(crate) include_environment_id: bool,
     pub(crate) include_shell_parameter: bool,
 }
@@ -66,6 +67,7 @@ impl Default for ExecCommandHandler {
             options: ExecCommandHandlerOptions {
                 allow_login_shell: false,
                 exec_permission_approvals_enabled: false,
+                sandbox_override_allowed: true,
                 include_environment_id: false,
                 include_shell_parameter: true,
             },
@@ -89,6 +91,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
             CommandToolOptions {
                 allow_login_shell: self.options.allow_login_shell,
                 exec_permission_approvals_enabled: self.options.exec_permission_approvals_enabled,
+                sandbox_override_allowed: self.options.sandbox_override_allowed,
             },
             self.options.include_environment_id,
             self.options.include_shell_parameter,

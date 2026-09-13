@@ -16,7 +16,6 @@ use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
 
 use crate::config::Config;
-use crate::review_prompts::resolve_review_request;
 use crate::review_prompts::resolve_review_request_with_runner;
 use crate::session::review_command_runner::ExecutorReviewCommandRunner;
 use crate::session::spawn_review_thread;
@@ -41,7 +40,6 @@ use codex_protocol::protocol::RealtimeConversationListVoicesResponseEvent;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
-use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadRolledBackEvent;
@@ -568,6 +566,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         .into_iter()
         .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
         .collect::<Vec<_>>();
+    sess.rebuild_pending_review_reports(&replay_items).await;
     sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
         .await;
     sess.services
@@ -714,22 +713,13 @@ pub async fn review(
     sub_id: String,
     review_request: ReviewRequest,
 ) {
-    let scope_requires_executor = matches!(
-        &review_request.target,
-        ReviewTarget::BaseBranch { .. } | ReviewTarget::PullRequest { .. }
-    );
-    let mut environment_error = None;
-    if scope_requires_executor
-        && let Err(err) = sess
-            .services
-            .turn_environments
-            .resolve_primary_environment()
-            .await
-    {
-        environment_error = Some(anyhow::anyhow!(
-            "failed to start review scope environment: {err}"
-        ));
-    }
+    let environment_error = sess
+        .services
+        .turn_environments
+        .resolve_primary_environment()
+        .await
+        .err()
+        .map(|err| anyhow::anyhow!("failed to start review scope environment: {err}"));
     let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
     sess.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
         .await;
@@ -738,26 +728,16 @@ pub async fn review(
     let resolved = if let Some(err) = environment_error {
         Err(err)
     } else {
-        match &review_request.target {
-            ReviewTarget::BaseBranch { .. } | ReviewTarget::PullRequest { .. } => {
-                if let Some(environment) = turn_context.environments.primary() {
-                    let runner = ExecutorReviewCommandRunner::new(
-                        environment.environment.get_exec_backend(),
-                        &turn_context.config.permissions.shell_environment_policy,
-                    );
-                    resolve_review_request_with_runner(review_request, &runner, environment.cwd())
-                        .await
-                } else {
-                    Err(anyhow::anyhow!(
-                        "cannot resolve review scope without a selected environment"
-                    ))
-                }
-            }
-            _ =>
-            {
-                #[allow(deprecated)]
-                resolve_review_request(review_request, &turn_context.cwd).await
-            }
+        if let Some(environment) = turn_context.environments.primary() {
+            let runner = ExecutorReviewCommandRunner::new(
+                environment.environment.get_exec_backend(),
+                &turn_context.config.permissions.shell_environment_policy,
+            );
+            resolve_review_request_with_runner(review_request, &runner, environment.cwd()).await
+        } else {
+            Err(anyhow::anyhow!(
+                "cannot resolve review scope without a selected environment"
+            ))
         }
     };
     match resolved {

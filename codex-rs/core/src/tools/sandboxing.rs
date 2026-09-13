@@ -422,6 +422,7 @@ pub(crate) struct SandboxAttempt<'a> {
     pub(crate) manager: &'a SandboxManager,
     pub(crate) sandbox_cwd: &'a PathUri,
     pub(crate) workspace_roots: &'a [AbsolutePathBuf],
+    pub(crate) review_protected_paths: &'a [PathUri],
     pub codex_linux_sandbox_exe: Option<&'a std::path::PathBuf>,
     pub use_legacy_landlock: bool,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
@@ -484,6 +485,12 @@ impl<'a> SandboxAttempt<'a> {
             self.exec_server_permissions,
             command.additional_permissions.as_ref(),
         );
+        let mut exec_server_permissions =
+            codex_protocol::models::PermissionProfile::<PathUri>::from(exec_server_permissions);
+        crate::session::turn_context::add_read_only_paths(
+            &mut exec_server_permissions,
+            self.review_protected_paths,
+        );
         let request = self
             .manager
             .transform(SandboxTransformRequest {
@@ -509,7 +516,7 @@ impl<'a> SandboxAttempt<'a> {
         exec_request.exec_server_managed_network = managed_network;
         if self.sandbox_requested {
             exec_request.exec_server_sandbox = Some(FileSystemSandboxContext {
-                permissions: exec_server_permissions.into(),
+                permissions: exec_server_permissions,
                 cwd: Some(exec_request.windows_sandbox_policy_cwd.clone()),
                 workspace_roots: Vec::new(),
                 windows_sandbox_level: self.windows_sandbox_level,

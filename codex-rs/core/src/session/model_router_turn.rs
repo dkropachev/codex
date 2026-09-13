@@ -212,6 +212,30 @@ impl Session {
         );
         rebuilt.model_verification_emitted =
             AtomicBool::new(previous.model_verification_emitted.load(Ordering::Relaxed));
+        if previous
+            .extension_data
+            .get::<crate::codex_delegate::RestrictedReviewStage>()
+            .is_some()
+        {
+            rebuilt
+                .extension_data
+                .insert(crate::codex_delegate::RestrictedReviewStage);
+        }
+        if previous
+            .extension_data
+            .get::<crate::codex_delegate::ToolFreeReviewStage>()
+            .is_some()
+        {
+            rebuilt
+                .extension_data
+                .insert(crate::codex_delegate::ToolFreeReviewStage);
+        }
+        if let Some(paths) = previous
+            .extension_data
+            .get::<crate::codex_delegate::ReviewProtectedPaths>()
+        {
+            rebuilt.extension_data.insert(paths.as_ref().clone());
+        }
         rebuilt
     }
 }

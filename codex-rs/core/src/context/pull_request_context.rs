@@ -6,7 +6,7 @@ use super::ContextualUserFragment;
 const CONTEXT_START_MARKER: &str = "<pull_request_context>";
 const CONTEXT_END_MARKER: &str = "</pull_request_context>";
 const CONTEXT_TRUNCATION_NOTICE: &str =
-    "\n[Pull request context truncated to the 8192-byte limit.]\n";
+    "\n[Pull request context truncated to the 8K-token limit.]\n";
 pub(super) const MAX_PULL_REQUEST_CONTEXT_BYTES: usize = 8 * 1024;
 
 /// Bounded, explicitly untrusted pull request metadata supplied to a reviewer.

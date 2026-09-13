@@ -582,6 +582,15 @@ fn code_mode_namespace_descriptions(
 
 #[instrument(level = "trace", skip_all)]
 fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    if context
+        .step_context
+        .turn
+        .extension_data
+        .get::<crate::codex_delegate::ToolFreeReviewStage>()
+        .is_some()
+    {
+        return;
+    }
     if crate::guardian::is_guardian_reviewer_source(&context.step_context.turn.session_source) {
         let turn_context = context.step_context.turn.as_ref();
         let environment_mode = tool_environment_mode(context.step_context);
@@ -590,6 +599,7 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
             planned_tools.add(ExecCommandHandler::new(ExecCommandHandlerOptions {
                 allow_login_shell: turn_context.config.permissions.allow_login_shell,
                 exec_permission_approvals_enabled: false,
+                sandbox_override_allowed: true,
                 include_environment_id,
                 include_shell_parameter: unified_exec_should_include_shell_parameter(
                     turn_context,
@@ -644,11 +654,16 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Planne
 
     let allow_login_shell = turn_context.config.permissions.allow_login_shell;
     let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
+    let sandbox_override_allowed = turn_context
+        .extension_data
+        .get::<crate::codex_delegate::RestrictedReviewStage>()
+        .is_none();
     let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
     let shell_command_options = ShellCommandHandlerOptions {
         backend_config: shell_command_backend_for_features(features),
         allow_login_shell,
         exec_permission_approvals_enabled,
+        sandbox_override_allowed,
     };
 
     match shell_type_for_model_and_features(&turn_context.model_info, features) {
@@ -656,6 +671,7 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Planne
             planned_tools.add(ExecCommandHandler::new(ExecCommandHandlerOptions {
                 allow_login_shell,
                 exec_permission_approvals_enabled,
+                sandbox_override_allowed,
                 include_environment_id,
                 include_shell_parameter: unified_exec_should_include_shell_parameter(
                     turn_context,

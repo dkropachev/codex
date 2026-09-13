@@ -11,6 +11,14 @@ use super::LegacyModelMismatchWarning;
 use super::LegacyUnifiedExecProcessLimitWarning;
 use super::PullRequestContext;
 use super::RecommendedPluginsInstructions;
+use super::ReviewCandidatesFragment;
+use super::ReviewFixFindingsFragment;
+use super::ReviewHandoffFragment;
+use super::ReviewReferencesFragment;
+use super::ReviewRepairInputFragment;
+use super::ReviewSourceFragment;
+use super::ReviewStageControlFragment;
+use super::ReviewTargetInstructionsFragment;
 use super::SkillInstructions;
 use super::SubagentNotification;
 use super::TurnAborted;
@@ -48,6 +56,22 @@ static LEGACY_MODEL_MISMATCH_WARNING_REGISTRATION: FragmentRegistrationProxy<
 > = FragmentRegistrationProxy::new();
 static PULL_REQUEST_CONTEXT_REGISTRATION: FragmentRegistrationProxy<PullRequestContext> =
     FragmentRegistrationProxy::new();
+static REVIEW_HANDOFF_REGISTRATION: FragmentRegistrationProxy<ReviewHandoffFragment> =
+    FragmentRegistrationProxy::new();
+static REVIEW_CANDIDATES_REGISTRATION: FragmentRegistrationProxy<ReviewCandidatesFragment> =
+    FragmentRegistrationProxy::new();
+static REVIEW_SOURCE_REGISTRATION: FragmentRegistrationProxy<ReviewSourceFragment> =
+    FragmentRegistrationProxy::new();
+static REVIEW_REFERENCES_REGISTRATION: FragmentRegistrationProxy<ReviewReferencesFragment> =
+    FragmentRegistrationProxy::new();
+static REVIEW_FIX_FINDINGS_REGISTRATION: FragmentRegistrationProxy<ReviewFixFindingsFragment> =
+    FragmentRegistrationProxy::new();
+static REVIEW_TARGET_REGISTRATION: FragmentRegistrationProxy<ReviewTargetInstructionsFragment> =
+    FragmentRegistrationProxy::new();
+static REVIEW_REPAIR_INPUT_REGISTRATION: FragmentRegistrationProxy<ReviewRepairInputFragment> =
+    FragmentRegistrationProxy::new();
+static REVIEW_STAGE_CONTROL_REGISTRATION: FragmentRegistrationProxy<ReviewStageControlFragment> =
+    FragmentRegistrationProxy::new();
 
 static CONTEXTUAL_USER_FRAGMENTS: &[&dyn FragmentRegistration] = &[
     &USER_INSTRUCTIONS_REGISTRATION,
@@ -63,6 +87,14 @@ static CONTEXTUAL_USER_FRAGMENTS: &[&dyn FragmentRegistration] = &[
     &LEGACY_APPLY_PATCH_EXEC_COMMAND_WARNING_REGISTRATION,
     &LEGACY_MODEL_MISMATCH_WARNING_REGISTRATION,
     &PULL_REQUEST_CONTEXT_REGISTRATION,
+    &REVIEW_HANDOFF_REGISTRATION,
+    &REVIEW_CANDIDATES_REGISTRATION,
+    &REVIEW_SOURCE_REGISTRATION,
+    &REVIEW_REFERENCES_REGISTRATION,
+    &REVIEW_FIX_FINDINGS_REGISTRATION,
+    &REVIEW_TARGET_REGISTRATION,
+    &REVIEW_REPAIR_INPUT_REGISTRATION,
+    &REVIEW_STAGE_CONTROL_REGISTRATION,
 ];
 
 fn is_standard_contextual_user_text(text: &str) -> bool {

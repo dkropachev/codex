@@ -8,6 +8,7 @@ use codex_exec_server::ExecBackend;
 use codex_exec_server::ExecEnvPolicy;
 use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecParams;
+use codex_exec_server::ExecProcess;
 use codex_exec_server::ProcessId;
 use codex_git_utils::ReviewCommand;
 use codex_git_utils::ReviewCommandOutput;
@@ -24,6 +25,35 @@ const READ_CHUNK_BYTES: usize = 64 * 1024;
 const READ_WAIT: Duration = Duration::from_secs(1);
 const TERMINATE_TIMEOUT: Duration = Duration::from_secs(1);
 const GH_REPO_ENV_VAR: &str = "GH_REPO";
+
+struct TerminateProcessOnDrop {
+    process: Option<Arc<dyn ExecProcess>>,
+}
+
+impl TerminateProcessOnDrop {
+    fn new(process: Arc<dyn ExecProcess>) -> Self {
+        Self {
+            process: Some(process),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.process = None;
+    }
+}
+
+impl Drop for TerminateProcessOnDrop {
+    fn drop(&mut self) {
+        let Some(process) = self.process.take() else {
+            return;
+        };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let _ = tokio::time::timeout(TERMINATE_TIMEOUT, process.terminate()).await;
+            });
+        }
+    }
+}
 
 /// Runs review-scope metadata commands through the selected turn executor.
 pub(crate) struct ExecutorReviewCommandRunner {
@@ -93,13 +123,17 @@ impl ReviewCommandRunner for ExecutorReviewCommandRunner {
         .await
         .context("review command timed out while starting")??;
         let process = started.process;
+        let mut terminate_on_drop = TerminateProcessOnDrop::new(Arc::clone(&process));
         let collected = timeout_at(
             deadline,
             collect_output(process.as_ref(), command.output_bytes_cap()),
         )
         .await;
         match collected {
-            Ok(Ok(output)) => Ok(output),
+            Ok(Ok(output)) => {
+                terminate_on_drop.disarm();
+                Ok(output)
+            }
             Ok(Err(err)) => {
                 let terminate_deadline = Instant::now() + TERMINATE_TIMEOUT;
                 let _ = timeout_at(terminate_deadline, process.terminate()).await;

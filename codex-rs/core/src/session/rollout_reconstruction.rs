@@ -271,7 +271,12 @@ impl Session {
                 RolloutItem::ResponseItem(response_item) => {
                     let active_segment =
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
-                    active_segment.counts_as_user_turn |= is_user_turn_boundary(response_item);
+                    active_segment.counts_as_user_turn |=
+                        !crate::context::ReviewHandoff::is_consumption_marker(response_item)
+                            && !crate::context::ReviewHandoff::is_pending_report_marker(
+                                response_item,
+                            )
+                            && is_user_turn_boundary(response_item);
                 }
                 RolloutItem::InterAgentCommunication(_) => {
                     let active_segment =
@@ -317,7 +322,16 @@ impl Session {
         let mut history = ContextManager::new();
         let mut saw_legacy_compaction_without_replacement_history = false;
         if let Some(base_replacement_history) = base_replacement_history {
-            history.replace(base_replacement_history.to_vec());
+            history.replace(
+                base_replacement_history
+                    .iter()
+                    .filter(|item| {
+                        !crate::context::ReviewHandoff::is_consumption_marker(item)
+                            && !crate::context::ReviewHandoff::is_pending_report_marker(item)
+                    })
+                    .cloned()
+                    .collect(),
+            );
         }
         // Materialize exact history semantics from the replay-derived suffix. The eventual lazy
         // design should keep this same replay shape, but drive it from a resumable reverse source
@@ -325,6 +339,11 @@ impl Session {
         for item in rollout_suffix {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
+                    if crate::context::ReviewHandoff::is_consumption_marker(response_item)
+                        || crate::context::ReviewHandoff::is_pending_report_marker(response_item)
+                    {
+                        continue;
+                    }
                     history.record_items(
                         std::iter::once(response_item),
                         turn_context.model_info.truncation_policy.into(),

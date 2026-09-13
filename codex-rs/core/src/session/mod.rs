@@ -210,6 +210,7 @@ mod model_router_turn;
 pub(crate) mod multi_agents;
 mod review;
 mod review_command_runner;
+mod review_handoff;
 mod rollout_budget;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
@@ -231,6 +232,7 @@ pub(crate) use self::input_queue::TurnInput;
 pub(crate) use self::input_queue::TurnInputQueue;
 pub use self::mcp_runtime::McpRuntimeSnapshot;
 use self::review::spawn_review_thread;
+pub(crate) use self::review_command_runner::ExecutorReviewCommandRunner;
 use self::session::AppServerClientMetadata;
 use self::session::Session;
 use self::session::SessionConfiguration;
@@ -320,6 +322,7 @@ use crate::stream_events_utils::HandleOutputCtx;
 #[cfg(test)]
 use crate::stream_events_utils::handle_output_item_done;
 use crate::tasks::ReviewTask;
+use crate::tasks::ReviewTaskConfig;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::network_approval::build_blocked_request_observer;
 use crate::tools::network_approval::build_network_policy_decider;
@@ -1320,6 +1323,8 @@ impl Session {
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
+        self.restore_pending_review_reports(&conversation_history)
+            .await;
         let is_subagent = {
             let state = self.state.lock().await;
             state
@@ -3503,11 +3508,19 @@ impl Session {
 
     #[tracing::instrument(level = "trace", skip_all, fields(item_count = items.len()))]
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
-        if let Some(live_thread) = self.live_thread()
-            && let Err(e) = live_thread.append_items(items).await
-        {
+        if let Err(e) = self.try_persist_rollout_items(items).await {
             error!("failed to record rollout items: {e:#}");
         }
+    }
+
+    pub(crate) async fn try_persist_rollout_items(
+        &self,
+        items: &[RolloutItem],
+    ) -> anyhow::Result<()> {
+        if let Some(live_thread) = self.live_thread() {
+            live_thread.append_items(items).await?;
+        }
+        Ok(())
     }
 
     pub(crate) async fn clone_history(&self) -> ContextManager {

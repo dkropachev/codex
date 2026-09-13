@@ -11,7 +11,12 @@ use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -374,8 +379,15 @@ impl TurnContext {
             &file_system_sandbox_policy,
             network_sandbox_policy,
         );
+        let mut permissions = PermissionProfile::<PathUri>::from(permissions);
+        if let Some(paths) = self
+            .extension_data
+            .get::<crate::codex_delegate::ReviewProtectedPaths>()
+        {
+            add_read_only_paths(&mut permissions, &paths.0);
+        }
         FileSystemSandboxContext {
-            permissions: permissions.into(),
+            permissions,
             cwd: Some(cwd.clone()),
             workspace_roots: self
                 .config
@@ -456,6 +468,23 @@ impl TurnContext {
                 .unwrap_or_default(),
         })
     }
+}
+
+pub(crate) fn add_read_only_paths<PathType: Clone>(
+    profile: &mut PermissionProfile<PathType>,
+    paths: &[PathType],
+) {
+    let PermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+        ..
+    } = profile
+    else {
+        return;
+    };
+    entries.extend(paths.iter().cloned().map(|path| FileSystemSandboxEntry {
+        path: FileSystemPath::Path { path },
+        access: FileSystemAccessMode::Read,
+    }));
 }
 
 fn local_time_context() -> (String, String) {
@@ -823,6 +852,33 @@ impl Session {
             sub_id,
             skills_snapshot,
         );
+        if self
+            .services
+            .thread_extension_data
+            .get::<crate::codex_delegate::RestrictedReviewStage>()
+            .is_some()
+        {
+            turn_context
+                .extension_data
+                .insert(crate::codex_delegate::RestrictedReviewStage);
+        }
+        if self
+            .services
+            .thread_extension_data
+            .get::<crate::codex_delegate::ToolFreeReviewStage>()
+            .is_some()
+        {
+            turn_context
+                .extension_data
+                .insert(crate::codex_delegate::ToolFreeReviewStage);
+        }
+        if let Some(paths) = self
+            .services
+            .thread_extension_data
+            .get::<crate::codex_delegate::ReviewProtectedPaths>()
+        {
+            turn_context.extension_data.insert(paths.as_ref().clone());
+        }
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 
         if let Some(final_schema) = final_output_json_schema {

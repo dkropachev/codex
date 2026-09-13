@@ -119,6 +119,42 @@ async fn runner_terminates_process_after_command_timeout() {
     assert!(process.terminated.load(Ordering::SeqCst));
 }
 
+#[tokio::test]
+async fn dropping_a_running_command_terminates_its_process() {
+    let process = Arc::new(TestProcess::new(ReadBehavior::Hang));
+    let runner = ExecutorReviewCommandRunner::new(
+        Arc::new(SingleProcessBackend::new(process.clone())),
+        &ShellEnvironmentPolicy::default(),
+    );
+    let cwd = PathUri::parse("file:///workspace").expect("cwd");
+    let task = tokio::spawn(async move {
+        resolve_pull_request_for_review_with_runner(
+            &runner,
+            &cwd,
+            "https://github.com/openai/codex/pull/42",
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !process.read_started.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("command should start reading");
+
+    task.abort();
+    let _ = task.await;
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !process.terminated.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("dropped command should terminate");
+}
+
 #[test]
 fn preserves_shell_environment_policy_for_executor() {
     let policy = ShellEnvironmentPolicy {
@@ -179,7 +215,13 @@ async fn resolves_pull_request_at_foreign_executor_cwd() {
                 .to_string(),
             ),
             expected(
-                &["git", "rev-parse", "--verify", "base-oid^{commit}"],
+                &[
+                    "git",
+                    "rev-parse",
+                    "--verify",
+                    "--end-of-options",
+                    "base-oid^{commit}",
+                ],
                 "resolved-base\n",
             ),
             expected(
@@ -325,6 +367,7 @@ struct TestProcess {
     process_id: ProcessId,
     behavior: ReadBehavior,
     terminated: AtomicBool,
+    read_started: AtomicBool,
 }
 
 impl TestProcess {
@@ -333,6 +376,7 @@ impl TestProcess {
             process_id: ProcessId::from("review-command-test".to_string()),
             behavior,
             terminated: AtomicBool::new(false),
+            read_started: AtomicBool::new(false),
         }
     }
 }
@@ -357,6 +401,7 @@ impl ExecProcess for TestProcess {
         _wait_ms: Option<u64>,
     ) -> ExecProcessFuture<'_, ReadResponse> {
         Box::pin(async move {
+            self.read_started.store(true, Ordering::SeqCst);
             match &self.behavior {
                 ReadBehavior::Response(response) => Ok(response.clone()),
                 ReadBehavior::Error => Err(codex_exec_server::ExecServerError::Protocol(

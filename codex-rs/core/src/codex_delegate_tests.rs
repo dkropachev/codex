@@ -199,6 +199,7 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
             SubAgentSource::Review,
             /*initial_history*/ None,
             codex_extension_api::ExtensionDataInit::default(),
+            DelegateContextPolicy::Inherit,
         ),
     )
     .await

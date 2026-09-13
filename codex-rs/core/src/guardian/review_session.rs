@@ -672,6 +672,7 @@ async fn spawn_guardian_review_session(
         SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()),
         initial_history,
         codex_extension_api::ExtensionDataInit::default(),
+        crate::codex_delegate::DelegateContextPolicy::Inherit,
     ))
     .await?;
 
