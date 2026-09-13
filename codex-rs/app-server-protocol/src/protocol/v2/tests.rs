@@ -139,6 +139,12 @@ fn review_resolve_scope_request_and_response_round_trip() {
             "refs/remotes/origin/main".to_string(),
             "refs/heads/feature/review-picker".to_string(),
         ],
+        has_uncommitted_changes: true,
+        commits: vec![ReviewScopeCommit {
+            sha: "abc123".to_string(),
+            title: "Add review picker".to_string(),
+        }],
+        error: None,
     };
     let response_value = serde_json::to_value(&response).expect("serialize scope response");
     assert_eq!(
@@ -155,7 +161,10 @@ fn review_resolve_scope_request_and_response_round_trip() {
                 "target": "refs/remotes/origin/main"
             },
             "currentBranch": "feature/review-picker",
-            "branches": ["refs/remotes/origin/main", "refs/heads/feature/review-picker"]
+            "branches": ["refs/remotes/origin/main", "refs/heads/feature/review-picker"],
+            "hasUncommittedChanges": true,
+            "commits": [{"sha": "abc123", "title": "Add review picker"}],
+            "error": null
         })
     );
     assert_eq!(

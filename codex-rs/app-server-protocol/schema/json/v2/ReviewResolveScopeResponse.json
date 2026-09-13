@@ -18,6 +18,21 @@
       ],
       "type": "object"
     },
+    "ReviewScopeCommit": {
+      "properties": {
+        "sha": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha",
+        "title"
+      ],
+      "type": "object"
+    },
     "ReviewScopePullRequest": {
       "properties": {
         "baseBranch": {
@@ -58,6 +73,13 @@
       },
       "type": "array"
     },
+    "commits": {
+      "description": "Recent commits reachable from HEAD, capped at 100 entries.",
+      "items": {
+        "$ref": "#/definitions/ReviewScopeCommit"
+      },
+      "type": "array"
+    },
     "currentBranch": {
       "description": "Currently checked-out branch, or `null` for a detached head or non-repository cwd.",
       "type": [
@@ -76,6 +98,17 @@
       ],
       "description": "Detected repository default branch, when one was found."
     },
+    "error": {
+      "description": "Short diagnostic shown when Git repository detection failed.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "hasUncommittedChanges": {
+      "description": "Whether staged, unstaged, or untracked changes are present.",
+      "type": "boolean"
+    },
     "pullRequest": {
       "anyOf": [
         {
@@ -89,7 +122,9 @@
     }
   },
   "required": [
-    "branches"
+    "branches",
+    "commits",
+    "hasUncommittedChanges"
   ],
   "title": "ReviewResolveScopeResponse",
   "type": "object"
