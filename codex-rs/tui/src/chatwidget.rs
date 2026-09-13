@@ -100,7 +100,9 @@ use codex_app_server_protocol::ModelVerification as AppServerModelVerification;
 use codex_app_server_protocol::RateLimitReachedType;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
+pub(crate) use codex_app_server_protocol::ReviewAction;
 use codex_app_server_protocol::ReviewTarget;
+use codex_app_server_protocol::ReviewVerification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -127,10 +129,7 @@ use codex_connectors::AppInfo;
 use codex_core_skills::model::SkillMetadata;
 use codex_features::FEATURES;
 use codex_features::Feature;
-#[cfg(test)]
-use codex_git_utils::CommitLogEntry;
 use codex_git_utils::get_git_repo_root;
-use codex_git_utils::recent_commits;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_plugin::PluginCapabilitySummary;
@@ -391,10 +390,8 @@ mod rendering;
 mod replay;
 mod review;
 mod review_popups;
-pub(crate) use self::review::ReviewAction;
+mod review_settings_popups;
 use self::review::ReviewState;
-#[cfg(test)]
-pub(crate) use self::review_popups::show_review_commit_picker_with_entries;
 mod safety_buffering;
 mod service_tiers;
 mod settings;
@@ -1259,7 +1256,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn exit_review_mode_after_item(&mut self) {
+    fn exit_review_mode_after_item(&mut self, review: String) {
         self.flush_answer_stream_with_separator();
         self.flush_interrupt_queue();
         self.flush_active_cell();
@@ -1268,6 +1265,11 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_review_status_line(
             "<< Code review finished >>".to_string(),
         ));
+        let parsed = parse_assistant_markdown(&review, self.config.cwd.as_path());
+        if !parsed.visible_markdown.is_empty() {
+            self.finalize_completed_assistant_message(Some(&parsed.visible_markdown));
+            self.record_agent_markdown(&parsed.visible_markdown);
+        }
         self.request_redraw();
     }
 

@@ -44,10 +44,12 @@ use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewThreadModelDefaults;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ReviewAction;
 use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
+use codex_app_server_protocol::ReviewVerification;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
@@ -1092,6 +1094,8 @@ impl AppServerSession {
         &mut self,
         thread_id: ThreadId,
         target: ReviewTarget,
+        verification: ReviewVerification,
+        action: ReviewAction,
     ) -> Result<ReviewStartResponse> {
         let request_id = self.next_request_id();
         self.client
@@ -1101,6 +1105,8 @@ impl AppServerSession {
                     thread_id: thread_id.to_string(),
                     target,
                     delivery: Some(ReviewDelivery::Inline),
+                    verification: Some(verification),
+                    action: Some(action),
                 },
             })
             .await

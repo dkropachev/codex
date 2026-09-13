@@ -206,29 +206,64 @@ async fn queued_slash_review_with_args_dispatches_after_active_turn() {
 
     complete_turn_with_message(&mut chat, "turn-1", Some("done"));
 
-    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Choose a review action"));
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Choose review verification"));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    let (thread_id, cwd, target, action) = loop {
+    let (thread_id, cwd, target, verification) = loop {
+        if let AppEvent::OpenReviewActionPicker {
+            thread_id,
+            cwd,
+            target,
+            verification,
+        } = rx.try_recv().expect("review verification event")
+        {
+            break (thread_id, cwd, target, verification);
+        }
+    };
+    assert_eq!(verification, ReviewVerification::SinglePass);
+    let request_id = chat.review.begin_scope_resolution(cwd.clone());
+    chat.review.set_scope_resolution(
+        request_id,
+        cwd.clone(),
+        crate::review_scope::ReviewScopeResolution {
+            commits: vec![codex_app_server_protocol::ReviewScopeCommit {
+                sha: "abc1234".to_string(),
+                title: "Example commit".to_string(),
+            }],
+            ..Default::default()
+        },
+    );
+    chat.show_review_action_picker(thread_id, cwd, target, verification);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let (thread_id, cwd, target, verification, action) = loop {
         if let AppEvent::StartReview {
             thread_id,
             cwd,
             target,
+            verification,
             action,
         } = rx.try_recv().expect("review action event")
         {
-            break (thread_id, cwd, target, action);
+            break (thread_id, cwd, target, verification, action);
         }
     };
     assert_eq!(action, ReviewAction::Report);
-    chat.start_review_for_thread(thread_id, cwd, target, action);
+    chat.start_review_for_thread(thread_id, cwd, target, verification, action);
 
     match op_rx.try_recv() {
-        Ok(Op::Review { target }) => assert_eq!(
+        Ok(Op::Review {
             target,
-            ReviewTarget::Custom {
-                instructions: "check regressions".to_string(),
-            }
-        ),
+            verification,
+            action,
+        }) => {
+            assert_eq!(
+                target,
+                ReviewTarget::Custom {
+                    instructions: "check regressions".to_string(),
+                }
+            );
+            assert_eq!(verification, ReviewVerification::SinglePass);
+            assert_eq!(action, ReviewAction::Report);
+        }
         other => panic!("expected queued /review to submit review op, got {other:?}"),
     }
 }

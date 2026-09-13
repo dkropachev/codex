@@ -147,6 +147,10 @@ impl EventProcessorWithJsonOutput {
                 id: make_id(),
                 details: ThreadItemDetails::AgentMessage(AgentMessageItem { text }),
             }),
+            ThreadItem::ExitedReviewMode { review, .. } => Some(ExecThreadItem {
+                id: make_id(),
+                details: ThreadItemDetails::AgentMessage(AgentMessageItem { text: review }),
+            }),
             ThreadItem::Reasoning { summary, .. } => {
                 let text = summary.join("\n");
                 if text.trim().is_empty() {
@@ -329,7 +333,9 @@ impl EventProcessorWithJsonOutput {
 
     fn map_started_item(&mut self, item: ThreadItem) -> Option<ExecThreadItem> {
         match item {
-            ThreadItem::AgentMessage { .. } | ThreadItem::Reasoning { .. } => None,
+            ThreadItem::AgentMessage { .. }
+            | ThreadItem::Reasoning { .. }
+            | ThreadItem::ExitedReviewMode { .. } => None,
             other => {
                 let raw_id = other.id().to_string();
                 Self::map_item_with_id(other, || self.started_item_id(&raw_id))
@@ -376,7 +382,8 @@ impl EventProcessorWithJsonOutput {
             .iter()
             .rev()
             .find_map(|item| match item {
-                ThreadItem::AgentMessage { text, .. } => Some(text.clone()),
+                ThreadItem::AgentMessage { text, .. }
+                | ThreadItem::ExitedReviewMode { review: text, .. } => Some(text.clone()),
                 _ => None,
             })
             .or_else(|| {

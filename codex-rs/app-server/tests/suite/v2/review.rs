@@ -37,21 +37,25 @@ const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 #[tokio::test]
 async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()> {
     let review_payload = json!({
-        "findings": [
+        "candidates": [
             {
                 "title": "Prefer Stylize helpers",
                 "body": "Use .dim()/.bold() chaining instead of manual Style.",
-                "confidence_score": 0.9,
+                "confidenceScore": 0.9,
                 "priority": 1,
-                "code_location": {
-                    "absolute_file_path": "/tmp/file.rs",
-                    "line_range": {"start": 10, "end": 20}
+                "codeLocation": {
+                    "absoluteFilePath": "/tmp/file.rs",
+                    "lineRange": {"start": 10, "end": 20}
                 }
             }
         ],
-        "overall_correctness": "good",
-        "overall_explanation": "Looks solid overall with minor polish suggested.",
-        "overall_confidence_score": 0.75
+        "assessment": {
+            "verdict": "patch is incorrect",
+            "explanation": "Looks solid overall with minor polish suggested.",
+            "confidenceScore": 0.75
+        },
+        "reviewContext": [],
+        "externalReferences": []
     })
     .to_string();
     let server = create_mock_responses_server_repeating_assistant(&review_payload).await;
@@ -71,10 +75,9 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         .send_review_start_request(ReviewStartParams {
             thread_id: thread_id.clone(),
             delivery: Some(ReviewDelivery::Inline),
-            target: ReviewTarget::Commit {
-                sha: "1234567deadbeef".to_string(),
-                title: Some("Tidy UI colors".to_string()),
-            },
+            target: ReviewTarget::WholeRepository,
+            verification: None,
+            action: None,
         })
         .await?;
     let review_resp: JSONRPCResponse = timeout(
@@ -96,7 +99,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
             id: turn_id.clone(),
             client_id: None,
             content: vec![V2UserInput::Text {
-                text: "commit 1234567: Tidy UI colors".to_string(),
+                text: "whole repository".to_string(),
                 text_elements: Vec::new(),
             }],
         }]
@@ -115,7 +118,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         match started.item {
             ThreadItem::EnteredReviewMode { review, .. } => {
                 assert_eq!(started.turn_id, turn_id);
-                assert_eq!(review, "commit 1234567: Tidy UI colors");
+                assert_eq!(review, "whole repository");
                 saw_entered_review_mode = true;
                 break;
             }
@@ -157,6 +160,23 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
     assert!(review.contains("/tmp/file.rs:10-20"));
     assert_eq!(finding_count, 1);
 
+    loop {
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+        let JSONRPCMessage::Notification(notification) = message else {
+            continue;
+        };
+        if notification.method == "item/completed" {
+            let completed: ItemCompletedNotification =
+                serde_json::from_value(notification.params.expect("item params"))?;
+            if matches!(completed.item, ThreadItem::AgentMessage { .. }) {
+                anyhow::bail!("review emitted a duplicate final agentMessage");
+            }
+        }
+        if notification.method == "turn/completed" {
+            break;
+        }
+    }
+
     Ok(())
 }
 
@@ -197,6 +217,8 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
                 sha: "1234567deadbeef".to_string(),
                 title: Some("Check review approvals".to_string()),
             },
+            verification: None,
+            action: None,
         })
         .await?;
     let review_resp: JSONRPCResponse = timeout(
@@ -281,6 +303,8 @@ async fn review_start_rejects_empty_pull_request_url() -> Result<()> {
             target: ReviewTarget::PullRequest {
                 url: "   ".to_string(),
             },
+            verification: None,
+            action: None,
         })
         .await?;
     let error: JSONRPCError = timeout(
@@ -318,6 +342,8 @@ async fn review_start_rejects_empty_base_branch() -> Result<()> {
             target: ReviewTarget::BaseBranch {
                 branch: "   ".to_string(),
             },
+            verification: None,
+            action: None,
         })
         .await?;
     let error: JSONRPCError = timeout(
@@ -339,10 +365,14 @@ async fn review_start_rejects_empty_base_branch() -> Result<()> {
 #[tokio::test]
 async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<()> {
     let review_payload = json!({
-        "findings": [],
-        "overall_correctness": "ok",
-        "overall_explanation": "detached review",
-        "overall_confidence_score": 0.5
+        "candidates": [],
+        "assessment": {
+            "verdict": "patch is correct",
+            "explanation": "Detached review found no issues.",
+            "confidenceScore": 0.5
+        },
+        "reviewContext": [],
+        "externalReferences": []
     })
     .to_string();
     let server = create_mock_responses_server_repeating_assistant(&review_payload).await;
@@ -366,6 +396,8 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
             target: ReviewTarget::Custom {
                 instructions: "detached review".to_string(),
             },
+            verification: None,
+            action: None,
         })
         .await?;
     let review_resp: JSONRPCResponse = timeout(
@@ -446,6 +478,8 @@ async fn review_start_rejects_empty_commit_sha() -> Result<()> {
                 sha: "\t".to_string(),
                 title: None,
             },
+            verification: None,
+            action: None,
         })
         .await?;
     let error: JSONRPCError = timeout(
@@ -483,6 +517,8 @@ async fn review_start_rejects_empty_custom_instructions() -> Result<()> {
             target: ReviewTarget::Custom {
                 instructions: "\n\n".to_string(),
             },
+            verification: None,
+            action: None,
         })
         .await?;
     let error: JSONRPCError = timeout(

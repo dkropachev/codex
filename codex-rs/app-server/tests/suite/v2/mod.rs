@@ -59,6 +59,7 @@ mod request_permissions;
 mod request_user_input;
 mod request_validation;
 mod review;
+mod review_empty_scope;
 #[cfg(unix)]
 mod review_pull_request;
 mod review_scope;

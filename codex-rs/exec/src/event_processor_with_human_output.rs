@@ -105,6 +105,15 @@ impl EventProcessorWithHumanOutput {
                 self.final_message = Some(text);
                 self.final_message_rendered = true;
             }
+            ThreadItem::ExitedReviewMode { review, .. } => {
+                eprintln!(
+                    "{}\n{}",
+                    "codex review".style(self.italic).style(self.magenta),
+                    review
+                );
+                self.final_message = Some(review);
+                self.final_message_rendered = true;
+            }
             ThreadItem::Reasoning {
                 summary, content, ..
             } => {
@@ -487,7 +496,8 @@ fn final_message_from_turn_items(items: &[ThreadItem]) -> Option<String> {
         .iter()
         .rev()
         .find_map(|item| match item {
-            ThreadItem::AgentMessage { text, .. } => Some(text.clone()),
+            ThreadItem::AgentMessage { text, .. }
+            | ThreadItem::ExitedReviewMode { review: text, .. } => Some(text.clone()),
             _ => None,
         })
         .or_else(|| {

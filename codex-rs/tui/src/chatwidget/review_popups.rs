@@ -1,4 +1,4 @@
-//! Review scope, action, commit, and custom-instruction selection surfaces.
+//! Review scope, commit, branch, and custom-instruction selection surfaces.
 
 use super::*;
 
@@ -25,10 +25,17 @@ impl ChatWidget {
         let tx = self.app_event_tx.clone();
         tokio::spawn(async move {
             let resolution = match (resolver, thread_id) {
-                (Some(resolver), Some(thread_id)) => {
-                    resolver.resolve(thread_id).await.unwrap_or_default()
-                }
-                _ => Default::default(),
+                (Some(resolver), Some(thread_id)) => resolver
+                    .resolve(thread_id)
+                    .await
+                    .unwrap_or_else(|_| crate::review_scope::ReviewScopeResolution {
+                        error: Some("Could not detect Git review scopes.".to_string()),
+                        ..Default::default()
+                    }),
+                _ => crate::review_scope::ReviewScopeResolution {
+                    error: Some("Could not detect Git review scopes.".to_string()),
+                    ..Default::default()
+                },
             };
             tx.send(AppEvent::ReviewScopesResolved {
                 request_id,
@@ -52,87 +59,99 @@ impl ChatWidget {
 
         let thread_id = self.thread_id;
         let mut items = Vec::new();
-        let mut includes_uncommitted = false;
-        if let Some(pull_request) = resolution.pull_request.as_ref() {
-            let description = pull_request
-                .base_branch
-                .as_deref()
-                .map(|branch| format!("Open PR into {branch}"))
-                .or_else(|| Some("Open pull request".to_string()));
-            items.push(review_target_item(
-                format!("Review pull request #{}", pull_request.number),
-                description,
-                thread_id,
-                cwd.clone(),
-                ReviewTarget::PullRequest {
-                    url: pull_request.url.clone(),
-                },
-            ));
-        } else if let Some(default_branch) = resolution.default_branch.as_ref() {
-            let branch_target = resolution
-                .default_branch_target
-                .clone()
-                .unwrap_or_else(|| default_branch.clone());
-            items.push(review_target_item(
-                format!("Review changes against {default_branch}"),
-                Some("Detected default branch".to_string()),
-                thread_id,
-                cwd.clone(),
-                ReviewTarget::BaseBranch {
-                    branch: branch_target,
-                },
-            ));
+        let git_detection_failed = resolution.error.is_some();
+        if let Some(error) = resolution.error.as_ref() {
+            items.push(SelectionItem {
+                name: error.clone(),
+                is_disabled: true,
+                ..Default::default()
+            });
         } else {
-            includes_uncommitted = true;
-            items.push(review_target_item(
-                "Review uncommitted changes".to_string(),
-                /*description*/ None,
-                thread_id,
-                cwd.clone(),
-                ReviewTarget::UncommittedChanges,
-            ));
+            if let Some(pull_request) = resolution.pull_request.as_ref() {
+                let description = pull_request
+                    .base_branch
+                    .as_deref()
+                    .map(|branch| format!("Open PR into {branch}"))
+                    .or_else(|| Some("Open pull request".to_string()));
+                items.push(review_target_item(
+                    format!("Review pull request #{}", pull_request.number),
+                    description,
+                    thread_id,
+                    cwd.clone(),
+                    ReviewTarget::PullRequest {
+                        url: pull_request.url.clone(),
+                    },
+                ));
+            } else if let Some(default_branch) = resolution.default_branch.as_ref() {
+                let branch_target = resolution
+                    .default_branch_target
+                    .clone()
+                    .unwrap_or_else(|| default_branch.clone());
+                items.push(review_target_item(
+                    format!("Review changes against {default_branch}"),
+                    Some("Detected default branch".to_string()),
+                    thread_id,
+                    cwd.clone(),
+                    ReviewTarget::BaseBranch {
+                        branch: branch_target,
+                    },
+                ));
+            }
+
+            if resolution.has_uncommitted_changes {
+                items.push(review_target_item(
+                    "Review uncommitted changes".to_string(),
+                    /*description*/ None,
+                    thread_id,
+                    cwd.clone(),
+                    ReviewTarget::UncommittedChanges,
+                ));
+            }
+            if !resolution.branches.is_empty() {
+                items.push(SelectionItem {
+                    name: "Choose a base branch".to_string(),
+                    description: Some("Select a specific branch".to_string()),
+                    actions: vec![Box::new({
+                        let cwd = cwd.clone();
+                        move |tx| {
+                            tx.send(AppEvent::OpenReviewBranchPicker {
+                                thread_id,
+                                cwd: cwd.clone(),
+                            })
+                        }
+                    })],
+                    dismiss_on_select: false,
+                    dismiss_parent_on_child_accept: true,
+                    ..Default::default()
+                });
+            }
+            if !resolution.commits.is_empty() {
+                items.push(SelectionItem {
+                    name: "Review a commit".to_string(),
+                    actions: vec![Box::new({
+                        let cwd = cwd.clone();
+                        move |tx| {
+                            tx.send(AppEvent::OpenReviewCommitPicker {
+                                thread_id,
+                                cwd: cwd.clone(),
+                            })
+                        }
+                    })],
+                    dismiss_on_select: false,
+                    dismiss_parent_on_child_accept: true,
+                    ..Default::default()
+                });
+            }
         }
 
-        if !includes_uncommitted {
-            items.push(review_target_item(
-                "Review uncommitted changes".to_string(),
-                /*description*/ None,
-                thread_id,
-                cwd.clone(),
-                ReviewTarget::UncommittedChanges,
-            ));
-        }
-        items.push(SelectionItem {
-            name: "Choose a base branch".to_string(),
-            description: Some("Select a specific branch".to_string()),
-            actions: vec![Box::new({
-                let cwd = cwd.clone();
-                move |tx| {
-                    tx.send(AppEvent::OpenReviewBranchPicker {
-                        thread_id,
-                        cwd: cwd.clone(),
-                    })
-                }
-            })],
-            dismiss_on_select: false,
-            dismiss_parent_on_child_accept: true,
-            ..Default::default()
-        });
-        items.push(SelectionItem {
-            name: "Review a commit".to_string(),
-            actions: vec![Box::new({
-                let cwd = cwd.clone();
-                move |tx| {
-                    tx.send(AppEvent::OpenReviewCommitPicker {
-                        thread_id,
-                        cwd: cwd.clone(),
-                    })
-                }
-            })],
-            dismiss_on_select: false,
-            dismiss_parent_on_child_accept: true,
-            ..Default::default()
-        });
+        let whole_repository_idx = items.len();
+        items.push(review_target_item(
+            "Review whole repository".to_string(),
+            /*description*/ None,
+            thread_id,
+            cwd.clone(),
+            ReviewTarget::WholeRepository,
+        ));
         items.push(SelectionItem {
             name: "Custom review instructions".to_string(),
             actions: vec![Box::new({
@@ -156,7 +175,11 @@ impl ChatWidget {
                 title: Some("Select a review scope".to_string()),
                 footer_hint: Some(standard_popup_hint_line()),
                 items,
-                initial_selected_idx: Some(0),
+                initial_selected_idx: Some(if git_detection_failed {
+                    whole_repository_idx
+                } else {
+                    0
+                }),
                 ..Default::default()
             },
         );
@@ -182,7 +205,7 @@ impl ChatWidget {
             .map(str::to_string);
         let default_branch = resolution.default_branch;
         let default_branch_target = resolution.default_branch_target;
-        let mut items = Vec::with_capacity(resolution.branches.len().max(1));
+        let mut items = Vec::with_capacity(resolution.branches.len());
         let cwd = cwd.to_path_buf();
 
         for option in resolution.branches {
@@ -208,7 +231,7 @@ impl ChatWidget {
                     .then(|| "Pull request base".to_string()),
                 is_default,
                 actions: vec![Box::new(move |tx: &AppEventSender| {
-                    tx.send(AppEvent::OpenReviewActionPicker {
+                    tx.send(AppEvent::OpenReviewVerificationPicker {
                         thread_id,
                         cwd: cwd.clone(),
                         target: ReviewTarget::BaseBranch {
@@ -218,13 +241,6 @@ impl ChatWidget {
                 })],
                 dismiss_on_select: true,
                 search_value: Some(option),
-                ..Default::default()
-            });
-        }
-        if items.is_empty() {
-            items.push(SelectionItem {
-                name: "No local branches found".to_string(),
-                is_disabled: true,
                 ..Default::default()
             });
         }
@@ -240,43 +256,37 @@ impl ChatWidget {
         });
     }
 
-    pub(crate) async fn show_review_commit_picker(
-        &mut self,
-        thread_id: Option<ThreadId>,
-        cwd: &Path,
-    ) {
+    pub(crate) fn show_review_commit_picker(&mut self, thread_id: Option<ThreadId>, cwd: &Path) {
         if self.thread_id != thread_id || self.config.cwd.as_path() != cwd {
             return;
         }
-        let commits = recent_commits(cwd, /*limit*/ 100).await;
-        if self.thread_id != thread_id || self.config.cwd.as_path() != cwd {
-            return;
-        }
+        let commits = self
+            .review
+            .resolved_scope(cwd)
+            .map(|resolution| resolution.commits.clone())
+            .unwrap_or_default();
 
         let mut items: Vec<SelectionItem> = Vec::with_capacity(commits.len());
         let cwd = cwd.to_path_buf();
         for entry in commits {
             let cwd = cwd.clone();
-            let subject = entry.subject.clone();
+            let title = entry.title.clone();
             let sha = entry.sha.clone();
-            let search_val = format!("{subject} {sha}");
+            let search_val = format!("{title} {sha}");
 
-            items.push(SelectionItem {
-                name: subject.clone(),
-                actions: vec![Box::new(move |tx: &AppEventSender| {
-                    tx.send(AppEvent::OpenReviewActionPicker {
-                        thread_id,
-                        cwd: cwd.clone(),
-                        target: ReviewTarget::Commit {
-                            sha: sha.clone(),
-                            title: Some(subject.clone()),
-                        },
-                    });
-                })],
-                dismiss_on_select: true,
-                search_value: Some(search_val),
-                ..Default::default()
-            });
+            items.push(review_target_item(
+                title.clone(),
+                /*description*/ None,
+                thread_id,
+                cwd,
+                ReviewTarget::Commit {
+                    sha,
+                    title: Some(title),
+                },
+            ));
+            if let Some(item) = items.last_mut() {
+                item.search_value = Some(search_val);
+            }
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
@@ -305,7 +315,7 @@ impl ChatWidget {
                 if trimmed.is_empty() {
                     return;
                 }
-                tx.send(AppEvent::OpenReviewActionPicker {
+                tx.send(AppEvent::OpenReviewVerificationPicker {
                     thread_id,
                     cwd: cwd.clone(),
                     target: ReviewTarget::Custom {
@@ -315,71 +325,6 @@ impl ChatWidget {
             }),
         );
         self.bottom_pane.show_view(Box::new(view));
-    }
-
-    pub(crate) fn show_review_action_picker(
-        &mut self,
-        thread_id: Option<ThreadId>,
-        cwd: PathBuf,
-        target: ReviewTarget,
-    ) {
-        if self.thread_id != thread_id || self.config.cwd.as_path() != cwd {
-            return;
-        }
-        let default_mode_available =
-            crate::collaboration_modes::default_mode_mask(self.model_catalog.as_ref()).is_some();
-        let items = [
-            (
-                "Report findings",
-                "Show the review in this conversation.",
-                ReviewAction::Report,
-            ),
-            (
-                "Fix findings",
-                "Revalidate and fix every valid finding.",
-                ReviewAction::Fix,
-            ),
-            (
-                "Fix findings + commit",
-                "Fix, verify, and create one focused commit.",
-                ReviewAction::FixAndCommit,
-            ),
-        ]
-        .into_iter()
-        .map(|(name, description, action)| {
-            let target = target.clone();
-            let cwd = cwd.clone();
-            let enabled = action == ReviewAction::Report || default_mode_available;
-            SelectionItem {
-                name: name.to_string(),
-                description: Some(description.to_string()),
-                actions: if enabled {
-                    vec![Box::new(move |tx: &AppEventSender| {
-                        tx.send(AppEvent::StartReview {
-                            thread_id,
-                            cwd: cwd.clone(),
-                            target: target.clone(),
-                            action,
-                        });
-                    }) as SelectionAction]
-                } else {
-                    Vec::new()
-                },
-                dismiss_on_select: true,
-                disabled_reason: (!enabled).then(|| {
-                    plan_implementation::PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE.to_string()
-                }),
-                ..Default::default()
-            }
-        })
-        .collect();
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Choose a review action".to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            initial_selected_idx: Some(0),
-            ..Default::default()
-        });
     }
 }
 
@@ -394,7 +339,7 @@ fn review_target_item(
         name,
         description,
         actions: vec![Box::new(move |tx| {
-            tx.send(AppEvent::OpenReviewActionPicker {
+            tx.send(AppEvent::OpenReviewVerificationPicker {
                 thread_id,
                 cwd: cwd.clone(),
                 target: target.clone(),
@@ -410,46 +355,4 @@ fn review_branch_display_name(branch: &str) -> &str {
         .strip_prefix("refs/heads/")
         .or_else(|| branch.strip_prefix("refs/remotes/"))
         .unwrap_or(branch)
-}
-
-#[cfg(test)]
-pub(crate) fn show_review_commit_picker_with_entries(
-    chat: &mut ChatWidget,
-    entries: Vec<CommitLogEntry>,
-) {
-    let mut items: Vec<SelectionItem> = Vec::with_capacity(entries.len());
-    let thread_id = chat.thread_id;
-    let cwd = chat.config.cwd.to_path_buf();
-    for entry in entries {
-        let cwd = cwd.clone();
-        let subject = entry.subject.clone();
-        let sha = entry.sha.clone();
-        let search_val = format!("{subject} {sha}");
-
-        items.push(SelectionItem {
-            name: subject.clone(),
-            actions: vec![Box::new(move |tx: &AppEventSender| {
-                tx.send(AppEvent::OpenReviewActionPicker {
-                    thread_id,
-                    cwd: cwd.clone(),
-                    target: ReviewTarget::Commit {
-                        sha: sha.clone(),
-                        title: Some(subject.clone()),
-                    },
-                });
-            })],
-            dismiss_on_select: true,
-            search_value: Some(search_val),
-            ..Default::default()
-        });
-    }
-
-    chat.bottom_pane.show_selection_view(SelectionViewParams {
-        title: Some("Select a commit to review".to_string()),
-        footer_hint: Some(standard_popup_hint_line()),
-        items,
-        is_searchable: true,
-        search_placeholder: Some("Type to search commits".to_string()),
-        ..Default::default()
-    });
 }

@@ -213,10 +213,14 @@ async fn review_start_sends_parent_lineage_in_turn_metadata_for_thread_fork_v2()
     skip_if_no_network!(Ok(()));
 
     let review_payload = serde_json::json!({
-        "findings": [],
-        "overall_correctness": "good",
-        "overall_explanation": "Done",
-        "overall_confidence_score": 0.5
+        "candidates": [],
+        "assessment": {
+            "verdict": "patch is correct",
+            "explanation": "No issues found.",
+            "confidenceScore": 0.5
+        },
+        "reviewContext": [],
+        "externalReferences": []
     })
     .to_string();
     let server = responses::start_mock_server().await;
@@ -263,6 +267,8 @@ async fn review_start_sends_parent_lineage_in_turn_metadata_for_thread_fork_v2()
             target: ReviewTarget::Custom {
                 instructions: "Review the fork".to_string(),
             },
+            verification: None,
+            action: None,
         })
         .await?;
     let review_resp: JSONRPCResponse = timeout(

@@ -177,8 +177,8 @@ Example with notification opt-out:
 - `thread/realtime/appendText` — append text input to the active realtime session with a required `role` of `user`, `developer`, or `assistant` (experimental); returns `{}`. Older clients that omit `role` default to `user`.
 - `thread/realtime/appendSpeech` — append text that the realtime model should speak to the user (experimental); returns `{}`.
 - `thread/realtime/stop` — stop the active realtime session for the thread (experimental); returns `{}`.
-- `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
-- `review/resolveScope` — inspect the selected thread environment for pull-request and branch review targets without starting a turn or modifying thread history.
+- `review/start` — run an isolated review chain for a thread; emits `enteredReviewMode` and `exitedReviewMode` item lifecycle notifications. The completed exit item is the canonical report.
+- `review/resolveScope` — inspect the selected thread environment for pull-request, dirty-worktree, branch, and recent-commit targets without starting a turn or modifying thread history.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `command/exec/write` — write base64-decoded stdin bytes to a running `command/exec` session or close stdin; returns `{}`.
 - `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.
@@ -995,8 +995,9 @@ manual compaction), the request fails with an `invalid request` error.
 
 Before opening a review target picker, use `review/resolveScope` to inspect the checkout selected by
 the thread. Resolution runs in the thread's primary environment, so remote threads report branches
-from the remote checkout rather than the app-server host. Missing Git or GitHub metadata is returned
-as `null` or an empty list rather than making the request fail.
+from the remote checkout rather than the app-server host. Missing GitHub metadata is returned as
+`null`. A Git detection failure is returned in `error` so clients can fall back to a whole-repository
+or custom review.
 
 ```json
 { "method": "review/resolveScope", "id": 39, "params": {
@@ -1014,7 +1015,10 @@ as `null` or an empty list rather than making the request fail.
         "target": "refs/remotes/origin/main"
     },
     "currentBranch": "feature/review-picker",
-    "branches": ["refs/remotes/origin/main", "refs/heads/feature/review-picker"]
+    "branches": ["refs/remotes/origin/main", "refs/heads/feature/review-picker"],
+    "hasUncommittedChanges": true,
+    "commits": [{"sha": "abc1234", "title": "Polish review output"}],
+    "error": null
 } }
 ```
 
@@ -1023,14 +1027,20 @@ resolved. Its `baseBranchTarget` is the exact ref for the base when local and re
 unambiguously. `defaultBranch` carries both a user-facing branch name and the exact ref to pass in
 a `baseBranch` review target. `currentBranch` is `null` for a detached head, and `branches`
 contains the available explicit base-branch targets with the preferred target first.
+`hasUncommittedChanges` covers staged, unstaged, and untracked files. `commits` contains at most
+100 recent commits from the selected executor. When `error` is non-null, Git-backed choices should
+be disabled and `wholeRepository` should be selected by default.
 
 Use `review/start` to run Codex’s reviewer on the currently checked-out project. The request takes the thread id plus a `target` describing what should be reviewed:
 
 - `{"type":"uncommittedChanges"}` — staged, unstaged, and untracked files.
-- `{"type":"baseBranch","branch":"main"}` — diff against the provided branch’s upstream (see prompt for the exact `git merge-base`/`git diff` instructions Codex will run).
+- `{"type":"baseBranch","branch":"main"}` — review the checkout relative to the exact resolved merge base.
 - `{"type":"commit","sha":"abc1234","title":"Optional subject"}` — review a specific commit.
 - `{"type":"pullRequest","url":"https://github.com/openai/codex/pull/123"}` — resolve the pull request metadata in the selected thread environment and review that checkout against its base. The pull request title and body provide scope context only.
+- `{"type":"wholeRepository"}` — inspect the accessible repository without a comparison baseline.
 - `{"type":"custom","instructions":"Free-form reviewer instructions"}` — fallback prompt equivalent to the legacy manual review request.
+- `verification` (`"singlePass"` or `"doubleCheck"`, default `"singlePass"`) — whether a second isolated agent verifies only the discovery candidates.
+- `action` (`"report"`, `"fix"`, or `"fixAndCommit"`, default `"report"`) — stop after the report, fix eligible findings, or fix and create one focused commit after successful verification. Fix stages use the thread's coding model in Default mode; review stages use `review_model` when configured.
 - `delivery` (`"inline"` or `"detached"`, default `"inline"`) — where the review runs:
   - `"inline"`: run the review as a new turn on the existing thread. The response’s `reviewThreadId` equals the original `threadId`, and no new `thread/started` notification is emitted.
   - `"detached"`: fork a new review thread from the parent conversation and run the review there. The response’s `reviewThreadId` is the id of this new review thread, and the server emits a `thread/started` notification for it before streaming review items.
@@ -1041,6 +1051,8 @@ Example request/response:
 { "method": "review/start", "id": 40, "params": {
     "threadId": "thr_123",
     "delivery": "inline",
+    "verification": "doubleCheck",
+    "action": "report",
     "target": { "type": "commit", "sha": "1234567deadbeef", "title": "Polish tui colors" }
 } }
 { "id": 40, "result": {
@@ -1057,6 +1069,11 @@ Example request/response:
 ```
 
 For a detached review, use `"delivery": "detached"`. The response is the same shape, but `reviewThreadId` will be the id of the new review thread (different from the original `threadId`). The server also emits a `thread/started` notification for that new thread before streaming the review turn.
+
+Uncommitted, base-branch, commit, and pull-request targets are checked before inference. If the
+resolved target is empty, the turn fails with `Selected review scope has no changes` and no model
+request is made. Pre-existing, out-of-scope, unverified, and reference-only entries are report-only.
+`fixAndCommit` never amends or pushes, and a partial or failed fix has no commit SHA.
 
 Codex streams the usual `turn/started` notification followed by an `item/started`
 with an `enteredReviewMode` item so clients can show progress:
@@ -1084,14 +1101,17 @@ containing an `exitedReviewMode` item with the final review text:
     "item": {
       "type": "exitedReviewMode",
       "id": "turn_900",
-      "review": "Looks solid overall...\n\n- Prefer Stylize helpers — app.rs:10-20\n  ...",
+      "review": "Assessment\n\npatch is incorrect (confidence 0.91)\nOne issue remains.\n\nFindings\n\n[P1] Use Stylize helpers — app.rs:10-20\nManual styling diverges from the TUI convention.\nPre-existing: no",
       "findingCount": 1
     }
   }
 }
 ```
 
-The `review` string is plain text that already bundles the overall explanation plus a bullet list for each structured finding (matching `ThreadItem::ExitedReviewMode` in the generated schema). `findingCount` is the number of structured findings and is zero when none are available. Use this notification to render the reviewer output in your client.
+The `review` string is the complete ordered report: assessment, findings, optional out-of-scope
+and unverified findings, references, external references, and optional resolution. `findingCount`
+counts only the main Findings section and is zero when it is empty. Use this notification to render
+the report; no duplicate final `agentMessage` is emitted solely for review display.
 
 ### Example: One-off command execution
 
@@ -1413,7 +1433,7 @@ Today both notifications carry an empty `items` array even when item events were
 - `imageView` — `{id, path}` emitted when the agent invokes the image viewer tool.
 - `sleep` — `{id, durationMs}` emitted while the agent waits for a duration or new input.
 - `enteredReviewMode` — `{id, review}` sent when the reviewer starts; `review` is a short user-facing label such as `"current changes"` or the requested target description.
-- `exitedReviewMode` — `{id, review, findingCount}` emitted when the reviewer finishes; `review` is the full plain-text review (usually, overall notes plus bullet point findings), and `findingCount` is the number of structured findings.
+- `exitedReviewMode` — `{id, review, findingCount}` emitted when the review chain finishes; `review` is the full ordered report and `findingCount` counts only in-scope Findings.
 - `contextCompaction` — `{id}` emitted when codex compacts the conversation history. This can happen automatically.
 - `compacted` - `{threadId, turnId}` when codex compacts the conversation history. This can happen automatically. **Deprecated:** Use `contextCompaction` instead.
 

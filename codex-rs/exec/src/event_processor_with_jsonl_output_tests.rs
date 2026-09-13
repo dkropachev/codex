@@ -4,6 +4,46 @@ use serde_json::json;
 use tempfile::tempdir;
 
 #[test]
+fn completed_review_is_an_agent_message_and_last_output() {
+    let tempdir = tempdir().expect("create tempdir");
+    let output_path = tempdir.path().join("last-message.txt");
+    let mut processor = EventProcessorWithJsonOutput::new(Some(output_path.clone()));
+    let review = "Assessment\n\nPatch is correct.".to_string();
+
+    let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        codex_app_server_protocol::ItemCompletedNotification {
+            item: ThreadItem::ExitedReviewMode {
+                id: "review-1".to_string(),
+                review: review.clone(),
+                finding_count: 0,
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+        },
+    ));
+
+    assert_eq!(collected.events.len(), 1);
+    let ThreadEvent::ItemCompleted(ItemCompletedEvent { item }) = &collected.events[0] else {
+        panic!("expected item completion");
+    };
+    assert_eq!(
+        item.details,
+        ThreadItemDetails::AgentMessage(AgentMessageItem {
+            text: review.clone(),
+        })
+    );
+    assert_eq!(processor.final_message(), Some(review.as_str()));
+
+    processor.emit_final_message_on_shutdown = true;
+    EventProcessor::print_final_output(&mut processor);
+    assert_eq!(
+        std::fs::read_to_string(output_path).expect("read last message"),
+        review
+    );
+}
+
+#[test]
 fn failed_turn_does_not_overwrite_output_last_message_file() {
     let tempdir = tempdir().expect("create tempdir");
     let output_path = tempdir.path().join("last-message.txt");

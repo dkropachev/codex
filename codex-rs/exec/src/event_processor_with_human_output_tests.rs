@@ -286,6 +286,17 @@ fn final_message_from_turn_items_falls_back_to_latest_plan() {
 }
 
 #[test]
+fn final_message_from_turn_items_uses_review_report() {
+    let message = final_message_from_turn_items(&[ThreadItem::ExitedReviewMode {
+        id: "review-1".to_string(),
+        review: "Assessment\n\nPatch is correct.".to_string(),
+        finding_count: 0,
+    }]);
+
+    assert_eq!(message.as_deref(), Some("Assessment\n\nPatch is correct."));
+}
+
+#[test]
 fn turn_completed_recovers_final_message_from_turn_items() {
     let mut processor = EventProcessorWithHumanOutput {
         bold: Style::new(),

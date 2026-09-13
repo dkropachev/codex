@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests/review_mode.rs
+expression: rendered
+---
+<< Code review finished >>
+
+• ## Assessment
+  
+  Patch is correct.
+  
+  ## Findings
+  
+  No findings.

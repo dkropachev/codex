@@ -9,6 +9,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewResolveScopeParams;
 use codex_app_server_protocol::ReviewResolveScopeResponse;
+use codex_app_server_protocol::ReviewScopeCommit;
 use codex_protocol::ThreadId;
 use uuid::Uuid;
 
@@ -27,6 +28,9 @@ pub(crate) struct ReviewScopeResolution {
     pub(crate) default_branch_target: Option<String>,
     pub(crate) current_branch: Option<String>,
     pub(crate) branches: Vec<String>,
+    pub(crate) has_uncommitted_changes: bool,
+    pub(crate) commits: Vec<ReviewScopeCommit>,
+    pub(crate) error: Option<String>,
 }
 
 impl From<ReviewResolveScopeResponse> for ReviewScopeResolution {
@@ -45,6 +49,9 @@ impl From<ReviewResolveScopeResponse> for ReviewScopeResolution {
             default_branch_target: default_branch.map(|branch| branch.target),
             current_branch: response.current_branch,
             branches: response.branches,
+            has_uncommitted_changes: response.has_uncommitted_changes,
+            commits: response.commits.into_iter().take(100).collect(),
+            error: response.error,
         }
     }
 }

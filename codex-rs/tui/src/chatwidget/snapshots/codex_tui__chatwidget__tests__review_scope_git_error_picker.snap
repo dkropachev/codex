@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/review_flow.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Select a review scope
+
+     Could not detect Git review scopes.
+› 1. Review whole repository
+  2. Custom review instructions
+
+  Press enter to confirm or esc to go back
