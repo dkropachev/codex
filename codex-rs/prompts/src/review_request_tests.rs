@@ -70,11 +70,19 @@ fn review_prompt_template_renders_pull_request_scope_without_metadata() {
 #[tokio::test]
 async fn fully_qualified_local_branch_uses_short_name_for_upstream_lookup() {
     let runner = FakeRunner::new(vec![
-        output(&["git", "rev-parse", "--is-inside-work-tree"], 0, "true\n"),
-        output(&["git", "rev-parse", "--verify", "HEAD"], 0, "head-oid\n"),
+        output(
+            &["git", "rev-parse", "--is-inside-work-tree"],
+            /*exit_code*/ 0,
+            "true\n",
+        ),
+        output(
+            &["git", "rev-parse", "--verify", "HEAD"],
+            /*exit_code*/ 0,
+            "head-oid\n",
+        ),
         output(
             &["git", "rev-parse", "--verify", "refs/heads/main"],
-            0,
+            /*exit_code*/ 0,
             "base-oid\n",
         ),
         output(
@@ -85,12 +93,12 @@ async fn fully_qualified_local_branch_uses_short_name_for_upstream_lookup() {
                 "--symbolic-full-name",
                 "main@{upstream}",
             ],
-            1,
+            /*exit_code*/ 1,
             "",
         ),
         output(
             &["git", "merge-base", "head-oid", "base-oid"],
-            0,
+            /*exit_code*/ 0,
             "merge-base-oid\n",
         ),
     ]);
