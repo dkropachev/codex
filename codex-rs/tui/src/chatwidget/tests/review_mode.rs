@@ -344,6 +344,11 @@ async fn exited_review_mode_renders_report_immediately_snapshot() {
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert_eq!(rendered.matches("Patch is correct.").count(), 1);
+    let rendered = rendered
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
     assert_chatwidget_snapshot!("review_report_renders_on_exit", rendered);
 }
 
