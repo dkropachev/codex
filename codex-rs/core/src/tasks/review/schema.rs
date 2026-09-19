@@ -1,3 +1,4 @@
+use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
 
@@ -48,49 +49,60 @@ fn assessment_schema() -> Value {
     })
 }
 
+fn discovery_finding_properties() -> Map<String, Value> {
+    [
+        (
+            "title".to_string(),
+            json!({"type": "string", "maxLength": MAX_TITLE_STRING}),
+        ),
+        (
+            "body".to_string(),
+            json!({"type": "string", "maxLength": MAX_BODY_STRING}),
+        ),
+        (
+            "confidenceScore".to_string(),
+            json!({"type": "number", "minimum": 0, "maximum": 1}),
+        ),
+        (
+            "priority".to_string(),
+            json!({"type": "integer", "minimum": 0, "maximum": 3}),
+        ),
+        ("codeLocation".to_string(), code_location_schema()),
+    ]
+    .into_iter()
+    .collect()
+}
+
 fn discovery_finding_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "properties": {
-            "title": {"type": "string", "maxLength": MAX_TITLE_STRING},
-            "body": {"type": "string", "maxLength": MAX_BODY_STRING},
-            "confidenceScore": {"type": "number", "minimum": 0, "maximum": 1},
-            "priority": {"type": "integer", "minimum": 0, "maximum": 3},
-            "codeLocation": code_location_schema()
-        },
+        "properties": discovery_finding_properties(),
         "required": ["title", "body", "confidenceScore", "priority", "codeLocation"]
     })
 }
 
 fn verified_finding_schema() -> Value {
-    let mut schema = discovery_finding_schema();
-    let properties = schema["properties"]
-        .as_object_mut()
-        .expect("finding properties must be an object");
-    properties.insert(
-        "candidateIndex".to_string(),
-        json!({"type": "integer", "minimum": 0}),
-    );
-    properties.insert(
-        "preExisting".to_string(),
-        json!({"type": "string", "enum": ["true", "false", "undetermined"]}),
-    );
-    properties.insert(
-        "preExistingFixRationale".to_string(),
-        json!({"type": ["string", "null"], "maxLength": MAX_SHORT_STRING}),
-    );
-    schema["required"] = json!([
-        "candidateIndex",
-        "title",
-        "body",
-        "confidenceScore",
-        "priority",
-        "codeLocation",
-        "preExisting",
-        "preExistingFixRationale"
-    ]);
-    schema
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "candidateIndex": {"type": "integer", "minimum": 0},
+            "preExisting": {
+                "type": "string",
+                "enum": ["true", "false", "undetermined"]
+            },
+            "preExistingFixRationale": {
+                "type": ["string", "null"],
+                "maxLength": MAX_SHORT_STRING
+            }
+        },
+        "required": [
+            "candidateIndex",
+            "preExisting",
+            "preExistingFixRationale"
+        ]
+    })
 }
 
 pub(super) fn discovery_schema() -> Value {
@@ -147,14 +159,60 @@ pub(super) fn verification_schema() -> Value {
                 "maxItems": MAX_STAGE_ITEMS,
                 "items": verified_finding_schema()
             },
+            "rejectedCandidateIndices": {
+                "type": "array",
+                "maxItems": MAX_STAGE_ITEMS,
+                "items": {"type": "integer", "minimum": 0}
+            },
             "assessment": assessment_schema()
         },
         "required": [
             "findings",
             "outOfScopeFindings",
             "unverifiedFindings",
+            "rejectedCandidateIndices",
             "assessment"
         ]
+    })
+}
+
+pub(super) fn fix_scope_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "hasComparisonBaseline": {"type": "boolean"},
+            "classifications": {
+                "type": "array",
+                "maxItems": MAX_STAGE_ITEMS,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "findingIndex": {"type": "integer", "minimum": 0},
+                        "preExisting": {
+                            "type": "string",
+                            "enum": ["true", "false", "undetermined"]
+                        },
+                        "preExistingFixRationale": {
+                            "type": ["string", "null"],
+                            "maxLength": MAX_SHORT_STRING
+                        },
+                        "validity": {
+                            "type": "string",
+                            "enum": ["valid", "rejected"]
+                        }
+                    },
+                    "required": [
+                        "findingIndex",
+                        "preExisting",
+                        "preExistingFixRationale",
+                        "validity"
+                    ]
+                }
+            }
+        },
+        "required": ["hasComparisonBaseline", "classifications"]
     })
 }
 

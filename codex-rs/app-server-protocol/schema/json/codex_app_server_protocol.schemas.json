@@ -16271,6 +16271,7 @@
             "type": "array"
           },
           "commits": {
+            "default": [],
             "description": "Recent commits reachable from HEAD, capped at 100 entries.",
             "items": {
               "$ref": "#/definitions/v2/ReviewScopeCommit"
@@ -16295,6 +16296,11 @@
             ],
             "description": "Detected repository default branch, when one was found."
           },
+          "doubleCheckAvailable": {
+            "default": false,
+            "description": "Whether the server supports the isolated Double-check stage.",
+            "type": "boolean"
+          },
           "error": {
             "description": "Short diagnostic shown when Git repository detection failed.",
             "type": [
@@ -16302,7 +16308,21 @@
               "null"
             ]
           },
+          "fixExecutionAvailable": {
+            "default": false,
+            "description": "Whether Fix actions can use the required workspace-write profile on the server.",
+            "type": "boolean"
+          },
+          "fixUnavailableReason": {
+            "default": null,
+            "description": "Short diagnostic when Fix actions are unavailable.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "hasUncommittedChanges": {
+            "default": false,
             "description": "Whether staged, unstaged, or untracked changes are present.",
             "type": "boolean"
           },
@@ -16316,12 +16336,28 @@
               }
             ],
             "description": "Open pull request associated with the selected checkout, when one was found."
+          },
+          "reviewExecutionAvailable": {
+            "default": true,
+            "description": "Whether reviews can run on the selected executor with the server's active sandbox setup.",
+            "type": "boolean"
+          },
+          "reviewUnavailableReason": {
+            "default": null,
+            "description": "Short diagnostic when review execution is unavailable.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "wholeRepositoryAvailable": {
+            "default": false,
+            "description": "Whether the server supports the whole-repository review target.",
+            "type": "boolean"
           }
         },
         "required": [
-          "branches",
-          "commits",
-          "hasUncommittedChanges"
+          "branches"
         ],
         "title": "ReviewResolveScopeResponse",
         "type": "object"

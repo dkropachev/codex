@@ -64,6 +64,7 @@ pub struct EventProcessorWithJsonOutput {
     last_critical_error: Option<ThreadErrorEvent>,
     final_message: Option<String>,
     emit_final_message_on_shutdown: bool,
+    suppress_legacy_review_agent: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +90,7 @@ impl EventProcessorWithJsonOutput {
             last_critical_error: None,
             final_message: None,
             emit_final_message_on_shutdown: false,
+            suppress_legacy_review_agent: false,
         }
     }
 
@@ -344,6 +346,17 @@ impl EventProcessorWithJsonOutput {
     }
 
     fn map_completed_item_mut(&mut self, item: ThreadItem) -> Option<ExecThreadItem> {
+        if matches!(
+            &item,
+            ThreadItem::AgentMessage { id, .. }
+                if id == "review_rollout_assistant" && self.suppress_legacy_review_agent
+        ) {
+            self.suppress_legacy_review_agent = false;
+            return None;
+        }
+        if matches!(&item, ThreadItem::ExitedReviewMode { .. }) {
+            self.suppress_legacy_review_agent = true;
+        }
         if let ThreadItem::Reasoning { summary, .. } = &item
             && summary.join("\n").trim().is_empty()
         {
@@ -505,6 +518,7 @@ impl EventProcessorWithJsonOutput {
                 CodexStatus::Running
             }
             ServerNotification::TurnCompleted(notification) => {
+                self.suppress_legacy_review_agent = false;
                 if let Some(running) = self.running_todo_list.take() {
                     events.push(ThreadEvent::ItemCompleted(ItemCompletedEvent {
                         item: ExecThreadItem {

@@ -74,3 +74,5 @@ pub use review_validation::resolve_review_commit_oid;
 pub use review_validation::resolve_review_git_directories;
 pub use review_validation::resolve_review_repository_root;
 pub use review_validation::resolved_commit_has_changes;
+pub use review_validation::validate_review_fix_commit_target;
+pub use review_validation::validate_review_fix_target;

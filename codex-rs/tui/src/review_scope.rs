@@ -21,8 +21,14 @@ pub(crate) struct ReviewPullRequest {
     pub(crate) base_branch_target: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ReviewScopeResolution {
+    pub(crate) review_execution_available: bool,
+    pub(crate) review_unavailable_reason: Option<String>,
+    pub(crate) fix_execution_available: bool,
+    pub(crate) fix_unavailable_reason: Option<String>,
+    pub(crate) double_check_available: bool,
+    pub(crate) whole_repository_available: bool,
     pub(crate) pull_request: Option<ReviewPullRequest>,
     pub(crate) default_branch: Option<String>,
     pub(crate) default_branch_target: Option<String>,
@@ -33,10 +39,37 @@ pub(crate) struct ReviewScopeResolution {
     pub(crate) error: Option<String>,
 }
 
+impl Default for ReviewScopeResolution {
+    fn default() -> Self {
+        Self {
+            review_execution_available: true,
+            review_unavailable_reason: None,
+            fix_execution_available: true,
+            fix_unavailable_reason: None,
+            double_check_available: true,
+            whole_repository_available: true,
+            pull_request: None,
+            default_branch: None,
+            default_branch_target: None,
+            current_branch: None,
+            branches: Vec::new(),
+            has_uncommitted_changes: false,
+            commits: Vec::new(),
+            error: None,
+        }
+    }
+}
+
 impl From<ReviewResolveScopeResponse> for ReviewScopeResolution {
     fn from(response: ReviewResolveScopeResponse) -> Self {
         let default_branch = response.default_branch;
         Self {
+            review_execution_available: response.review_execution_available,
+            review_unavailable_reason: response.review_unavailable_reason,
+            fix_execution_available: response.fix_execution_available,
+            fix_unavailable_reason: response.fix_unavailable_reason,
+            double_check_available: response.double_check_available,
+            whole_repository_available: response.whole_repository_available,
             pull_request: response.pull_request.map(|pull_request| ReviewPullRequest {
                 number: pull_request.number,
                 url: pull_request.url,

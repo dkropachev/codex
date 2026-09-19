@@ -19,9 +19,6 @@ use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::context::CyberPolicyAutoRecovery;
 use crate::feedback_tags;
-use crate::hook_runtime::inspect_pending_input;
-use crate::hook_runtime::record_additional_contexts;
-use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_legacy_after_agent_hook;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_turn_stop_hooks;
@@ -128,6 +125,8 @@ use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
 
+mod review_handoff_turn;
+
 /// Takes initial turn input and runs a loop where, at each sampling request,
 /// the model replies with either:
 ///
@@ -150,21 +149,20 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<Option<String>> {
-    let mut review_handoff_through = None;
-    let mut review_handoff_items = Vec::new();
-    if input
-        .iter()
-        .any(|item| matches!(item, TurnInput::UserInput { content, .. } if !content.is_empty()))
-        && let Some(handoff) = sess.pending_review_handoff().await
-    {
-        review_handoff_through = Some(handoff.through_item_id().to_string());
-        review_handoff_items = handoff.into_response_items();
-    }
-    let pending_tokens = pending_turn_input_tokens(&input, &review_handoff_items);
+    let (review_handoff_items, review_handoff_through, review_handoff_transaction) =
+        review_handoff_turn::pending_for_input(sess.as_ref(), &input).await;
+    let pending_tokens = pending_review_handoff_tokens(&review_handoff_items);
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
-    if let Err(err) =
-        run_pre_sampling_compact(&sess, &turn_context, &mut client_session, pending_tokens).await
+    if let Err(err) = run_pre_sampling_compact(
+        &sess,
+        &turn_context,
+        &mut client_session,
+        pending_tokens,
+        InitialContextInjection::DoNotInject,
+        CompactionPhase::PreTurn,
+    )
+    .await
     {
         if matches!(err, CodexErr::TurnAborted) {
             return Err(err);
@@ -199,18 +197,17 @@ pub(crate) async fn run_turn(
         return Ok(None);
     }
     let mut can_drain_pending_input = input.is_empty();
-    if run_hooks_and_record_inputs_with_prefix(&sess, &turn_context, &input, review_handoff_items)
-        .await
-    {
+    let record_outcome = review_handoff_turn::run_hooks_and_record_inputs_with_prefix(
+        &sess,
+        &turn_context,
+        &input,
+        review_handoff_items,
+        review_handoff_through.as_deref(),
+        review_handoff_transaction.as_deref(),
+    )
+    .await;
+    if record_outcome != review_handoff_turn::RecordInputOutcome::Continue {
         return Ok(None);
-    }
-    if let Some(item_id) = review_handoff_through {
-        match sess.persist_and_consume_review_handoff(&item_id).await {
-            Ok(()) => {}
-            Err(error) => {
-                warn!(%error, "failed to persist review handoff consumption");
-            }
-        }
     }
 
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
@@ -255,7 +252,49 @@ pub(crate) async fn run_turn(
             Vec::new()
         };
 
-        if run_hooks_and_record_inputs(&sess, &turn_context, &pending_input).await {
+        let (review_handoff_items, review_handoff_through, review_handoff_transaction) =
+            review_handoff_turn::pending_for_input(sess.as_ref(), &pending_input).await;
+        if !review_handoff_items.is_empty() {
+            let mid_turn_pending_tokens = pending_review_handoff_tokens(&review_handoff_items);
+            if let Err(err) = run_pre_sampling_compact(
+                &sess,
+                &turn_context,
+                &mut client_session,
+                mid_turn_pending_tokens,
+                InitialContextInjection::BeforeLastUserMessage(Arc::clone(&world_state)),
+                CompactionPhase::MidTurn,
+            )
+            .await
+            {
+                if let Some(turn_state) = sess
+                    .input_queue
+                    .turn_state_for_sub_id(&sess.active_turn, &turn_context.sub_id)
+                    .await
+                {
+                    sess.input_queue
+                        .prepend_pending_input_for_turn_state(turn_state.as_ref(), pending_input)
+                        .await;
+                }
+                if matches!(err, CodexErr::TurnAborted) {
+                    return Err(err);
+                }
+                let error = err.to_codex_protocol_error();
+                sess.emit_turn_error_lifecycle(turn_context.as_ref(), error)
+                    .await;
+                return Ok(None);
+            }
+            next_step_context = None;
+        }
+        let record_outcome = review_handoff_turn::run_hooks_and_record_inputs_with_prefix(
+            &sess,
+            &turn_context,
+            &pending_input,
+            review_handoff_items,
+            review_handoff_through.as_deref(),
+            review_handoff_transaction.as_deref(),
+        )
+        .await;
+        if record_outcome != review_handoff_turn::RecordInputOutcome::Continue {
             break;
         }
 
@@ -517,57 +556,6 @@ async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, Pat
         display_roots.push((turn_environment.environment_id.clone(), root));
     }
     display_roots
-}
-
-#[instrument(level = "trace", skip_all)]
-async fn run_hooks_and_record_inputs(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
-    input: &[TurnInput],
-) -> bool {
-    run_hooks_and_record_inputs_with_prefix(sess, turn_context, input, Vec::new()).await
-}
-
-#[instrument(level = "trace", skip_all)]
-async fn run_hooks_and_record_inputs_with_prefix(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
-    input: &[TurnInput],
-    prefix: Vec<ResponseItem>,
-) -> bool {
-    let mut inspected = Vec::with_capacity(input.len());
-    let mut blocked_input = false;
-    let mut accepted_user_input = false;
-    for input_item in input {
-        let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
-        if hook_outcome.should_stop {
-            blocked_input = true;
-        } else if matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty())
-        {
-            accepted_user_input = true;
-        }
-        inspected.push((input_item.clone(), hook_outcome));
-    }
-    if !(blocked_input && !accepted_user_input) {
-        for item in prefix {
-            sess.record_conversation_items(turn_context, std::slice::from_ref(&item))
-                .await;
-        }
-    }
-    for (input_item, hook_outcome) in inspected {
-        if hook_outcome.should_stop {
-            record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
-            continue;
-        }
-        record_pending_input(
-            sess,
-            turn_context,
-            input_item,
-            hook_outcome.additional_contexts,
-        )
-        .await;
-    }
-    blocked_input && !accepted_user_input
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -868,6 +856,8 @@ async fn run_pre_sampling_compact(
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
     pending_tokens: i64,
+    initial_context_injection: InitialContextInjection,
+    phase: CompactionPhase,
 ) -> CodexResult<()> {
     maybe_run_previous_model_inline_compact(sess, turn_context, client_session).await?;
     let token_status =
@@ -879,38 +869,31 @@ async fn run_pre_sampling_compact(
             .tokens_until_compaction
             .is_some_and(|remaining| pending_tokens >= remaining)
     {
-        // Pre-turn compaction runs before run_turn creates the normal sampling step.
         let step_context = sess.capture_step_context(Arc::clone(turn_context)).await;
         run_auto_compact(
             sess,
             step_context,
             /*fallback_step_context*/ None,
             client_session,
-            InitialContextInjection::DoNotInject,
+            initial_context_injection,
             CompactionReason::ContextLimit,
-            CompactionPhase::PreTurn,
+            phase,
         )
         .await?;
     }
     Ok(())
 }
 
-fn pending_turn_input_tokens(input: &[TurnInput], prefix: &[ResponseItem]) -> i64 {
-    let bytes = input
+fn pending_review_handoff_tokens(prefix: &[ResponseItem]) -> i64 {
+    // Handoff fragments contain untrusted text. Their security bound assumes
+    // one UTF-8 byte per token, so preserve that conservative accounting here.
+    let handoff_tokens = prefix
         .iter()
-        .filter_map(|item| match item {
-            TurnInput::UserInput { content, .. } => serde_json::to_vec(content).ok(),
-            TurnInput::ResponseItem(item) => serde_json::to_vec(item).ok(),
-            TurnInput::InterAgentCommunication(item) => serde_json::to_vec(item).ok(),
-        })
-        .chain(
-            prefix
-                .iter()
-                .filter_map(|item| serde_json::to_vec(item).ok()),
-        )
+        .filter_map(|item| serde_json::to_vec(item).ok())
         .map(|item| item.len())
         .sum::<usize>();
-    i64::try_from(codex_utils_string::approx_tokens_from_byte_count(bytes)).unwrap_or(i64::MAX)
+    let handoff_tokens = u64::try_from(handoff_tokens).unwrap_or(u64::MAX);
+    i64::try_from(handoff_tokens).unwrap_or(i64::MAX)
 }
 
 /// Returns true only when both turns declare compaction compatibility hashes and they differ.

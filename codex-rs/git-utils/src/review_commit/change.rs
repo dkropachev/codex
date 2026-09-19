@@ -115,11 +115,11 @@ fn repository_relative_path(repository_root: &PathUri, path: &PathUri) -> Result
     let convention = repository_root
         .infer_path_convention()
         .context("cannot infer the review repository path convention")?;
+    let root = repository_root.inferred_native_path_string();
+    let absolute = path.inferred_native_path_string();
     if path == repository_root || !path.starts_with(repository_root) {
         bail!("review fix path is outside the repository: {path}");
     }
-    let root = repository_root.inferred_native_path_string();
-    let absolute = path.inferred_native_path_string();
     let relative = absolute
         .strip_prefix(&root)
         .context("review fix path does not share the repository path spelling")?;

@@ -4,10 +4,12 @@ use super::*;
 fn stage_schemas_are_strict_and_bounded_where_required() {
     let discovery = discovery_schema();
     let verification = verification_schema();
+    let fix_scope = fix_scope_schema();
     let fix = fix_schema();
 
     assert_eq!(discovery["additionalProperties"], false);
     assert_eq!(verification["additionalProperties"], false);
+    assert_eq!(fix_scope["additionalProperties"], false);
     assert_eq!(fix["additionalProperties"], false);
     assert_eq!(
         fix["properties"]["resolution"]["properties"]["summary"]["maxItems"],

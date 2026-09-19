@@ -44,7 +44,7 @@ pub(crate) async fn sanitize_fix_locations(
         let requested =
             PathUri::parse(&display_path).or_else(|_| checkout_root.join(&display_path));
         let location_is_safe = match requested {
-            Ok(requested) if requested.starts_with(checkout_root) => {
+            Ok(requested) => {
                 let mut resolved = None;
                 for candidate in requested.ancestors().take(64) {
                     if let Some(canonical) = tokio::time::timeout_at(
@@ -61,7 +61,7 @@ pub(crate) async fn sanitize_fix_locations(
                 }
                 resolved.is_some_and(|path| path.starts_with(&canonical_root))
             }
-            Ok(_) | Err(_) => false,
+            Err(_) => false,
         };
         if location_is_safe {
             eligible.push(finding);

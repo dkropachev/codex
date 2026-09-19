@@ -15,6 +15,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::RolloutItem;
+use std::collections::HashSet;
 
 pub(crate) fn initial_history_has_prior_user_turns(conversation_history: &InitialHistory) -> bool {
     conversation_history.scan_rollout_items(rollout_item_is_user_turn_boundary)
@@ -37,9 +38,18 @@ fn rollout_item_is_user_turn_boundary(item: &RolloutItem) -> bool {
 /// last N user turns were removed from the effective thread history; we apply them here so
 /// indexing uses the post-rollback history rather than the raw stream.
 pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize> {
+    let mut rollback_turn_positions = Vec::new();
     let mut user_positions = Vec::new();
+    let mut review_boundaries = HashSet::new();
+    let mut explicit_review_boundary_active = false;
     for (idx, item) in items.iter().enumerate() {
         match item {
+            RolloutItem::ResponseItem(response_item)
+                if is_legacy_review_user_message(response_item)
+                    && !explicit_review_boundary_active =>
+            {
+                rollback_turn_positions.push(idx);
+            }
             RolloutItem::ResponseItem(item @ ResponseItem::Message { .. })
                 if matches!(
                     event_mapping::parse_turn_item(item),
@@ -47,12 +57,27 @@ pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<us
                 ) =>
             {
                 user_positions.push(idx);
+                rollback_turn_positions.push(idx);
+            }
+            item if is_new_review_turn_boundary(item, &mut review_boundaries) => {
+                rollback_turn_positions.push(idx);
+                explicit_review_boundary_active = true;
             }
             RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
                 let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
-                let new_len = user_positions.len().saturating_sub(num_turns);
-                user_positions.truncate(new_len);
+                let Some(rollback_start_idx) = rollback_turn_positions
+                    .len()
+                    .checked_sub(num_turns)
+                    .map(|start| rollback_turn_positions[start])
+                    .or_else(|| rollback_turn_positions.first().copied())
+                else {
+                    continue;
+                };
+                rollback_turn_positions
+                    .truncate(rollback_turn_positions.len().saturating_sub(num_turns));
+                user_positions.retain(|position| *position < rollback_start_idx);
             }
+            item if is_review_exit(item) => explicit_review_boundary_active = false,
             _ => {}
         }
     }
@@ -73,8 +98,16 @@ pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<us
 pub(crate) fn fork_turn_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize> {
     let mut rollback_turn_positions = Vec::new();
     let mut fork_turn_positions = Vec::new();
+    let mut review_boundaries = HashSet::new();
+    let mut explicit_review_boundary_active = false;
     for (idx, item) in items.iter().enumerate() {
         match item {
+            RolloutItem::ResponseItem(response_item)
+                if is_legacy_review_user_message(response_item)
+                    && !explicit_review_boundary_active =>
+            {
+                rollback_turn_positions.push(idx);
+            }
             RolloutItem::ResponseItem(item) => {
                 let has_delivery_metadata = matches!(item, ResponseItem::AgentMessage { .. })
                     && idx.checked_sub(1).is_some_and(|previous_idx| {
@@ -86,7 +119,9 @@ pub(crate) fn fork_turn_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize
                 if is_user_turn_boundary(item) && !has_delivery_metadata {
                     rollback_turn_positions.push(idx);
                 }
-                if is_real_user_message_boundary(item) || is_trigger_turn_boundary(item) {
+                if !is_legacy_review_user_message(item)
+                    && (is_real_user_message_boundary(item) || is_trigger_turn_boundary(item))
+                {
                     fork_turn_positions.push(idx);
                 }
             }
@@ -101,6 +136,10 @@ pub(crate) fn fork_turn_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize
                 if *trigger_turn {
                     fork_turn_positions.push(idx);
                 }
+            }
+            item if is_new_review_turn_boundary(item, &mut review_boundaries) => {
+                rollback_turn_positions.push(idx);
+                explicit_review_boundary_active = true;
             }
             RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
                 let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
@@ -119,10 +158,45 @@ pub(crate) fn fork_turn_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize
                 rollback_turn_positions.truncate(new_rollback_len);
                 fork_turn_positions.retain(|position| *position < rollback_start_idx);
             }
+            item if is_review_exit(item) => explicit_review_boundary_active = false,
             _ => {}
         }
     }
     fork_turn_positions
+}
+
+fn is_new_review_turn_boundary(item: &RolloutItem, seen_boundaries: &mut HashSet<String>) -> bool {
+    let boundary = match item {
+        RolloutItem::EventMsg(EventMsg::EnteredReviewMode(entered)) => {
+            entered.item_id.as_deref().or(entered.turn_id.as_deref())
+        }
+        RolloutItem::EventMsg(EventMsg::ItemCompleted(completed)) => match &completed.item {
+            TurnItem::EnteredReviewMode(entered) => Some(entered.id.as_str()),
+            _ => return false,
+        },
+        _ => return false,
+    };
+    boundary.is_none_or(|boundary| seen_boundaries.insert(boundary.to_string()))
+}
+
+fn is_legacy_review_user_message(item: &ResponseItem) -> bool {
+    matches!(
+        item,
+        ResponseItem::Message { id: Some(id), .. } if id == "review_rollout_user"
+    )
+}
+
+fn is_review_exit(item: &RolloutItem) -> bool {
+    matches!(
+        item,
+        RolloutItem::EventMsg(
+            EventMsg::ExitedReviewMode(_)
+                | EventMsg::ItemCompleted(codex_protocol::protocol::ItemCompletedEvent {
+                    item: TurnItem::ExitedReviewMode(_),
+                    ..
+                })
+        )
+    )
 }
 
 /// Return a prefix of `items` obtained by cutting strictly before the nth user message.

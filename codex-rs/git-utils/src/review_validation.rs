@@ -73,6 +73,34 @@ pub async fn resolve_review_git_directories(
     Ok(directories)
 }
 
+/// Validates that a review fix can create a new commit on the current branch.
+pub async fn validate_review_fix_target(
+    runner: &impl ReviewCommandRunner,
+    repository_root: &PathUri,
+) -> Result<()> {
+    resolve_commit_oid(runner, repository_root, "HEAD")
+        .await
+        .context("Fix requires an existing HEAD commit")?;
+    Ok(())
+}
+
+/// Validates that a review fix can create a new commit on the current branch.
+pub async fn validate_review_fix_commit_target(
+    runner: &impl ReviewCommandRunner,
+    repository_root: &PathUri,
+) -> Result<()> {
+    let output = run_git(runner, repository_root, ["symbolic-ref", "--quiet", "HEAD"])
+        .await
+        .context("failed to inspect the review Fix + commit target")?;
+    if output.exit_code != 0 || !output.stdout.trim().starts_with("refs/heads/") {
+        bail!("Fix + commit requires a Git repository on an attached branch");
+    }
+    validate_review_fix_target(runner, repository_root)
+        .await
+        .context("Fix + commit requires an existing HEAD commit")?;
+    Ok(())
+}
+
 /// Returns whether the selected repository has staged, unstaged, or untracked changes.
 pub async fn has_uncommitted_changes(
     runner: &impl ReviewCommandRunner,

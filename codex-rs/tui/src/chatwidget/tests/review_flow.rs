@@ -76,12 +76,38 @@ async fn review_scope_request_failure_selects_whole_repository() {
 }
 
 #[tokio::test]
+async fn legacy_server_git_failure_selects_custom_review_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    open_resolved_scope_picker(
+        &mut chat,
+        &mut rx,
+        crate::review_scope::ReviewScopeResolution {
+            whole_repository_available: false,
+            error: Some("Could not detect Git review scopes.".to_string()),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    assert_chatwidget_snapshot!(
+        "review_scope_legacy_server_git_error",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+}
+
+#[tokio::test]
 async fn review_scope_pull_request_picker_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     open_resolved_scope_picker(
         &mut chat,
         &mut rx,
         crate::review_scope::ReviewScopeResolution {
+            review_execution_available: true,
+            review_unavailable_reason: None,
+            fix_execution_available: true,
+            fix_unavailable_reason: None,
+            double_check_available: true,
+            whole_repository_available: true,
             pull_request: Some(crate::review_scope::ReviewPullRequest {
                 number: 314,
                 url: "https://github.com/acme/widgets/pull/314".to_string(),
@@ -132,6 +158,12 @@ async fn review_scope_default_branch_picker_snapshot() {
         &mut chat,
         &mut rx,
         crate::review_scope::ReviewScopeResolution {
+            review_execution_available: true,
+            review_unavailable_reason: None,
+            fix_execution_available: true,
+            fix_unavailable_reason: None,
+            double_check_available: true,
+            whole_repository_available: true,
             pull_request: None,
             default_branch: Some("main".to_string()),
             default_branch_target: Some("refs/remotes/origin/main".to_string()),
@@ -350,6 +382,108 @@ async fn review_action_picker_hides_commit_when_git_is_unavailable_snapshot() {
 }
 
 #[tokio::test]
+async fn review_action_picker_hides_fix_when_default_mode_is_unavailable_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    mark_review_commit_available(&mut chat);
+    let params = chat.review_action_picker_params(
+        chat.thread_id,
+        chat.config.cwd.to_path_buf(),
+        ReviewTarget::WholeRepository,
+        ReviewVerification::SinglePass,
+        /*commit_available*/ true,
+        super::super::review_settings_popups::ReviewFixAvailability::Unavailable,
+    );
+    chat.bottom_pane.show_selection_view(params);
+
+    let rendered = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(!rendered.contains("Fix findings"));
+    assert_chatwidget_snapshot!("review_action_picker_report_only", rendered);
+}
+
+#[tokio::test]
+async fn review_action_picker_hides_fix_when_server_permissions_reject_it() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let cwd = chat.config.cwd.to_path_buf();
+    let request_id = chat.review.begin_scope_resolution(cwd.clone());
+    chat.review.set_scope_resolution(
+        request_id,
+        cwd.clone(),
+        crate::review_scope::ReviewScopeResolution {
+            fix_execution_available: false,
+            fix_unavailable_reason: Some("Fix is unavailable.".to_string()),
+            ..Default::default()
+        },
+    );
+
+    chat.show_review_action_picker(
+        chat.thread_id,
+        cwd,
+        ReviewTarget::WholeRepository,
+        ReviewVerification::SinglePass,
+    );
+
+    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Fix findings"));
+}
+
+#[tokio::test]
+async fn review_action_picker_shows_server_execution_unavailability_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let cwd = chat.config.cwd.to_path_buf();
+    let request_id = chat.review.begin_scope_resolution(cwd.clone());
+    chat.review.set_scope_resolution(
+        request_id,
+        cwd.clone(),
+        crate::review_scope::ReviewScopeResolution {
+            review_execution_available: false,
+            review_unavailable_reason: Some(
+                "Review requires Windows sandboxing for the selected local executor.".to_string(),
+            ),
+            ..Default::default()
+        },
+    );
+
+    chat.show_review_action_picker(
+        chat.thread_id,
+        cwd,
+        ReviewTarget::WholeRepository,
+        ReviewVerification::SinglePass,
+    );
+
+    assert_chatwidget_snapshot!(
+        "review_action_picker_unavailable",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+}
+
+#[tokio::test]
+async fn review_action_picker_hides_commit_at_detached_head_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    let cwd = chat.config.cwd.to_path_buf();
+    let request_id = chat.review.begin_scope_resolution(cwd.clone());
+    chat.review.set_scope_resolution(
+        request_id,
+        cwd.clone(),
+        crate::review_scope::ReviewScopeResolution {
+            current_branch: None,
+            commits: vec![review_scope_commit()],
+            ..Default::default()
+        },
+    );
+
+    chat.show_review_action_picker(
+        chat.thread_id,
+        cwd,
+        ReviewTarget::WholeRepository,
+        ReviewVerification::SinglePass,
+    );
+
+    let rendered = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(!rendered.contains("Fix findings + commit"));
+    assert_chatwidget_snapshot!("review_action_picker_detached_head", rendered);
+}
+
+#[tokio::test]
 async fn custom_review_silently_resolves_fix_commit_availability() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     let thread_id = Some(ThreadId::new());
@@ -357,6 +491,7 @@ async fn custom_review_silently_resolves_fix_commit_availability() {
     chat.review_scope_resolver = Some(Arc::new(FakeReviewScopeResolver {
         calls: Arc::new(Mutex::new(Vec::new())),
         result: Ok(crate::review_scope::ReviewScopeResolution {
+            current_branch: Some("main".to_string()),
             commits: vec![review_scope_commit()],
             ..Default::default()
         }),
@@ -406,6 +541,7 @@ async fn dismissed_review_action_resolution_does_not_reopen_picker() {
     chat.review_scope_resolver = Some(Arc::new(FakeReviewScopeResolver {
         calls: Arc::new(Mutex::new(Vec::new())),
         result: Ok(crate::review_scope::ReviewScopeResolution {
+            current_branch: Some("main".to_string()),
             commits: vec![review_scope_commit()],
             ..Default::default()
         }),
@@ -475,6 +611,28 @@ async fn review_verification_picker_defaults_to_single_pass_snapshot() {
 }
 
 #[tokio::test]
+async fn review_verification_picker_hides_double_check_for_older_server_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let cwd = chat.config.cwd.to_path_buf();
+    let request_id = chat.review.begin_scope_resolution(cwd.clone());
+    chat.review.set_scope_resolution(
+        request_id,
+        cwd.clone(),
+        crate::review_scope::ReviewScopeResolution {
+            double_check_available: false,
+            ..Default::default()
+        },
+    );
+
+    chat.show_review_verification_picker(chat.thread_id, cwd, ReviewTarget::WholeRepository);
+
+    assert_chatwidget_snapshot!(
+        "review_verification_picker_single_pass",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+}
+
+#[tokio::test]
 async fn review_verification_picker_emits_double_check() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     let thread_id = chat.thread_id;
@@ -505,6 +663,7 @@ async fn review_action_picker_emits_fix_choices_with_all_settings() {
     {
         let (mut chat, mut rx, _op_rx) = review_chat().await;
         mark_review_commit_available(&mut chat);
+        chat.review_scope_resolver = None;
         let thread_id = chat.thread_id;
         let cwd = chat.config.cwd.to_path_buf();
         chat.show_review_action_picker(
@@ -723,6 +882,13 @@ fn mark_review_commit_available(chat: &mut ChatWidget) {
         request_id,
         cwd,
         crate::review_scope::ReviewScopeResolution {
+            review_execution_available: true,
+            review_unavailable_reason: None,
+            fix_execution_available: true,
+            fix_unavailable_reason: None,
+            double_check_available: true,
+            whole_repository_available: true,
+            current_branch: Some("main".to_string()),
             commits: vec![review_scope_commit()],
             ..Default::default()
         },

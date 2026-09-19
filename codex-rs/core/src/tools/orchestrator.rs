@@ -98,6 +98,12 @@ impl ToolOrchestrator {
             sandbox_cwd: attempt.sandbox_cwd,
             workspace_roots: attempt.workspace_roots,
             review_protected_paths: attempt.review_protected_paths,
+            review_additional_read_paths: attempt.review_additional_read_paths,
+            review_read_deny_entries: attempt.review_read_deny_entries,
+            review_readable_root: attempt.review_readable_root,
+            review_writable_root: attempt.review_writable_root,
+            review_patch_tool: attempt.review_patch_tool,
+            review_verification_write_root: attempt.review_verification_write_root,
             codex_linux_sandbox_exe: attempt.codex_linux_sandbox_exe,
             use_legacy_landlock: attempt.use_legacy_landlock,
             windows_sandbox_level: attempt.windows_sandbox_level,
@@ -165,8 +171,17 @@ impl ToolOrchestrator {
         let network_sandbox_policy = turn_ctx.network_sandbox_policy();
         let restricted_review_stage = turn_ctx
             .extension_data
-            .get::<crate::codex_delegate::RestrictedReviewStage>()
+            .get::<crate::review_stage_runtime::RestrictedReviewStage>()
             .is_some();
+        let restricted_review_sandboxed_stage = restricted_review_stage
+            && (turn_ctx
+                .extension_data
+                .get::<crate::review_stage_runtime::ReviewWritableRoot>()
+                .is_some()
+                || turn_ctx
+                    .extension_data
+                    .get::<crate::review_stage_runtime::ReviewReadableRoot>()
+                    .is_some());
         let requested_sandbox_permissions = tool.sandbox_permissions(req);
         if restricted_review_stage && requested_sandbox_permissions.requests_sandbox_override() {
             return Err(ToolError::Rejected(
@@ -272,6 +287,19 @@ impl ToolOrchestrator {
         } else {
             SandboxType::None
         };
+        let execution_environment_is_remote =
+            tool.execution_environment_is_remote(req).or_else(|| {
+                turn_ctx
+                    .environments
+                    .primary()
+                    .map(|environment| environment.environment.is_remote())
+            });
+        reject_unenforced_local_review_sandbox(
+            restricted_review_sandboxed_stage,
+            sandbox_requested,
+            initial_sandbox,
+            execution_environment_is_remote,
+        )?;
 
         // Platform-specific flag gating is handled by SandboxManager::select_initial.
         let use_legacy_landlock = turn_ctx.config.features.use_legacy_landlock();
@@ -283,20 +311,88 @@ impl ToolOrchestrator {
         let workspace_roots = turn_ctx.config.effective_workspace_roots();
         let review_protected_paths = turn_ctx
             .extension_data
-            .get::<crate::codex_delegate::ReviewProtectedPaths>();
+            .get::<crate::review_stage_runtime::ReviewProtectedPaths>();
         let review_protected_paths = review_protected_paths
             .as_deref()
             .map(|paths| paths.0.as_slice())
             .unwrap_or_default();
+        let review_additional_read_paths = turn_ctx
+            .extension_data
+            .get::<crate::review_stage_runtime::ReviewAdditionalReadPaths>(
+        );
+        let review_additional_read_paths = review_additional_read_paths
+            .as_deref()
+            .map(|paths| paths.0.as_slice())
+            .unwrap_or_default();
+        let review_read_deny_entries = turn_ctx
+            .extension_data
+            .get::<crate::review_stage_runtime::ReviewReadDenyEntries>();
+        let review_read_deny_entries = review_read_deny_entries
+            .as_deref()
+            .map(|entries| entries.0.as_slice())
+            .unwrap_or_default();
+        let review_writable_root = turn_ctx
+            .extension_data
+            .get::<crate::review_stage_runtime::ReviewWritableRoot>();
+        let review_readable_root = turn_ctx
+            .extension_data
+            .get::<crate::review_stage_runtime::ReviewReadableRoot>();
+        let review_patch_tool =
+            review_writable_root.is_some() && tool_ctx.tool_name.name == "apply_patch";
+        let review_verification_write_root =
+            turn_ctx
+                .extension_data
+                .get::<crate::review_stage_runtime::ReviewVerificationWriteRoot>();
         let local_review_protected_paths = review_protected_paths
             .iter()
             .filter_map(|path| path.to_abs_path().ok())
             .collect::<Vec<_>>();
-        let mut local_permissions = turn_ctx.permission_profile.clone();
+        let local_review_writable_root = review_writable_root
+            .as_deref()
+            .and_then(|root| root.0.to_abs_path().ok());
+        let local_review_readable_root = review_readable_root
+            .as_deref()
+            .and_then(|root| root.0.to_abs_path().ok());
+        let mut local_permissions = match (local_review_writable_root, local_review_readable_root) {
+            (Some(root), _) if review_patch_tool => {
+                crate::session::turn_context::review_workspace_permissions(root)
+            }
+            (Some(root), _) => crate::session::turn_context::review_verification_permissions(root),
+            (None, Some(root)) => crate::session::turn_context::review_read_permissions(root),
+            (None, None) => turn_ctx.permission_profile.clone(),
+        };
         crate::session::turn_context::add_read_only_paths(
             &mut local_permissions,
             &local_review_protected_paths,
         );
+        if !review_patch_tool {
+            let local_additional_read_paths = review_additional_read_paths
+                .iter()
+                .filter_map(|path| path.to_abs_path().ok())
+                .collect::<Vec<_>>();
+            crate::session::turn_context::add_read_only_paths(
+                &mut local_permissions,
+                &local_additional_read_paths,
+            );
+        }
+        let local_read_deny_entries = review_read_deny_entries
+            .iter()
+            .filter_map(|entry| entry.clone().try_into().ok())
+            .collect::<Vec<_>>();
+        crate::session::turn_context::add_file_system_entries(
+            &mut local_permissions,
+            &local_read_deny_entries,
+        );
+        if !review_patch_tool
+            && let Some(root) = review_verification_write_root
+                .as_deref()
+                .and_then(|root| root.0.to_abs_path().ok())
+        {
+            crate::session::turn_context::add_write_paths(
+                &mut local_permissions,
+                std::slice::from_ref(&root),
+            );
+        }
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
             sandbox_requested,
@@ -307,6 +403,14 @@ impl ToolOrchestrator {
             sandbox_cwd: &sandbox_policy_cwd,
             workspace_roots: workspace_roots.as_slice(),
             review_protected_paths,
+            review_additional_read_paths,
+            review_read_deny_entries,
+            review_readable_root: review_readable_root.as_deref().map(|root| &root.0),
+            review_writable_root: review_writable_root.as_deref().map(|root| &root.0),
+            review_patch_tool,
+            review_verification_write_root: review_verification_write_root
+                .as_deref()
+                .map(|root| &root.0),
             codex_linux_sandbox_exe: turn_ctx.config.codex_linux_sandbox_exe.as_ref(),
             use_legacy_landlock,
             windows_sandbox_level: turn_ctx.windows_sandbox_level,
@@ -476,6 +580,12 @@ impl ToolOrchestrator {
                 } else {
                     SandboxType::None
                 };
+                reject_unenforced_local_review_sandbox(
+                    restricted_review_sandboxed_stage,
+                    retry_sandbox_requested,
+                    retry_sandbox,
+                    execution_environment_is_remote,
+                )?;
                 let retry_codex_linux_sandbox_exe = if unsandboxed_allowed {
                     None
                 } else {
@@ -491,6 +601,14 @@ impl ToolOrchestrator {
                     sandbox_cwd: &sandbox_policy_cwd,
                     workspace_roots: workspace_roots.as_slice(),
                     review_protected_paths,
+                    review_additional_read_paths,
+                    review_read_deny_entries,
+                    review_readable_root: review_readable_root.as_deref().map(|root| &root.0),
+                    review_writable_root: review_writable_root.as_deref().map(|root| &root.0),
+                    review_patch_tool,
+                    review_verification_write_root: review_verification_write_root
+                        .as_deref()
+                        .map(|root| &root.0),
                     codex_linux_sandbox_exe: retry_codex_linux_sandbox_exe,
                     use_legacy_landlock,
                     windows_sandbox_level: turn_ctx.windows_sandbox_level,
@@ -667,6 +785,24 @@ impl ToolOrchestrator {
     }
 }
 
+fn reject_unenforced_local_review_sandbox(
+    restricted_review_sandboxed_stage: bool,
+    sandbox_requested: bool,
+    sandbox: SandboxType,
+    execution_environment_is_remote: Option<bool>,
+) -> Result<(), ToolError> {
+    if restricted_review_sandboxed_stage
+        && sandbox_requested
+        && sandbox == SandboxType::None
+        && execution_environment_is_remote == Some(false)
+    {
+        return Err(ToolError::Rejected(
+            "review stage sandboxing is unavailable for the local environment".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn sandbox_outcome_from_tool_error(err: &ToolError) -> Option<&'static str> {
     match err {
         ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { .. })) => Some("denied"),
@@ -681,3 +817,7 @@ fn build_denial_reason_from_output(_output: &ExecToolCallOutput) -> String {
     // output so we can evolve heuristics later without touching call sites.
     "command failed; retry without sandbox?".to_string()
 }
+
+#[cfg(test)]
+#[path = "orchestrator_tests.rs"]
+mod tests;

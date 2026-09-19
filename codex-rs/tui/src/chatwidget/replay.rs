@@ -82,12 +82,11 @@ impl ChatWidget {
                 phase,
                 memory_citation,
             } => {
-                let duplicates_exit_report = from_replay
-                    && self
-                        .review
-                        .legacy_report_dedupe
-                        .as_ref()
-                        .is_some_and(|expected_turn_id| expected_turn_id == &turn_id)
+                let duplicates_exit_report = self
+                    .review
+                    .legacy_report_dedupe
+                    .as_ref()
+                    .is_some_and(|expected_turn_id| expected_turn_id == &turn_id)
                     && id == "review_rollout_assistant";
                 if duplicates_exit_report {
                     self.review.legacy_report_dedupe = None;
@@ -176,8 +175,8 @@ impl ChatWidget {
                 }
             }
             ThreadItem::ExitedReviewMode { review, .. } => {
-                self.exit_review_mode_after_item(review.clone());
-                self.review.legacy_report_dedupe = from_replay.then(|| turn_id.clone());
+                self.exit_review_mode_after_item(review);
+                self.review.legacy_report_dedupe = Some(turn_id.clone());
             }
             ThreadItem::ContextCompaction { .. } => {
                 self.add_info_message("Context compacted".to_string(), /*hint*/ None);

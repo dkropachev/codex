@@ -177,7 +177,7 @@ Example with notification opt-out:
 - `thread/realtime/appendText` — append text input to the active realtime session with a required `role` of `user`, `developer`, or `assistant` (experimental); returns `{}`. Older clients that omit `role` default to `user`.
 - `thread/realtime/appendSpeech` — append text that the realtime model should speak to the user (experimental); returns `{}`.
 - `thread/realtime/stop` — stop the active realtime session for the thread (experimental); returns `{}`.
-- `review/start` — run an isolated review chain for a thread; emits `enteredReviewMode` and `exitedReviewMode` item lifecycle notifications. The completed exit item is the canonical report.
+- `review/start` — run an isolated review chain for a thread; emits `enteredReviewMode` and `exitedReviewMode` item lifecycle notifications. The completed exit item is the canonical report; a matching final assistant `agentMessage` remains for compatibility with existing clients.
 - `review/resolveScope` — inspect the selected thread environment for pull-request, dirty-worktree, branch, and recent-commit targets without starting a turn or modifying thread history.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `command/exec/write` — write base64-decoded stdin bytes to a running `command/exec` session or close stdin; returns `{}`.
@@ -1004,6 +1004,12 @@ or custom review.
     "threadId": "thr_123"
 } }
 { "id": 39, "result": {
+    "reviewExecutionAvailable": true,
+    "reviewUnavailableReason": null,
+    "fixExecutionAvailable": true,
+    "fixUnavailableReason": null,
+    "doubleCheckAvailable": true,
+    "wholeRepositoryAvailable": true,
     "pullRequest": {
         "number": 123,
         "url": "https://github.com/openai/codex/pull/123",
@@ -1023,7 +1029,12 @@ or custom review.
 ```
 
 `pullRequest` is the open pull request associated with the current branch or `HEAD`, if one can be
-resolved. Its `baseBranchTarget` is the exact ref for the base when local and remote refs resolve
+resolved. `reviewExecutionAvailable` reflects the app-server host, selected executor, and active
+sandbox setup; `reviewUnavailableReason` explains a false value. `fixExecutionAvailable` also
+checks the server's permission constraints, and `fixUnavailableReason` explains why Fix actions
+are disabled. `doubleCheckAvailable` indicates support for the isolated verification stage.
+`wholeRepositoryAvailable` indicates support for that review target. `baseBranchTarget` is the
+exact ref for the base when local and remote refs resolve
 unambiguously. `defaultBranch` carries both a user-facing branch name and the exact ref to pass in
 a `baseBranch` review target. `currentBranch` is `null` for a detached head, and `branches`
 contains the available explicit base-branch targets with the preferred target first.
@@ -1040,7 +1051,7 @@ Use `review/start` to run Codex’s reviewer on the currently checked-out projec
 - `{"type":"wholeRepository"}` — inspect the accessible repository without a comparison baseline.
 - `{"type":"custom","instructions":"Free-form reviewer instructions"}` — fallback prompt equivalent to the legacy manual review request.
 - `verification` (`"singlePass"` or `"doubleCheck"`, default `"singlePass"`) — whether a second isolated agent verifies only the discovery candidates.
-- `action` (`"report"`, `"fix"`, or `"fixAndCommit"`, default `"report"`) — stop after the report, fix eligible findings, or fix and create one focused commit after successful verification. Fix stages use the thread's coding model in Default mode; review stages use `review_model` when configured.
+- `action` (`"report"`, `"fix"`, or `"fixAndCommit"`, default `"report"`) — stop after the report, fix eligible findings, or fix and create one focused commit after successful verification. Fix uses the thread's coding model in Default mode: a read-only eligibility pass first removes rejected and report-only findings, then a fresh workspace-write session receives only eligible findings. Review stages use `review_model` when configured. `fixAndCommit` requires an attached Git branch and rejects the review before inference otherwise.
 - `delivery` (`"inline"` or `"detached"`, default `"inline"`) — where the review runs:
   - `"inline"`: run the review as a new turn on the existing thread. The response’s `reviewThreadId` equals the original `threadId`, and no new `thread/started` notification is emitted.
   - `"detached"`: fork a new review thread from the parent conversation and run the review there. The response’s `reviewThreadId` is the id of this new review thread, and the server emits a `thread/started` notification for it before streaming review items.
@@ -1111,7 +1122,10 @@ containing an `exitedReviewMode` item with the final review text:
 The `review` string is the complete ordered report: assessment, findings, optional out-of-scope
 and unverified findings, references, external references, and optional resolution. `findingCount`
 counts only the main Findings section and is zero when it is empty. Use this notification to render
-the report; no duplicate final `agentMessage` is emitted solely for review display.
+the report. A final `agentMessage` with id `review_rollout_assistant` repeats the same text for
+compatibility with existing clients; clients that render `exitedReviewMode` should deduplicate it.
+The raw-response compatibility stream also retains the paired `review_rollout_user` and
+`review_rollout_assistant` message items in that order.
 
 ### Example: One-off command execution
 

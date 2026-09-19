@@ -1,7 +1,25 @@
 use std::fs;
+use std::io;
 use std::time::Duration;
 
 use codex_exec_server::LocalFileSystem;
+use codex_file_system::CopyOptions;
+use codex_file_system::CreateDirectoryOptions;
+use codex_file_system::ExecutorFileSystem;
+use codex_file_system::ExecutorFileSystemFuture;
+use codex_file_system::FileMetadata;
+use codex_file_system::FileSystemReadStream;
+use codex_file_system::FileSystemSandboxContext;
+use codex_file_system::ReadDirectoryEntry;
+use codex_file_system::RemoveOptions;
+use codex_file_system::WalkOptions;
+use codex_file_system::WalkOutcome;
+use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ReviewExternalReference;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
@@ -113,7 +131,7 @@ fn fix_findings_fragment_preserves_valid_json_and_rejects_invalid_or_oversized_i
     let oversized =
         serde_json::to_string(&"x".repeat(/*n*/ crate::context::MAX_REVIEW_FRAGMENT_BYTES * 2))
             .expect("serialize oversized findings");
-    assert!(matches!(ReviewFixFindingsFragment::new(oversized), Err(_)));
+    assert!(ReviewFixFindingsFragment::new(oversized).is_err());
 }
 
 #[tokio::test]
@@ -279,6 +297,7 @@ async fn enforces_fragment_file_and_total_byte_limits() {
     let context = collect_review_context_with_limits(
         &LocalFileSystem::unsandboxed(),
         &root_uri(&root),
+        /*sandbox*/ None,
         "[]",
         &[source("first.rs", /*start*/ 1, /*end*/ 10)],
         &[
@@ -310,4 +329,243 @@ async fn enforces_fragment_file_and_total_byte_limits() {
         reference.explanation.contains("8K-token source limit")
             || reference.explanation.contains("total limit")
     }));
+}
+
+struct SlowCanonicalizeFileSystem {
+    inner: LocalFileSystem,
+    delay: Duration,
+    denied_path: Option<PathUri>,
+}
+
+impl SlowCanonicalizeFileSystem {
+    fn reject_denied(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> io::Result<()> {
+        if sandbox.is_some() && self.denied_path.as_ref() == Some(path) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "path denied by test sandbox",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl ExecutorFileSystem for SlowCanonicalizeFileSystem {
+    fn canonicalize<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, PathUri> {
+        Box::pin(async move {
+            self.reject_denied(path, sandbox)?;
+            tokio::time::sleep(self.delay).await;
+            self.inner.canonicalize(path, /*sandbox*/ None).await
+        })
+    }
+
+    fn read_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
+        Box::pin(async move {
+            self.reject_denied(path, sandbox)?;
+            self.inner.read_file(path, /*sandbox*/ None).await
+        })
+    }
+
+    fn read_file_stream<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
+        self.inner.read_file_stream(path, sandbox)
+    }
+
+    fn write_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        self.inner.write_file(path, contents, sandbox)
+    }
+
+    fn create_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: CreateDirectoryOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        self.inner.create_directory(path, options, sandbox)
+    }
+
+    fn get_metadata<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        Box::pin(async move {
+            self.reject_denied(path, sandbox)?;
+            self.inner.get_metadata(path, /*sandbox*/ None).await
+        })
+    }
+
+    fn read_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
+        self.inner.read_directory(path, sandbox)
+    }
+
+    fn walk<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: WalkOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, WalkOutcome> {
+        self.inner.walk(path, options, sandbox)
+    }
+
+    fn remove<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: RemoveOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        self.inner.remove(path, options, sandbox)
+    }
+
+    fn copy<'a>(
+        &'a self,
+        source_path: &'a PathUri,
+        destination_path: &'a PathUri,
+        options: CopyOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        self.inner
+            .copy(source_path, destination_path, options, sandbox)
+    }
+}
+
+fn timeout_limits(filesystem_timeout: Duration, total_scan_timeout: Duration) -> ContextLimits {
+    ContextLimits {
+        filesystem_timeout,
+        total_scan_timeout,
+        ..ContextLimits::default()
+    }
+}
+
+#[tokio::test]
+async fn parent_sandbox_denial_keeps_candidate_source_out_of_context() {
+    let root = TempDir::new().expect("temporary directory");
+    let root_uri = root_uri(&root);
+    let denied_path = root_uri.join("secret.rs").expect("secret URI");
+    fs::write(root.path().join("secret.rs"), "do_not_inject\n").expect("write secret");
+    let filesystem = SlowCanonicalizeFileSystem {
+        inner: LocalFileSystem::unsandboxed(),
+        delay: Duration::ZERO,
+        denied_path: Some(denied_path.clone()),
+    };
+    let sandbox = FileSystemSandboxContext {
+        permissions: PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Restricted {
+                entries: vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Path {
+                            path: root_uri.clone(),
+                        },
+                        access: FileSystemAccessMode::Read,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Path { path: denied_path },
+                        access: FileSystemAccessMode::Deny,
+                    },
+                ],
+                glob_scan_max_depth: None,
+            },
+            network: NetworkSandboxPolicy::Restricted,
+        },
+        cwd: Some(root_uri.clone()),
+        workspace_roots: vec![root_uri.clone()],
+        windows_sandbox_level: Default::default(),
+        windows_sandbox_private_desktop: false,
+        use_legacy_landlock: false,
+    };
+
+    let context = collect_review_context_with_sandbox(
+        &filesystem,
+        &root_uri,
+        &sandbox,
+        "[]",
+        &[source("secret.rs", /*start*/ 1, /*end*/ 1)],
+        &[],
+        &[],
+    )
+    .await;
+
+    assert!(context.source_fragments.is_empty());
+    assert_eq!(context.references.len(), 1);
+    assert!(
+        !context.reference_fragments[0]
+            .render()
+            .contains("do_not_inject")
+    );
+}
+
+#[tokio::test]
+async fn reports_a_filesystem_operation_timeout() {
+    let root = TempDir::new().expect("temporary directory");
+    let filesystem = SlowCanonicalizeFileSystem {
+        inner: LocalFileSystem::unsandboxed(),
+        delay: Duration::from_millis(25),
+        denied_path: None,
+    };
+    let context = collect_review_context_with_limits_and_timeout(
+        &filesystem,
+        &root_uri(&root),
+        /*sandbox*/ None,
+        "[]",
+        &[source("source.rs", /*start*/ 1, /*end*/ 1)],
+        &[],
+        &[],
+        timeout_limits(Duration::from_millis(1), Duration::from_secs(/*secs*/ 1)),
+    )
+    .await;
+
+    assert!(
+        context.references[0]
+            .explanation
+            .contains("filesystem timeout")
+    );
+}
+
+#[tokio::test]
+async fn reports_the_total_context_scan_timeout() {
+    let root = TempDir::new().expect("temporary directory");
+    let filesystem = SlowCanonicalizeFileSystem {
+        inner: LocalFileSystem::unsandboxed(),
+        delay: Duration::from_millis(25),
+        denied_path: None,
+    };
+    let context = collect_review_context_with_limits_and_timeout(
+        &filesystem,
+        &root_uri(&root),
+        /*sandbox*/ None,
+        "[]",
+        &[source("source.rs", /*start*/ 1, /*end*/ 1)],
+        &[],
+        &[],
+        timeout_limits(Duration::from_secs(/*secs*/ 1), Duration::from_millis(1)),
+    )
+    .await;
+
+    assert_eq!(
+        context.references[0].explanation,
+        "Source collection exceeded the overall timeout."
+    );
 }

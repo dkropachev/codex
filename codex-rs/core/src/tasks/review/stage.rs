@@ -23,14 +23,19 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex_delegate::DelegateContextPolicy;
-use crate::codex_delegate::RestrictedReviewStage;
-use crate::codex_delegate::ReviewProtectedPaths;
-use crate::codex_delegate::ToolFreeReviewStage;
 use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::PermissionProfileSnapshot;
 use crate::context::PullRequestContext;
+use crate::review_stage_runtime::RestrictedReviewStage;
+use crate::review_stage_runtime::ReviewAdditionalReadPaths;
+use crate::review_stage_runtime::ReviewProtectedPaths;
+use crate::review_stage_runtime::ReviewReadDenyEntries;
+use crate::review_stage_runtime::ReviewReadableRoot;
+use crate::review_stage_runtime::ReviewVerificationWriteRoot;
+use crate::review_stage_runtime::ReviewWritableRoot;
+use crate::review_stage_runtime::ToolFreeReviewStage;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use codex_git_utils::ReviewFixFileChange;
@@ -42,6 +47,15 @@ pub(super) enum StagePermissions {
     ToolFree,
 }
 
+pub(super) fn review_fix_permission_profile() -> PermissionProfile {
+    PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Restricted,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    )
+}
+
 pub(super) struct ReviewStageRequest {
     pub(super) model: String,
     pub(super) system_prompt: String,
@@ -49,6 +63,8 @@ pub(super) struct ReviewStageRequest {
     pub(super) user_prompt: String,
     pub(super) output_schema: Value,
     pub(super) permissions: StagePermissions,
+    pub(super) workspace_read_root: Option<PathUri>,
+    pub(super) workspace_write_root: Option<PathUri>,
     pub(super) include_pull_request_context: bool,
 }
 
@@ -57,7 +73,9 @@ pub(super) struct ReviewStageEvidence {
     command_results: HashMap<String, CommandEvidence>,
     successful_file_changes: Vec<std::collections::HashMap<std::path::PathBuf, FileChange>>,
     potentially_mutating_commands: Vec<String>,
+    failed_file_change: bool,
     last_mutation_sequence: u64,
+    net_file_changes: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -89,7 +107,7 @@ impl ReviewStageEvidence {
         let mut resolved = Vec::new();
         for changes in &self.successful_file_changes {
             let mut changes = changes.iter().collect::<Vec<_>>();
-            changes.sort_by(|(left, _), (right, _)| left.cmp(right));
+            changes.sort_by_key(|(path, _)| *path);
             for (path, change) in changes {
                 let path = resolve(path)?;
                 resolved.push(match change {
@@ -115,8 +133,25 @@ impl ReviewStageEvidence {
         Ok(resolved)
     }
 
+    #[cfg(test)]
     pub(super) fn has_potentially_mutating_command(&self) -> bool {
         !self.potentially_mutating_commands.is_empty()
+    }
+
+    pub(super) fn has_failed_file_change(&self) -> bool {
+        self.failed_file_change
+    }
+
+    pub(super) fn net_file_changes(&self) -> Option<bool> {
+        self.net_file_changes
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_failed_file_change() -> Self {
+        Self {
+            failed_file_change: true,
+            ..Self::default()
+        }
     }
 }
 
@@ -198,11 +233,7 @@ impl ReviewStageEvidenceCollector {
                             && command.exit_code == Some(0),
                     },
                 );
-                if command.status == CommandExecutionStatus::Completed
-                    && command.exit_code == Some(0)
-                    && !codex_shell_command::is_safe_command::is_known_safe_command(
-                        &command.command,
-                    )
+                if !codex_shell_command::is_safe_command::is_known_safe_command(&command.command)
                     && !looks_like_verification_command(&invoked_command)
                 {
                     self.evidence
@@ -210,13 +241,15 @@ impl ReviewStageEvidenceCollector {
                         .push(invoked_command);
                 }
             }
-            TurnItem::FileChange(file_change)
-                if file_change.status == Some(PatchApplyStatus::Completed) =>
-            {
+            TurnItem::FileChange(file_change) => {
                 self.evidence.last_mutation_sequence = self.next_sequence;
-                self.evidence
-                    .successful_file_changes
-                    .push(file_change.changes.clone());
+                if file_change.status == Some(PatchApplyStatus::Completed) {
+                    self.evidence
+                        .successful_file_changes
+                        .push(file_change.changes.clone());
+                } else {
+                    self.evidence.failed_file_change = true;
+                }
             }
             _ => {}
         }
@@ -224,6 +257,14 @@ impl ReviewStageEvidenceCollector {
 }
 
 fn looks_like_verification_command(command: &str) -> bool {
+    if command.chars().any(|character| {
+        matches!(
+            character,
+            '\n' | '\r' | ';' | '|' | '&' | '>' | '<' | '`' | '$' | '(' | ')'
+        )
+    }) {
+        return false;
+    }
     let words = command
         .split_whitespace()
         .take(3)
@@ -261,6 +302,12 @@ pub(super) async fn run_review_stage(
     );
     let mut extension_data = ExtensionDataInit::default();
     extension_data.insert(RestrictedReviewStage);
+    if let Some(root) = request.workspace_read_root {
+        extension_data.insert(ReviewReadableRoot(root));
+    }
+    if let Some(root) = request.workspace_write_root {
+        extension_data.insert(ReviewWritableRoot(root));
+    }
     if request.include_pull_request_context
         && let Some(context) = ctx.extension_data.get::<PullRequestContext>()
     {
@@ -269,10 +316,26 @@ pub(super) async fn run_review_stage(
     if request.permissions == StagePermissions::ToolFree {
         extension_data.insert(ToolFreeReviewStage);
     }
-    if request.permissions == StagePermissions::WorkspaceWrite
+    if request.permissions != StagePermissions::ToolFree
         && let Some(paths) = ctx.extension_data.get::<ReviewProtectedPaths>()
     {
         extension_data.insert(paths.as_ref().clone());
+    }
+    if request.permissions != StagePermissions::ToolFree
+        && let Some(paths) = ctx.extension_data.get::<ReviewAdditionalReadPaths>()
+    {
+        extension_data.insert(paths.as_ref().clone());
+    }
+    if request.permissions != StagePermissions::ToolFree
+        && let Some(entries) = ctx.extension_data.get::<ReviewReadDenyEntries>()
+    {
+        extension_data.insert(entries.as_ref().clone());
+    }
+    if request.permissions == StagePermissions::WorkspaceWrite
+        && let Some(root) = ctx.extension_data.get::<ReviewVerificationWriteRoot>()
+    {
+        configure_verification_environment(&mut config, &root.0)?;
+        extension_data.insert(root.as_ref().clone());
     }
     let child = run_codex_thread_one_shot(
         config,
@@ -314,6 +377,12 @@ pub(super) async fn run_review_stage(
                         .await;
                 }
             }
+            EventMsg::TurnDiff(event) => {
+                evidence.evidence.net_file_changes = Some(!event.unified_diff.is_empty());
+                session
+                    .send_event(ctx.as_ref(), EventMsg::TurnDiff(event))
+                    .await;
+            }
             EventMsg::TurnComplete(completed) => {
                 return Ok(ReviewStageResponse {
                     output: completed.last_agent_message,
@@ -333,6 +402,36 @@ pub(super) async fn run_review_stage(
         output: None,
         evidence: evidence.evidence,
     })
+}
+
+fn configure_verification_environment(config: &mut Config, root: &PathUri) -> anyhow::Result<()> {
+    let root_path = root.inferred_native_path_string();
+    for name in ["TMPDIR", "TMP", "TEMP"] {
+        config
+            .permissions
+            .shell_environment_policy
+            .r#set
+            .insert(name.to_string(), root_path.clone());
+    }
+    for (name, child) in [
+        ("CARGO_TARGET_DIR", "cargo-target"),
+        ("GOCACHE", "go-cache"),
+        ("PYTHONPYCACHEPREFIX", "python-cache"),
+        ("npm_config_cache", "npm-cache"),
+        ("YARN_CACHE_FOLDER", "yarn-cache"),
+        ("XDG_CACHE_HOME", "xdg-cache"),
+    ] {
+        config.permissions.shell_environment_policy.r#set.insert(
+            name.to_string(),
+            root.join(child)?.inferred_native_path_string(),
+        );
+    }
+    config
+        .permissions
+        .shell_environment_policy
+        .r#set
+        .insert("CARGO_INCREMENTAL".to_string(), "0".to_string());
+    Ok(())
 }
 
 fn is_private_stage_item(item: &TurnItem) -> bool {
@@ -357,6 +456,7 @@ fn review_stage_config(parent: &Config, request: &ReviewStageRequest) -> anyhow:
     config.tool_output_token_limit = Some(2 * 1024);
     config.compact_prompt = None;
     config.notify = None;
+    config.experimental_request_user_input_enabled = false;
     config.memories.use_memories = false;
     config.memories.dedicated_tools = false;
     config.mcp_servers.set(HashMap::new())?;
@@ -398,13 +498,8 @@ fn review_stage_config(parent: &Config, request: &ReviewStageRequest) -> anyhow:
         config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
         config
             .permissions
-            .replace_permission_profile_from_session_snapshot(PermissionProfileSnapshot::legacy(
-                PermissionProfile::workspace_write_with(
-                    &[],
-                    NetworkSandboxPolicy::Restricted,
-                    /*exclude_tmpdir_env_var*/ false,
-                    /*exclude_slash_tmp*/ false,
-                ),
+            .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::legacy(
+                review_fix_permission_profile(),
             ))?;
     }
     if request.permissions == StagePermissions::ToolFree {

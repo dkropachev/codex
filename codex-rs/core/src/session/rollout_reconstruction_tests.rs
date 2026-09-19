@@ -4,12 +4,15 @@ use super::tests::build_world_state_from_turn_context;
 use super::tests::make_session_and_context;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::items::EnteredReviewModeItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ResumedHistory;
+use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
@@ -22,6 +25,18 @@ use uuid::Uuid;
 fn user_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+fn legacy_review_user_message(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: Some("review_rollout_user".to_string()),
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: text.to_string(),
@@ -411,6 +426,171 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
             .expect("serialize reconstructed world state"),
         json!({"test": {"environment": "first"}})
     );
+}
+
+#[tokio::test]
+async fn reconstruct_history_rollback_counts_a_review_without_dropping_the_prior_user_turn() {
+    let (session, turn_context) = make_session_and_context().await;
+    let context_item = turn_context.to_turn_context_item();
+    let prior_user = user_message("prior user");
+    let prior_assistant = assistant_message("prior assistant");
+    let mut rollout_items = completed_user_turn_rollout(
+        context_item.clone(),
+        vec![
+            RolloutItem::WorldState(WorldStateItem::full(json!({
+                "test": {"environment": "prior"}
+            }))),
+            RolloutItem::ResponseItem(prior_user.clone()),
+            RolloutItem::ResponseItem(prior_assistant.clone()),
+        ],
+    );
+    let review_turn_id = "review-turn".to_string();
+    rollout_items.extend([
+        RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: review_turn_id.clone(),
+            item: codex_protocol::items::TurnItem::EnteredReviewMode(EnteredReviewModeItem {
+                id: "review-item".to_string(),
+                target: ReviewTarget::WholeRepository,
+                user_facing_hint: "whole repository".to_string(),
+            }),
+            completed_at_ms: 0,
+        })),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+            codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+        )),
+    ]);
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(reconstructed.history, vec![prior_user, prior_assistant]);
+    assert_eq!(reconstructed.reference_context_item, Some(context_item));
+    assert_eq!(
+        reconstructed.previous_turn_settings,
+        Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            comp_hash: None,
+            realtime_active: Some(turn_context.realtime_active),
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(reconstructed.world_state_baseline)
+            .expect("serialize reconstructed world state"),
+        json!({"test": {"environment": "prior"}})
+    );
+}
+
+#[tokio::test]
+async fn review_rollback_across_compaction_preserves_the_older_user_turn() {
+    let (session, turn_context) = make_session_and_context().await;
+    let context_item = turn_context.to_turn_context_item();
+    let user_a = user_message("user a");
+    let assistant_a = assistant_message("assistant a");
+    let mut rollout_items = completed_user_turn_rollout(
+        context_item,
+        vec![
+            RolloutItem::ResponseItem(user_a.clone()),
+            RolloutItem::ResponseItem(assistant_a.clone()),
+        ],
+    );
+    rollout_items.push(RolloutItem::EventMsg(EventMsg::ItemCompleted(
+        ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "review-turn".to_string(),
+            item: codex_protocol::items::TurnItem::EnteredReviewMode(EnteredReviewModeItem {
+                id: "review-item".to_string(),
+                target: ReviewTarget::WholeRepository,
+                user_facing_hint: "whole repository".to_string(),
+            }),
+            completed_at_ms: 0,
+        },
+    )));
+    let user_b = user_message("user b");
+    let assistant_b = assistant_message("assistant b");
+    rollout_items.extend([
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: "turn-b".to_string(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::Compacted(CompactedItem {
+            message: "summary before user b".to_string(),
+            replacement_history: Some(vec![user_a.clone(), assistant_a.clone()]),
+            window_number: Some(1),
+            first_window_id: None,
+            previous_window_id: None,
+            window_id: None,
+        }),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "user b".to_string(),
+                ..Default::default()
+            },
+        )),
+        RolloutItem::ResponseItem(user_b),
+        RolloutItem::ResponseItem(assistant_b),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id: "turn-b".to_string(),
+                last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+            codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 2 },
+        )),
+    ]);
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(reconstructed.history, vec![user_a, assistant_a]);
+}
+
+#[tokio::test]
+async fn legacy_review_wrapper_and_entered_event_count_as_one_reconstructed_turn() {
+    let (session, turn_context) = make_session_and_context().await;
+    let context_item = turn_context.to_turn_context_item();
+    let mut rollout_items = completed_user_turn_rollout(
+        context_item,
+        vec![
+            RolloutItem::ResponseItem(user_message("prior user")),
+            RolloutItem::ResponseItem(assistant_message("prior assistant")),
+        ],
+    );
+    rollout_items.extend([
+        RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "review-turn".to_string(),
+            item: codex_protocol::items::TurnItem::EnteredReviewMode(EnteredReviewModeItem {
+                id: "review-item".to_string(),
+                target: ReviewTarget::WholeRepository,
+                user_facing_hint: "whole repository".to_string(),
+            }),
+            completed_at_ms: 0,
+        })),
+        RolloutItem::ResponseItem(legacy_review_user_message("legacy report")),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+            codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 2 },
+        )),
+    ]);
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert!(reconstructed.history.is_empty());
+    assert!(reconstructed.previous_turn_settings.is_none());
+    assert!(reconstructed.reference_context_item.is_none());
 }
 
 #[tokio::test]

@@ -4,11 +4,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_file_system::ExecutorFileSystem;
+use codex_file_system::FileSystemSandboxContext;
 use codex_protocol::protocol::ReviewExternalReference;
 use codex_protocol::protocol::ReviewLineRange;
 use codex_protocol::protocol::ReviewReference;
 use codex_utils_path_uri::PathUri;
-use futures::StreamExt;
 
 use super::CollectedReviewContext;
 use super::ContextLimits;
@@ -21,6 +21,7 @@ use crate::context::escape_review_markup;
 pub(super) async fn collect_review_context_with_limits(
     filesystem: &dyn ExecutorFileSystem,
     checkout_root: &PathUri,
+    sandbox: Option<&FileSystemSandboxContext>,
     candidates_json: &str,
     candidate_ranges: &[SourceRange],
     review_ranges: &[SourceRange],
@@ -45,7 +46,7 @@ pub(super) async fn collect_review_context_with_limits(
     let requested = requested_ranges(candidate_ranges, review_ranges, limits, &mut references);
     let canonical_root = fs_call(
         limits.filesystem_timeout,
-        filesystem.canonicalize(checkout_root, /*sandbox*/ None),
+        filesystem.canonicalize(checkout_root, sandbox),
     )
     .await;
     let mut resolved = Vec::new();
@@ -56,6 +57,7 @@ pub(super) async fn collect_review_context_with_limits(
                     filesystem,
                     checkout_root,
                     &canonical_root,
+                    sandbox,
                     request,
                     limits.filesystem_timeout,
                 )
@@ -113,6 +115,7 @@ pub(super) async fn collect_review_context_with_limits(
                 let contents = load_text_file(
                     filesystem,
                     &range.canonical_path,
+                    sandbox,
                     limits.file_bytes,
                     limits.filesystem_timeout,
                 )
@@ -278,6 +281,7 @@ async fn resolve_range(
     filesystem: &dyn ExecutorFileSystem,
     checkout_root: &PathUri,
     canonical_root: &PathUri,
+    sandbox: Option<&FileSystemSandboxContext>,
     request: RequestedRange,
     filesystem_timeout: Duration,
 ) -> Result<ResolvedRange, RangeFailure> {
@@ -291,7 +295,7 @@ async fn resolve_range(
         })?;
     let canonical_path = fs_call(
         filesystem_timeout,
-        filesystem.canonicalize(&requested_path, /*sandbox*/ None),
+        filesystem.canonicalize(&requested_path, sandbox),
     )
     .await
     .map_err(|failure| {
@@ -369,11 +373,12 @@ fn merge_resolved_ranges(ranges: Vec<ResolvedRange>, max_lines: u32) -> Vec<Reso
 async fn load_text_file(
     filesystem: &dyn ExecutorFileSystem,
     path: &PathUri,
+    sandbox: Option<&FileSystemSandboxContext>,
     max_bytes: usize,
     filesystem_timeout: Duration,
 ) -> Result<Arc<String>, &'static str> {
     let result = fs_call(filesystem_timeout, async {
-        let metadata = filesystem.get_metadata(path, /*sandbox*/ None).await?;
+        let metadata = filesystem.get_metadata(path, sandbox).await?;
         if !metadata.is_file {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a file"));
         }
@@ -383,17 +388,12 @@ async fn load_text_file(
                 "file too large",
             ));
         }
-        let mut stream = filesystem.read_file_stream(path, /*sandbox*/ None).await?;
-        let mut bytes = Vec::with_capacity(/*capacity*/ metadata.size as usize);
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            if chunk.len() > max_bytes.saturating_sub(bytes.len()) {
-                return Err(io::Error::new(
-                    io::ErrorKind::FileTooLarge,
-                    "file too large",
-                ));
-            }
-            bytes.extend_from_slice(&chunk);
+        let bytes = filesystem.read_file(path, sandbox).await?;
+        if bytes.len() > max_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                "file too large",
+            ));
         }
         Ok(bytes)
     })

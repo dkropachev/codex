@@ -144,14 +144,18 @@ impl ChatWidget {
             }
         }
 
-        let whole_repository_idx = items.len();
-        items.push(review_target_item(
-            "Review whole repository".to_string(),
-            /*description*/ None,
-            thread_id,
-            cwd.clone(),
-            ReviewTarget::WholeRepository,
-        ));
+        let whole_repository_idx = resolution.whole_repository_available.then(|| {
+            let index = items.len();
+            items.push(review_target_item(
+                "Review whole repository".to_string(),
+                /*description*/ None,
+                thread_id,
+                cwd.clone(),
+                ReviewTarget::WholeRepository,
+            ));
+            index
+        });
+        let custom_idx = items.len();
         items.push(SelectionItem {
             name: "Custom review instructions".to_string(),
             actions: vec![Box::new({
@@ -176,7 +180,7 @@ impl ChatWidget {
                 footer_hint: Some(standard_popup_hint_line()),
                 items,
                 initial_selected_idx: Some(if git_detection_failed {
-                    whole_repository_idx
+                    whole_repository_idx.unwrap_or(custom_idx)
                 } else {
                     0
                 }),

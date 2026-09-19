@@ -76,6 +76,10 @@ pub(crate) use realtime_end_instructions::RealtimeEndInstructions;
 pub(crate) use realtime_start_instructions::RealtimeStartInstructions;
 pub(crate) use realtime_start_with_instructions::RealtimeStartWithInstructions;
 pub(crate) use recommended_plugins_instructions::RecommendedPluginsInstructions;
+#[cfg(test)]
+pub(crate) use review_handoff::MAX_HANDOFF_FRAGMENT_BYTES;
+pub(crate) use review_handoff::MAX_HANDOFF_FRAGMENTS;
+pub(crate) use review_handoff::MAX_HANDOFF_LOGICAL_BYTES;
 pub(crate) use review_handoff::PendingReviewReport;
 pub(crate) use review_handoff::ReviewHandoff;
 pub(crate) use review_handoff::ReviewHandoffFragment;

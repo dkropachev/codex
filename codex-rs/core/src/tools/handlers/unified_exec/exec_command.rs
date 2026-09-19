@@ -233,7 +233,6 @@ impl ExecCommandHandler {
                 )));
             }
         }
-        let process_id = manager.allocate_process_id().await;
         let resolved_command = get_command(
             &args,
             shell,
@@ -243,6 +242,7 @@ impl ExecCommandHandler {
         .map_err(FunctionCallError::RespondToModel)?;
         let command = resolved_command.command;
         let shell_type = resolved_command.shell_type;
+        let process_id = manager.allocate_process_id().await;
         let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
 
         let ExecCommandArgs {
@@ -325,7 +325,6 @@ impl ExecCommandHandler {
             context.turn.clone(),
             Some(&tracker),
             &context.call_id,
-            "exec_command",
         )
         .await?
         {

@@ -395,6 +395,11 @@ pub(crate) enum ToolError {
 }
 
 pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
+    /// Reports whether the concrete environment selected by this request is remote.
+    fn execution_environment_is_remote(&self, _req: &Req) -> Option<bool> {
+        None
+    }
+
     fn network_approval_spec(&self, _req: &Req, _ctx: &ToolCtx) -> Option<NetworkApprovalSpec> {
         None
     }
@@ -423,6 +428,13 @@ pub(crate) struct SandboxAttempt<'a> {
     pub(crate) sandbox_cwd: &'a PathUri,
     pub(crate) workspace_roots: &'a [AbsolutePathBuf],
     pub(crate) review_protected_paths: &'a [PathUri],
+    pub(crate) review_additional_read_paths: &'a [PathUri],
+    pub(crate) review_read_deny_entries:
+        &'a [codex_protocol::permissions::FileSystemSandboxEntry<PathUri>],
+    pub(crate) review_readable_root: Option<&'a PathUri>,
+    pub(crate) review_writable_root: Option<&'a PathUri>,
+    pub(crate) review_patch_tool: bool,
+    pub(crate) review_verification_write_root: Option<&'a PathUri>,
     pub codex_linux_sandbox_exe: Option<&'a std::path::PathBuf>,
     pub use_legacy_landlock: bool,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
@@ -481,16 +493,48 @@ impl<'a> SandboxAttempt<'a> {
     ) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
         let network = self.network_proxy(network);
         let managed_network = command.managed_network.clone();
-        let exec_server_permissions = effective_permission_profile(
-            self.exec_server_permissions,
-            command.additional_permissions.as_ref(),
+        let review_root = self.review_writable_root.or(self.review_readable_root);
+        let mut exec_server_permissions = review_root.map_or_else(
+            || {
+                codex_protocol::models::PermissionProfile::<PathUri>::from(
+                    effective_permission_profile(
+                        self.exec_server_permissions,
+                        command.additional_permissions.as_ref(),
+                    ),
+                )
+            },
+            |root| {
+                if self.review_patch_tool {
+                    crate::session::turn_context::review_workspace_permissions(root.clone())
+                } else if self.review_writable_root.is_some() {
+                    crate::session::turn_context::review_verification_permissions(root.clone())
+                } else {
+                    crate::session::turn_context::review_read_permissions(root.clone())
+                }
+            },
         );
-        let mut exec_server_permissions =
-            codex_protocol::models::PermissionProfile::<PathUri>::from(exec_server_permissions);
         crate::session::turn_context::add_read_only_paths(
             &mut exec_server_permissions,
             self.review_protected_paths,
         );
+        if !self.review_patch_tool {
+            crate::session::turn_context::add_read_only_paths(
+                &mut exec_server_permissions,
+                self.review_additional_read_paths,
+            );
+        }
+        crate::session::turn_context::add_file_system_entries(
+            &mut exec_server_permissions,
+            self.review_read_deny_entries,
+        );
+        if !self.review_patch_tool
+            && let Some(root) = self.review_verification_write_root
+        {
+            crate::session::turn_context::add_write_paths(
+                &mut exec_server_permissions,
+                std::slice::from_ref(root),
+            );
+        }
         let request = self
             .manager
             .transform(SandboxTransformRequest {

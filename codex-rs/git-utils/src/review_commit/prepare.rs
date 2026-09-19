@@ -215,15 +215,30 @@ async fn apply_change_to_indexes(
         ReviewFixFileChange::Update { unified_diff, .. } => {
             if !unified_diff.is_empty() {
                 for index in indexes {
-                    update_index_entry(
+                    let mut entry = index_entry(
                         runner,
-                        fs,
                         repository_root,
-                        attributes_source,
                         index,
-                        content_path,
                         &change.path,
-                        unified_diff,
+                        attributes_source,
+                    )
+                    .await?
+                    .with_context(|| {
+                        format!("review fix update path is absent: {}", change.path)
+                    })?;
+                    let original =
+                        read_blob_text(runner, repository_root, &entry.object_id).await?;
+                    let content = apply_update_diff(&original, unified_diff)?
+                        .context("review fix update contains no changes")?;
+                    entry.object_id =
+                        hash_content(runner, fs, repository_root, content_path, &content).await?;
+                    set_index_entry(
+                        runner,
+                        repository_root,
+                        index,
+                        &change.path,
+                        &entry,
+                        attributes_source,
                     )
                     .await?;
                 }
@@ -279,34 +294,6 @@ async fn apply_change_to_indexes(
     Ok(())
 }
 
-async fn update_index_entry(
-    runner: &impl ReviewCommandRunner,
-    fs: &dyn ExecutorFileSystem,
-    repository_root: &PathUri,
-    attributes_source: &str,
-    index: &PathUri,
-    content_path: &PathUri,
-    path: &str,
-    unified_diff: &str,
-) -> Result<()> {
-    let mut entry = index_entry(runner, repository_root, index, path, attributes_source)
-        .await?
-        .with_context(|| format!("review fix update path is absent: {path}"))?;
-    let original = read_blob_text(runner, repository_root, &entry.object_id).await?;
-    let content = apply_update_diff(&original, unified_diff)?
-        .context("review fix update contains no changes")?;
-    entry.object_id = hash_content(runner, fs, repository_root, content_path, &content).await?;
-    set_index_entry(
-        runner,
-        repository_root,
-        index,
-        path,
-        &entry,
-        attributes_source,
-    )
-    .await
-}
-
 async fn hash_content(
     runner: &impl ReviewCommandRunner,
     fs: &dyn ExecutorFileSystem,
@@ -321,5 +308,11 @@ async fn hash_content(
     )
     .await
     .with_context(|| format!("failed to write exact review fix content {content_path}"))?;
-    hash_file_without_filters(runner, repository_root, content_path, true).await
+    hash_file_without_filters(
+        runner,
+        repository_root,
+        content_path,
+        /*write_object*/ true,
+    )
+    .await
 }

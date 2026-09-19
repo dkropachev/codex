@@ -52,6 +52,13 @@ pub struct ReviewFixCommitSnapshot {
     empty_tree: String,
 }
 
+impl ReviewFixCommitSnapshot {
+    /// Paths the isolated fix stage must not modify before finalization.
+    pub fn protected_paths(&self) -> Vec<PathUri> {
+        vec![self.index_path.clone()]
+    }
+}
+
 /// Result of attempting to commit exact changes made by a review-fix stage.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReviewFixCommitOutcome {
@@ -67,7 +74,7 @@ pub enum ReviewFixCommitOutcome {
 /// access run in the executor that owns `repository_root`.
 pub async fn capture_review_fix_commit_snapshot(
     runner: &impl ReviewCommandRunner,
-    fs: &dyn ExecutorFileSystem,
+    fs: Arc<dyn ExecutorFileSystem>,
     repository_root: &PathUri,
 ) -> Result<ReviewFixCommitSnapshot> {
     let head_sha = resolve_object(
@@ -94,20 +101,21 @@ pub async fn capture_review_fix_commit_snapshot(
         .with_context(|| format!("failed to read Git index {index_path}"))?;
     let index_flags = read_preserved_index_flags(runner, repository_root, &index_path).await?;
     let empty_tree = resolve_empty_tree(runner, repository_root).await?;
-    let artifacts = TemporaryGitArtifacts::new(&index_path, &["snapshot-index"])?;
+    let mut artifacts =
+        TemporaryGitArtifacts::new(&index_path, &["snapshot-index"], Arc::clone(&fs))?;
     let result = capture_index_tree(
         runner,
-        fs,
+        fs.as_ref(),
         repository_root,
         &artifacts.paths[0],
         &index_contents,
         &empty_tree,
     )
     .await;
-    let cleanup = artifacts.cleanup(fs).await;
+    let cleanup = artifacts.cleanup().await;
     let index_tree = combine_with_cleanup(result, cleanup)?;
     ensure_head(runner, repository_root, &head_sha, head_ref.as_deref()).await?;
-    ensure_index_unchanged(fs, &index_path, &index_contents).await?;
+    ensure_index_unchanged(fs.as_ref(), &index_path, &index_contents).await?;
 
     Ok(ReviewFixCommitSnapshot {
         repository_root: repository_root.clone(),
@@ -127,7 +135,7 @@ pub async fn capture_review_fix_commit_snapshot(
 /// This never reads the worktree or changes a ref or the real index.
 pub async fn review_fix_snapshot_has_changes(
     runner: &impl ReviewCommandRunner,
-    fs: &dyn ExecutorFileSystem,
+    fs: Arc<dyn ExecutorFileSystem>,
     snapshot: &ReviewFixCommitSnapshot,
     changes: &[ReviewFixFileChange],
 ) -> Result<bool> {
@@ -135,15 +143,17 @@ pub async fn review_fix_snapshot_has_changes(
         return Ok(false);
     }
     let changes = validate_changes(&snapshot.repository_root, changes)?;
-    ensure_snapshot_git_state(runner, fs, snapshot).await?;
-    let artifacts = TemporaryGitArtifacts::new(
+    ensure_snapshot_git_state(runner, fs.as_ref(), snapshot).await?;
+    let mut artifacts = TemporaryGitArtifacts::new(
         &snapshot.index_path,
         &["commit-index", "preserved-index", "change-content"],
+        Arc::clone(&fs),
     )?;
-    let result = prepare_commit_trees(runner, fs, snapshot, &artifacts.paths, &changes).await;
-    let cleanup = artifacts.cleanup(fs).await;
+    let result =
+        prepare_commit_trees(runner, fs.as_ref(), snapshot, &artifacts.paths, &changes).await;
+    let cleanup = artifacts.cleanup().await;
     let prepared = combine_with_cleanup(result, cleanup)?;
-    ensure_snapshot_git_state(runner, fs, snapshot).await?;
+    ensure_snapshot_git_state(runner, fs.as_ref(), snapshot).await?;
     Ok(prepared.is_some())
 }
 
@@ -177,9 +187,10 @@ where
     }
     let changes = validate_changes(&snapshot.repository_root, changes)?;
     ensure_snapshot_git_state(runner.as_ref(), fs.as_ref(), snapshot).await?;
-    let artifacts = TemporaryGitArtifacts::new(
+    let mut artifacts = TemporaryGitArtifacts::new(
         &snapshot.index_path,
         &["commit-index", "preserved-index", "change-content"],
+        Arc::clone(&fs),
     )?;
     let prepared = prepare_commit_trees(
         runner.as_ref(),
@@ -192,12 +203,12 @@ where
     let prepared = match prepared {
         Ok(Some(prepared)) => prepared,
         Ok(None) => {
-            let cleanup = artifacts.cleanup(fs.as_ref()).await;
+            let cleanup = artifacts.cleanup().await;
             combine_with_cleanup(Ok(()), cleanup)?;
             return Ok(ReviewFixCommitOutcome::NoChanges);
         }
         Err(error) => {
-            return combine_with_cleanup(Err(error), artifacts.cleanup(fs.as_ref()).await);
+            return combine_with_cleanup(Err(error), artifacts.cleanup().await);
         }
     };
     let commit_sha = create_commit(
@@ -210,7 +221,7 @@ where
     let commit_sha = match commit_sha {
         Ok(commit_sha) => commit_sha,
         Err(error) => {
-            return combine_with_cleanup(Err(error), artifacts.cleanup(fs.as_ref()).await);
+            return combine_with_cleanup(Err(error), artifacts.cleanup().await);
         }
     };
 
@@ -225,7 +236,11 @@ where
             &commit_sha,
         )
         .await;
-        combine_with_cleanup(result, artifacts.cleanup(fs.as_ref()).await)
+        let cleanup = artifacts.cleanup().await;
+        match result {
+            Ok(outcome @ ReviewFixCommitOutcome::Committed { .. }) => Ok(outcome),
+            result => combine_with_cleanup(result, cleanup),
+        }
     });
     transaction
         .await

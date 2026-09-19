@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use codex_file_system::ExecutorFileSystem;
+use codex_file_system::FileSystemSandboxContext;
 use codex_protocol::protocol::ReviewExternalReference;
 use codex_protocol::protocol::ReviewLineRange;
 use codex_protocol::protocol::ReviewReference;
@@ -17,7 +18,7 @@ mod collector;
 
 const MAX_FILE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RANGE_LINES: u32 = 400;
-// Conservative byte caps guarantee the requested token ceilings for arbitrary UTF-8.
+// One UTF-8 byte per token is the conservative bound for untrusted text.
 const MAX_FILE_SOURCE_BYTES: usize = 8 * 1024;
 const MAX_TOTAL_SOURCE_BYTES: usize = 64 * 1024;
 const MAX_REQUESTED_RANGES: usize = 256;
@@ -91,6 +92,7 @@ impl Default for ContextLimits {
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn collect_review_context(
     filesystem: &dyn ExecutorFileSystem,
     checkout_root: &PathUri,
@@ -100,9 +102,55 @@ pub(crate) async fn collect_review_context(
     external_references: &[ReviewExternalReference],
 ) -> CollectedReviewContext {
     let limits = ContextLimits::default();
+    collect_review_context_with_limits_and_timeout(
+        filesystem,
+        checkout_root,
+        /*sandbox*/ None,
+        candidates_json,
+        candidate_ranges,
+        review_ranges,
+        external_references,
+        limits,
+    )
+    .await
+}
+
+pub(crate) async fn collect_review_context_with_sandbox(
+    filesystem: &dyn ExecutorFileSystem,
+    checkout_root: &PathUri,
+    sandbox: &FileSystemSandboxContext,
+    candidates_json: &str,
+    candidate_ranges: &[SourceRange],
+    review_ranges: &[SourceRange],
+    external_references: &[ReviewExternalReference],
+) -> CollectedReviewContext {
+    collect_review_context_with_limits_and_timeout(
+        filesystem,
+        checkout_root,
+        Some(sandbox),
+        candidates_json,
+        candidate_ranges,
+        review_ranges,
+        external_references,
+        ContextLimits::default(),
+    )
+    .await
+}
+
+async fn collect_review_context_with_limits_and_timeout(
+    filesystem: &dyn ExecutorFileSystem,
+    checkout_root: &PathUri,
+    sandbox: Option<&FileSystemSandboxContext>,
+    candidates_json: &str,
+    candidate_ranges: &[SourceRange],
+    review_ranges: &[SourceRange],
+    external_references: &[ReviewExternalReference],
+    limits: ContextLimits,
+) -> CollectedReviewContext {
     let collection = collector::collect_review_context_with_limits(
         filesystem,
         checkout_root,
+        sandbox,
         candidates_json,
         candidate_ranges,
         review_ranges,

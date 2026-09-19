@@ -50,7 +50,99 @@ struct ActiveReplaySegment<'a> {
     reference_context_item: TurnReferenceContextItem,
     world_state_replay: Vec<&'a RolloutItem>,
     base_replacement_history: Option<&'a [ResponseItem]>,
+    base_replacement_suffix: Option<&'a [RolloutItem]>,
     window: Option<ReconstructedWindow>,
+}
+
+#[derive(Default)]
+struct ForwardReplayTurnTracker {
+    model_visible_turns: Vec<bool>,
+    active_turn: Option<usize>,
+    review_boundaries: std::collections::HashSet<String>,
+}
+
+impl ForwardReplayTurnTracker {
+    fn start_turn(&mut self) {
+        self.active_turn = None;
+    }
+
+    fn note_turn_boundary(&mut self, model_visible: bool) {
+        if let Some(index) = self.active_turn {
+            self.model_visible_turns[index] |= model_visible;
+        } else {
+            let index = self.model_visible_turns.len();
+            self.model_visible_turns.push(model_visible);
+            self.active_turn = Some(index);
+        }
+    }
+
+    fn finish_turn(&mut self) {
+        self.active_turn = None;
+    }
+
+    fn rollback(&mut self, num_turns: u32) -> u32 {
+        let num_turns = usize::try_from(num_turns).unwrap_or(usize::MAX);
+        let start = self.model_visible_turns.len().saturating_sub(num_turns);
+        let visible_turns = self.model_visible_turns[start..]
+            .iter()
+            .filter(|visible| **visible)
+            .count()
+            .saturating_add(num_turns.saturating_sub(self.model_visible_turns.len()));
+        self.model_visible_turns.truncate(start);
+        self.active_turn = None;
+        u32::try_from(visible_turns).unwrap_or(u32::MAX)
+    }
+
+    fn observe(&mut self, item: &RolloutItem) -> Option<u32> {
+        match item {
+            RolloutItem::ResponseItem(response_item)
+                if super::review_handoff::is_legacy_review_user_message(response_item) =>
+            {
+                self.note_turn_boundary(/*model_visible*/ true);
+            }
+            RolloutItem::ResponseItem(response_item) if is_user_turn_boundary(response_item) => {
+                self.note_turn_boundary(/*model_visible*/ true);
+            }
+            RolloutItem::InterAgentCommunication(_) => {
+                self.note_turn_boundary(/*model_visible*/ true);
+            }
+            RolloutItem::EventMsg(EventMsg::TurnStarted(_)) => self.start_turn(),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) => {
+                self.finish_turn();
+            }
+            RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
+                self.note_turn_boundary(/*model_visible*/ false);
+            }
+            RolloutItem::EventMsg(EventMsg::EnteredReviewMode(entered)) => {
+                self.note_review_turn(entered.item_id.as_deref().or(entered.turn_id.as_deref()));
+            }
+            RolloutItem::EventMsg(EventMsg::ItemCompleted(completed)) => match &completed.item {
+                codex_protocol::items::TurnItem::EnteredReviewMode(entered) => {
+                    self.note_review_turn(Some(&entered.id));
+                }
+                codex_protocol::items::TurnItem::ExitedReviewMode(_) => self.finish_turn(),
+                _ => {}
+            },
+            RolloutItem::EventMsg(EventMsg::ExitedReviewMode(_)) => self.finish_turn(),
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                return Some(self.rollback(rollback.num_turns));
+            }
+            RolloutItem::ResponseItem(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::WorldState(_)
+            | RolloutItem::SessionMeta(_)
+            | RolloutItem::InterAgentCommunicationMetadata { .. }
+            | RolloutItem::EventMsg(_) => {}
+        }
+        None
+    }
+
+    fn note_review_turn(&mut self, boundary: Option<&str>) {
+        if boundary.is_none_or(|boundary| self.review_boundaries.insert(boundary.to_string())) {
+            self.note_turn_boundary(/*model_visible*/ false);
+        }
+    }
 }
 
 fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&str>) -> bool {
@@ -58,9 +150,25 @@ fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&s
         .is_none_or(|turn_id| item_turn_id.is_none_or(|item_turn_id| item_turn_id == turn_id))
 }
 
+fn review_turn_boundary(item: &RolloutItem) -> Option<Option<&str>> {
+    match item {
+        RolloutItem::EventMsg(EventMsg::EnteredReviewMode(entered)) => {
+            Some(entered.item_id.as_deref().or(entered.turn_id.as_deref()))
+        }
+        RolloutItem::EventMsg(EventMsg::ItemCompleted(completed)) => match &completed.item {
+            codex_protocol::items::TurnItem::EnteredReviewMode(entered) => {
+                Some(Some(entered.id.as_str()))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn finalize_active_segment<'a>(
     active_segment: ActiveReplaySegment<'a>,
     base_replacement_history: &mut Option<&'a [ResponseItem]>,
+    rollout_suffix: &mut &'a [RolloutItem],
     previous_turn_settings: &mut Option<PreviousTurnSettings>,
     reference_context_item: &mut TurnReferenceContextItem,
     world_state_replay: &mut Vec<&'a RolloutItem>,
@@ -85,6 +193,9 @@ fn finalize_active_segment<'a>(
         && let Some(segment_base_replacement_history) = active_segment.base_replacement_history
     {
         *base_replacement_history = Some(segment_base_replacement_history);
+        if let Some(segment_suffix) = active_segment.base_replacement_suffix {
+            *rollout_suffix = segment_suffix;
+        }
     }
 
     if window.is_none() {
@@ -150,8 +261,45 @@ impl Session {
         // Reverse replay accumulates rollout items into the newest in-progress turn segment until
         // we hit its matching `TurnStarted`, at which point the segment can be finalized.
         let mut active_segment: Option<ActiveReplaySegment<'_>> = None;
+        let mut seen_review_boundaries = std::collections::HashSet::new();
 
         for (index, item) in rollout_items.iter().enumerate().rev() {
+            if let Some(boundary) = review_turn_boundary(item) {
+                if boundary
+                    .is_none_or(|boundary| seen_review_boundaries.insert(boundary.to_string()))
+                {
+                    let mut review_already_counted = false;
+                    if let Some(active_segment) = active_segment.take() {
+                        review_already_counted = active_segment.counts_as_user_turn;
+                        finalize_active_segment(
+                            active_segment,
+                            &mut base_replacement_history,
+                            &mut rollout_suffix,
+                            &mut previous_turn_settings,
+                            &mut reference_context_item,
+                            &mut world_state_replay,
+                            &mut window,
+                            &mut pending_rollback_turns,
+                        );
+                    }
+                    if !review_already_counted {
+                        finalize_active_segment(
+                            ActiveReplaySegment {
+                                counts_as_user_turn: true,
+                                ..Default::default()
+                            },
+                            &mut base_replacement_history,
+                            &mut rollout_suffix,
+                            &mut previous_turn_settings,
+                            &mut reference_context_item,
+                            &mut world_state_replay,
+                            &mut window,
+                            &mut pending_rollback_turns,
+                        );
+                    }
+                }
+                continue;
+            }
             match item {
                 RolloutItem::Compacted(compacted) => {
                     let active_segment =
@@ -182,7 +330,7 @@ impl Session {
                         && let Some(replacement_history) = &compacted.replacement_history
                     {
                         active_segment.base_replacement_history = Some(replacement_history);
-                        rollout_suffix = &rollout_items[index + 1..];
+                        active_segment.base_replacement_suffix = Some(&rollout_items[index + 1..]);
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
@@ -260,6 +408,7 @@ impl Session {
                         finalize_active_segment(
                             active_segment,
                             &mut base_replacement_history,
+                            &mut rollout_suffix,
                             &mut previous_turn_settings,
                             &mut reference_context_item,
                             &mut world_state_replay,
@@ -303,6 +452,7 @@ impl Session {
             finalize_active_segment(
                 active_segment,
                 &mut base_replacement_history,
+                &mut rollout_suffix,
                 &mut previous_turn_settings,
                 &mut reference_context_item,
                 &mut world_state_replay,
@@ -323,31 +473,36 @@ impl Session {
         let mut saw_legacy_compaction_without_replacement_history = false;
         if let Some(base_replacement_history) = base_replacement_history {
             history.replace(
-                base_replacement_history
-                    .iter()
-                    .filter(|item| {
-                        !crate::context::ReviewHandoff::is_consumption_marker(item)
-                            && !crate::context::ReviewHandoff::is_pending_report_marker(item)
-                    })
-                    .cloned()
-                    .collect(),
+                super::review_handoff::filter_complete_review_handoff_history(
+                    base_replacement_history.iter().cloned(),
+                ),
             );
         }
         // Materialize exact history semantics from the replay-derived suffix. The eventual lazy
         // design should keep this same replay shape, but drive it from a resumable reverse source
         // instead of an eagerly loaded `&[RolloutItem]`.
+        let mut review_handoff_filter = super::review_handoff::ReviewHandoffHistoryFilter::new();
+        let mut forward_turns = ForwardReplayTurnTracker::default();
+        let rollout_suffix_start = rollout_items.len().saturating_sub(rollout_suffix.len());
+        for item in &rollout_items[..rollout_suffix_start] {
+            forward_turns.observe(item);
+        }
         for item in rollout_suffix {
+            let rolled_back_visible_turns = forward_turns.observe(item);
+            if !matches!(
+                item,
+                RolloutItem::ResponseItem(_) | RolloutItem::InterAgentCommunicationMetadata { .. }
+            ) {
+                review_handoff_filter.interrupt();
+            }
             match item {
                 RolloutItem::ResponseItem(response_item) => {
-                    if crate::context::ReviewHandoff::is_consumption_marker(response_item)
-                        || crate::context::ReviewHandoff::is_pending_report_marker(response_item)
-                    {
-                        continue;
+                    for response_item in review_handoff_filter.push(response_item.clone()) {
+                        history.record_items(
+                            std::iter::once(&response_item),
+                            turn_context.model_info.truncation_policy.into(),
+                        );
                     }
-                    history.record_items(
-                        std::iter::once(response_item),
-                        turn_context.model_info.truncation_policy.into(),
-                    );
                 }
                 RolloutItem::InterAgentCommunication(communication) => {
                     let response_item = communication.to_model_input_item();
@@ -382,7 +537,9 @@ impl Session {
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
-                    history.drop_last_n_user_turns(rollback.num_turns);
+                    let visible_turns = rolled_back_visible_turns
+                        .unwrap_or_else(|| forward_turns.rollback(rollback.num_turns));
+                    history.drop_last_n_user_turns(visible_turns);
                 }
                 RolloutItem::EventMsg(_)
                 | RolloutItem::TurnContext(_)

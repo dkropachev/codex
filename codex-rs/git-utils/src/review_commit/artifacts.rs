@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::SystemTime;
@@ -15,10 +16,15 @@ static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(/*v*/ 0);
 
 pub(super) struct TemporaryGitArtifacts {
     pub(super) paths: Vec<PathUri>,
+    cleanup_fs: Option<Arc<dyn ExecutorFileSystem>>,
 }
 
 impl TemporaryGitArtifacts {
-    pub(super) fn new(index_path: &PathUri, roles: &[&str]) -> Result<Self> {
+    pub(super) fn new(
+        index_path: &PathUri,
+        roles: &[&str],
+        cleanup_fs: Arc<dyn ExecutorFileSystem>,
+    ) -> Result<Self> {
         let parent = index_path
             .parent()
             .context("Git index path has no parent directory")?;
@@ -36,32 +42,60 @@ impl TemporaryGitArtifacts {
                     .with_context(|| format!("failed to create temporary {role} path"))?,
             );
         }
-        Ok(Self { paths })
+        Ok(Self {
+            paths,
+            cleanup_fs: Some(cleanup_fs),
+        })
     }
 
-    pub(super) async fn cleanup(&self, fs: &dyn ExecutorFileSystem) -> Result<()> {
-        let mut failures = Vec::new();
-        for path in &self.paths {
-            remove_file(fs, path, &mut failures).await;
-            let lock_path = path
-                .parent()
-                .and_then(|parent| {
-                    path.basename()
-                        .map(|basename| (parent, format!("{basename}.lock")))
-                })
-                .and_then(|(parent, basename)| parent.join(&basename).ok());
-            if let Some(lock_path) = lock_path {
-                remove_file(fs, &lock_path, &mut failures).await;
-            }
+    pub(super) async fn cleanup(&mut self) -> Result<()> {
+        let Some(fs) = self.cleanup_fs.as_ref() else {
+            return Ok(());
+        };
+        let result = cleanup_paths(fs.as_ref(), &self.paths).await;
+        if result.is_ok() {
+            self.cleanup_fs = None;
         }
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            bail!(
-                "failed to clean temporary Git files: {}",
-                failures.join("; ")
-            )
+        result
+    }
+}
+
+impl Drop for TemporaryGitArtifacts {
+    fn drop(&mut self) {
+        let Some(fs) = self.cleanup_fs.take() else {
+            return;
+        };
+        let paths = self.paths.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let _ = cleanup_paths(fs.as_ref(), &paths).await;
+            });
         }
+    }
+}
+
+async fn cleanup_paths(fs: &dyn ExecutorFileSystem, paths: &[PathUri]) -> Result<()> {
+    let mut failures = Vec::new();
+    for path in paths {
+        remove_file(fs, path, &mut failures).await;
+        let lock_path = path
+            .parent()
+            .and_then(|parent| {
+                path.basename()
+                    .map(|basename| (parent, format!("{basename}.lock")))
+            })
+            .and_then(|(parent, basename)| parent.join(&basename).ok());
+        if let Some(lock_path) = lock_path {
+            remove_file(fs, &lock_path, &mut failures).await;
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        bail!(
+            "failed to clean temporary Git files: {}",
+            failures.join("; ")
+        )
     }
 }
 

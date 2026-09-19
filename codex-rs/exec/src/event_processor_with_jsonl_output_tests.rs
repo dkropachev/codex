@@ -35,6 +35,22 @@ fn completed_review_is_an_agent_message_and_last_output() {
     );
     assert_eq!(processor.final_message(), Some(review.as_str()));
 
+    let legacy = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        codex_app_server_protocol::ItemCompletedNotification {
+            item: ThreadItem::AgentMessage {
+                id: "review_rollout_assistant".to_string(),
+                text: review.clone(),
+                phase: None,
+                memory_citation: None,
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+        },
+    ));
+    assert!(legacy.events.is_empty());
+    assert_eq!(processor.final_message(), Some(review.as_str()));
+
     processor.emit_final_message_on_shutdown = true;
     EventProcessor::print_final_output(&mut processor);
     assert_eq!(

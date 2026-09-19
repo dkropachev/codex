@@ -200,6 +200,12 @@ fi
     assert_eq!(
         to_response::<ReviewResolveScopeResponse>(scope_response)?,
         ReviewResolveScopeResponse {
+            review_execution_available: true,
+            review_unavailable_reason: None,
+            fix_execution_available: true,
+            fix_unavailable_reason: None,
+            double_check_available: true,
+            whole_repository_available: true,
             pull_request: Some(ReviewScopePullRequest {
                 number: 314,
                 url: PULL_REQUEST_URL.to_string(),

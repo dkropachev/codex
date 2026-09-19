@@ -586,7 +586,7 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
         .step_context
         .turn
         .extension_data
-        .get::<crate::codex_delegate::ToolFreeReviewStage>()
+        .get::<crate::review_stage_runtime::ToolFreeReviewStage>()
         .is_some()
     {
         return;
@@ -656,7 +656,7 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Planne
     let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
     let sandbox_override_allowed = turn_context
         .extension_data
-        .get::<crate::codex_delegate::RestrictedReviewStage>()
+        .get::<crate::review_stage_runtime::RestrictedReviewStage>()
         .is_none();
     let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
     let shell_command_options = ShellCommandHandlerOptions {
@@ -726,7 +726,6 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     let environment_mode = tool_environment_mode(context.step_context);
 
     planned_tools.add(PlanHandler);
-
     if features.enabled(Feature::DeferredExecutor) {
         planned_tools.add(WaitForEnvironmentHandler);
     }

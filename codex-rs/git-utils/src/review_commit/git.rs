@@ -305,8 +305,8 @@ pub(super) async fn resolve_head_ref(
     match output.exit_code {
         0 => {
             let reference = parse_single_line(&output.stdout, "git symbolic-ref")?;
-            if !reference.starts_with("refs/") {
-                bail!("git symbolic-ref returned an invalid HEAD reference");
+            if !reference.starts_with("refs/heads/") {
+                bail!("git symbolic-ref did not return a local branch");
             }
             Ok(Some(reference.to_string()))
         }
@@ -371,7 +371,14 @@ async fn run_git_dynamic(
     index_path: Option<&PathUri>,
     args: Vec<String>,
 ) -> Result<ReviewCommandOutput> {
-    run_git_dynamic_with_attributes(runner, repository_root, index_path, args, None).await
+    run_git_dynamic_with_attributes(
+        runner,
+        repository_root,
+        index_path,
+        args,
+        /*attributes_source*/ None,
+    )
+    .await
 }
 
 async fn run_git_dynamic_with_attributes(
@@ -399,6 +406,7 @@ async fn run_git_dynamic_with_attributes(
         repository_root.clone(),
     )
     .env("GIT_OPTIONAL_LOCKS", "0")
+    .env("GIT_NO_REPLACE_OBJECTS", "1")
     .env("GIT_TERMINAL_PROMPT", "0")
     .env("GIT_LITERAL_PATHSPECS", "1")
     .env("LC_ALL", "C");

@@ -7,6 +7,30 @@ import type { ReviewScopePullRequest } from "./ReviewScopePullRequest";
 
 export type ReviewResolveScopeResponse = {
 /**
+ * Whether reviews can run on the selected executor with the server's active sandbox setup.
+ */
+reviewExecutionAvailable: boolean,
+/**
+ * Short diagnostic when review execution is unavailable.
+ */
+reviewUnavailableReason: string | null,
+/**
+ * Whether Fix actions can use the required workspace-write profile on the server.
+ */
+fixExecutionAvailable: boolean,
+/**
+ * Short diagnostic when Fix actions are unavailable.
+ */
+fixUnavailableReason: string | null,
+/**
+ * Whether the server supports the isolated Double-check stage.
+ */
+doubleCheckAvailable: boolean,
+/**
+ * Whether the server supports the whole-repository review target.
+ */
+wholeRepositoryAvailable: boolean,
+/**
  * Open pull request associated with the selected checkout, when one was found.
  */
 pullRequest: ReviewScopePullRequest | null,

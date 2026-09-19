@@ -214,27 +214,57 @@ impl Session {
             AtomicBool::new(previous.model_verification_emitted.load(Ordering::Relaxed));
         if previous
             .extension_data
-            .get::<crate::codex_delegate::RestrictedReviewStage>()
+            .get::<crate::review_stage_runtime::RestrictedReviewStage>()
             .is_some()
         {
             rebuilt
                 .extension_data
-                .insert(crate::codex_delegate::RestrictedReviewStage);
+                .insert(crate::review_stage_runtime::RestrictedReviewStage);
+        }
+        if let Some(root) = previous
+            .extension_data
+            .get::<crate::review_stage_runtime::ReviewReadableRoot>()
+        {
+            rebuilt.extension_data.insert(root.as_ref().clone());
+        }
+        if let Some(root) = previous
+            .extension_data
+            .get::<crate::review_stage_runtime::ReviewWritableRoot>()
+        {
+            rebuilt.extension_data.insert(root.as_ref().clone());
         }
         if previous
             .extension_data
-            .get::<crate::codex_delegate::ToolFreeReviewStage>()
+            .get::<crate::review_stage_runtime::ToolFreeReviewStage>()
             .is_some()
         {
             rebuilt
                 .extension_data
-                .insert(crate::codex_delegate::ToolFreeReviewStage);
+                .insert(crate::review_stage_runtime::ToolFreeReviewStage);
         }
         if let Some(paths) = previous
             .extension_data
-            .get::<crate::codex_delegate::ReviewProtectedPaths>()
+            .get::<crate::review_stage_runtime::ReviewReadDenyEntries>()
         {
             rebuilt.extension_data.insert(paths.as_ref().clone());
+        }
+        if let Some(paths) = previous
+            .extension_data
+            .get::<crate::review_stage_runtime::ReviewAdditionalReadPaths>()
+        {
+            rebuilt.extension_data.insert(paths.as_ref().clone());
+        }
+        if let Some(paths) = previous
+            .extension_data
+            .get::<crate::review_stage_runtime::ReviewProtectedPaths>()
+        {
+            rebuilt.extension_data.insert(paths.as_ref().clone());
+        }
+        if let Some(root) = previous
+            .extension_data
+            .get::<crate::review_stage_runtime::ReviewVerificationWriteRoot>()
+        {
+            rebuilt.extension_data.insert(root.as_ref().clone());
         }
         rebuilt
     }

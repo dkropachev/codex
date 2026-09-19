@@ -168,6 +168,7 @@ fn preserves_shell_environment_policy_for_executor() {
         r#set: HashMap::from([
             ("PATH".to_string(), "/tools".to_string()),
             ("GH_REPO".to_string(), "unrelated/repo".to_string()),
+            ("GIT_DIR".to_string(), "/other/.git".to_string()),
         ]),
         include_only: vec![
             codex_protocol::config_types::EnvironmentVariablePattern::new_case_insensitive("PATH"),
@@ -180,10 +181,27 @@ fn preserves_shell_environment_policy_for_executor() {
         ExecEnvPolicy {
             inherit: codex_protocol::config_types::ShellEnvironmentPolicyInherit::Core,
             ignore_default_excludes: false,
-            exclude: vec!["PRIVATE_*".to_string(), "GH_REPO".to_string()],
+            exclude: vec![
+                "PRIVATE_*".to_string(),
+                "GIT_*".to_string(),
+                "GH_REPO".to_string(),
+            ],
             r#set: HashMap::from([("PATH".to_string(), "/tools".to_string())]),
             include_only: vec!["PATH".to_string()],
         }
+    );
+    let sanitized = sanitized_review_shell_environment_policy(&policy);
+    assert!(
+        sanitized
+            .exclude
+            .iter()
+            .any(|pattern| pattern.matches("GIT_DIR"))
+    );
+    assert!(
+        sanitized
+            .exclude
+            .iter()
+            .any(|pattern| pattern.matches("GH_REPO"))
     );
 }
 

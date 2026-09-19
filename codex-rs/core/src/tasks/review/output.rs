@@ -33,7 +33,31 @@ pub(super) struct VerificationOutput {
     pub(super) findings: Vec<VerifiedFinding>,
     pub(super) out_of_scope_findings: Vec<VerifiedFinding>,
     pub(super) unverified_findings: Vec<VerifiedFinding>,
+    pub(super) rejected_candidate_indices: Vec<usize>,
     pub(super) assessment: StageAssessment,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct FixScopeOutput {
+    pub(super) has_comparison_baseline: bool,
+    pub(super) classifications: Vec<FixScopeClassification>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct FixScopeClassification {
+    pub(super) finding_index: usize,
+    pub(super) pre_existing: ReviewPreExisting,
+    pub(super) pre_existing_fix_rationale: Option<String>,
+    pub(super) validity: FixScopeValidity,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum FixScopeValidity {
+    Valid,
+    Rejected,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -50,11 +74,6 @@ pub(super) struct StageFinding {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct VerifiedFinding {
     pub(super) candidate_index: usize,
-    pub(super) title: String,
-    pub(super) body: String,
-    pub(super) confidence_score: f32,
-    pub(super) priority: i32,
-    pub(super) code_location: StageCodeLocation,
     pub(super) pre_existing: ReviewPreExisting,
     pub(super) pre_existing_fix_rationale: Option<String>,
 }
@@ -176,7 +195,7 @@ impl DiscoveryOutput {
 }
 
 impl VerificationOutput {
-    pub(super) fn retain_candidates(&mut self, candidate_indices: &[usize]) {
+    pub(super) fn retain_candidates(&mut self, candidate_indices: &[usize]) -> Vec<usize> {
         let mut remaining = candidate_indices.iter().copied().collect::<HashSet<_>>();
         for findings in [
             &mut self.findings,
@@ -185,11 +204,19 @@ impl VerificationOutput {
         ] {
             findings.retain(|finding| remaining.remove(&finding.candidate_index));
         }
+        self.rejected_candidate_indices
+            .retain(|index| remaining.remove(index));
+        candidate_indices
+            .iter()
+            .copied()
+            .filter(|index| remaining.contains(index))
+            .collect()
     }
 
     pub(super) fn into_review_output(
         self,
         target: &ReviewTarget,
+        candidates: &[StageFinding],
         references: Vec<ReviewReference>,
         external_references: Vec<ReviewExternalReference>,
         mut omitted_candidates: Vec<ReviewFinding>,
@@ -199,7 +226,7 @@ impl VerificationOutput {
         let mut unverified_findings = self
             .unverified_findings
             .into_iter()
-            .map(VerifiedFinding::into_review_finding)
+            .filter_map(|finding| finding.into_review_finding(candidates))
             .collect::<Vec<_>>();
         unverified_findings.append(&mut omitted_candidates);
 
@@ -207,7 +234,7 @@ impl VerificationOutput {
             .findings
             .into_iter()
             .chain(self.out_of_scope_findings)
-            .map(VerifiedFinding::into_review_finding)
+            .filter_map(|finding| finding.into_review_finding(candidates))
             .collect::<Vec<_>>();
 
         match target {
@@ -227,8 +254,8 @@ impl VerificationOutput {
                 }
                 findings = classified;
             }
-            ReviewTarget::Custom { .. } => findings = classified,
-            ReviewTarget::UncommittedChanges
+            ReviewTarget::Custom { .. }
+            | ReviewTarget::UncommittedChanges
             | ReviewTarget::BaseBranch { .. }
             | ReviewTarget::Commit { .. } => findings = classified,
         }
@@ -276,7 +303,12 @@ pub(super) fn normalize_review_assessment(target: &ReviewTarget, output: &mut Re
     } else {
         "patch is correct"
     };
-    if output.overall_correctness != verdict {
+    let has_report_only_finding = output
+        .findings
+        .iter()
+        .chain(&output.out_of_scope_findings)
+        .any(|finding| finding.pre_existing == ReviewPreExisting::True);
+    if output.overall_correctness != verdict || has_report_only_finding {
         output.overall_explanation = match verdict {
             "patch is incorrect" => "Verified non-pre-existing findings remain.",
             "uncertain" => "Some findings could not be verified or scoped conclusively.",
@@ -300,10 +332,10 @@ impl FixOutput {
         for update in self.classification_updates {
             if allowed_indices.contains(&update.finding_index)
                 && updated_indices.insert(update.finding_index)
-                && let Some(finding) = output.findings.get_mut(update.finding_index)
+                && let Some(finding) = output.findings.get(update.finding_index)
             {
-                finding.pre_existing = update.pre_existing;
-                finding.pre_existing_fix_rationale = update.pre_existing_fix_rationale;
+                invalid_structure |= update.pre_existing != finding.pre_existing
+                    || update.pre_existing_fix_rationale != finding.pre_existing_fix_rationale;
                 dispositions.insert(update.finding_index, update.disposition);
             } else {
                 invalid_structure = true;
@@ -326,7 +358,7 @@ pub(super) struct AppliedFixOutput {
 }
 
 impl StageFinding {
-    fn into_review_finding(self) -> ReviewFinding {
+    pub(super) fn into_review_finding(self) -> ReviewFinding {
         ReviewFinding {
             title: self.title,
             body: self.body,
@@ -340,16 +372,14 @@ impl StageFinding {
 }
 
 impl VerifiedFinding {
-    fn into_review_finding(self) -> ReviewFinding {
-        ReviewFinding {
-            title: self.title,
-            body: self.body,
-            confidence_score: self.confidence_score,
-            priority: self.priority,
-            code_location: self.code_location.into_review_code_location(),
-            pre_existing: self.pre_existing,
-            pre_existing_fix_rationale: self.pre_existing_fix_rationale,
-        }
+    fn into_review_finding(self, candidates: &[StageFinding]) -> Option<ReviewFinding> {
+        let mut finding = candidates
+            .get(self.candidate_index)?
+            .clone()
+            .into_review_finding();
+        finding.pre_existing = self.pre_existing;
+        finding.pre_existing_fix_rationale = self.pre_existing_fix_rationale;
+        Some(finding)
     }
 }
 

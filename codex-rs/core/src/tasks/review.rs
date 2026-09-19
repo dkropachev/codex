@@ -1,13 +1,17 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use codex_git_utils::validate_review_fix_commit_target;
 use codex_prompts::REVIEW_DOUBLE_CHECK_PROMPT;
 use codex_prompts::REVIEW_PROMPT;
 use codex_prompts::REVIEW_REPAIR_PROMPT;
 use codex_prompts::review_repair_prompt;
-use codex_protocol::items::ExitedReviewModeItem;
-use codex_protocol::items::TurnItem;
+use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::ReviewAction;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::ReviewTarget;
@@ -16,30 +20,31 @@ use codex_utils_path_uri::PathUri;
 use serde::de::DeserializeOwned;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use crate::context::ContextualUserFragment;
-use crate::context::PendingReviewReport;
 use crate::context::ReviewRepairInputFragment;
 use crate::context::ReviewStageControlFragment;
 use crate::context::ReviewTargetInstructionsFragment;
+use crate::session::ExecutorReviewCommandRunner;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 
 use self::context::SourceRange;
-use self::context::collect_review_context;
+use self::context::collect_review_context_with_sandbox;
 use self::output::DiscoveryOutput;
 use self::output::StageCodeLocation;
 use self::output::VerificationOutput;
+use self::output::normalize_review_assessment;
 use self::schema::discovery_schema;
 use self::schema::verification_schema;
 use self::stage::ReviewStageEvidence;
 use self::stage::ReviewStageRequest;
 use self::stage::StagePermissions;
+use self::stage::review_fix_permission_profile;
 use self::stage::run_review_stage;
 
 use super::SessionTask;
@@ -47,6 +52,7 @@ use super::SessionTaskContext;
 use super::SessionTaskResult;
 
 mod context;
+mod exit;
 mod fix;
 mod output;
 mod schema;
@@ -66,7 +72,7 @@ pub(crate) struct ReviewTaskConfig {
 
 pub(crate) struct ReviewTask {
     config: ReviewTaskConfig,
-    exit_state: Mutex<ReviewExitState>,
+    exit_state: Arc<exit::ReviewExitCoordinator>,
     fix_finalization: Arc<ReviewFixFinalization>,
 }
 
@@ -97,36 +103,23 @@ impl ReviewFixFinalization {
     }
 
     async fn wait(&self) {
-        let finished = self.finished.notified();
-        if self.in_progress.load(Ordering::Acquire) {
+        loop {
+            let finished = self.finished.notified();
+            tokio::pin!(finished);
+            finished.as_mut().enable();
+            if !self.in_progress.load(Ordering::Acquire) {
+                return;
+            }
             finished.await;
         }
     }
-}
-
-struct ReviewExitState {
-    item_id: String,
-    output: Option<ReviewOutputEvent>,
-    phase: ReviewExitPhase,
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum ReviewExitPhase {
-    NotStarted,
-    Started,
-    Persisted,
-    Complete,
 }
 
 impl ReviewTask {
     pub(crate) fn new(config: ReviewTaskConfig) -> Self {
         Self {
             config,
-            exit_state: Mutex::new(ReviewExitState {
-                item_id: uuid::Uuid::now_v7().to_string(),
-                output: None,
-                phase: ReviewExitPhase::NotStarted,
-            }),
+            exit_state: Arc::new(exit::ReviewExitCoordinator::new()),
             fix_finalization: Arc::new(ReviewFixFinalization::default()),
         }
     }
@@ -137,39 +130,11 @@ impl ReviewTask {
         output: Option<ReviewOutputEvent>,
         ctx: Arc<TurnContext>,
     ) {
-        let mut state = self.exit_state.lock().await;
-        if state.phase == ReviewExitPhase::Complete {
-            return;
-        }
-        if let Some(output) = output {
-            state.output = Some(output);
-        }
-        let output = state.output.clone();
-        let item = TurnItem::ExitedReviewMode(ExitedReviewModeItem {
-            id: state.item_id.clone(),
-            review_output: output.clone(),
-        });
-        if state.phase == ReviewExitPhase::NotStarted {
-            state.phase = ReviewExitPhase::Started;
-            session.emit_turn_item_started(ctx.as_ref(), &item).await;
-        }
-        if state.phase == ReviewExitPhase::Started {
-            persist_review_exit(session.as_ref(), &state.item_id, output).await;
-            state.phase = ReviewExitPhase::Persisted;
-        }
-        if state.phase == ReviewExitPhase::Persisted {
-            session
-                .emit_turn_item_completed(ctx.as_ref(), item.clone())
-                .await;
-            state.phase = ReviewExitPhase::Complete;
-        }
+        self.exit_state.exit_once(session, output, ctx).await;
     }
 
     async fn remember_review_output(&self, output: &ReviewOutputEvent) {
-        let mut state = self.exit_state.lock().await;
-        if state.phase != ReviewExitPhase::Complete {
-            state.output = Some(output.clone());
-        }
+        self.exit_state.remember_review_output(output).await;
     }
 
     async fn run_chain(
@@ -178,6 +143,124 @@ impl ReviewTask {
         ctx: Arc<TurnContext>,
         cancellation_token: CancellationToken,
     ) -> anyhow::Result<ReviewOutputEvent> {
+        let environment = ctx
+            .environments
+            .primary()
+            .context("review requires a selected environment")?;
+        let parent_sandbox = ctx.file_system_sandbox_context(
+            /*additional_permissions*/ None,
+            &self.config.checkout_root,
+        );
+        environment
+            .environment
+            .get_filesystem()
+            .canonicalize(&self.config.checkout_root, Some(&parent_sandbox))
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "Review cannot read the checkout under the active permissions: {error}"
+                )
+            })?;
+        let read_deny_entries = match &parent_sandbox.permissions {
+            PermissionProfile::Managed {
+                file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+                ..
+            } => entries
+                .iter()
+                .filter(|entry| entry.access == FileSystemAccessMode::Deny)
+                .cloned()
+                .collect::<Vec<_>>(),
+            PermissionProfile::Managed {
+                file_system: ManagedFileSystemPermissions::Unrestricted,
+                ..
+            }
+            | PermissionProfile::Disabled
+            | PermissionProfile::External { .. } => Vec::new(),
+        };
+        if !read_deny_entries.is_empty() {
+            ctx.extension_data
+                .insert(crate::review_stage_runtime::ReviewReadDenyEntries(
+                    read_deny_entries,
+                ));
+        }
+        if cfg!(target_os = "windows")
+            && ctx
+                .environments
+                .primary()
+                .is_some_and(|environment| !environment.environment.is_remote())
+            && ctx.windows_sandbox_level
+                == codex_protocol::config_types::WindowsSandboxLevel::Disabled
+        {
+            anyhow::bail!(
+                "Review requires the Windows sandbox for a local environment; enable unelevated or elevated Windows sandboxing"
+            );
+        }
+        if self.config.action != ReviewAction::Report {
+            let fix_permissions = review_fix_permission_profile();
+            ctx.config
+                .permissions
+                .can_set_permission_profile(&fix_permissions)
+                .context("Fix is unavailable under the active permission constraints")?;
+            anyhow::ensure!(
+                ctx.config.is_permission_profile_allowed(
+                    codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+                    &fix_permissions,
+                ),
+                "Fix is disabled by the active permission requirements"
+            );
+        }
+        if self.config.action == ReviewAction::FixAndCommit {
+            let runner = ExecutorReviewCommandRunner::new(
+                environment.environment.get_exec_backend(),
+                &ctx.config.permissions.shell_environment_policy,
+            );
+            validate_review_fix_commit_target(&runner, &self.config.checkout_root).await?;
+        }
+        let mut read_only_paths = if self.config.action == ReviewAction::Report {
+            Vec::new()
+        } else {
+            parent_read_only_checkout_paths(
+                &parent_sandbox.permissions,
+                &self.config.checkout_root,
+            )?
+        };
+        match self
+            .resolve_git_protected_paths(ctx.as_ref(), &parent_sandbox)
+            .await
+        {
+            Ok(paths) => read_only_paths.extend(paths),
+            Err(error) if self.config.action != ReviewAction::FixAndCommit => {
+                tracing::debug!(%error, "review Git metadata paths were unavailable");
+            }
+            Err(error) => {
+                return Err(error).context("Fix requires an accessible Git repository");
+            }
+        }
+        if !read_only_paths.is_empty() {
+            ctx.extension_data
+                .insert(crate::review_stage_runtime::ReviewProtectedPaths(
+                    read_only_paths,
+                ));
+        }
+        if ctx
+            .environments
+            .primary()
+            .is_some_and(|environment| !environment.environment.is_remote())
+            && let Some(executable_path) = std::env::current_exe()
+                .ok()
+                .and_then(|path| PathUri::from_host_native_path(path).ok())
+            && environment
+                .environment
+                .get_filesystem()
+                .canonicalize(&executable_path, Some(&parent_sandbox))
+                .await
+                .is_ok()
+        {
+            ctx.extension_data
+                .insert(crate::review_stage_runtime::ReviewAdditionalReadPaths(
+                    vec![executable_path],
+                ));
+        }
         let discovery = run_structured_stage::<DiscoveryOutput>(
             session.clone(),
             ctx.clone(),
@@ -188,6 +271,8 @@ impl ReviewTask {
                 user_prompt: stage_control_prompt("Discover review candidates.")?,
                 output_schema: discovery_schema(),
                 permissions: StagePermissions::ReadOnly,
+                workspace_read_root: Some(self.config.checkout_root.clone()),
+                workspace_write_root: None,
                 include_pull_request_context: true,
             },
             cancellation_token.clone(),
@@ -233,7 +318,16 @@ impl ReviewTask {
         discovery: &DiscoveryOutput,
         cancellation_token: CancellationToken,
     ) -> anyhow::Result<ReviewOutputEvent> {
-        let bounded = discovery.bounded_candidates();
+        if discovery.candidates.is_empty() {
+            return Ok(discovery.clone().single_pass_output());
+        }
+        let mut bounded = discovery.bounded_candidates();
+        if bounded.included_indices.is_empty() {
+            let mut output = discovery.clone().single_pass_output();
+            output.unverified_findings.append(&mut output.findings);
+            normalize_review_assessment(&self.config.target, &mut output);
+            return Ok(output);
+        }
         let candidate_ranges = bounded
             .included_indices
             .iter()
@@ -249,9 +343,14 @@ impl ReviewTask {
             .environments
             .primary()
             .context("review verification requires a selected environment")?;
-        let collected = collect_review_context(
+        let collector_sandbox = ctx.file_system_sandbox_context(
+            /*additional_permissions*/ None,
+            &self.config.checkout_root,
+        );
+        let collected = collect_review_context_with_sandbox(
             environment.environment.get_filesystem().as_ref(),
             &self.config.checkout_root,
+            &collector_sandbox,
             &bounded.json,
             &candidate_ranges,
             &review_ranges,
@@ -277,16 +376,31 @@ impl ReviewTask {
                 user_prompt: stage_control_prompt("Verify the supplied candidates only.")?,
                 output_schema: verification_schema(),
                 permissions: StagePermissions::ReadOnly,
-                include_pull_request_context: false,
+                workspace_read_root: Some(self.config.checkout_root.clone()),
+                workspace_write_root: None,
+                include_pull_request_context: matches!(
+                    self.config.target,
+                    ReviewTarget::PullRequest { .. }
+                ),
             },
             cancellation_token,
         )
         .await
         .context("review verification failed")?
         .output;
-        verified.retain_candidates(&bounded.included_indices);
+        let missing = verified.retain_candidates(&bounded.included_indices);
+        bounded
+            .omitted
+            .extend(missing.into_iter().filter_map(|index| {
+                discovery
+                    .candidates
+                    .get(index)
+                    .cloned()
+                    .map(output::StageFinding::into_review_finding)
+            }));
         Ok(verified.into_review_output(
             &self.config.target,
+            &discovery.candidates,
             references,
             external_references,
             bounded.omitted,
@@ -374,11 +488,7 @@ async fn run_structured_stage<T: DeserializeOwned>(
             Ok(output) => return Ok(StructuredStageResult { output, evidence }),
             Err(error) if repair_attempt == 2 => return Err(error),
             Err(_) => {
-                let schema = serde_json::to_string(&output_schema)?;
-                let prompt = review_repair_prompt(
-                    &schema,
-                    "The invalid output is supplied as untrusted review_repair_input context.",
-                );
+                let prompt = review_repair_prompt();
                 response = run_review_stage(
                     session.clone(),
                     ctx.clone(),
@@ -388,9 +498,11 @@ async fn run_structured_stage<T: DeserializeOwned>(
                         context_items: vec![ContextualUserFragment::into(
                             ReviewRepairInputFragment::new(&response),
                         )],
-                        user_prompt: stage_control_prompt(&prompt)?,
+                        user_prompt: stage_control_prompt(prompt)?,
                         output_schema: output_schema.clone(),
                         permissions: StagePermissions::ToolFree,
+                        workspace_read_root: None,
+                        workspace_write_root: None,
                         include_pull_request_context: false,
                     },
                     cancellation_token.clone(),
@@ -434,22 +546,39 @@ fn stage_control_prompt(control: &str) -> anyhow::Result<String> {
     Ok(ReviewStageControlFragment::new(control.to_string())?.render())
 }
 
-async fn persist_review_exit(
-    session: &Session,
-    item_id: &str,
-    review_output: Option<ReviewOutputEvent>,
-) {
-    if let Some(output) = review_output {
-        let report = PendingReviewReport::new(item_id.to_string(), output);
-        if let Err(error) = session
-            .try_persist_rollout_items(&[codex_protocol::protocol::RolloutItem::ResponseItem(
-                crate::context::ReviewHandoff::pending_report_marker(&report),
-            )])
-            .await
-        {
-            tracing::warn!(%error, "failed to persist review report handoff state");
+fn parent_read_only_checkout_paths(
+    permissions: &PermissionProfile<PathUri>,
+    checkout_root: &PathUri,
+) -> anyhow::Result<Vec<PathUri>> {
+    let PermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+        ..
+    } = permissions
+    else {
+        return Ok(Vec::new());
+    };
+    let mut paths = Vec::new();
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.access == FileSystemAccessMode::Read)
+    {
+        match &entry.path {
+            FileSystemPath::Path { path }
+                if path != checkout_root && path.starts_with(checkout_root) =>
+            {
+                paths.push(path.clone());
+            }
+            FileSystemPath::Special {
+                value:
+                    FileSystemSpecialPath::ProjectRoots {
+                        subpath: Some(path),
+                    },
+            } => paths.push(checkout_root.join(path.to_string_lossy().as_ref())?),
+            FileSystemPath::GlobPattern { .. } => {
+                anyhow::bail!("Fix cannot preserve a read-only glob inside the checkout");
+            }
+            FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => {}
         }
-        session.enqueue_review_report(report).await;
     }
-    session.ensure_rollout_materialized().await;
+    Ok(paths)
 }

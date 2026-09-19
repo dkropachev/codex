@@ -297,6 +297,44 @@ fn final_message_from_turn_items_uses_review_report() {
 }
 
 #[test]
+fn legacy_review_agent_does_not_render_twice() {
+    let mut processor = EventProcessorWithHumanOutput {
+        bold: Style::new(),
+        cyan: Style::new(),
+        dimmed: Style::new(),
+        green: Style::new(),
+        italic: Style::new(),
+        magenta: Style::new(),
+        red: Style::new(),
+        yellow: Style::new(),
+        show_agent_reasoning: true,
+        show_raw_agent_reasoning: false,
+        last_message_path: None,
+        final_message: None,
+        final_message_rendered: false,
+        emit_final_message_on_shutdown: false,
+        last_total_token_usage: None,
+        suppress_legacy_review_agent: false,
+    };
+    let review = "Assessment\n\nPatch is correct.";
+
+    processor.render_item_completed(ThreadItem::ExitedReviewMode {
+        id: "review-1".to_string(),
+        review: review.to_string(),
+        finding_count: 0,
+    });
+    processor.render_item_completed(ThreadItem::AgentMessage {
+        id: "review_rollout_assistant".to_string(),
+        text: review.to_string(),
+        phase: None,
+        memory_citation: None,
+    });
+
+    assert_eq!(processor.final_message.as_deref(), Some(review));
+    assert!(!processor.suppress_legacy_review_agent);
+}
+
+#[test]
 fn turn_completed_recovers_final_message_from_turn_items() {
     let mut processor = EventProcessorWithHumanOutput {
         bold: Style::new(),
@@ -314,6 +352,7 @@ fn turn_completed_recovers_final_message_from_turn_items() {
         final_message_rendered: false,
         emit_final_message_on_shutdown: false,
         last_total_token_usage: None,
+        suppress_legacy_review_agent: false,
     };
 
     let status = processor.process_server_notification(ServerNotification::TurnCompleted(
@@ -362,6 +401,7 @@ fn turn_completed_overwrites_stale_final_message_from_turn_items() {
         final_message_rendered: true,
         emit_final_message_on_shutdown: false,
         last_total_token_usage: None,
+        suppress_legacy_review_agent: false,
     };
 
     let status = processor.process_server_notification(ServerNotification::TurnCompleted(
@@ -411,6 +451,7 @@ fn turn_completed_preserves_streamed_final_message_when_turn_items_are_empty() {
         final_message_rendered: false,
         emit_final_message_on_shutdown: false,
         last_total_token_usage: None,
+        suppress_legacy_review_agent: false,
     };
 
     let status = processor.process_server_notification(ServerNotification::TurnCompleted(
@@ -455,6 +496,7 @@ fn turn_failed_clears_stale_final_message() {
         final_message_rendered: true,
         emit_final_message_on_shutdown: true,
         last_total_token_usage: None,
+        suppress_legacy_review_agent: false,
     };
 
     let status = processor.process_server_notification(ServerNotification::TurnCompleted(
@@ -500,6 +542,7 @@ fn turn_interrupted_clears_stale_final_message() {
         final_message_rendered: true,
         emit_final_message_on_shutdown: true,
         last_total_token_usage: None,
+        suppress_legacy_review_agent: false,
     };
 
     let status = processor.process_server_notification(ServerNotification::TurnCompleted(

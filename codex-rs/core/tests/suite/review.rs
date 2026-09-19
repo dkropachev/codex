@@ -8,6 +8,7 @@ use codex_core::config::Config;
 use codex_features::Feature;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExitedReviewModeEvent;
@@ -29,6 +30,7 @@ use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -40,6 +42,18 @@ use tempfile::TempDir;
 use tokio::io::AsyncWriteExt as _;
 use uuid::Uuid;
 use wiremock::MockServer;
+
+struct ReviewTestConversation {
+    test: TestCodex,
+}
+
+impl std::ops::Deref for ReviewTestConversation {
+    type Target = CodexThread;
+
+    fn deref(&self) -> &Self::Target {
+        &self.test.codex
+    }
+}
 
 /// Verify that submitting `Op::Review` emits review item lifecycle,
 /// legacy review events, and TurnComplete when the model returns a structured review payload.
@@ -964,18 +978,41 @@ async fn review_report_is_handed_off_with_the_next_parent_turn() {
 
     let rollout =
         std::fs::read_to_string(codex.rollout_path().expect("rollout path")).expect("read rollout");
-    let persisted_handoff_count = rollout
+    let rollout_items = rollout
         .lines()
         .filter_map(|line| serde_json::from_str::<RolloutLine>(line).ok())
+        .map(|line| line.item)
+        .collect::<Vec<_>>();
+    let persisted_handoff_count = rollout_items
+        .iter()
         .filter(|line| {
             matches!(
-                &line.item,
+                line,
                 RolloutItem::ResponseItem(ResponseItem::Message { id: Some(id), .. })
                     if id.starts_with("review_handoff_part:")
             )
         })
         .count();
     assert_eq!(persisted_handoff_count, 1);
+    let handoff_index = rollout_items
+        .iter()
+        .position(|item| {
+            matches!(
+                item,
+                RolloutItem::ResponseItem(ResponseItem::Message { id: Some(id), .. })
+                    if id.starts_with("review_handoff_part:")
+            )
+        })
+        .expect("persisted handoff");
+    assert!(matches!(
+        rollout_items.get(handoff_index + 1),
+        Some(RolloutItem::ResponseItem(ResponseItem::Message { role, .. })) if role == "user"
+    ));
+    assert!(matches!(
+        rollout_items.get(handoff_index + 2),
+        Some(RolloutItem::ResponseItem(ResponseItem::Message { id: Some(id), .. }))
+            if id.starts_with("review_handoff_commit:")
+    ));
 
     let _codex_home_guard = codex_home;
     server.verify().await;
@@ -1153,7 +1190,7 @@ async fn new_conversation_for_server<F>(
     server: &MockServer,
     codex_home: Arc<TempDir>,
     mutator: F,
-) -> Arc<CodexThread>
+) -> ReviewTestConversation
 where
     F: FnOnce(&mut Config) + Send + 'static,
 {
@@ -1162,13 +1199,15 @@ where
         .with_home(codex_home)
         .with_config(move |config| {
             config.model_provider.base_url = Some(base_url.clone());
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::Disabled)
+                .expect("set parent test permissions");
             mutator(config);
         });
-    builder
-        .build(server)
-        .await
-        .expect("create conversation")
-        .codex
+    ReviewTestConversation {
+        test: builder.build(server).await.expect("create conversation"),
+    }
 }
 
 /// Create a conversation resuming from a rollout file, configured to talk to the provided mock server.
@@ -1177,7 +1216,7 @@ async fn resume_conversation_for_server<F>(
     codex_home: Arc<TempDir>,
     resume_path: std::path::PathBuf,
     mutator: F,
-) -> Arc<CodexThread>
+) -> ReviewTestConversation
 where
     F: FnOnce(&mut Config) + Send + 'static,
 {
@@ -1186,11 +1225,16 @@ where
         .with_home(codex_home.clone())
         .with_config(move |config| {
             config.model_provider.base_url = Some(base_url.clone());
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::Disabled)
+                .expect("set parent test permissions");
             mutator(config);
         });
-    builder
-        .resume(server, codex_home, resume_path)
-        .await
-        .expect("resume conversation")
-        .codex
+    ReviewTestConversation {
+        test: builder
+            .resume(server, codex_home, resume_path)
+            .await
+            .expect("resume conversation"),
+    }
 }

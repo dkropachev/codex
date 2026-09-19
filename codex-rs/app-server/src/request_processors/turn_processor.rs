@@ -295,6 +295,12 @@ impl TurnRequestProcessor {
 
         Ok(Some(
             ReviewResolveScopeResponse {
+                review_execution_available: resolution.review_execution_available,
+                review_unavailable_reason: resolution.review_unavailable_reason,
+                fix_execution_available: resolution.fix_execution_available,
+                fix_unavailable_reason: resolution.fix_unavailable_reason,
+                double_check_available: resolution.double_check_available,
+                whole_repository_available: resolution.whole_repository_available,
                 pull_request: resolution
                     .pull_request
                     .map(|pull_request| ReviewScopePullRequest {

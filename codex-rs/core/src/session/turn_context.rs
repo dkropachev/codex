@@ -17,6 +17,8 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -379,12 +381,36 @@ impl TurnContext {
             &file_system_sandbox_policy,
             network_sandbox_policy,
         );
-        let mut permissions = PermissionProfile::<PathUri>::from(permissions);
+        let mut permissions = if let Some(root) =
+            self.extension_data
+                .get::<crate::review_stage_runtime::ReviewWritableRoot>()
+        {
+            review_workspace_permissions(root.0.clone())
+        } else if let Some(root) = self
+            .extension_data
+            .get::<crate::review_stage_runtime::ReviewReadableRoot>()
+        {
+            review_read_permissions(root.0.clone())
+        } else {
+            PermissionProfile::<PathUri>::from(permissions)
+        };
         if let Some(paths) = self
             .extension_data
-            .get::<crate::codex_delegate::ReviewProtectedPaths>()
+            .get::<crate::review_stage_runtime::ReviewProtectedPaths>()
         {
             add_read_only_paths(&mut permissions, &paths.0);
+        }
+        if let Some(paths) = self
+            .extension_data
+            .get::<crate::review_stage_runtime::ReviewAdditionalReadPaths>()
+        {
+            add_read_only_paths(&mut permissions, &paths.0);
+        }
+        if let Some(entries) = self
+            .extension_data
+            .get::<crate::review_stage_runtime::ReviewReadDenyEntries>()
+        {
+            add_file_system_entries(&mut permissions, &entries.0);
         }
         FileSystemSandboxContext {
             permissions,
@@ -485,6 +511,92 @@ pub(crate) fn add_read_only_paths<PathType: Clone>(
         path: FileSystemPath::Path { path },
         access: FileSystemAccessMode::Read,
     }));
+}
+
+pub(crate) fn add_write_paths<PathType: Clone>(
+    profile: &mut PermissionProfile<PathType>,
+    paths: &[PathType],
+) {
+    let PermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+        ..
+    } = profile
+    else {
+        return;
+    };
+    entries.extend(paths.iter().cloned().map(|path| FileSystemSandboxEntry {
+        path: FileSystemPath::Path { path },
+        access: FileSystemAccessMode::Write,
+    }));
+}
+
+pub(crate) fn add_file_system_entries<PathType: Clone>(
+    profile: &mut PermissionProfile<PathType>,
+    additional_entries: &[FileSystemSandboxEntry<PathType>],
+) {
+    let PermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+        ..
+    } = profile
+    else {
+        return;
+    };
+    entries.extend(additional_entries.iter().cloned());
+}
+
+pub(crate) fn review_workspace_permissions<PathType: Clone>(
+    root: PathType,
+) -> PermissionProfile<PathType> {
+    let mut profile = review_verification_permissions(root.clone());
+    let PermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+        ..
+    } = &mut profile
+    else {
+        return profile;
+    };
+    entries.insert(
+        1,
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: root },
+            access: FileSystemAccessMode::Write,
+        },
+    );
+    profile
+}
+
+pub(crate) fn review_read_permissions<PathType: Clone>(
+    root: PathType,
+) -> PermissionProfile<PathType> {
+    restricted_review_permissions(FileSystemSpecialPath::Minimal, root)
+}
+
+pub(crate) fn review_verification_permissions<PathType: Clone>(
+    root: PathType,
+) -> PermissionProfile<PathType> {
+    restricted_review_permissions(FileSystemSpecialPath::Root, root)
+}
+
+fn restricted_review_permissions<PathType: Clone>(
+    baseline: FileSystemSpecialPath,
+    root: PathType,
+) -> PermissionProfile<PathType> {
+    PermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Restricted {
+            entries: vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special { value: baseline },
+                    access: FileSystemAccessMode::Read,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path { path: root },
+                    access: FileSystemAccessMode::Read,
+                },
+            ],
+            glob_scan_max_depth: None,
+        },
+        network: NetworkSandboxPolicy::Restricted,
+    }
 }
 
 fn local_time_context() -> (String, String) {
@@ -855,29 +967,64 @@ impl Session {
         if self
             .services
             .thread_extension_data
-            .get::<crate::codex_delegate::RestrictedReviewStage>()
+            .get::<crate::review_stage_runtime::RestrictedReviewStage>()
             .is_some()
         {
             turn_context
                 .extension_data
-                .insert(crate::codex_delegate::RestrictedReviewStage);
+                .insert(crate::review_stage_runtime::RestrictedReviewStage);
+        }
+        if let Some(root) = self
+            .services
+            .thread_extension_data
+            .get::<crate::review_stage_runtime::ReviewReadableRoot>()
+        {
+            turn_context.extension_data.insert(root.as_ref().clone());
+        }
+        if let Some(root) = self
+            .services
+            .thread_extension_data
+            .get::<crate::review_stage_runtime::ReviewWritableRoot>()
+        {
+            turn_context.extension_data.insert(root.as_ref().clone());
         }
         if self
             .services
             .thread_extension_data
-            .get::<crate::codex_delegate::ToolFreeReviewStage>()
+            .get::<crate::review_stage_runtime::ToolFreeReviewStage>()
             .is_some()
         {
             turn_context
                 .extension_data
-                .insert(crate::codex_delegate::ToolFreeReviewStage);
+                .insert(crate::review_stage_runtime::ToolFreeReviewStage);
         }
         if let Some(paths) = self
             .services
             .thread_extension_data
-            .get::<crate::codex_delegate::ReviewProtectedPaths>()
+            .get::<crate::review_stage_runtime::ReviewReadDenyEntries>()
         {
             turn_context.extension_data.insert(paths.as_ref().clone());
+        }
+        if let Some(paths) = self
+            .services
+            .thread_extension_data
+            .get::<crate::review_stage_runtime::ReviewAdditionalReadPaths>()
+        {
+            turn_context.extension_data.insert(paths.as_ref().clone());
+        }
+        if let Some(paths) = self
+            .services
+            .thread_extension_data
+            .get::<crate::review_stage_runtime::ReviewProtectedPaths>()
+        {
+            turn_context.extension_data.insert(paths.as_ref().clone());
+        }
+        if let Some(root) = self
+            .services
+            .thread_extension_data
+            .get::<crate::review_stage_runtime::ReviewVerificationWriteRoot>()
+        {
+            turn_context.extension_data.insert(root.as_ref().clone());
         }
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 

@@ -101,3 +101,19 @@ fn structured_priority_overrides_a_legacy_title_prefix() {
             .starts_with("[P0] Handle the failed send")
     );
 }
+
+#[test]
+fn pre_existing_rationale_is_rendered_once() {
+    let mut finding = finding("Close the stale handle", ReviewPreExisting::True);
+    finding.pre_existing_fix_rationale = Some("The adjacent change can fix it safely.".to_string());
+
+    let report = format_review_findings_block(&[finding], /*selection*/ None);
+
+    assert!(report.contains("Pre-existing: yes — The adjacent change can fix it safely."));
+    assert_eq!(
+        report
+            .matches("The adjacent change can fix it safely.")
+            .count(),
+        1
+    );
+}

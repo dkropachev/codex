@@ -70,6 +70,24 @@ pub struct ReviewResolveScopeParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ReviewResolveScopeResponse {
+    /// Whether reviews can run on the selected executor with the server's active sandbox setup.
+    #[serde(default = "default_review_execution_available")]
+    pub review_execution_available: bool,
+    /// Short diagnostic when review execution is unavailable.
+    #[serde(default)]
+    pub review_unavailable_reason: Option<String>,
+    /// Whether Fix actions can use the required workspace-write profile on the server.
+    #[serde(default)]
+    pub fix_execution_available: bool,
+    /// Short diagnostic when Fix actions are unavailable.
+    #[serde(default)]
+    pub fix_unavailable_reason: Option<String>,
+    /// Whether the server supports the isolated Double-check stage.
+    #[serde(default)]
+    pub double_check_available: bool,
+    /// Whether the server supports the whole-repository review target.
+    #[serde(default)]
+    pub whole_repository_available: bool,
     /// Open pull request associated with the selected checkout, when one was found.
     pub pull_request: Option<ReviewScopePullRequest>,
     /// Detected repository default branch, when one was found.
@@ -79,11 +97,17 @@ pub struct ReviewResolveScopeResponse {
     /// Available explicit base-branch targets, with the preferred target first.
     pub branches: Vec<String>,
     /// Whether staged, unstaged, or untracked changes are present.
+    #[serde(default)]
     pub has_uncommitted_changes: bool,
     /// Recent commits reachable from HEAD, capped at 100 entries.
+    #[serde(default)]
     pub commits: Vec<ReviewScopeCommit>,
     /// Short diagnostic shown when Git repository detection failed.
     pub error: Option<String>,
+}
+
+fn default_review_execution_available() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

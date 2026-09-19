@@ -105,9 +105,10 @@ fn failed_verification_prevents_fix_commit() {
 
     normalize_resolution(
         ReviewAction::FixAndCommit,
-        &ReviewTarget::WholeRepository,
         &[0],
-        /*omitted_count*/ 0,
+        /*considered_count*/ 1,
+        /*initial_rejected_count*/ 0,
+        /*initial_unresolved_count*/ 0,
         &applied(&[(0, FixDisposition::Fixed)]),
         &super::super::stage::ReviewStageEvidence::default(),
         &mut output,
@@ -118,6 +119,40 @@ fn failed_verification_prevents_fix_commit() {
     assert_eq!(resolution.fixed_count, 0);
     assert_eq!(resolution.unresolved_count, 1);
     assert_eq!(resolution.commit_sha, None);
+}
+
+#[test]
+fn failed_file_change_is_unresolved_even_when_model_rejects_the_finding() {
+    let mut output = ReviewOutputEvent {
+        findings: vec![finding(ReviewPreExisting::False)],
+        resolution: Some(ReviewResolution {
+            status: ReviewResolutionStatus::Complete,
+            fixed_count: 0,
+            rejected_count: 1,
+            unresolved_count: 0,
+            summary: Vec::new(),
+            tests: Vec::new(),
+            commit_sha: None,
+        }),
+        ..Default::default()
+    };
+
+    normalize_resolution(
+        ReviewAction::Fix,
+        &[0],
+        /*considered_count*/ 1,
+        /*initial_rejected_count*/ 0,
+        /*initial_unresolved_count*/ 0,
+        &applied(&[(0, FixDisposition::Rejected)]),
+        &super::super::stage::ReviewStageEvidence::with_failed_file_change(),
+        &mut output,
+    );
+
+    let resolution = output.resolution.expect("resolution");
+    assert_eq!(resolution.status, ReviewResolutionStatus::Partial);
+    assert_eq!(resolution.fixed_count, 0);
+    assert_eq!(resolution.rejected_count, 1);
+    assert_eq!(resolution.unresolved_count, 1);
 }
 
 #[test]
@@ -135,12 +170,34 @@ fn pull_request_post_fix_classification_moves_report_only_findings() {
         &ReviewTarget::PullRequest {
             url: "https://example.test/pull/1".to_string(),
         },
+        ReviewVerification::DoubleCheck,
+        /*has_comparison_baseline*/ true,
         &mut output,
     );
 
     assert_eq!(output.findings.len(), 1);
     assert_eq!(output.out_of_scope_findings.len(), 1);
     assert_eq!(output.unverified_findings.len(), 1);
+}
+
+#[test]
+fn single_pass_pull_request_keeps_classified_findings_in_the_main_section() {
+    let mut output = ReviewOutputEvent {
+        findings: vec![finding(ReviewPreExisting::True)],
+        ..Default::default()
+    };
+
+    normalize_post_fix_sections(
+        &ReviewTarget::PullRequest {
+            url: "https://example.test/pull/1".to_string(),
+        },
+        ReviewVerification::SinglePass,
+        /*has_comparison_baseline*/ true,
+        &mut output,
+    );
+
+    assert_eq!(output.findings.len(), 1);
+    assert!(output.out_of_scope_findings.is_empty());
 }
 
 #[test]
@@ -153,11 +210,39 @@ fn custom_post_fix_classification_preserves_an_explicit_baseline() {
         instructions: "Compare against merge base abc123.".to_string(),
     };
 
-    normalize_post_fix_sections(&target, &mut output);
+    normalize_post_fix_sections(
+        &target,
+        ReviewVerification::SinglePass,
+        /*has_comparison_baseline*/ true,
+        &mut output,
+    );
     normalize_review_assessment(&target, &mut output);
 
     assert_eq!(output.findings[0].pre_existing, ReviewPreExisting::True);
     assert_eq!(output.overall_correctness, "patch is correct");
+}
+
+#[test]
+fn custom_explicit_baseline_moves_unknown_scope_to_unverified() {
+    let mut output = ReviewOutputEvent {
+        findings: vec![finding(ReviewPreExisting::Undetermined)],
+        ..Default::default()
+    };
+    let target = ReviewTarget::Custom {
+        instructions: "Compare against merge base abc123.".to_string(),
+    };
+
+    normalize_post_fix_sections(
+        &target,
+        ReviewVerification::SinglePass,
+        /*has_comparison_baseline*/ true,
+        &mut output,
+    );
+    normalize_review_assessment(&target, &mut output);
+
+    assert!(output.findings.is_empty());
+    assert_eq!(output.unverified_findings.len(), 1);
+    assert_eq!(output.overall_correctness, "uncertain");
 }
 
 #[test]
@@ -181,10 +266,11 @@ fn report_only_reclassification_cannot_be_counted_as_fixed() {
 
     normalize_resolution(
         ReviewAction::FixAndCommit,
-        &ReviewTarget::WholeRepository,
-        &[0],
-        /*omitted_count*/ 0,
-        &applied(&[(0, FixDisposition::Fixed)]),
+        &[],
+        /*considered_count*/ 1,
+        /*initial_rejected_count*/ 0,
+        /*initial_unresolved_count*/ 1,
+        &applied(&[]),
         &super::super::stage::ReviewStageEvidence::default(),
         &mut output,
     );
@@ -220,10 +306,11 @@ fn unrelated_rejection_cannot_hide_a_report_only_fixed_count() {
 
     normalize_resolution(
         ReviewAction::FixAndCommit,
-        &ReviewTarget::WholeRepository,
-        &[0, 1],
-        /*omitted_count*/ 0,
-        &applied(&[(0, FixDisposition::Fixed), (1, FixDisposition::Rejected)]),
+        &[1],
+        /*considered_count*/ 2,
+        /*initial_rejected_count*/ 0,
+        /*initial_unresolved_count*/ 1,
+        &applied(&[(1, FixDisposition::Rejected)]),
         &super::super::stage::ReviewStageEvidence::default(),
         &mut output,
     );
@@ -253,9 +340,10 @@ fn resolution_status_is_derived_from_normalized_counts() {
 
     normalize_resolution(
         ReviewAction::Fix,
-        &ReviewTarget::WholeRepository,
         &[0],
-        /*omitted_count*/ 0,
+        /*considered_count*/ 1,
+        /*initial_rejected_count*/ 0,
+        /*initial_unresolved_count*/ 0,
         &applied(&[(0, FixDisposition::Rejected)]),
         &super::super::stage::ReviewStageEvidence::default(),
         &mut output,
@@ -265,4 +353,51 @@ fn resolution_status_is_derived_from_normalized_counts() {
         output.resolution.expect("resolution").status,
         ReviewResolutionStatus::Complete
     );
+}
+
+#[test]
+fn structurally_invalid_fix_marks_every_considered_finding_unresolved() {
+    let mut output = ReviewOutputEvent {
+        findings: vec![
+            finding(ReviewPreExisting::False),
+            finding(ReviewPreExisting::False),
+        ],
+        resolution: Some(ReviewResolution {
+            status: ReviewResolutionStatus::Complete,
+            fixed_count: 1,
+            rejected_count: 1,
+            unresolved_count: 0,
+            summary: Vec::new(),
+            tests: vec![ReviewTestResult {
+                command: "just test -p example".to_string(),
+                status: ReviewTestStatus::Passed,
+            }],
+            commit_sha: Some("abc123".to_string()),
+        }),
+        ..Default::default()
+    };
+    let applied = super::super::output::AppliedFixOutput {
+        dispositions: [(0, FixDisposition::Fixed), (1, FixDisposition::Rejected)]
+            .into_iter()
+            .collect(),
+        invalid_structure: true,
+    };
+
+    normalize_resolution(
+        ReviewAction::FixAndCommit,
+        &[0, 1],
+        /*considered_count*/ 2,
+        /*initial_rejected_count*/ 0,
+        /*initial_unresolved_count*/ 0,
+        &applied,
+        &super::super::stage::ReviewStageEvidence::default(),
+        &mut output,
+    );
+
+    let resolution = output.resolution.expect("resolution");
+    assert_eq!(resolution.status, ReviewResolutionStatus::Failed);
+    assert_eq!(resolution.fixed_count, 0);
+    assert_eq!(resolution.rejected_count, 0);
+    assert_eq!(resolution.unresolved_count, 2);
+    assert_eq!(resolution.commit_sha, None);
 }

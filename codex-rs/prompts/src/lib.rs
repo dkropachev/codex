@@ -19,6 +19,7 @@ pub use realtime::BACKEND_PROMPT;
 pub use realtime::END_INSTRUCTIONS;
 pub use realtime::START_INSTRUCTIONS;
 pub use review_agent::REVIEW_DOUBLE_CHECK_PROMPT;
+pub use review_agent::REVIEW_FIX_SCOPE_PROMPT;
 pub use review_agent::REVIEW_PROMPT;
 pub use review_agent::REVIEW_REPAIR_PROMPT;
 pub use review_agent::SHARED_REVIEW_AGENT_PROMPT;

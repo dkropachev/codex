@@ -36,6 +36,7 @@ pub(crate) struct EventProcessorWithHumanOutput {
     final_message_rendered: bool,
     emit_final_message_on_shutdown: bool,
     last_total_token_usage: Option<ThreadTokenUsage>,
+    suppress_legacy_review_agent: bool,
 }
 
 impl EventProcessorWithHumanOutput {
@@ -61,6 +62,7 @@ impl EventProcessorWithHumanOutput {
             final_message_rendered: false,
             emit_final_message_on_shutdown: false,
             last_total_token_usage: None,
+            suppress_legacy_review_agent: false,
         }
     }
 
@@ -96,6 +98,11 @@ impl EventProcessorWithHumanOutput {
 
     fn render_item_completed(&mut self, item: ThreadItem) {
         match item {
+            ThreadItem::AgentMessage { id, .. }
+                if id == "review_rollout_assistant" && self.suppress_legacy_review_agent =>
+            {
+                self.suppress_legacy_review_agent = false;
+            }
             ThreadItem::AgentMessage { text, .. } => {
                 eprintln!(
                     "{}\n{}",
@@ -113,6 +120,7 @@ impl EventProcessorWithHumanOutput {
                 );
                 self.final_message = Some(review);
                 self.final_message_rendered = true;
+                self.suppress_legacy_review_agent = true;
             }
             ThreadItem::Reasoning {
                 summary, content, ..
@@ -308,6 +316,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             ServerNotification::TurnCompleted(notification) => match notification.turn.status {
                 TurnStatus::Completed => {
+                    self.suppress_legacy_review_agent = false;
                     let rendered_message = self
                         .final_message_rendered
                         .then(|| self.final_message.clone())

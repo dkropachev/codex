@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use codex_exec_server::ExecutorFileSystem;
@@ -195,8 +196,16 @@ async fn try_verify_apply_patch_args(
         .transpose()?
         .unwrap_or_else(|| cwd.clone());
     let mut changes = HashMap::new();
+    let mut source_paths = HashSet::new();
+    let mut deleted_sources = HashSet::new();
+    let mut move_destinations = HashSet::new();
     for hunk in hunks {
         let path = hunk.resolve_path(&effective_cwd)?;
+        if !source_paths.insert(path.clone()) || move_destinations.contains(&path) {
+            return Err(ApplyPatchError::ConflictingPath(
+                path.inferred_native_path_string(),
+            ));
+        }
         match hunk {
             Hunk::AddFile { contents, .. } => {
                 changes.insert(path, ApplyPatchFileChange::Add { content: contents });
@@ -208,11 +217,24 @@ async fn try_verify_apply_patch_args(
                         source,
                     })
                 })?;
+                deleted_sources.insert(path.clone());
                 changes.insert(path, ApplyPatchFileChange::Delete { content });
             }
             Hunk::UpdateFile {
                 move_path, chunks, ..
             } => {
+                let move_path = move_path
+                    .map(|path| effective_cwd.join(&path.to_string_lossy()))
+                    .transpose()?;
+                if let Some(destination) = move_path.as_ref()
+                    && (!move_destinations.insert(destination.clone())
+                        || (source_paths.contains(destination)
+                            && !deleted_sources.contains(destination)))
+                {
+                    return Err(ApplyPatchError::ConflictingPath(
+                        destination.inferred_native_path_string(),
+                    ));
+                }
                 let ApplyPatchFileUpdate {
                     unified_diff,
                     content: contents,
@@ -222,9 +244,7 @@ async fn try_verify_apply_patch_args(
                     path,
                     ApplyPatchFileChange::Update {
                         unified_diff,
-                        move_path: move_path
-                            .map(|path| effective_cwd.join(&path.to_string_lossy()))
-                            .transpose()?,
+                        move_path,
                         new_content: contents,
                     },
                 );
@@ -919,6 +939,57 @@ PATCH"#,
             }
             other => panic!("expected update change, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn rejects_repeated_source_paths() {
+        let session_dir = tempdir().unwrap();
+        fs::write(session_dir.path().join("source.txt"), "before\n").unwrap();
+        let argv = vec![
+            "apply_patch".to_string(),
+            wrap_patch(
+                "*** Update File: source.txt\n@@\n-before\n+first\n*** Update File: source.txt\n@@\n-before\n+second",
+            ),
+        ];
+
+        let result = maybe_parse_apply_patch_verified(
+            &argv,
+            &PathUri::from_host_native_path(session_dir.path()).expect("absolute test path"),
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ConflictingPath(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejects_colliding_move_destinations() {
+        let session_dir = tempdir().unwrap();
+        fs::write(session_dir.path().join("first.txt"), "first\n").unwrap();
+        fs::write(session_dir.path().join("second.txt"), "second\n").unwrap();
+        let argv = vec![
+            "apply_patch".to_string(),
+            wrap_patch(
+                "*** Update File: first.txt\n*** Move to: target.txt\n@@\n-first\n+one\n*** Update File: second.txt\n*** Move to: target.txt\n@@\n-second\n+two",
+            ),
+        ];
+
+        let result = maybe_parse_apply_patch_verified(
+            &argv,
+            &PathUri::from_host_native_path(session_dir.path()).expect("absolute test path"),
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ConflictingPath(_))
+        ));
     }
 
     #[tokio::test]

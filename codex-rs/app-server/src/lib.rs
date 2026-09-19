@@ -109,6 +109,7 @@ mod models_refresh_worker;
 mod outgoing_message;
 mod request_processors;
 mod request_serialization;
+mod review_compat;
 mod server_request_error;
 mod skills_watcher;
 mod thread_state;

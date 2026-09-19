@@ -3,6 +3,13 @@ use super::*;
 fn verified(pre_existing: ReviewPreExisting) -> VerifiedFinding {
     VerifiedFinding {
         candidate_index: 0,
+        pre_existing,
+        pre_existing_fix_rationale: None,
+    }
+}
+
+fn candidate() -> StageFinding {
+    StageFinding {
         title: "Handle failure".to_string(),
         body: "The failure is ignored.".to_string(),
         confidence_score: 0.9,
@@ -11,8 +18,6 @@ fn verified(pre_existing: ReviewPreExisting) -> VerifiedFinding {
             absolute_file_path: "/repo/src/lib.rs".to_string(),
             line_range: ReviewLineRange { start: 7, end: 7 },
         },
-        pre_existing,
-        pre_existing_fix_rationale: None,
     }
 }
 
@@ -34,12 +39,14 @@ fn pull_request_classification_controls_sections() {
         ],
         out_of_scope_findings: Vec::new(),
         unverified_findings: Vec::new(),
+        rejected_candidate_indices: Vec::new(),
         assessment: assessment(),
     }
     .into_review_output(
         &ReviewTarget::PullRequest {
             url: "https://example.test/pull/1".to_string(),
         },
+        &[candidate()],
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -56,12 +63,14 @@ fn pre_existing_only_does_not_make_patch_incorrect() {
         findings: vec![verified(ReviewPreExisting::True)],
         out_of_scope_findings: Vec::new(),
         unverified_findings: Vec::new(),
+        rejected_candidate_indices: Vec::new(),
         assessment: assessment(),
     }
     .into_review_output(
         &ReviewTarget::BaseBranch {
             branch: "main".to_string(),
         },
+        &[candidate()],
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -76,15 +85,17 @@ fn pre_existing_only_does_not_make_patch_incorrect() {
 
 #[test]
 fn omitted_candidates_make_an_empty_verification_uncertain() {
-    let omitted = verified(ReviewPreExisting::Undetermined).into_review_finding();
+    let omitted = candidate().into_review_finding();
     let output = VerificationOutput {
         findings: Vec::new(),
         out_of_scope_findings: Vec::new(),
         unverified_findings: Vec::new(),
+        rejected_candidate_indices: Vec::new(),
         assessment: assessment(),
     }
     .into_review_output(
         &ReviewTarget::UncommittedChanges,
+        &[candidate()],
         Vec::new(),
         Vec::new(),
         vec![omitted],
@@ -134,12 +145,14 @@ fn custom_review_preserves_an_explicit_baseline_classification() {
         findings: vec![verified(ReviewPreExisting::True)],
         out_of_scope_findings: Vec::new(),
         unverified_findings: Vec::new(),
+        rejected_candidate_indices: Vec::new(),
         assessment: assessment(),
     }
     .into_review_output(
         &ReviewTarget::Custom {
             instructions: "Compare against merge base abc123.".to_string(),
         },
+        &[candidate()],
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -150,23 +163,77 @@ fn custom_review_preserves_an_explicit_baseline_classification() {
 }
 
 #[test]
-fn verification_cannot_add_or_duplicate_candidate_locations() {
-    let candidate = StageCodeLocation {
-        absolute_file_path: "/repo/src/lib.rs".to_string(),
-        line_range: ReviewLineRange { start: 7, end: 7 },
-    };
-    let mut duplicate = verified(ReviewPreExisting::False);
-    duplicate.code_location = candidate.clone();
+fn mixed_custom_scope_uses_only_non_pre_existing_findings_in_assessment() {
+    let output = VerificationOutput {
+        findings: vec![
+            verified(ReviewPreExisting::False),
+            verified(ReviewPreExisting::True),
+        ],
+        out_of_scope_findings: Vec::new(),
+        unverified_findings: Vec::new(),
+        rejected_candidate_indices: Vec::new(),
+        assessment: StageAssessment {
+            verdict: "patch is incorrect".to_string(),
+            explanation: "Both findings make the patch incorrect.".to_string(),
+            confidence_score: 0.9,
+        },
+    }
+    .into_review_output(
+        &ReviewTarget::Custom {
+            instructions: "Compare against merge base abc123.".to_string(),
+        },
+        &[candidate(), candidate()],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+
+    assert_eq!(output.overall_correctness, "patch is incorrect");
+    assert_eq!(
+        output.overall_explanation,
+        "Verified non-pre-existing findings remain."
+    );
+}
+
+#[test]
+fn verification_cannot_add_or_duplicate_candidate_indices() {
+    let duplicate = verified(ReviewPreExisting::False);
     let mut invented = verified(ReviewPreExisting::False);
-    invented.code_location.line_range = ReviewLineRange { start: 99, end: 99 };
+    invented.candidate_index = 99;
     let mut output = VerificationOutput {
         findings: vec![duplicate.clone(), duplicate, invented],
         out_of_scope_findings: Vec::new(),
         unverified_findings: Vec::new(),
+        rejected_candidate_indices: Vec::new(),
         assessment: assessment(),
     };
 
-    output.retain_candidates(&[0]);
+    let missing = output.retain_candidates(&[0]);
 
     assert_eq!(output.findings.len(), 1);
+    assert!(missing.is_empty());
+}
+
+#[test]
+fn rejected_candidate_is_not_reclassified_as_unverified() {
+    let mut output = VerificationOutput {
+        findings: Vec::new(),
+        out_of_scope_findings: Vec::new(),
+        unverified_findings: Vec::new(),
+        rejected_candidate_indices: vec![0],
+        assessment: assessment(),
+    };
+
+    let missing = output.retain_candidates(&[0]);
+    let report = output.into_review_output(
+        &ReviewTarget::WholeRepository,
+        &[candidate()],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+
+    assert!(missing.is_empty());
+    assert!(report.findings.is_empty());
+    assert!(report.unverified_findings.is_empty());
 }

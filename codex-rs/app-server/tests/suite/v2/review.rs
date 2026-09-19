@@ -11,6 +11,7 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
@@ -18,6 +19,8 @@ use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
@@ -133,25 +136,29 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
     // Confirm we see the ExitedReviewMode marker (with review text)
     // on the same turn. Ignore any other items the stream surfaces.
     let mut review_result: Option<(String, usize)> = None;
-    for _ in 0..10 {
-        let review_notif: JSONRPCNotification = timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("item/completed"),
-        )
-        .await??;
-        let completed: ItemCompletedNotification =
-            serde_json::from_value(review_notif.params.expect("params must be present"))?;
-        match completed.item {
-            ThreadItem::ExitedReviewMode {
+    let mut legacy_raw_item_ids = Vec::new();
+    for _ in 0..20 {
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+        let JSONRPCMessage::Notification(notification) = message else {
+            continue;
+        };
+        if notification.method == "rawResponseItem/completed" {
+            let completed: RawResponseItemCompletedNotification =
+                serde_json::from_value(notification.params.expect("raw item params"))?;
+            legacy_raw_item_ids.push(completed.item.id().map(str::to_string));
+        } else if notification.method == "item/completed" {
+            let completed: ItemCompletedNotification =
+                serde_json::from_value(notification.params.expect("params must be present"))?;
+            if let ThreadItem::ExitedReviewMode {
                 review,
                 finding_count,
                 ..
-            } => {
+            } = completed.item
+            {
                 assert_eq!(completed.turn_id, turn_id);
                 review_result = Some((review, finding_count));
                 break;
             }
-            _ => continue,
         }
     }
 
@@ -160,22 +167,62 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
     assert!(review.contains("/tmp/file.rs:10-20"));
     assert_eq!(finding_count, 1);
 
+    let mut legacy_agent_messages = 0;
     loop {
         let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
         let JSONRPCMessage::Notification(notification) = message else {
             continue;
         };
-        if notification.method == "item/completed" {
+        if notification.method == "rawResponseItem/completed" {
+            let completed: RawResponseItemCompletedNotification =
+                serde_json::from_value(notification.params.expect("raw item params"))?;
+            legacy_raw_item_ids.push(completed.item.id().map(str::to_string));
+        } else if notification.method == "item/completed" {
             let completed: ItemCompletedNotification =
                 serde_json::from_value(notification.params.expect("item params"))?;
-            if matches!(completed.item, ThreadItem::AgentMessage { .. }) {
-                anyhow::bail!("review emitted a duplicate final agentMessage");
+            if let ThreadItem::AgentMessage { id, text, .. } = completed.item {
+                assert_eq!(id, "review_rollout_assistant");
+                assert_eq!(text, review);
+                legacy_agent_messages += 1;
             }
         }
         if notification.method == "turn/completed" {
             break;
         }
     }
+    assert_eq!(legacy_agent_messages, 1);
+    assert_eq!(
+        legacy_raw_item_ids,
+        vec![
+            Some("review_rollout_user".to_string()),
+            Some("review_rollout_assistant".to_string())
+        ]
+    );
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id,
+            include_turns: true,
+        })
+        .await?;
+    let read_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadReadResponse { thread, .. } = to_response::<ThreadReadResponse>(read_response)?;
+    let persisted_review_messages = thread.turns[0]
+        .items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item,
+                ThreadItem::AgentMessage { id, text, .. }
+                    if id == "review_rollout_assistant" && text == &review
+            )
+        })
+        .count();
+    assert_eq!(persisted_review_messages, 1);
 
     Ok(())
 }

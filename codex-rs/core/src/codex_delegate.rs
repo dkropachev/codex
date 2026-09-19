@@ -77,15 +77,6 @@ pub(crate) enum DelegateContextPolicy {
     Isolated,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ToolFreeReviewStage;
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct RestrictedReviewStage;
-
-#[derive(Clone, Debug)]
-pub(crate) struct ReviewProtectedPaths(pub(crate) Vec<codex_utils_path_uri::PathUri>);
-
 /// Start an interactive sub-Codex thread and return IO channels.
 ///
 /// The returned `events_rx` yields non-approval events emitted by the sub-agent.

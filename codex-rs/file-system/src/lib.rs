@@ -56,6 +56,11 @@ pub struct FileMetadata {
     pub is_directory: bool,
     pub is_file: bool,
     pub is_symlink: bool,
+    /// Number of filesystem directory entries that reference this file.
+    ///
+    /// `None` means the executor could not report a link count or predates
+    /// support for this field.
+    pub hard_link_count: Option<u64>,
     /// Size in bytes.
     pub size: u64,
     pub created_at_ms: i64,

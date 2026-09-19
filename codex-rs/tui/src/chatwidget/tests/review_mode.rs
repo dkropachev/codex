@@ -396,6 +396,38 @@ async fn replayed_exited_review_mode_renders_report_once() {
 }
 
 #[tokio::test]
+async fn live_legacy_review_agent_renders_report_once() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let report = "Assessment\n\npatch is correct\nLive report.";
+
+    chat.handle_thread_item(
+        AppServerThreadItem::ExitedReviewMode {
+            id: "review-end".to_string(),
+            review: report.to_string(),
+            finding_count: 0,
+        },
+        "turn-1".to_string(),
+        ThreadItemRenderSource::Live,
+    );
+    chat.handle_thread_item(
+        AppServerThreadItem::AgentMessage {
+            id: "review_rollout_assistant".to_string(),
+            text: report.to_string(),
+            phase: None,
+            memory_citation: None,
+        },
+        "turn-1".to_string(),
+        ThreadItemRenderSource::Live,
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_eq!(rendered.matches("Live report.").count(), 1);
+}
+
+#[tokio::test]
 async fn replayed_exit_does_not_suppress_a_genuine_same_turn_message() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     let report = "Assessment\n\npatch is correct\nReplayed report.";

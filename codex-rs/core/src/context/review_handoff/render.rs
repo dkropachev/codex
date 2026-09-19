@@ -125,7 +125,7 @@ pub(super) fn compact_report(output: &ReviewOutputEvent) -> String {
 }
 
 pub(super) fn minimal_report(output: &ReviewOutputEvent, max_bytes: usize) -> String {
-    let correctness = bounded_inline(&output.overall_correctness, 128);
+    let correctness = bounded_inline(&output.overall_correctness, /*max_bytes*/ 128);
     let mut report = format!(
         "Assessment: {} (confidence {:.2})\nFindings: {}; out-of-scope: {}; unverified: {}; references: {}; external references: {}",
         escape_untrusted_markup(&correctness),
@@ -137,25 +137,59 @@ pub(super) fn minimal_report(output: &ReviewOutputEvent, max_bytes: usize) -> St
         output.external_references.len(),
     );
     let mut omitted_metadata = 0usize;
+    if let Some(resolution) = output.resolution.as_ref() {
+        let line = format!(
+            "\nResolution: {:?}; fixed {}; rejected {}; unresolved {}",
+            resolution.status,
+            resolution.fixed_count,
+            resolution.rejected_count,
+            resolution.unresolved_count
+        );
+        report.push_str(&line);
+        if let Some(commit_sha) = resolution.commit_sha.as_deref() {
+            let commit_sha = bounded_inline(commit_sha, /*max_bytes*/ 128);
+            report.push_str(&format!(
+                "\nCommit: {}",
+                escape_untrusted_markup(&commit_sha)
+            ));
+        }
+        for test in &resolution.tests {
+            let line = format!(
+                "\nTest: {} — {:?}",
+                escape_untrusted_markup(&bounded_inline(&test.command, /*max_bytes*/ 64)),
+                test.status
+            );
+            if report.len().saturating_add(line.len() + 64) <= max_bytes {
+                report.push_str(&line);
+            } else {
+                omitted_metadata += 1;
+            }
+        }
+    }
     for (section, findings) in [
         ("finding", output.findings.as_slice()),
         ("out-of-scope", output.out_of_scope_findings.as_slice()),
         ("unverified", output.unverified_findings.as_slice()),
     ] {
         for finding in findings {
-            let title = bounded_inline(&finding.title, 48);
+            let title = bounded_inline(&finding.title, /*max_bytes*/ 48);
             let path = bounded_inline(
                 &finding
                     .code_location
                     .absolute_file_path
                     .display()
                     .to_string(),
-                48,
+                /*max_bytes*/ 48,
             );
             let rationale = finding
                 .pre_existing_fix_rationale
                 .as_deref()
-                .map(|value| format!("; rationale={}", bounded_inline(value, 48)))
+                .map(|value| {
+                    format!(
+                        "; rationale={}",
+                        escape_untrusted_markup(&bounded_inline(value, /*max_bytes*/ 48))
+                    )
+                })
                 .unwrap_or_default();
             let line = format!(
                 "\n{section}: P{}; title={}; location={}:{}-{}; preExisting={:?}{rationale}",
@@ -166,41 +200,6 @@ pub(super) fn minimal_report(output: &ReviewOutputEvent, max_bytes: usize) -> St
                 finding.code_location.line_range.end,
                 finding.pre_existing,
             );
-            if report.len().saturating_add(line.len() + 64) <= max_bytes {
-                report.push_str(&line);
-            } else {
-                omitted_metadata += 1;
-            }
-        }
-    }
-    if let Some(resolution) = output.resolution.as_ref() {
-        let line = format!(
-            "\nResolution: {:?}; fixed {}; rejected {}; unresolved {}",
-            resolution.status,
-            resolution.fixed_count,
-            resolution.rejected_count,
-            resolution.unresolved_count
-        );
-        if report.len().saturating_add(line.len() + 64) <= max_bytes {
-            report.push_str(&line);
-        } else {
-            omitted_metadata += 1;
-        }
-        for test in &resolution.tests {
-            let line = format!(
-                "\nTest: {} — {:?}",
-                escape_untrusted_markup(&bounded_inline(&test.command, 64)),
-                test.status
-            );
-            if report.len().saturating_add(line.len() + 64) <= max_bytes {
-                report.push_str(&line);
-            } else {
-                omitted_metadata += 1;
-            }
-        }
-        if let Some(commit_sha) = resolution.commit_sha.as_deref() {
-            let commit_sha = bounded_inline(commit_sha, 128);
-            let line = format!("\nCommit: {}", escape_untrusted_markup(&commit_sha));
             if report.len().saturating_add(line.len() + 64) <= max_bytes {
                 report.push_str(&line);
             } else {
