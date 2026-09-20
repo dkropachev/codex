@@ -33,11 +33,14 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
+use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::routes_approval_to_guardian;
 use crate::guardian::routes_approval_to_guardian_with_reviewer;
 use crate::guardian::spawn_approval_request_review;
+use crate::mcp::McpManager;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
@@ -68,6 +71,12 @@ struct PendingMcpInvocation {
     metadata: Option<McpToolApprovalMetadata>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DelegateContextPolicy {
+    Inherit,
+    Isolated,
+}
+
 /// Start an interactive sub-Codex thread and return IO channels.
 ///
 /// The returned `events_rx` yields non-approval events emitted by the sub-agent.
@@ -84,15 +93,51 @@ pub(crate) async fn run_codex_thread_interactive(
     subagent_source: SubAgentSource,
     initial_history: Option<InitialHistory>,
     thread_extension_init: ExtensionDataInit,
+    context_policy: DelegateContextPolicy,
 ) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let conversation_history = initial_history.unwrap_or(InitialHistory::New);
     let forked_from_thread_id = conversation_history.forked_from_id();
-    let user_instructions = LoadedUserInstructions {
-        instructions: parent_session.user_instructions().await,
-        warnings: Vec::new(),
+    let user_instructions = if context_policy == DelegateContextPolicy::Isolated {
+        LoadedUserInstructions::default()
+    } else {
+        LoadedUserInstructions {
+            instructions: parent_session.user_instructions().await,
+            warnings: Vec::new(),
+        }
     };
+    let extensions = if context_policy == DelegateContextPolicy::Isolated {
+        codex_extension_api::empty_extension_registry()
+    } else {
+        Arc::clone(&parent_session.services.extensions)
+    };
+    let mcp_manager = if context_policy == DelegateContextPolicy::Isolated {
+        Arc::new(McpManager::new(Arc::clone(
+            &parent_session.services.plugins_manager,
+        )))
+    } else {
+        Arc::clone(&parent_session.services.mcp_manager)
+    };
+    let inherited_exec_policy = if context_policy == DelegateContextPolicy::Isolated {
+        Some(Arc::new(ExecPolicyManager::default()))
+    } else {
+        Some(Arc::clone(&parent_session.services.exec_policy))
+    };
+    let inherited_environments = if context_policy == DelegateContextPolicy::Isolated {
+        TurnEnvironmentSnapshot {
+            turn_environments: parent_ctx
+                .environments
+                .primary()
+                .cloned()
+                .into_iter()
+                .collect(),
+            starting: Vec::new(),
+        }
+    } else {
+        parent_ctx.environments.clone()
+    };
+    let environment_selections = inherited_environments.to_selections();
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
         config,
         allow_provider_model_fallback: false,
@@ -106,9 +151,9 @@ pub(crate) async fn run_codex_thread_interactive(
             .environment_manager(),
         skills_service: Arc::clone(&parent_session.services.skills_service),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
-        mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
+        mcp_manager,
         code_mode_session_provider: parent_session.services.code_mode_service.session_provider(),
-        extensions: Arc::clone(&parent_session.services.extensions),
+        extensions,
         conversation_history,
         requested_history_mode: None,
         session_source: SessionSource::SubAgent(subagent_source.clone()),
@@ -120,11 +165,11 @@ pub(crate) async fn run_codex_thread_interactive(
         dynamic_tools: Vec::new(),
         metrics_service_name: None,
         user_shell_override: None,
-        inherited_environments: Some(parent_ctx.environments.clone()),
-        inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
+        inherited_environments: Some(inherited_environments),
+        inherited_exec_policy,
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         parent_trace: None,
-        environment_selections: parent_ctx.environments.to_selections(),
+        environment_selections,
         thread_extension_init,
         supports_openai_form_elicitation: parent_session
             .services
@@ -207,6 +252,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     final_output_json_schema: Option<Value>,
     initial_history: Option<InitialHistory>,
     thread_extension_init: ExtensionDataInit,
+    context_policy: DelegateContextPolicy,
 ) -> Result<Codex, CodexErr> {
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
@@ -221,6 +267,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         subagent_source,
         initial_history,
         thread_extension_init,
+        context_policy,
     ))
     .await?;
 
