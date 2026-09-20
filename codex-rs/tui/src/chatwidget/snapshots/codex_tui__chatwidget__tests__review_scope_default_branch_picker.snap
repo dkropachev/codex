@@ -8,6 +8,7 @@ expression: "render_bottom_popup(&chat, 80)"
   2. Review uncommitted changes
   3. Choose a base branch         Select a specific branch
   4. Review a commit
-  5. Custom review instructions
+  5. Review whole repository
+  6. Custom review instructions
 
   Press enter to confirm or esc to go back

@@ -192,11 +192,7 @@ impl ChatWidget {
         let had_pending_steers = !self.input_queue.pending_steers.is_empty();
         self.refresh_pending_input_preview();
 
-        if !from_replay
-            && !self.has_queued_follow_up_messages()
-            && !had_pending_steers
-            && !self.review.has_ready_follow_up()
-        {
+        if !from_replay && !self.has_queued_follow_up_messages() && !had_pending_steers {
             self.maybe_prompt_plan_implementation();
         }
         // Keep this flag for replayed completion events so a subsequent live TurnComplete can
@@ -451,7 +447,6 @@ impl ChatWidget {
         {
             return;
         }
-        self.clear_review_action();
         if codex_error_info
             .as_ref()
             .is_some_and(is_app_server_cyber_policy_error)

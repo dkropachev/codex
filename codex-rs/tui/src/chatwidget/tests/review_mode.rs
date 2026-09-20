@@ -327,6 +327,139 @@ async fn live_agent_message_renders_during_review_mode() {
     assert!(lines_to_single_string(&inserted[0]).contains("Review progress update"));
 }
 
+#[tokio::test]
+async fn exited_review_mode_renders_report_immediately_snapshot() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_entered_review_mode(&mut chat, "whole repository");
+    let _ = drain_insert_history(&mut rx);
+
+    handle_exited_review_mode_with_output(
+        &mut chat,
+        "## Assessment\n\nPatch is correct.\n\n## Findings\n\nNo findings.",
+        /*finding_count*/ 0,
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_eq!(rendered.matches("Patch is correct.").count(), 1);
+    let rendered = rendered
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_chatwidget_snapshot!("review_report_renders_on_exit", rendered);
+}
+
+#[tokio::test]
+async fn exited_review_mode_renders_interruption_message() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_exited_review_mode_with_output(
+        &mut chat,
+        "Review interrupted.",
+        /*finding_count*/ 0,
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_eq!(rendered.matches("Review interrupted.").count(), 1);
+}
+
+#[tokio::test]
+async fn replayed_exited_review_mode_renders_report_once() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    replay_entered_review_mode(&mut chat, "whole repository");
+    let _ = drain_insert_history(&mut rx);
+    let report = "Assessment\n\npatch is correct\nReplayed report.";
+    let legacy_report = "Replayed report.\n\nReview comment:\n\n- Old format";
+
+    chat.replay_thread_item(
+        AppServerThreadItem::ExitedReviewMode {
+            id: "review-end".to_string(),
+            review: report.to_string(),
+            finding_count: 0,
+        },
+        "turn-1".to_string(),
+        ReplayKind::ThreadSnapshot,
+    );
+    replay_agent_message(
+        &mut chat,
+        "review_rollout_assistant",
+        legacy_report,
+        ReplayKind::ThreadSnapshot,
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_eq!(rendered.matches("Replayed report.").count(), 1);
+}
+
+#[tokio::test]
+async fn live_legacy_review_agent_renders_report_once() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let report = "Assessment\n\npatch is correct\nLive report.";
+
+    chat.handle_thread_item(
+        AppServerThreadItem::ExitedReviewMode {
+            id: "review-end".to_string(),
+            review: report.to_string(),
+            finding_count: 0,
+        },
+        "turn-1".to_string(),
+        ThreadItemRenderSource::Live,
+    );
+    chat.handle_thread_item(
+        AppServerThreadItem::AgentMessage {
+            id: "review_rollout_assistant".to_string(),
+            text: report.to_string(),
+            phase: None,
+            memory_citation: None,
+        },
+        "turn-1".to_string(),
+        ThreadItemRenderSource::Live,
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_eq!(rendered.matches("Live report.").count(), 1);
+}
+
+#[tokio::test]
+async fn replayed_exit_does_not_suppress_a_genuine_same_turn_message() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let report = "Assessment\n\npatch is correct\nReplayed report.";
+
+    chat.replay_thread_item(
+        AppServerThreadItem::ExitedReviewMode {
+            id: "review-end".to_string(),
+            review: report.to_string(),
+            finding_count: 0,
+        },
+        "turn-1".to_string(),
+        ReplayKind::ThreadSnapshot,
+    );
+    replay_agent_message(
+        &mut chat,
+        "item-42",
+        "A genuine same-turn message.",
+        ReplayKind::ThreadSnapshot,
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(rendered.contains("A genuine same-turn message."));
+}
+
 /// Exiting review restores the pre-review context window indicator.
 #[tokio::test]
 async fn review_restores_context_window_indicator() {
@@ -1055,9 +1188,8 @@ async fn review_popup_custom_prompt_action_sends_event() {
     };
     assert!(chat.apply_review_scope_resolution(request_id, cwd, resolution));
 
-    // Move selection down to the fourth item: "Custom review instructions"
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    // Git detection is unavailable in this harness, so whole-repository is selected by default.
+    // Move to "Custom review instructions".
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     // Activate
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -1076,25 +1208,40 @@ async fn review_popup_custom_prompt_action_sends_event() {
 /// The commit picker shows only commit subjects (no timestamps).
 #[tokio::test]
 async fn review_commit_picker_shows_subjects_without_timestamps() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
 
-    // Open the Review presets parent popup.
+    // Cache executor-backed commit entries through the scope resolution path.
     chat.open_review_popup();
-
-    // Show commit picker with synthetic entries.
-    let entries = vec![
-        CommitLogEntry {
+    let (request_id, cwd, _) = loop {
+        if let AppEvent::ReviewScopesResolved {
+            request_id,
+            cwd,
+            resolution,
+        } = rx.recv().await.expect("scope resolution")
+        {
+            break (request_id, cwd, resolution);
+        }
+    };
+    let commits = vec![
+        ReviewScopeCommit {
             sha: "1111111deadbeef".to_string(),
-            timestamp: 0,
-            subject: "Add new feature X".to_string(),
+            title: "Add new feature X".to_string(),
         },
-        CommitLogEntry {
+        ReviewScopeCommit {
             sha: "2222222cafebabe".to_string(),
-            timestamp: 0,
-            subject: "Fix bug Y".to_string(),
+            title: "Fix bug Y".to_string(),
         },
     ];
-    super::show_review_commit_picker_with_entries(&mut chat, entries);
+    assert!(chat.apply_review_scope_resolution(
+        request_id,
+        cwd.clone(),
+        crate::review_scope::ReviewScopeResolution {
+            commits,
+            ..Default::default()
+        },
+    ));
+    chat.show_review_commit_picker(chat.thread_id, &cwd);
 
     // Render the bottom pane and inspect the lines for subjects and absence of time words.
     let width = 72;
@@ -1134,7 +1281,7 @@ async fn review_commit_picker_shows_subjects_without_timestamps() {
     );
 }
 
-/// Submitting the custom prompt view sends its target to the action picker.
+/// Submitting the custom prompt view sends its target to the verification picker.
 #[tokio::test]
 async fn custom_prompt_submit_opens_review_action_picker() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -1145,10 +1292,10 @@ async fn custom_prompt_submit_opens_review_action_picker() {
     chat.handle_paste("  please audit dependencies  ".to_string());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    // Expect the action picker request with a trimmed custom target.
+    // Expect the verification picker request with a trimmed custom target.
     let evt = rx.try_recv().expect("expected one app event");
     match evt {
-        AppEvent::OpenReviewActionPicker { target, .. } => {
+        AppEvent::OpenReviewVerificationPicker { target, .. } => {
             assert_eq!(
                 target,
                 ReviewTarget::Custom {

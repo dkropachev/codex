@@ -147,7 +147,6 @@ impl ChatWidget {
     /// When there are queued user messages, restore them into the composer
     /// separated by newlines rather than auto-submitting the next one.
     pub(super) fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
-        self.clear_review_action();
         let cancelled_prompt = self.take_armed_cancel_edit_prompt(reason);
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();

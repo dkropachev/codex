@@ -1047,7 +1047,7 @@ impl ChatWidget {
                 self.request_side_conversation(parent_thread_id, Some(user_message));
             }
             SlashCommand::Review if !trimmed.is_empty() => {
-                self.show_review_action_picker(
+                self.show_review_verification_picker(
                     self.thread_id,
                     self.config.cwd.to_path_buf(),
                     ReviewTarget::Custom { instructions: args },

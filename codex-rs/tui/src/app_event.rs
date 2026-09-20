@@ -970,19 +970,38 @@ pub(crate) enum AppEvent {
         resolution: crate::review_scope::ReviewScopeResolution,
     },
 
-    /// Open the action picker after a review scope has been selected.
-    OpenReviewActionPicker {
+    /// Open the verification picker after a review scope has been selected.
+    OpenReviewVerificationPicker {
         thread_id: Option<ThreadId>,
         cwd: PathBuf,
         target: codex_app_server_protocol::ReviewTarget,
     },
 
-    /// Start a review and retain the selected post-review action in the TUI.
+    /// Open the action picker after review verification has been selected.
+    OpenReviewActionPicker {
+        thread_id: Option<ThreadId>,
+        cwd: PathBuf,
+        target: codex_app_server_protocol::ReviewTarget,
+        verification: codex_app_server_protocol::ReviewVerification,
+    },
+
+    /// Finish the silent Git capability probe used by custom review shortcuts.
+    ReviewActionScopeResolved {
+        request_id: uuid::Uuid,
+        thread_id: Option<ThreadId>,
+        cwd: PathBuf,
+        target: codex_app_server_protocol::ReviewTarget,
+        verification: codex_app_server_protocol::ReviewVerification,
+        resolution: crate::review_scope::ReviewScopeResolution,
+    },
+
+    /// Start a review with the selected verification and action.
     StartReview {
         thread_id: Option<ThreadId>,
         cwd: PathBuf,
         target: codex_app_server_protocol::ReviewTarget,
-        action: crate::chatwidget::ReviewAction,
+        verification: codex_app_server_protocol::ReviewVerification,
+        action: codex_app_server_protocol::ReviewAction,
     },
 
     /// Submit a user message with an explicit collaboration mask.

@@ -4,9 +4,7 @@ expression: "render_bottom_popup(&chat, 80)"
 ---
   Select a review scope
 
-› 1. Review uncommitted changes
-  2. Choose a base branch        Select a specific branch
-  3. Review a commit
-  4. Custom review instructions
+› 1. Review whole repository
+  2. Custom review instructions
 
   Press enter to confirm or esc to go back

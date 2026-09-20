@@ -245,12 +245,6 @@ impl ChatWidget {
         // this TUI already rendered locally. Once that turn ends, another
         // client can submit the same text and it still needs its own user cell.
         self.last_rendered_user_message_display = None;
-        self.note_review_turn_terminal(
-            &notification.thread_id,
-            &notification.turn.id,
-            &notification.turn.status,
-            replay_kind.is_some(),
-        );
         match notification.turn.status {
             TurnStatus::Completed => {
                 self.last_non_retry_error = None;
@@ -297,8 +291,6 @@ impl ChatWidget {
         notification: ItemStartedNotification,
         from_replay: bool,
     ) {
-        let notification_thread_id = notification.thread_id;
-        let turn_id = notification.turn_id;
         match notification.item {
             item @ ThreadItem::CommandExecution { .. } => self.on_command_execution_started(item),
             ThreadItem::FileChange { id: _, changes, .. } => {
@@ -334,7 +326,6 @@ impl ChatWidget {
             }),
             item @ ThreadItem::SubAgentActivity { .. } => self.on_sub_agent_activity(item),
             ThreadItem::EnteredReviewMode { review, .. } if !from_replay => {
-                self.bind_live_review_action(&notification_thread_id, turn_id);
                 self.enter_review_mode_with_hint(review, /*from_replay*/ false);
             }
             _ => {}
@@ -346,15 +337,6 @@ impl ChatWidget {
         notification: ItemCompletedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
-        if replay_kind.is_none()
-            && let ThreadItem::ExitedReviewMode { finding_count, .. } = &notification.item
-        {
-            self.note_live_review_exit(
-                &notification.thread_id,
-                &notification.turn_id,
-                *finding_count,
-            );
-        }
         self.handle_thread_item(
             notification.item,
             notification.turn_id,

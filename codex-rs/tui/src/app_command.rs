@@ -5,7 +5,9 @@ use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
+use codex_app_server_protocol::ReviewAction;
 use codex_app_server_protocol::ReviewTarget;
+use codex_app_server_protocol::ReviewVerification;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::ApprovalsReviewer;
@@ -102,6 +104,8 @@ pub(crate) enum AppCommand {
     },
     Review {
         target: ReviewTarget,
+        verification: ReviewVerification,
+        action: ReviewAction,
     },
     ApproveGuardianDeniedAction {
         event: GuardianAssessmentEvent,
@@ -271,8 +275,16 @@ impl AppCommand {
         Self::ThreadRollback { num_turns }
     }
 
-    pub(crate) fn review(target: ReviewTarget) -> Self {
-        Self::Review { target }
+    pub(crate) fn review(
+        target: ReviewTarget,
+        verification: ReviewVerification,
+        action: ReviewAction,
+    ) -> Self {
+        Self::Review {
+            target,
+            verification,
+            action,
+        }
     }
 
     pub(crate) fn approve_guardian_denied_action(event: GuardianAssessmentEvent) -> Self {
