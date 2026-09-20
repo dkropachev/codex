@@ -8,6 +8,7 @@ use codex_exec_server::ExecBackend;
 use codex_exec_server::ExecEnvPolicy;
 use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecParams;
+use codex_exec_server::ExecProcess;
 use codex_exec_server::ProcessId;
 use codex_git_utils::ReviewCommand;
 use codex_git_utils::ReviewCommandOutput;
@@ -23,7 +24,36 @@ use super::Session;
 const READ_CHUNK_BYTES: usize = 64 * 1024;
 const READ_WAIT: Duration = Duration::from_secs(1);
 const TERMINATE_TIMEOUT: Duration = Duration::from_secs(1);
-const GH_REPO_ENV_VAR: &str = "GH_REPO";
+const REVIEW_ENV_EXCLUDE_PATTERNS: [&str; 2] = ["GIT_*", "GH_REPO"];
+
+struct TerminateProcessOnDrop {
+    process: Option<Arc<dyn ExecProcess>>,
+}
+
+impl TerminateProcessOnDrop {
+    fn new(process: Arc<dyn ExecProcess>) -> Self {
+        Self {
+            process: Some(process),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.process = None;
+    }
+}
+
+impl Drop for TerminateProcessOnDrop {
+    fn drop(&mut self) {
+        let Some(process) = self.process.take() else {
+            return;
+        };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let _ = tokio::time::timeout(TERMINATE_TIMEOUT, process.terminate()).await;
+            });
+        }
+    }
+}
 
 /// Runs review-scope metadata commands through the selected turn executor.
 pub(crate) struct ExecutorReviewCommandRunner {
@@ -54,20 +84,60 @@ impl Session {
             .await
             .map_err(|err| anyhow::anyhow!("failed to start review scope environment: {err}"))?
             .context("cannot resolve review scope without a selected environment")?;
-        let shell_environment_policy = {
+        let (shell_environment_policy, windows_sandbox_level, config) = {
             let state = self.state.lock().await;
+            let mut config = (*state.session_configuration.original_config_do_not_use).clone();
             state
                 .session_configuration
-                .original_config_do_not_use
-                .permissions
-                .shell_environment_policy
-                .clone()
+                .apply_permission_profile_to_permissions(&mut config.permissions);
+            (
+                state
+                    .session_configuration
+                    .original_config_do_not_use
+                    .permissions
+                    .shell_environment_policy
+                    .clone(),
+                state.session_configuration.windows_sandbox_level,
+                config,
+            )
         };
         let runner = ExecutorReviewCommandRunner::new(
             environment.environment.get_exec_backend(),
             &shell_environment_policy,
         );
-        Ok(codex_git_utils::resolve_review_scope(&runner, environment.cwd()).await)
+        let mut resolution =
+            codex_git_utils::resolve_review_scope(&runner, environment.cwd()).await;
+        resolution.review_execution_available = environment.environment.is_remote()
+            || !cfg!(target_os = "windows")
+            || windows_sandbox_level != codex_protocol::config_types::WindowsSandboxLevel::Disabled;
+        resolution.review_unavailable_reason =
+            (!resolution.review_execution_available).then(|| {
+                "Review requires Windows sandboxing for the selected local executor.".to_string()
+            });
+        let fix_permissions = codex_protocol::models::PermissionProfile::workspace_write_with(
+            &[],
+            codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+            /*exclude_tmpdir_env_var*/ true,
+            /*exclude_slash_tmp*/ true,
+        );
+        resolution.fix_execution_available = resolution.review_execution_available
+            && config
+                .permissions
+                .can_set_permission_profile(&fix_permissions)
+                .is_ok()
+            && config.is_permission_profile_allowed(
+                codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+                &fix_permissions,
+            );
+        resolution.fix_unavailable_reason = (!resolution.fix_execution_available).then(|| {
+            resolution
+                .review_unavailable_reason
+                .clone()
+                .unwrap_or_else(|| {
+                    "Fix is unavailable under the active permission constraints.".to_string()
+                })
+        });
+        Ok(resolution)
     }
 }
 
@@ -93,13 +163,17 @@ impl ReviewCommandRunner for ExecutorReviewCommandRunner {
         .await
         .context("review command timed out while starting")??;
         let process = started.process;
+        let mut terminate_on_drop = TerminateProcessOnDrop::new(Arc::clone(&process));
         let collected = timeout_at(
             deadline,
             collect_output(process.as_ref(), command.output_bytes_cap()),
         )
         .await;
         match collected {
-            Ok(Ok(output)) => Ok(output),
+            Ok(Ok(output)) => {
+                terminate_on_drop.disarm();
+                Ok(output)
+            }
             Ok(Err(err)) => {
                 let terminate_deadline = Instant::now() + TERMINATE_TIMEOUT;
                 let _ = timeout_at(terminate_deadline, process.terminate()).await;
@@ -160,25 +234,46 @@ fn append_capped(output: &mut Vec<u8>, chunk: &[u8], output_bytes_cap: usize) {
 }
 
 fn exec_env_policy(policy: &ShellEnvironmentPolicy) -> ExecEnvPolicy {
-    let mut exclude = policy
+    let policy = sanitized_review_shell_environment_policy(policy);
+    let exclude = policy
         .exclude
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
-    exclude.push(GH_REPO_ENV_VAR.to_string());
-    let mut r#set = policy.r#set.clone();
-    r#set.retain(|key, _| !key.eq_ignore_ascii_case(GH_REPO_ENV_VAR));
     ExecEnvPolicy {
         inherit: policy.inherit.clone(),
         ignore_default_excludes: policy.ignore_default_excludes,
         exclude,
-        r#set,
+        r#set: policy.r#set,
         include_only: policy
             .include_only
             .iter()
             .map(ToString::to_string)
             .collect(),
     }
+}
+
+pub(super) fn sanitized_review_shell_environment_policy(
+    policy: &ShellEnvironmentPolicy,
+) -> ShellEnvironmentPolicy {
+    let mut policy = policy.clone();
+    for pattern in REVIEW_ENV_EXCLUDE_PATTERNS {
+        if !policy
+            .exclude
+            .iter()
+            .any(|existing| existing.to_string().eq_ignore_ascii_case(pattern))
+        {
+            policy.exclude.push(
+                codex_protocol::config_types::EnvironmentVariablePattern::new_case_insensitive(
+                    pattern,
+                ),
+            );
+        }
+    }
+    policy.r#set.retain(|key, _| {
+        !key.eq_ignore_ascii_case("GH_REPO") && !key.to_ascii_uppercase().starts_with("GIT_")
+    });
+    policy
 }
 
 #[cfg(test)]
