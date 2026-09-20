@@ -36,6 +36,14 @@ use super::SessionTask;
 use super::SessionTaskContext;
 use super::SessionTaskResult;
 
+// These helpers are staged before the review runtime that consumes them.
+#[allow(dead_code)]
+mod context;
+#[allow(dead_code)]
+mod output;
+#[allow(dead_code)]
+mod schema;
+
 #[derive(Clone, Copy)]
 pub(crate) struct ReviewTask;
 
