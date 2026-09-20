@@ -4,7 +4,9 @@ use crate::session::tests::make_session_and_context;
 use codex_protocol::AgentPath;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::protocol::EnteredReviewModeEvent;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -29,6 +31,18 @@ fn assistant_msg(text: &str) -> ResponseItem {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+fn legacy_review_user_msg(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: Some("review_rollout_user".to_string()),
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
         phase: None,
@@ -441,6 +455,47 @@ fn fork_turn_positions_ignore_zero_turn_rollback_markers() {
     ];
 
     assert_eq!(fork_turn_positions_in_rollout(&rollout), vec![0, 1, 3]);
+}
+
+#[test]
+fn review_rollback_preserves_the_prior_user_and_fork_boundaries() {
+    let rollout = vec![
+        RolloutItem::ResponseItem(user_msg("u1")),
+        RolloutItem::ResponseItem(assistant_msg("a1")),
+        RolloutItem::EventMsg(EventMsg::EnteredReviewMode(EnteredReviewModeEvent {
+            target: ReviewTarget::WholeRepository,
+            user_facing_hint: Some("whole repository".to_string()),
+            turn_id: Some("review-turn".to_string()),
+            item_id: Some("review-item".to_string()),
+        })),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        })),
+        RolloutItem::ResponseItem(user_msg("u2")),
+    ];
+
+    assert_eq!(user_message_positions_in_rollout(&rollout), vec![0, 4]);
+    assert_eq!(fork_turn_positions_in_rollout(&rollout), vec![0, 4]);
+}
+
+#[test]
+fn legacy_review_wrapper_does_not_duplicate_the_entered_rollback_boundary() {
+    let rollout = vec![
+        RolloutItem::ResponseItem(user_msg("u1")),
+        RolloutItem::EventMsg(EventMsg::EnteredReviewMode(EnteredReviewModeEvent {
+            target: ReviewTarget::WholeRepository,
+            user_facing_hint: Some("whole repository".to_string()),
+            turn_id: Some("review-turn".to_string()),
+            item_id: Some("review-item".to_string()),
+        })),
+        RolloutItem::ResponseItem(legacy_review_user_msg("legacy report")),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 2,
+        })),
+    ];
+
+    assert!(user_message_positions_in_rollout(&rollout).is_empty());
+    assert!(fork_turn_positions_in_rollout(&rollout).is_empty());
 }
 
 #[test]

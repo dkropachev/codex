@@ -3,6 +3,7 @@ use crate::session::tests::make_session_configuration_for_tests;
 use crate::state::AutoCompactWindowSnapshot;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
+use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::SpendControlLimitSnapshot;
 use pretty_assertions::assert_eq;
 
@@ -33,6 +34,40 @@ async fn clear_connector_selection_removes_entries() {
     state.clear_connector_selection();
 
     assert_eq!(state.get_connector_selection(), HashSet::new());
+}
+
+#[tokio::test]
+async fn pending_review_report_overflow_is_visible_until_consumed() {
+    let session_configuration = make_session_configuration_for_tests().await;
+    let mut state = SessionState::new(session_configuration);
+    for index in 0..=MAX_PENDING_REVIEW_REPORTS {
+        state.enqueue_review_report(PendingReviewReport::new(
+            format!("review-{index}"),
+            ReviewOutputEvent::default(),
+        ));
+    }
+
+    assert_eq!(
+        state.pending_review_reports().len(),
+        MAX_PENDING_REVIEW_REPORTS
+    );
+    assert_eq!(state.pending_review_report_overflow(), 1);
+    state.clear_pending_review_reports_through("review-64");
+    assert_eq!(state.pending_review_report_overflow(), 0);
+}
+
+#[tokio::test]
+async fn stale_review_consumption_target_keeps_newer_reports() {
+    let session_configuration = make_session_configuration_for_tests().await;
+    let mut state = SessionState::new(session_configuration);
+    state.enqueue_review_report(PendingReviewReport::new(
+        "newer".to_string(),
+        ReviewOutputEvent::default(),
+    ));
+
+    state.clear_pending_review_reports_through("stale");
+
+    assert_eq!(state.pending_review_reports()[0].item_id, "newer");
 }
 
 #[tokio::test]

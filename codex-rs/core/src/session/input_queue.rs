@@ -183,6 +183,16 @@ impl InputQueue {
         turn_state.lock().await.pending_input.items.extend(input);
     }
 
+    pub(crate) async fn prepend_pending_input_for_turn_state(
+        &self,
+        turn_state: &Mutex<TurnState>,
+        mut input: Vec<TurnInput>,
+    ) {
+        let mut turn_state = turn_state.lock().await;
+        input.append(&mut turn_state.pending_input.items);
+        turn_state.pending_input.items = input;
+    }
+
     pub(crate) async fn take_pending_input_for_turn_state(
         &self,
         turn_state: &Mutex<TurnState>,
@@ -416,5 +426,31 @@ mod tests {
             ))
             .await;
         assert!(input_queue.has_trigger_turn_mailbox_items().await);
+    }
+
+    #[tokio::test]
+    async fn restored_input_is_prepended_before_newer_input() {
+        let input_queue = InputQueue::new();
+        let turn_state = Mutex::new(TurnState::default());
+        let input = |text: &str| TurnInput::UserInput {
+            content: vec![UserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            client_id: None,
+        };
+        input_queue
+            .extend_pending_input_for_turn_state(&turn_state, vec![input("newer")])
+            .await;
+        input_queue
+            .prepend_pending_input_for_turn_state(&turn_state, vec![input("older")])
+            .await;
+
+        assert_eq!(
+            input_queue
+                .take_pending_input_for_turn_state(&turn_state)
+                .await,
+            vec![input("older"), input("newer")]
+        );
     }
 }
