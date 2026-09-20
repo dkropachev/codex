@@ -12,7 +12,7 @@ use super::*;
 
 #[tokio::test]
 async fn current_branch_pull_request_wins_and_its_base_is_preferred() {
-    let runner = FakeRunner::new(vec![
+    let runner = scope_runner(vec![
         response(
             &["gh", "pr", "view", "--json", "number,url,state,baseRefName"],
             /*exit_code*/ 0,
@@ -84,6 +84,13 @@ async fn current_branch_pull_request_wins_and_its_base_is_preferred() {
                 "refs/heads/feature".to_string(),
                 "refs/heads/main".to_string(),
             ],
+            has_uncommitted_changes: false,
+            commits: vec![CommitLogEntry {
+                sha: "commit-sha".to_string(),
+                timestamp: 1,
+                subject: "Commit subject".to_string(),
+            }],
+            git_error: None,
         }
     );
     assert!(!runner.saw(&["git", "rev-parse", "HEAD"]));
@@ -92,7 +99,7 @@ async fn current_branch_pull_request_wins_and_its_base_is_preferred() {
 
 #[tokio::test]
 async fn pull_request_base_matching_default_uses_base_repository_remote() {
-    let runner = FakeRunner::new(vec![
+    let runner = scope_runner(vec![
         response(
             &["gh", "pr", "view", "--json", "number,url,state,baseRefName"],
             /*exit_code*/ 0,
@@ -176,7 +183,7 @@ async fn pull_request_base_matching_default_uses_base_repository_remote() {
 
 #[tokio::test]
 async fn head_lookup_searches_parent_before_fork_and_uses_lowest_open_number() {
-    let runner = FakeRunner::new(vec![
+    let runner = scope_runner(vec![
         response(
             &["gh", "pr", "view", "--json", "number,url,state,baseRefName"],
             /*exit_code*/ 1,
@@ -299,7 +306,7 @@ async fn head_lookup_searches_parent_before_fork_and_uses_lowest_open_number() {
 
 #[tokio::test]
 async fn detected_default_branch_is_inserted_once_at_the_front() {
-    let runner = FakeRunner::new(vec![
+    let runner = scope_runner(vec![
         response(
             &["gh", "pr", "view", "--json", "number,url,state,baseRefName"],
             /*exit_code*/ 1,
@@ -357,7 +364,7 @@ async fn detected_default_branch_is_inserted_once_at_the_front() {
 
 #[tokio::test]
 async fn remote_show_default_branch_uses_verified_remote_target() {
-    let runner = FakeRunner::new(vec![
+    let runner = scope_runner(vec![
         response(
             &["gh", "pr", "view", "--json", "number,url,state,baseRefName"],
             /*exit_code*/ 1,
@@ -416,7 +423,7 @@ async fn remote_show_default_branch_uses_verified_remote_target() {
 
 #[tokio::test]
 async fn local_default_branch_is_used_when_remote_detection_fails() {
-    let runner = FakeRunner::new(vec![
+    let runner = scope_runner(vec![
         response(
             &["gh", "pr", "view", "--json", "number,url,state,baseRefName"],
             /*exit_code*/ 1,
@@ -469,6 +476,26 @@ async fn local_default_branch_is_used_when_remote_detection_fails() {
 }
 
 #[tokio::test]
+async fn git_detection_failure_returns_a_short_picker_error() {
+    let runner = FakeRunner::new(vec![response(
+        &["git", "rev-parse", "--is-inside-work-tree"],
+        /*exit_code*/ 128,
+        "",
+    )]);
+
+    let resolution = resolve_review_scope(&runner, &cwd()).await;
+
+    assert_eq!(
+        resolution,
+        ReviewScopeResolution {
+            git_error: Some("Git detection failed".to_string()),
+            ..Default::default()
+        }
+    );
+    runner.assert_exhausted();
+}
+
+#[tokio::test]
 async fn pull_request_and_default_branch_probes_start_concurrently() {
     let runner = ConcurrentProbeRunner {
         barrier: Arc::new(Barrier::new(2)),
@@ -495,6 +522,50 @@ fn cwd() -> PathUri {
     PathUri::parse("file:///repo").expect("cwd")
 }
 
+fn scope_runner(mut responses: Vec<FakeResponse>) -> FakeRunner {
+    responses.extend([
+        response(
+            &["git", "rev-parse", "--is-inside-work-tree"],
+            /*exit_code*/ 0,
+            "true\n",
+        ),
+        response(
+            &[
+                "git",
+                "config",
+                "--null",
+                "--name-only",
+                "--get-regexp",
+                r"^filter\..*\.(clean|process)$",
+            ],
+            /*exit_code*/ 1,
+            "",
+        ),
+        FakeResponse {
+            argv: safe_status_argv(),
+            output: ReviewCommandOutput {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+        },
+        response(
+            &[
+                "git",
+                "-c",
+                "log.showSignature=false",
+                "log",
+                "-n",
+                "100",
+                "--pretty=format:%H%x1f%ct%x1f%s",
+            ],
+            /*exit_code*/ 0,
+            "commit-sha\u{001f}1\u{001f}Commit subject\n",
+        ),
+    ]);
+    FakeRunner::new(responses)
+}
+
 fn response(argv: &[&str], exit_code: i32, stdout: &str) -> FakeResponse {
     FakeResponse {
         argv: argv.iter().map(|arg| (*arg).to_string()).collect(),
@@ -504,6 +575,21 @@ fn response(argv: &[&str], exit_code: i32, stdout: &str) -> FakeResponse {
             stderr: String::new(),
         },
     }
+}
+
+fn safe_status_argv() -> Vec<String> {
+    [
+        "git".to_string(),
+        "-c".to_string(),
+        "core.hooksPath=/dev/null".to_string(),
+        "-c".to_string(),
+        "core.fsmonitor=false".to_string(),
+        "status".to_string(),
+        "--porcelain=v1".to_string(),
+        "--untracked-files=all".to_string(),
+        "--ignore-submodules=dirty".to_string(),
+    ]
+    .into()
 }
 
 struct FakeResponse {
@@ -568,6 +654,13 @@ impl ReviewCommandRunner for ConcurrentProbeRunner {
             self.barrier.wait().await;
         }
         let (exit_code, stdout) = match command.argv() {
+            [program, command, option]
+                if program == "git"
+                    && command == "rev-parse"
+                    && option == "--is-inside-work-tree" =>
+            {
+                (0, "true\n")
+            }
             [program, command, ..] if program == "gh" && command == "pr" => (
                 0,
                 r#"{"number":7,"url":"https://github.com/acme/repo/pull/7","state":"OPEN"}"#,
@@ -589,6 +682,16 @@ impl ReviewCommandRunner for ConcurrentProbeRunner {
                 (0, "refs/heads/main\n")
             }
             [program, command, ..] if program == "git" && command == "branch" => (0, "feature\n"),
+            args if args.first().is_some_and(|program| program == "git")
+                && args.iter().any(|arg| arg == "status") =>
+            {
+                (0, "")
+            }
+            args if args.first().is_some_and(|program| program == "git")
+                && args.iter().any(|arg| arg == "log") =>
+            {
+                (0, "")
+            }
             _ => (1, ""),
         };
         Ok(ReviewCommandOutput {

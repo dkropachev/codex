@@ -3,10 +3,15 @@
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 
+use crate::CommitLogEntry;
 use crate::ReviewCommand;
 use crate::ReviewCommandOutput;
 use crate::ReviewCommandRunner;
+use crate::has_uncommitted_changes;
 use crate::resolve_pr_base_ref_with_runner;
+use crate::review_validation::recent_review_commits;
+
+const GIT_DETECTION_ERROR: &str = "Git detection failed";
 
 /// An open pull request associated with the selected checkout.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -31,6 +36,9 @@ pub struct ReviewScopeResolution {
     pub default_branch: Option<ReviewDefaultBranch>,
     pub current_branch: Option<String>,
     pub branches: Vec<String>,
+    pub has_uncommitted_changes: bool,
+    pub commits: Vec<CommitLogEntry>,
+    pub git_error: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -79,10 +87,33 @@ pub async fn resolve_review_scope(
     runner: &impl ReviewCommandRunner,
     cwd: &PathUri,
 ) -> ReviewScopeResolution {
-    let (mut pull_request, default_branch) =
-        tokio::join!(open_pull_request(runner, cwd), default_branch(runner, cwd),);
-    let (current_branch, mut branches) =
-        tokio::join!(current_branch(runner, cwd), local_branches(runner, cwd),);
+    let repository = run_git(runner, cwd, ["rev-parse", "--is-inside-work-tree"]).await;
+    if !repository.is_some_and(|output| output.success() && output.stdout.trim() == "true") {
+        return ReviewScopeResolution {
+            git_error: Some(GIT_DETECTION_ERROR.to_string()),
+            ..Default::default()
+        };
+    }
+    let (
+        mut pull_request,
+        default_branch,
+        current_branch,
+        mut branches,
+        has_uncommitted_changes,
+        commits,
+    ) = tokio::join!(
+        open_pull_request(runner, cwd),
+        default_branch(runner, cwd),
+        current_branch(runner, cwd),
+        local_branches(runner, cwd),
+        has_uncommitted_changes(runner, cwd),
+        recent_review_commits(runner, cwd),
+    );
+    let (has_uncommitted_changes, uncommitted_error) = match has_uncommitted_changes {
+        Ok(has_uncommitted_changes) => (has_uncommitted_changes, false),
+        Err(_) => (false, true),
+    };
+    let commits = commits.unwrap_or_default();
     let pull_request_base_name = pull_request
         .as_ref()
         .and_then(|pull_request| pull_request.base_branch.clone());
@@ -126,6 +157,9 @@ pub async fn resolve_review_scope(
         default_branch,
         current_branch,
         branches,
+        has_uncommitted_changes,
+        commits,
+        git_error: uncommitted_error.then(|| GIT_DETECTION_ERROR.to_string()),
     }
 }
 

@@ -19,7 +19,7 @@ use crate::review_branch::resolve_pr_base_ref_with_runner;
 
 pub(crate) const GH_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
-const REVIEW_COMMAND_OUTPUT_BYTES_CAP: usize = 512 * 1024;
+pub(crate) const REVIEW_COMMAND_OUTPUT_BYTES_CAP: usize = 512 * 1024;
 const GH_REPO_ENV_VAR: &str = "GH_REPO";
 
 /// A bounded, non-interactive command used to resolve a code-review scope.
@@ -248,6 +248,9 @@ pub async fn merge_base_with_head_with_runner(
     cwd: &PathUri,
     branch: &str,
 ) -> Result<Option<String>> {
+    if branch.starts_with('-') {
+        bail!("review branch must not start with '-'");
+    }
     let repository = run_git(runner, cwd, ["rev-parse", "--is-inside-work-tree"]).await?;
     if !repository.success() || repository.stdout.trim() != "true" {
         bail!(
@@ -269,35 +272,40 @@ pub async fn merge_base_with_head_with_runner(
         .strip_prefix("refs/heads/")
         .or_else(|| (!branch.starts_with("refs/")).then_some(branch));
     if let Some(local_branch) = local_branch {
-        let upstream_spec = format!("{local_branch}@{{upstream}}");
+        let local_ref = format!("refs/heads/{local_branch}");
         let upstream = run_git(
             runner,
             cwd,
             [
-                "rev-parse",
-                "--abbrev-ref",
-                "--symbolic-full-name",
-                &upstream_spec,
+                "for-each-ref",
+                "--format=%(upstream)",
+                "--count=1",
+                &local_ref,
             ],
         )
         .await?;
         if upstream.success() {
             let upstream = upstream.stdout.trim();
             if !upstream.is_empty() {
-                let range = format!("{branch}...{upstream}");
-                let counts =
-                    run_git(runner, cwd, ["rev-list", "--left-right", "--count", &range]).await?;
-                let remote_is_ahead = counts.success()
-                    && counts
-                        .stdout
-                        .split_whitespace()
-                        .nth(1)
-                        .and_then(|count| count.parse::<u64>().ok())
-                        .is_some_and(|count| count > 0);
-                if remote_is_ahead {
-                    let upstream_revision =
-                        run_git(runner, cwd, ["rev-parse", "--verify", upstream]).await?;
-                    if upstream_revision.success() && !upstream_revision.stdout.trim().is_empty() {
+                let upstream_revision =
+                    run_git(runner, cwd, ["rev-parse", "--verify", upstream]).await?;
+                if upstream_revision.success() && !upstream_revision.stdout.trim().is_empty() {
+                    let range = format!(
+                        "{}...{}",
+                        branch_revision.stdout.trim(),
+                        upstream_revision.stdout.trim()
+                    );
+                    let counts =
+                        run_git(runner, cwd, ["rev-list", "--left-right", "--count", &range])
+                            .await?;
+                    let remote_is_ahead = counts.success()
+                        && counts
+                            .stdout
+                            .split_whitespace()
+                            .nth(1)
+                            .and_then(|count| count.parse::<u64>().ok())
+                            .is_some_and(|count| count > 0);
+                    if remote_is_ahead {
                         preferred_revision = upstream_revision.stdout.trim().to_string();
                     }
                 }
@@ -463,6 +471,10 @@ pub(crate) async fn resolve_revision_oid(
     cwd: &PathUri,
     revision: &str,
 ) -> Result<Option<String>> {
+    let revision = revision.trim();
+    if revision.is_empty() || revision.starts_with('-') {
+        bail!("review revision must not be empty or start with '-'");
+    }
     let commit_revision = format!("{revision}^{{commit}}");
     let verify = run_git(runner, cwd, ["rev-parse", "--verify", &commit_revision]).await?;
     if !verify.success() {
@@ -484,7 +496,8 @@ pub(crate) async fn run_git<const N: usize>(
         .run(
             ReviewCommand::new(std::iter::once("git").chain(args), cwd.clone())
                 .env("GIT_OPTIONAL_LOCKS", "0")
-                .env("GIT_TERMINAL_PROMPT", "0"),
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .env("LC_ALL", "C"),
         )
         .await
 }

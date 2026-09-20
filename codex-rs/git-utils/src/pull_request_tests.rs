@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::path::Path;
 use std::sync::Mutex;
 
 use pretty_assertions::assert_eq;
@@ -275,6 +276,61 @@ async fn resolver_does_not_use_same_named_branch_from_fork_remote() {
 }
 
 #[tokio::test]
+async fn merge_base_prefers_an_ahead_upstream_branch() {
+    let repository = tempfile::TempDir::new().expect("temporary repository");
+    run_native_git(repository.path(), &["init"]);
+    run_native_git(repository.path(), &["config", "user.name", "Codex Test"]);
+    run_native_git(
+        repository.path(),
+        &["config", "user.email", "codex@example.com"],
+    );
+    run_native_git(repository.path(), &["config", "core.hooksPath", "no-hooks"]);
+    run_native_git(repository.path(), &["remote", "add", "--", "-origin", "."]);
+
+    std::fs::write(repository.path().join("base.txt"), "base\n").expect("base file");
+    run_native_git(repository.path(), &["add", "base.txt"]);
+    run_native_git(
+        repository.path(),
+        &["commit", "--no-gpg-sign", "-m", "base"],
+    );
+    let local_main = run_native_git(repository.path(), &["rev-parse", "HEAD"]);
+
+    std::fs::write(repository.path().join("upstream.txt"), "upstream\n").expect("upstream file");
+    run_native_git(repository.path(), &["add", "upstream.txt"]);
+    run_native_git(
+        repository.path(),
+        &["commit", "--no-gpg-sign", "-m", "upstream"],
+    );
+    let upstream_main = run_native_git(repository.path(), &["rev-parse", "HEAD"]);
+    run_native_git(
+        repository.path(),
+        &["update-ref", "refs/remotes/-origin/main", &upstream_main],
+    );
+    run_native_git(repository.path(), &["checkout", "-b", "feature"]);
+    run_native_git(
+        repository.path(),
+        &["update-ref", "refs/heads/-main", &local_main],
+    );
+    run_native_git(
+        repository.path(),
+        &[
+            "branch",
+            "--set-upstream-to=refs/remotes/-origin/main",
+            "--",
+            "-main",
+        ],
+    );
+    let cwd = PathUri::from_host_native_path(repository.path()).expect("repository URI");
+
+    assert_eq!(
+        merge_base_with_head_with_runner(&NativeReviewCommandRunner, &cwd, "refs/heads/-main")
+            .await
+            .expect("merge base"),
+        Some(upstream_main)
+    );
+}
+
+#[tokio::test]
 async fn resolver_rejects_option_shaped_and_mismatched_pull_request_urls() {
     let invalid_runner = FakeRunner::new(Vec::new());
     let invalid =
@@ -282,6 +338,12 @@ async fn resolver_rejects_option_shaped_and_mismatched_pull_request_urls() {
             .await
             .expect_err("option-shaped selector");
     assert!(invalid.to_string().contains("absolute URL"));
+    for result in [
+        merge_base_with_head_with_runner(&invalid_runner, &cwd(), "-main").await,
+        resolve_revision_oid(&invalid_runner, &cwd(), "-main").await,
+    ] {
+        assert!(result.is_err());
+    }
     invalid_runner.assert_finished();
 
     let mismatched_output =
@@ -323,6 +385,24 @@ fn git_argv(args: &[&str]) -> Vec<String> {
     std::iter::once("git".to_string())
         .chain(args.iter().map(|arg| (*arg).to_string()))
         .collect()
+}
+
+fn run_native_git(cwd: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("git stdout")
+        .trim()
+        .to_string()
 }
 
 fn gh_output() -> String {

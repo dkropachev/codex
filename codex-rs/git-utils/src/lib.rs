@@ -9,6 +9,7 @@ mod platform;
 mod pull_request;
 mod review_branch;
 mod review_scope;
+mod review_validation;
 
 pub use apply::ApplyGitRequest;
 pub use apply::ApplyGitResult;
@@ -59,3 +60,4 @@ pub use review_scope::ReviewDefaultBranch;
 pub use review_scope::ReviewScopePullRequest;
 pub use review_scope::ReviewScopeResolution;
 pub use review_scope::resolve_review_scope;
+pub use review_validation::has_uncommitted_changes;
