@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use codex_git_utils::validate_review_fix_commit_target;
 use codex_prompts::REVIEW_DOUBLE_CHECK_PROMPT;
 use codex_prompts::REVIEW_PROMPT;
 use codex_prompts::REVIEW_REPAIR_PROMPT;
@@ -9,18 +10,24 @@ use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::ReviewAction;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::ReviewVerification;
 use codex_utils_path_uri::PathUri;
 use serde::de::DeserializeOwned;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use crate::context::ContextualUserFragment;
 use crate::context::ReviewRepairInputFragment;
 use crate::context::ReviewStageControlFragment;
 use crate::context::ReviewTargetInstructionsFragment;
+use crate::session::ExecutorReviewCommandRunner;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -37,6 +44,7 @@ use self::schema::verification_schema;
 use self::stage::ReviewStageEvidence;
 use self::stage::ReviewStageRequest;
 use self::stage::StagePermissions;
+use self::stage::review_fix_permission_profile;
 use self::stage::run_review_stage;
 
 use super::SessionTask;
@@ -45,7 +53,7 @@ use super::SessionTaskResult;
 
 mod context;
 mod exit;
-mod git_paths;
+mod fix;
 mod output;
 mod schema;
 mod stage;
@@ -65,6 +73,46 @@ pub(crate) struct ReviewTaskConfig {
 pub(crate) struct ReviewTask {
     config: ReviewTaskConfig,
     exit_state: Arc<exit::ReviewExitCoordinator>,
+    fix_finalization: Arc<ReviewFixFinalization>,
+}
+
+#[derive(Default)]
+struct ReviewFixFinalization {
+    in_progress: AtomicBool,
+    finished: Notify,
+}
+
+struct ReviewFixFinalizationGuard {
+    state: Arc<ReviewFixFinalization>,
+}
+
+impl Drop for ReviewFixFinalizationGuard {
+    fn drop(&mut self) {
+        self.state.in_progress.store(false, Ordering::Release);
+        self.state.finished.notify_waiters();
+    }
+}
+
+impl ReviewFixFinalization {
+    fn begin(self: &Arc<Self>) -> ReviewFixFinalizationGuard {
+        let was_in_progress = self.in_progress.swap(true, Ordering::AcqRel);
+        debug_assert!(!was_in_progress, "review fix finalization started twice");
+        ReviewFixFinalizationGuard {
+            state: Arc::clone(self),
+        }
+    }
+
+    async fn wait(&self) {
+        loop {
+            let finished = self.finished.notified();
+            tokio::pin!(finished);
+            finished.as_mut().enable();
+            if !self.in_progress.load(Ordering::Acquire) {
+                return;
+            }
+            finished.await;
+        }
+    }
 }
 
 impl ReviewTask {
@@ -72,6 +120,7 @@ impl ReviewTask {
         Self {
             config,
             exit_state: Arc::new(exit::ReviewExitCoordinator::new()),
+            fix_finalization: Arc::new(ReviewFixFinalization::default()),
         }
     }
 
@@ -146,21 +195,45 @@ impl ReviewTask {
                 "Review requires the Windows sandbox for a local environment; enable unelevated or elevated Windows sandboxing"
             );
         }
-        anyhow::ensure!(
-            self.config.action == ReviewAction::Report,
-            "Fix requires the review mutation stage"
-        );
-        let mut read_only_paths = Vec::new();
-        match git_paths::resolve_git_protected_paths(
-            ctx.as_ref(),
-            &self.config.checkout_root,
-            &parent_sandbox,
-        )
-        .await
+        if self.config.action != ReviewAction::Report {
+            let fix_permissions = review_fix_permission_profile();
+            ctx.config
+                .permissions
+                .can_set_permission_profile(&fix_permissions)
+                .context("Fix is unavailable under the active permission constraints")?;
+            anyhow::ensure!(
+                ctx.config.is_permission_profile_allowed(
+                    codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+                    &fix_permissions,
+                ),
+                "Fix is disabled by the active permission requirements"
+            );
+        }
+        if self.config.action == ReviewAction::FixAndCommit {
+            let runner = ExecutorReviewCommandRunner::new(
+                environment.environment.get_exec_backend(),
+                &ctx.config.permissions.shell_environment_policy,
+            );
+            validate_review_fix_commit_target(&runner, &self.config.checkout_root).await?;
+        }
+        let mut read_only_paths = if self.config.action == ReviewAction::Report {
+            Vec::new()
+        } else {
+            parent_read_only_checkout_paths(
+                &parent_sandbox.permissions,
+                &self.config.checkout_root,
+            )?
+        };
+        match self
+            .resolve_git_protected_paths(ctx.as_ref(), &parent_sandbox)
+            .await
         {
             Ok(paths) => read_only_paths.extend(paths),
-            Err(error) => {
+            Err(error) if self.config.action != ReviewAction::FixAndCommit => {
                 tracing::debug!(%error, "review Git metadata paths were unavailable");
+            }
+            Err(error) => {
+                return Err(error).context("Fix requires an accessible Git repository");
             }
         }
         if !read_only_paths.is_empty() {
@@ -208,7 +281,7 @@ impl ReviewTask {
         .context("review discovery failed")?
         .output;
 
-        let output = match self.config.verification {
+        let mut output = match self.config.verification {
             ReviewVerification::SinglePass => discovery.clone().single_pass_output(),
             ReviewVerification::DoubleCheck => {
                 self.run_double_check(
@@ -221,6 +294,20 @@ impl ReviewTask {
             }
         };
         self.remember_review_output(&output).await;
+
+        if self.config.action != ReviewAction::Report {
+            fix::sanitize_fix_locations(ctx.as_ref(), &self.config.checkout_root, &mut output)
+                .await;
+            let mut pending_fix = output.clone();
+            if !pending_fix.findings.is_empty() {
+                pending_fix.resolution =
+                    Some(output::failed_fix_resolution(pending_fix.findings.len()));
+            }
+            self.remember_review_output(&pending_fix).await;
+            self.run_fix_stage(session, ctx, &mut output, cancellation_token)
+                .await?;
+            self.remember_review_output(&output).await;
+        }
         Ok(output)
     }
 
@@ -365,6 +452,7 @@ impl SessionTask for ReviewTask {
     }
 
     async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
+        self.fix_finalization.wait().await;
         self.exit_once(session.clone_session(), /*output*/ None, ctx)
             .await;
     }
@@ -456,4 +544,41 @@ fn target_context_item(instructions: &str) -> anyhow::Result<ResponseItem> {
 
 fn stage_control_prompt(control: &str) -> anyhow::Result<String> {
     Ok(ReviewStageControlFragment::new(control.to_string())?.render())
+}
+
+fn parent_read_only_checkout_paths(
+    permissions: &PermissionProfile<PathUri>,
+    checkout_root: &PathUri,
+) -> anyhow::Result<Vec<PathUri>> {
+    let PermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+        ..
+    } = permissions
+    else {
+        return Ok(Vec::new());
+    };
+    let mut paths = Vec::new();
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.access == FileSystemAccessMode::Read)
+    {
+        match &entry.path {
+            FileSystemPath::Path { path }
+                if path != checkout_root && path.starts_with(checkout_root) =>
+            {
+                paths.push(path.clone());
+            }
+            FileSystemPath::Special {
+                value:
+                    FileSystemSpecialPath::ProjectRoots {
+                        subpath: Some(path),
+                    },
+            } => paths.push(checkout_root.join(path.to_string_lossy().as_ref())?),
+            FileSystemPath::GlobPattern { .. } => {
+                anyhow::bail!("Fix cannot preserve a read-only glob inside the checkout");
+            }
+            FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => {}
+        }
+    }
+    Ok(paths)
 }
