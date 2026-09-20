@@ -12636,6 +12636,14 @@
         }
       ]
     },
+    "ReviewAction": {
+      "enum": [
+        "report",
+        "fix",
+        "fixAndCommit"
+      ],
+      "type": "string"
+    },
     "ReviewDelivery": {
       "enum": [
         "inline",
@@ -12666,6 +12674,14 @@
           },
           "type": "array"
         },
+        "commits": {
+          "default": [],
+          "description": "Recent commits reachable from HEAD, capped at 100 entries.",
+          "items": {
+            "$ref": "#/definitions/ReviewScopeCommit"
+          },
+          "type": "array"
+        },
         "currentBranch": {
           "description": "Currently checked-out branch, or `null` for a detached head or non-repository cwd.",
           "type": [
@@ -12684,6 +12700,37 @@
           ],
           "description": "Detected repository default branch, when one was found."
         },
+        "doubleCheckAvailable": {
+          "default": false,
+          "description": "Whether the server supports the isolated Double-check stage.",
+          "type": "boolean"
+        },
+        "error": {
+          "default": null,
+          "description": "Short diagnostic shown when Git repository detection failed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fixExecutionAvailable": {
+          "default": false,
+          "description": "Whether Fix actions can use the required workspace-write profile on the server.",
+          "type": "boolean"
+        },
+        "fixUnavailableReason": {
+          "default": null,
+          "description": "Short diagnostic when Fix actions are unavailable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hasUncommittedChanges": {
+          "default": false,
+          "description": "Whether staged, unstaged, or untracked changes are present.",
+          "type": "boolean"
+        },
         "pullRequest": {
           "anyOf": [
             {
@@ -12694,6 +12741,24 @@
             }
           ],
           "description": "Open pull request associated with the selected checkout, when one was found."
+        },
+        "reviewExecutionAvailable": {
+          "default": true,
+          "description": "Whether reviews can run on the selected executor with the server's active sandbox setup.",
+          "type": "boolean"
+        },
+        "reviewUnavailableReason": {
+          "default": null,
+          "description": "Short diagnostic when review execution is unavailable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "wholeRepositoryAvailable": {
+          "default": false,
+          "description": "Whether the server supports the whole-repository review target.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -12716,6 +12781,21 @@
       "required": [
         "displayName",
         "target"
+      ],
+      "type": "object"
+    },
+    "ReviewScopeCommit": {
+      "properties": {
+        "sha": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha",
+        "title"
       ],
       "type": "object"
     },
@@ -12753,6 +12833,18 @@
     "ReviewStartParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "action": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReviewAction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What to do after the report is ready."
+        },
         "delivery": {
           "anyOf": [
             {
@@ -12770,6 +12862,18 @@
         },
         "threadId": {
           "type": "string"
+        },
+        "verification": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReviewVerification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether to verify discovery candidates in a second isolated stage."
         }
       },
       "required": [
@@ -12887,6 +12991,23 @@
           "type": "object"
         },
         {
+          "description": "Review the accessible checkout without a comparison baseline.",
+          "properties": {
+            "type": {
+              "enum": [
+                "wholeRepository"
+              ],
+              "title": "WholeRepositoryReviewTargetType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "WholeRepositoryReviewTarget",
+          "type": "object"
+        },
+        {
           "description": "Arbitrary instructions, equivalent to the old free-form prompt.",
           "properties": {
             "instructions": {
@@ -12908,6 +13029,13 @@
           "type": "object"
         }
       ]
+    },
+    "ReviewVerification": {
+      "enum": [
+        "singlePass",
+        "doubleCheck"
+      ],
+      "type": "string"
     },
     "SandboxMode": {
       "enum": [

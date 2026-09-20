@@ -115,6 +115,8 @@ fn builds_uncommitted_review_request() {
 
     let expected = ReviewRequest {
         target: ReviewTarget::UncommittedChanges,
+        verification: Default::default(),
+        action: Default::default(),
         user_facing_hint: None,
     };
 
@@ -137,6 +139,8 @@ fn builds_commit_review_request_with_title() {
             sha: "123456789".to_string(),
             title: Some("Add review command".to_string()),
         },
+        verification: Default::default(),
+        action: Default::default(),
         user_facing_hint: None,
     };
 
@@ -158,6 +162,8 @@ fn builds_custom_review_request_trims_prompt() {
         target: ReviewTarget::Custom {
             instructions: "custom review instructions".to_string(),
         },
+        verification: Default::default(),
+        action: Default::default(),
         user_facing_hint: None,
     };
 

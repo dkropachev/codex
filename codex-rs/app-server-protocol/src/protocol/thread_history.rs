@@ -61,7 +61,7 @@ use codex_protocol::protocol::ViewImageToolCallEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
 #[cfg(test)]
-use codex_protocol::review_format::REVIEW_FALLBACK_MESSAGE;
+use codex_protocol::review_format::REVIEW_INTERRUPTED_MESSAGE;
 use std::collections::HashMap;
 use tracing::warn;
 use uuid::Uuid;
@@ -239,6 +239,7 @@ pub struct ThreadHistoryBuilder {
     current_rollout_index: usize,
     next_rollout_index: usize,
     active_change_set: Option<ThreadHistoryChangeSet>,
+    pending_legacy_review_agent_message_text: Option<String>,
 }
 
 impl Default for ThreadHistoryBuilder {
@@ -256,6 +257,7 @@ impl ThreadHistoryBuilder {
             current_rollout_index: 0,
             next_rollout_index: 0,
             active_change_set: None,
+            pending_legacy_review_agent_message_text: None,
         }
     }
 
@@ -444,7 +446,27 @@ impl ThreadHistoryBuilder {
             return;
         };
 
+        if role == "assistant" && id.as_deref() == Some("review_rollout_assistant") {
+            let text = content
+                .iter()
+                .filter_map(|item| match item {
+                    codex_protocol::models::ContentItem::OutputText { text } => Some(text.as_str()),
+                    codex_protocol::models::ContentItem::InputText { .. }
+                    | codex_protocol::models::ContentItem::InputImage { .. } => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if text.trim().is_empty() {
+                self.pending_legacy_review_agent_message_text = None;
+            } else {
+                self.pending_legacy_review_agent_message_text = Some(text.clone());
+                self.upsert_review_agent_message(/*turn_id*/ None, text);
+            }
+            return;
+        }
+
         if role != "user" {
+            self.pending_legacy_review_agent_message_text = None;
             return;
         }
 
@@ -463,6 +485,7 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_user_message(&mut self, payload: &UserMessageEvent) {
+        self.pending_legacy_review_agent_message_text = None;
         // User messages should stay in explicitly opened turns. For backward
         // compatibility with older streams that did not open turns explicitly,
         // close any implicit/inactive turn and start a fresh one for this input.
@@ -491,13 +514,26 @@ impl ThreadHistoryBuilder {
             return;
         }
 
-        let id = self.next_item_id();
-        self.push_item_in_current_turn(ThreadItem::AgentMessage {
+        let uses_legacy_review_id = self
+            .pending_legacy_review_agent_message_text
+            .take()
+            .is_some_and(|expected| expected == text);
+        let id = if uses_legacy_review_id {
+            "review_rollout_assistant".to_string()
+        } else {
+            self.next_item_id()
+        };
+        let item = ThreadItem::AgentMessage {
             id,
             text,
             phase,
             memory_citation,
-        });
+        };
+        if uses_legacy_review_id {
+            self.upsert_item_in_current_turn(item);
+        } else {
+            self.push_item_in_current_turn(item);
+        }
     }
 
     fn handle_agent_reasoning(&mut self, payload: &AgentReasoningEvent) {
@@ -586,6 +622,12 @@ impl ThreadHistoryBuilder {
 
     fn handle_item_completed(&mut self, payload: &ItemCompletedEvent) {
         self.handle_materialized_item_lifecycle(&payload.turn_id, &payload.item);
+        if let codex_protocol::items::TurnItem::ExitedReviewMode(review) = &payload.item {
+            self.upsert_review_agent_message(
+                Some(&payload.turn_id),
+                review_output_text(review.review_output.as_ref()),
+            );
+        }
     }
 
     fn handle_materialized_item_lifecycle(
@@ -1155,10 +1197,25 @@ impl ThreadHistoryBuilder {
             payload.turn_id.as_deref(),
             ThreadItem::ExitedReviewMode {
                 id,
-                review,
+                review: review.clone(),
                 finding_count,
             },
         );
+        self.upsert_review_agent_message(payload.turn_id.as_deref(), review);
+    }
+
+    fn upsert_review_agent_message(&mut self, turn_id: Option<&str>, text: String) {
+        let item = ThreadItem::AgentMessage {
+            id: "review_rollout_assistant".to_string(),
+            text,
+            phase: None,
+            memory_citation: None,
+        };
+        if let Some(turn_id) = turn_id {
+            self.upsert_item_in_turn_id(turn_id, item);
+        } else {
+            self.upsert_item_in_current_turn(item);
+        }
     }
 
     fn upsert_review_mode_item(&mut self, turn_id: Option<&str>, item: ThreadItem) {
@@ -1764,10 +1821,13 @@ mod tests {
                     absolute_file_path: PathBuf::from("/tmp/file.rs"),
                     line_range: ReviewLineRange { start: 10, end: 10 },
                 },
+                pre_existing: codex_protocol::protocol::ReviewPreExisting::Undetermined,
+                pre_existing_fix_rationale: None,
             }],
             overall_correctness: "incorrect".into(),
             overall_explanation: "Found one issue.".into(),
             overall_confidence_score: 0.9,
+            ..Default::default()
         };
         let review = review_output_text(Some(&review_output));
         let events = vec![
@@ -1809,8 +1869,14 @@ mod tests {
                 },
                 ThreadItem::ExitedReviewMode {
                     id: "exited-review".into(),
-                    review,
+                    review: review.clone(),
                     finding_count: 1,
+                },
+                ThreadItem::AgentMessage {
+                    id: "review_rollout_assistant".into(),
+                    text: review,
+                    phase: None,
+                    memory_citation: None,
                 },
             ]
         );
@@ -1868,8 +1934,14 @@ mod tests {
                 },
                 ThreadItem::ExitedReviewMode {
                     id: "exited-review".into(),
-                    review: REVIEW_FALLBACK_MESSAGE.into(),
+                    review: REVIEW_INTERRUPTED_MESSAGE.into(),
                     finding_count: 0,
+                },
+                ThreadItem::AgentMessage {
+                    id: "review_rollout_assistant".into(),
+                    text: REVIEW_INTERRUPTED_MESSAGE.into(),
+                    phase: None,
+                    memory_citation: None,
                 },
             ]
         );
@@ -4407,6 +4479,141 @@ mod tests {
                 changed_turns: Vec::new(),
                 removed_turn_ids: vec!["turn-a".into()],
             }
+        );
+    }
+
+    #[test]
+    fn legacy_review_response_marker_preserves_the_agent_message_id() {
+        let mut builder = ThreadHistoryBuilder::new();
+        builder.handle_rollout_item(&RolloutItem::ResponseItem(
+            codex_protocol::models::ResponseItem::Message {
+                id: Some("review_rollout_assistant".to_string()),
+                role: "assistant".to_string(),
+                content: vec![codex_protocol::models::ContentItem::OutputText {
+                    text: "Legacy review report".to_string(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            },
+        ));
+        assert_eq!(
+            builder
+                .active_turn_snapshot()
+                .expect("review response should open a turn")
+                .items,
+            vec![ThreadItem::AgentMessage {
+                id: "review_rollout_assistant".to_string(),
+                text: "Legacy review report".to_string(),
+                phase: None,
+                memory_citation: None,
+            }]
+        );
+        builder.handle_rollout_item(&RolloutItem::EventMsg(EventMsg::AgentMessage(
+            AgentMessageEvent {
+                message: "Legacy review report".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+        )));
+
+        let turns = builder.finish();
+        assert!(matches!(
+            &turns[0].items[0],
+            ThreadItem::AgentMessage { id, text, .. }
+                if id == "review_rollout_assistant" && text == "Legacy review report"
+        ));
+    }
+
+    #[test]
+    fn legacy_review_sequence_upserts_the_synthesized_agent_message() {
+        let review_output = ReviewOutputEvent {
+            overall_correctness: "patch is correct".to_string(),
+            overall_explanation: "No issues found.".to_string(),
+            overall_confidence_score: 1.0,
+            ..Default::default()
+        };
+        let review = review_output_text(Some(&review_output));
+        let mut builder = ThreadHistoryBuilder::new();
+        builder.handle_rollout_item(&RolloutItem::EventMsg(EventMsg::ExitedReviewMode(
+            ExitedReviewModeEvent {
+                turn_id: Some("turn-1".to_string()),
+                item_id: Some("exited-review".to_string()),
+                review_output: Some(review_output),
+            },
+        )));
+        builder.handle_rollout_item(&RolloutItem::ResponseItem(
+            codex_protocol::models::ResponseItem::Message {
+                id: Some("review_rollout_assistant".to_string()),
+                role: "assistant".to_string(),
+                content: vec![codex_protocol::models::ContentItem::OutputText {
+                    text: review.clone(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            },
+        ));
+        builder.handle_rollout_item(&RolloutItem::EventMsg(EventMsg::AgentMessage(
+            AgentMessageEvent {
+                message: review.clone(),
+                phase: None,
+                memory_citation: None,
+            },
+        )));
+
+        let turns = builder.finish();
+        let legacy_messages = turns[0]
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    ThreadItem::AgentMessage { id, text, .. }
+                        if id == "review_rollout_assistant" && text == &review
+                )
+            })
+            .count();
+        assert_eq!(legacy_messages, 1);
+    }
+
+    #[test]
+    fn legacy_review_response_marker_does_not_retag_an_unrelated_message() {
+        let mut builder = ThreadHistoryBuilder::new();
+        builder.handle_rollout_item(&RolloutItem::ResponseItem(
+            codex_protocol::models::ResponseItem::Message {
+                id: Some("review_rollout_assistant".to_string()),
+                role: "assistant".to_string(),
+                content: vec![codex_protocol::models::ContentItem::OutputText {
+                    text: "Legacy review report".to_string(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            },
+        ));
+        builder.handle_rollout_item(&RolloutItem::EventMsg(EventMsg::AgentMessage(
+            AgentMessageEvent {
+                message: "A later answer".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+        )));
+
+        let turns = builder.finish();
+        assert_eq!(
+            turns[0].items,
+            vec![
+                ThreadItem::AgentMessage {
+                    id: "review_rollout_assistant".to_string(),
+                    text: "Legacy review report".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                },
+                ThreadItem::AgentMessage {
+                    id: "item-1".to_string(),
+                    text: "A later answer".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                },
+            ]
         );
     }
 }

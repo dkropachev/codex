@@ -1003,6 +1003,12 @@ as `null` or an empty list rather than making the request fail.
     "threadId": "thr_123"
 } }
 { "id": 39, "result": {
+    "reviewExecutionAvailable": true,
+    "reviewUnavailableReason": null,
+    "fixExecutionAvailable": false,
+    "fixUnavailableReason": "Fix requires the staged review runtime",
+    "doubleCheckAvailable": false,
+    "wholeRepositoryAvailable": true,
     "pullRequest": {
         "number": 123,
         "url": "https://github.com/openai/codex/pull/123",
@@ -1014,7 +1020,12 @@ as `null` or an empty list rather than making the request fail.
         "target": "refs/remotes/origin/main"
     },
     "currentBranch": "feature/review-picker",
-    "branches": ["refs/remotes/origin/main", "refs/heads/feature/review-picker"]
+    "branches": ["refs/remotes/origin/main", "refs/heads/feature/review-picker"],
+    "hasUncommittedChanges": true,
+    "commits": [
+        { "sha": "abc1234", "title": "Polish review picker" }
+    ],
+    "error": null
 } }
 ```
 
@@ -1022,7 +1033,10 @@ as `null` or an empty list rather than making the request fail.
 resolved. Its `baseBranchTarget` is the exact ref for the base when local and remote refs resolve
 unambiguously. `defaultBranch` carries both a user-facing branch name and the exact ref to pass in
 a `baseBranch` review target. `currentBranch` is `null` for a detached head, and `branches`
-contains the available explicit base-branch targets with the preferred target first.
+contains the available explicit base-branch targets with the preferred target first. The capability
+fields tell clients which review controls are currently usable. `hasUncommittedChanges` and the
+bounded `commits` list populate additional target choices. `error` carries a short Git detection
+diagnostic when those choices could not be resolved.
 
 Use `review/start` to run Codex’s reviewer on the currently checked-out project. The request takes the thread id plus a `target` describing what should be reviewed:
 
@@ -1030,10 +1044,13 @@ Use `review/start` to run Codex’s reviewer on the currently checked-out projec
 - `{"type":"baseBranch","branch":"main"}` — diff against the provided branch’s upstream (see prompt for the exact `git merge-base`/`git diff` instructions Codex will run).
 - `{"type":"commit","sha":"abc1234","title":"Optional subject"}` — review a specific commit.
 - `{"type":"pullRequest","url":"https://github.com/openai/codex/pull/123"}` — resolve the pull request metadata in the selected thread environment and review that checkout against its base. The pull request title and body provide scope context only.
+- `{"type":"wholeRepository"}` — review the accessible checkout without a comparison baseline.
 - `{"type":"custom","instructions":"Free-form reviewer instructions"}` — fallback prompt equivalent to the legacy manual review request.
 - `delivery` (`"inline"` or `"detached"`, default `"inline"`) — where the review runs:
   - `"inline"`: run the review as a new turn on the existing thread. The response’s `reviewThreadId` equals the original `threadId`, and no new `thread/started` notification is emitted.
   - `"detached"`: fork a new review thread from the parent conversation and run the review there. The response’s `reviewThreadId` is the id of this new review thread, and the server emits a `thread/started` notification for it before streaming review items.
+- `verification` (`"singlePass"` or `"doubleCheck"`, default `"singlePass"`) — request an isolated verification stage only when `doubleCheckAvailable` is true. Unsupported non-default values are rejected.
+- `action` (`"report"`, `"fix"`, or `"fixAndCommit"`, default `"report"`) — request mutation only when `fixExecutionAvailable` is true. Unsupported fix actions are rejected.
 
 Example request/response:
 

@@ -12,6 +12,132 @@ use crate::ReviewCommand;
 use crate::ReviewCommandOutput;
 
 #[tokio::test]
+async fn repository_root_traverses_ascii_parent_segments() {
+    let runner = FakeRunner::new(vec![
+        response(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            /*exit_code*/ 0,
+            "true\n",
+        ),
+        response(
+            ["git", "rev-parse", "--show-cdup"],
+            /*exit_code*/ 0,
+            "../\n",
+        ),
+    ]);
+
+    assert_eq!(
+        resolve_review_repository_root(
+            &runner,
+            &PathUri::parse("file:///repo/nested").expect("nested cwd"),
+        )
+        .await
+        .expect("repository root"),
+        cwd()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn repository_root_preserves_non_utf8_root_cwd() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let root_path = std::path::PathBuf::from(std::ffi::OsString::from_vec(
+        b"/repo/non-utf8-\xff".to_vec(),
+    ));
+    let root = PathUri::from_host_native_path(&root_path).expect("opaque root URI");
+    let nested = PathUri::from_host_native_path(root_path.join("nested")).expect("nested URI");
+    let runner = FakeRunner::new(vec![
+        response(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            /*exit_code*/ 0,
+            "true\n",
+        ),
+        response(
+            ["git", "rev-parse", "--show-cdup"],
+            /*exit_code*/ 0,
+            "../\n",
+        ),
+    ]);
+
+    assert_eq!(
+        resolve_review_repository_root(&runner, &nested)
+            .await
+            .expect("repository root"),
+        root
+    );
+}
+
+#[tokio::test]
+async fn repository_root_rejects_cwd_outside_the_worktree() {
+    let runner = FakeRunner::new(vec![response(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        /*exit_code*/ 0,
+        "false\n",
+    )]);
+
+    assert!(
+        resolve_review_repository_root(&runner, &cwd())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn commit_change_detection_fails_when_a_shallow_parent_is_unavailable() {
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let missing_parent = "1111111111111111111111111111111111111111";
+    let runner = FakeRunner::new(vec![
+        response(
+            ["git", "--no-replace-objects", "cat-file", "-p", commit],
+            /*exit_code*/ 0,
+            &format!(
+                "tree 2222222222222222222222222222222222222222\nparent {missing_parent}\n\nmessage\n"
+            ),
+        ),
+        response(
+            [
+                "git",
+                "--no-replace-objects",
+                "diff-tree",
+                "--quiet",
+                "--ignore-submodules=none",
+                "-r",
+                missing_parent,
+                commit,
+                "--",
+            ],
+            /*exit_code*/ 128,
+            "",
+        ),
+    ]);
+
+    assert!(
+        resolved_commit_has_changes(&runner, &cwd(), commit)
+            .await
+            .is_err()
+    );
+    runner.assert_finished();
+}
+
+#[tokio::test]
+async fn commit_change_detection_rejects_malformed_parent_headers() {
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let runner = FakeRunner::new(vec![response(
+        ["git", "--no-replace-objects", "cat-file", "-p", commit],
+        /*exit_code*/ 0,
+        "tree 2222222222222222222222222222222222222222\nparent --output=/tmp/oops\n\nmessage\n",
+    )]);
+
+    assert!(
+        resolved_commit_has_changes(&runner, &cwd(), commit)
+            .await
+            .is_err()
+    );
+    runner.assert_finished();
+}
+
+#[tokio::test]
 async fn detects_uncommitted_changes_from_porcelain_status() {
     for (cwd, hooks_path) in [
         (cwd(), "/dev/null"),
@@ -319,10 +445,21 @@ impl FakeRunner {
             responses: Mutex::new(responses.into()),
         }
     }
+
+    fn assert_finished(&self) {
+        assert!(self.responses.lock().expect("responses lock").is_empty());
+    }
 }
 
 impl ReviewCommandRunner for FakeRunner {
     async fn run(&self, command: ReviewCommand) -> Result<ReviewCommandOutput> {
+        assert_eq!(
+            command
+                .env_vars()
+                .get("GIT_NO_REPLACE_OBJECTS")
+                .map(String::as_str),
+            Some("1")
+        );
         let response = self
             .responses
             .lock()

@@ -496,6 +496,7 @@ pub(crate) async fn run_git<const N: usize>(
         .run(
             ReviewCommand::new(std::iter::once("git").chain(args), cwd.clone())
                 .env("GIT_OPTIONAL_LOCKS", "0")
+                .env("GIT_NO_REPLACE_OBJECTS", "1")
                 .env("GIT_TERMINAL_PROMPT", "0")
                 .env("LC_ALL", "C"),
         )

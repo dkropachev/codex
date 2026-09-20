@@ -3157,6 +3157,14 @@
         }
       ]
     },
+    "ReviewAction": {
+      "enum": [
+        "report",
+        "fix",
+        "fixAndCommit"
+      ],
+      "type": "string"
+    },
     "ReviewDelivery": {
       "enum": [
         "inline",
@@ -3177,6 +3185,18 @@
     },
     "ReviewStartParams": {
       "properties": {
+        "action": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReviewAction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What to do after the report is ready."
+        },
         "delivery": {
           "anyOf": [
             {
@@ -3194,6 +3214,18 @@
         },
         "threadId": {
           "type": "string"
+        },
+        "verification": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReviewVerification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether to verify discovery candidates in a second isolated stage."
         }
       },
       "required": [
@@ -3292,6 +3324,23 @@
           "type": "object"
         },
         {
+          "description": "Review the accessible checkout without a comparison baseline.",
+          "properties": {
+            "type": {
+              "enum": [
+                "wholeRepository"
+              ],
+              "title": "WholeRepositoryReviewTargetType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "WholeRepositoryReviewTarget",
+          "type": "object"
+        },
+        {
           "description": "Arbitrary instructions, equivalent to the old free-form prompt.",
           "properties": {
             "instructions": {
@@ -3313,6 +3362,13 @@
           "type": "object"
         }
       ]
+    },
+    "ReviewVerification": {
+      "enum": [
+        "singlePass",
+        "doubleCheck"
+      ],
+      "type": "string"
     },
     "SandboxMode": {
       "enum": [
