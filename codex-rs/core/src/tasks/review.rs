@@ -36,6 +36,10 @@ use super::SessionTask;
 use super::SessionTaskContext;
 use super::SessionTaskResult;
 
+mod context;
+mod output;
+mod schema;
+
 #[derive(Clone, Copy)]
 pub(crate) struct ReviewTask;
 
