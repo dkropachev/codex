@@ -107,7 +107,7 @@ mod responses_lite;
 mod resume;
 mod resume_warning;
 mod review;
-mod review_chain_report;
+mod review_chain;
 mod rmcp_client;
 mod rollout_budget;
 mod rollout_list_find;
