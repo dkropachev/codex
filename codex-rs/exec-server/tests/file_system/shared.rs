@@ -82,6 +82,7 @@ async fn file_system_get_metadata_reports_files_and_directories(
             is_directory: false,
             is_file: true,
             is_symlink: false,
+            hard_link_count: file_metadata.hard_link_count,
             size: 5,
             created_at_ms: file_metadata.created_at_ms,
             modified_at_ms: file_metadata.modified_at_ms,
@@ -102,6 +103,7 @@ async fn file_system_get_metadata_reports_files_and_directories(
             is_directory: true,
             is_file: false,
             is_symlink: false,
+            hard_link_count: directory_metadata.hard_link_count,
             size: std::fs::metadata(&directory_path)?.len(),
             created_at_ms: directory_metadata.created_at_ms,
             modified_at_ms: directory_metadata.modified_at_ms,
@@ -109,6 +111,33 @@ async fn file_system_get_metadata_reports_files_and_directories(
     );
     assert!(directory_metadata.modified_at_ms > 0);
 
+    Ok(())
+}
+
+#[cfg(any(unix, windows))]
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_get_metadata_reports_hard_link_count(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+    let tmp = TempDir::new()?;
+    let original_path = tmp.path().join("original.txt");
+    let linked_path = tmp.path().join("linked.txt");
+    std::fs::write(&original_path, "shared")?;
+    std::fs::hard_link(&original_path, &linked_path)?;
+
+    let metadata = file_system
+        .get_metadata(
+            &PathUri::from_host_native_path(&linked_path)?,
+            /*sandbox*/ None,
+        )
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+
+    assert_eq!(metadata.hard_link_count, Some(2));
     Ok(())
 }
 
@@ -681,6 +710,7 @@ async fn file_system_sandboxed_metadata_and_read_allow_readable_root(
             is_directory: false,
             is_file: true,
             is_symlink: false,
+            hard_link_count: metadata.hard_link_count,
             size: 15,
             created_at_ms: metadata.created_at_ms,
             modified_at_ms: metadata.modified_at_ms,

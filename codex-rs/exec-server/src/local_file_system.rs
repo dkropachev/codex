@@ -1,5 +1,7 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -598,10 +600,12 @@ impl DirectFileSystem {
         let path = path.to_abs_path()?;
         let metadata = tokio::fs::metadata(path.as_path()).await?;
         let symlink_metadata = tokio::fs::symlink_metadata(path.as_path()).await?;
+        let hard_link_count = hard_link_count(path.as_path(), &metadata).await;
         Ok(FileMetadata {
             is_directory: metadata.is_dir(),
             is_file: metadata.is_file(),
             is_symlink: symlink_metadata.file_type().is_symlink(),
+            hard_link_count,
             size: metadata.len(),
             created_at_ms: metadata.created().ok().map_or(0, system_time_to_unix_ms),
             modified_at_ms: metadata.modified().ok().map_or(0, system_time_to_unix_ms),
@@ -719,6 +723,40 @@ impl DirectFileSystem {
         .await
         .map_err(|err| io::Error::other(format!("filesystem task failed: {err}")))?
     }
+}
+
+#[cfg(unix)]
+async fn hard_link_count(_path: &Path, metadata: &std::fs::Metadata) -> Option<u64> {
+    Some(metadata.nlink())
+}
+
+#[cfg(windows)]
+async fn hard_link_count(path: &Path, _metadata: &std::fs::Metadata) -> Option<u64> {
+    use std::mem::MaybeUninit;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION;
+    use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle;
+
+    let file = tokio::fs::File::open(path).await.ok()?;
+    let mut information = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+    // SAFETY: `file` owns a valid handle and `information` points to writable storage of the
+    // exact structure required by `GetFileInformationByHandle`.
+    let succeeded = unsafe {
+        GetFileInformationByHandle(file.as_raw_handle() as HANDLE, information.as_mut_ptr())
+    };
+    if succeeded == 0 {
+        None
+    } else {
+        // SAFETY: A successful call initialized the entire output structure.
+        let information = unsafe { information.assume_init() };
+        Some(u64::from(information.nNumberOfLinks))
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+async fn hard_link_count(_path: &Path, _metadata: &std::fs::Metadata) -> Option<u64> {
+    None
 }
 
 impl ExecutorFileSystem for DirectFileSystem {

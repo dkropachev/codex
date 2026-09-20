@@ -97,6 +97,7 @@ impl SyntheticFileSystem {
             is_directory,
             is_file,
             is_symlink: false,
+            hard_link_count: None,
             size: 0,
             created_at_ms: 0,
             modified_at_ms: 0,

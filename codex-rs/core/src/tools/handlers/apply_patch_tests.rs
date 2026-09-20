@@ -243,7 +243,13 @@ async fn approval_keys_include_move_destination() {
     };
 
     let keys = file_paths_for_action(&action);
-    assert_eq!(keys.len(), 2);
+    assert_eq!(
+        keys,
+        vec![
+            cwd.join("old/name.txt").expect("source path"),
+            cwd.join("renamed/dir/name.txt").expect("destination path"),
+        ]
+    );
 }
 
 #[test]

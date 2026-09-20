@@ -208,6 +208,10 @@ impl Approvable<ShellRequest> for ShellRuntime {
 }
 
 impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
+    fn execution_environment_is_remote(&self, req: &ShellRequest) -> Option<bool> {
+        Some(req.turn_environment.environment.is_remote())
+    }
+
     fn network_approval_spec(
         &self,
         req: &ShellRequest,
