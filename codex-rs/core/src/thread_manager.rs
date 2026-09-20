@@ -1020,17 +1020,50 @@ impl ThreadManager {
     where
         S: Into<ForkSnapshot>,
     {
+        let environments = default_thread_environment_selections(
+            self.state.environment_manager.as_ref(),
+            &config.cwd,
+        );
         self.fork_thread_with_initial_history(
             snapshot.into(),
             config,
             history,
             thread_source,
             parent_trace,
+            environments,
             supports_openai_form_elicitation,
         )
         .await
     }
 
+    /// Fork an existing thread while preserving explicit environment selections.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn fork_thread_from_history_with_environments<S>(
+        &self,
+        snapshot: S,
+        config: Config,
+        history: InitialHistory,
+        thread_source: Option<ThreadSource>,
+        parent_trace: Option<W3cTraceContext>,
+        environments: Vec<TurnEnvironmentSelection>,
+        supports_openai_form_elicitation: bool,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
+        self.fork_thread_with_initial_history(
+            snapshot.into(),
+            config,
+            history,
+            thread_source,
+            parent_trace,
+            environments,
+            supports_openai_form_elicitation,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn fork_thread_with_initial_history(
         &self,
         snapshot: ForkSnapshot,
@@ -1038,6 +1071,7 @@ impl ThreadManager {
         history: InitialHistory,
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
+        environments: Vec<TurnEnvironmentSelection>,
         supports_openai_form_elicitation: bool,
     ) -> CodexResult<NewThread> {
         // `forked_from_id()` describes this history's existing lineage. When
@@ -1060,10 +1094,6 @@ impl ThreadManager {
         let interrupted_marker =
             InterruptedTurnHistoryMarker::from_config_and_version(&config, multi_agent_version);
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
-        let environments = default_thread_environment_selections(
-            self.state.environment_manager.as_ref(),
-            &config.cwd,
-        );
         let agent_control = self.agent_control_for_config(&config);
         Box::pin(self.state.spawn_thread(
             config,

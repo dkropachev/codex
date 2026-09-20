@@ -295,12 +295,12 @@ impl TurnRequestProcessor {
 
         Ok(Some(
             ReviewResolveScopeResponse {
-                review_execution_available: true,
-                review_unavailable_reason: None,
-                fix_execution_available: false,
-                fix_unavailable_reason: Some("Fix requires the staged review runtime".to_string()),
-                double_check_available: false,
-                whole_repository_available: true,
+                review_execution_available: resolution.review_execution_available,
+                review_unavailable_reason: resolution.review_unavailable_reason,
+                fix_execution_available: resolution.fix_execution_available,
+                fix_unavailable_reason: resolution.fix_unavailable_reason,
+                double_check_available: resolution.double_check_available,
+                whole_repository_available: resolution.whole_repository_available,
                 pull_request: resolution
                     .pull_request
                     .map(|pull_request| ReviewScopePullRequest {
@@ -456,8 +456,8 @@ impl TurnRequestProcessor {
         let hint = codex_core::review_prompts::user_facing_hint(&core_target);
         let review_request = ReviewRequest {
             target: core_target,
-            verification: Default::default(),
-            action: Default::default(),
+            verification: CoreReviewVerification::SinglePass,
+            action: CoreReviewAction::Report,
             user_facing_hint: Some(hint.clone()),
         };
 
@@ -1279,10 +1279,8 @@ impl TurnRequestProcessor {
                 ))
             })?;
 
-        let mut config = self.config.as_ref().clone();
-        if let Some(review_model) = &config.review_model {
-            config.model = Some(review_model.clone());
-        }
+        let config = parent_thread.config().await.as_ref().clone();
+        let environments = parent_thread.environment_selections().await;
 
         let NewThread {
             thread_id,
@@ -1290,7 +1288,7 @@ impl TurnRequestProcessor {
             ..
         } = self
             .thread_manager
-            .fork_thread_from_history(
+            .fork_thread_from_history_with_environments(
                 ForkSnapshot::Interrupted,
                 config.clone(),
                 InitialHistory::Resumed(ResumedHistory {
@@ -1300,6 +1298,7 @@ impl TurnRequestProcessor {
                 }),
                 /*thread_source*/ None,
                 self.request_trace_context(request_id).await,
+                environments,
                 /*supports_openai_form_elicitation*/ false,
             )
             .await
@@ -1319,7 +1318,7 @@ impl TurnRequestProcessor {
             "review thread",
         );
 
-        let fallback_provider = self.config.model_provider_id.as_str();
+        let fallback_provider = config.model_provider_id.as_str();
         match review_thread
             .read_thread(
                 /*include_archived*/ true, /*include_history*/ false,
@@ -1328,7 +1327,7 @@ impl TurnRequestProcessor {
         {
             Ok(stored_thread) => {
                 let (mut thread, _) =
-                    thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
+                    thread_from_stored_thread(stored_thread, fallback_provider, &config.cwd);
                 thread.session_id = review_thread.session_configured().session_id.to_string();
                 self.thread_watch_manager
                     .upsert_thread_silently(thread.clone())
@@ -1377,11 +1376,16 @@ impl TurnRequestProcessor {
             thread_id,
             target,
             delivery,
-            ..
+            verification,
+            action,
         } = params;
 
         let (parent_thread_id, parent_thread) = self.load_thread(&thread_id).await?;
-        let (review_request, display_text) = Self::review_request_from_target(target)?;
+        let (mut review_request, display_text) = Self::review_request_from_target(target)?;
+        review_request.verification = verification
+            .unwrap_or(ApiReviewVerification::SinglePass)
+            .to_core();
+        review_request.action = action.unwrap_or(ApiReviewAction::Report).to_core();
         match delivery.unwrap_or(ApiReviewDelivery::Inline).to_core() {
             CoreReviewDelivery::Inline => {
                 self.start_inline_review(
