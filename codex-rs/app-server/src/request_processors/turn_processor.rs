@@ -1377,8 +1377,23 @@ impl TurnRequestProcessor {
             thread_id,
             target,
             delivery,
-            ..
+            verification,
+            action,
         } = params;
+
+        if verification == Some(ApiReviewVerification::DoubleCheck) {
+            return Err(invalid_request(
+                "review verification `doubleCheck` is not available".to_string(),
+            ));
+        }
+        if matches!(
+            action,
+            Some(ApiReviewAction::Fix | ApiReviewAction::FixAndCommit)
+        ) {
+            return Err(invalid_request(
+                "review fix actions are not available".to_string(),
+            ));
+        }
 
         let (parent_thread_id, parent_thread) = self.load_thread(&thread_id).await?;
         let (review_request, display_text) = Self::review_request_from_target(target)?;

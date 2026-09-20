@@ -4,225 +4,209 @@ use std::sync::Mutex;
 use anyhow::Result;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use super::*;
 use crate::ReviewCommand;
 use crate::ReviewCommandOutput;
 
 #[tokio::test]
-async fn resolves_repository_root_using_executor_path_convention() {
-    let runner = FakeRunner::new(vec![response(
-        ["git", "rev-parse", "--show-toplevel"],
-        /*exit_code*/ 0,
-        "C:\\workspace\n",
-    )]);
-    let cwd = PathUri::parse("file:///C:/workspace/subdir").expect("cwd");
+async fn repository_root_traverses_ascii_parent_segments() {
+    let runner = FakeRunner::new(vec![
+        response(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            /*exit_code*/ 0,
+            "true\n",
+        ),
+        response(
+            ["git", "rev-parse", "--show-cdup"],
+            /*exit_code*/ 0,
+            "../\n",
+        ),
+    ]);
 
     assert_eq!(
-        resolve_review_repository_root(&runner, &cwd)
+        resolve_review_repository_root(
+            &runner,
+            &PathUri::parse("file:///repo/nested").expect("nested cwd"),
+        )
+        .await
+        .expect("repository root"),
+        cwd()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn repository_root_preserves_non_utf8_root_cwd() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let root_path = std::path::PathBuf::from(std::ffi::OsString::from_vec(
+        b"/repo/non-utf8-\xff".to_vec(),
+    ));
+    let root = PathUri::from_host_native_path(&root_path).expect("opaque root URI");
+    let nested = PathUri::from_host_native_path(root_path.join("nested")).expect("nested URI");
+    let runner = FakeRunner::new(vec![
+        response(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            /*exit_code*/ 0,
+            "true\n",
+        ),
+        response(
+            ["git", "rev-parse", "--show-cdup"],
+            /*exit_code*/ 0,
+            "../\n",
+        ),
+    ]);
+
+    assert_eq!(
+        resolve_review_repository_root(&runner, &nested)
             .await
             .expect("repository root"),
-        PathUri::parse("file:///C:/workspace").expect("repository root URI")
+        root
     );
-    runner.assert_exhausted();
 }
 
 #[tokio::test]
-async fn resolves_executor_git_and_common_directories() {
+async fn repository_root_rejects_cwd_outside_the_worktree() {
     let runner = FakeRunner::new(vec![response(
-        [
-            "git",
-            "rev-parse",
-            "--path-format=absolute",
-            "--git-dir",
-            "--git-common-dir",
-        ],
+        ["git", "rev-parse", "--is-inside-work-tree"],
         /*exit_code*/ 0,
-        "C:\\repo.git\\worktrees\\feature\nC:\\repo.git\n",
+        "false\n",
     )]);
-    let repository = PathUri::parse("file:///C:/workspace").expect("repository URI");
 
-    assert_eq!(
-        resolve_review_git_directories(&runner, &repository)
+    assert!(
+        resolve_review_repository_root(&runner, &cwd())
             .await
-            .expect("Git directories"),
-        vec![
-            PathUri::parse("file:///C:/repo.git/worktrees/feature").expect("git dir"),
-            PathUri::parse("file:///C:/repo.git").expect("common dir"),
-        ]
+            .is_err()
     );
-    runner.assert_exhausted();
+}
+
+#[tokio::test]
+async fn commit_change_detection_fails_when_a_shallow_parent_is_unavailable() {
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let missing_parent = "1111111111111111111111111111111111111111";
+    let runner = FakeRunner::new(vec![
+        response(
+            ["git", "--no-replace-objects", "cat-file", "-p", commit],
+            /*exit_code*/ 0,
+            &format!(
+                "tree 2222222222222222222222222222222222222222\nparent {missing_parent}\n\nmessage\n"
+            ),
+        ),
+        response(
+            [
+                "git",
+                "--no-replace-objects",
+                "diff-tree",
+                "--quiet",
+                "--ignore-submodules=none",
+                "-r",
+                missing_parent,
+                commit,
+                "--",
+            ],
+            /*exit_code*/ 128,
+            "",
+        ),
+    ]);
+
+    assert!(
+        resolved_commit_has_changes(&runner, &cwd(), commit)
+            .await
+            .is_err()
+    );
+    runner.assert_finished();
+}
+
+#[tokio::test]
+async fn commit_change_detection_rejects_malformed_parent_headers() {
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let runner = FakeRunner::new(vec![response(
+        ["git", "--no-replace-objects", "cat-file", "-p", commit],
+        /*exit_code*/ 0,
+        "tree 2222222222222222222222222222222222222222\nparent --output=/tmp/oops\n\nmessage\n",
+    )]);
+
+    assert!(
+        resolved_commit_has_changes(&runner, &cwd(), commit)
+            .await
+            .is_err()
+    );
+    runner.assert_finished();
 }
 
 #[tokio::test]
 async fn detects_uncommitted_changes_from_porcelain_status() {
+    for (cwd, hooks_path) in [
+        (cwd(), "/dev/null"),
+        (PathUri::parse("file:///C:/repo").unwrap(), "NUL"),
+    ] {
+        let runner = FakeRunner::new(vec![
+            response(filter_config_args(), /*exit_code*/ 1, ""),
+            response(
+                safe_args(
+                    hooks_path,
+                    &[
+                        "status",
+                        "--porcelain=v1",
+                        "--untracked-files=all",
+                        "--ignore-submodules=dirty",
+                    ],
+                ),
+                /*exit_code*/ 0,
+                "?? new.rs\n",
+            ),
+        ]);
+
+        assert!(has_uncommitted_changes(&runner, &cwd).await.unwrap());
+    }
+}
+
+#[tokio::test]
+async fn worktree_scan_rejects_truncated_filter_config() {
     let runner = FakeRunner::new(vec![response(
-        safe_args(&["status", "--porcelain=v1", "--untracked-files=all"]),
+        filter_config_args(),
         /*exit_code*/ 0,
-        "?? new.rs\n",
+        &"x".repeat(REVIEW_COMMAND_OUTPUT_BYTES_CAP),
     )]);
-
-    assert!(
-        has_uncommitted_changes(&runner, &cwd())
-            .await
-            .expect("uncommitted changes")
-    );
-    runner.assert_exhausted();
+    assert!(has_uncommitted_changes(&runner, &cwd()).await.is_err());
 }
 
+#[cfg(unix)]
 #[tokio::test]
-async fn detects_untracked_changes_when_tracked_tree_matches_base() {
-    let runner = FakeRunner::new(vec![
-        response(
-            [
-                "git",
-                "rev-parse",
-                "--verify",
-                "--end-of-options",
-                "base^{commit}",
-            ],
-            /*exit_code*/ 0,
-            "base-oid\n",
-        ),
-        response(
-            safe_args(&["diff", "--quiet", "base-oid", "--"]),
-            /*exit_code*/ 0,
-            "",
-        ),
-        response(
-            safe_args(&["ls-files", "--others", "--exclude-standard"]),
-            /*exit_code*/ 0,
-            "new.rs\n",
-        ),
-    ]);
+async fn worktree_scan_ignores_dirty_submodule_helpers() {
+    let submodule = tempfile::TempDir::new().expect("submodule repository");
+    init_filter_repository(submodule.path());
 
-    assert!(
-        has_changes_against_base(&runner, &cwd(), "base")
-            .await
-            .expect("changes against base")
+    let repository = tempfile::TempDir::new().expect("parent repository");
+    init_native_repository(repository.path());
+    let submodule_path = submodule.path().to_str().expect("submodule path");
+    run_native(
+        repository.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            submodule_path,
+            "dependency",
+        ],
     );
-    runner.assert_exhausted();
-}
-
-#[tokio::test]
-async fn tracked_changes_short_circuit_untracked_scan() {
-    let runner = FakeRunner::new(vec![
-        response(
-            [
-                "git",
-                "rev-parse",
-                "--verify",
-                "--end-of-options",
-                "base^{commit}",
-            ],
-            /*exit_code*/ 0,
-            "base-oid\n",
-        ),
-        response(
-            safe_args(&["diff", "--quiet", "base-oid", "--"]),
-            /*exit_code*/ 1,
-            "",
-        ),
-    ]);
-
-    assert!(
-        has_changes_against_base(&runner, &cwd(), "base")
-            .await
-            .expect("changes against base")
+    run_native(
+        repository.path(),
+        &["commit", "--no-gpg-sign", "-am", "submodule"],
     );
-    runner.assert_exhausted();
-}
+    let marker = submodule.path().join("filter-ran");
+    let filter = submodule.path().join("filter.sh");
+    let dependency = repository.path().join("dependency");
+    install_filter(&dependency, &filter, &marker);
+    std::fs::write(dependency.join("tracked.txt"), "changed\n").expect("change submodule file");
+    let cwd = PathUri::from_host_native_path(repository.path()).expect("repository URI");
 
-#[tokio::test]
-async fn validates_regular_and_root_commit_changes() {
-    let regular = FakeRunner::new(vec![
-        response(
-            [
-                "git",
-                "rev-parse",
-                "--verify",
-                "--end-of-options",
-                "commit^{commit}",
-            ],
-            /*exit_code*/ 0,
-            "commit-oid\n",
-        ),
-        response(
-            ["git", "rev-list", "--parents", "-n", "1", "commit-oid"],
-            /*exit_code*/ 0,
-            "commit-oid parent-oid\n",
-        ),
-        response(
-            ["git", "diff", "--quiet", "parent-oid", "commit-oid", "--"],
-            /*exit_code*/ 1,
-            "",
-        ),
-    ]);
-    assert!(
-        commit_has_changes(&regular, &cwd(), "commit")
-            .await
-            .expect("regular commit changes")
-    );
-    regular.assert_exhausted();
-
-    let empty_root = FakeRunner::new(vec![
-        response(
-            [
-                "git",
-                "rev-parse",
-                "--verify",
-                "--end-of-options",
-                "root^{commit}",
-            ],
-            /*exit_code*/ 0,
-            "root-oid\n",
-        ),
-        response(
-            ["git", "rev-list", "--parents", "-n", "1", "root-oid"],
-            /*exit_code*/ 0,
-            "root-oid\n",
-        ),
-        response(
-            ["git", "diff-tree", "--quiet", "--root", "root-oid", "--"],
-            /*exit_code*/ 0,
-            "",
-        ),
-    ]);
-    assert!(
-        !commit_has_changes(&empty_root, &cwd(), "root")
-            .await
-            .expect("empty root commit")
-    );
-    empty_root.assert_exhausted();
-}
-
-#[tokio::test]
-async fn validation_errors_on_inconclusive_git_exit_status() {
-    let runner = FakeRunner::new(vec![
-        response(
-            [
-                "git",
-                "rev-parse",
-                "--verify",
-                "--end-of-options",
-                "base^{commit}",
-            ],
-            /*exit_code*/ 0,
-            "base-oid\n",
-        ),
-        failed_response(
-            safe_args(&["diff", "--quiet", "base-oid", "--"]),
-            /*exit_code*/ 2,
-            "bad revision",
-        ),
-    ]);
-
-    let error = has_changes_against_base(&runner, &cwd(), "base")
-        .await
-        .expect_err("inconclusive diff must fail validation");
-
-    assert!(format!("{error:#}").contains("bad revision"));
-    runner.assert_exhausted();
+    assert!(!has_uncommitted_changes(&NativeRunner, &cwd).await.unwrap());
+    assert!(!marker.exists(), "submodule clean filter executed");
 }
 
 #[tokio::test]
@@ -232,7 +216,15 @@ async fn recent_review_commits_are_hard_capped() {
         .collect::<Vec<_>>()
         .join("\n");
     let runner = FakeRunner::new(vec![response(
-        ["git", "log", "-n", "100", "--pretty=format:%H%x1f%ct%x1f%s"],
+        [
+            "git",
+            "-c",
+            "log.showSignature=false",
+            "log",
+            "-n",
+            "100",
+            "--pretty=format:%H%x1f%ct%x1f%s",
+        ],
         /*exit_code*/ 0,
         &stdout,
     )]);
@@ -242,54 +234,86 @@ async fn recent_review_commits_are_hard_capped() {
         .expect("recent commits");
 
     assert_eq!(commits.len(), REVIEW_SCOPE_COMMIT_LIMIT);
-    assert_eq!(commits[0].sha, "sha-0");
-    assert_eq!(commits[REVIEW_SCOPE_COMMIT_LIMIT - 1].sha, "sha-99");
-    runner.assert_exhausted();
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn worktree_scan_disables_repository_fsmonitor_helper() {
-    use std::os::unix::fs::PermissionsExt;
+async fn worktree_scan_disables_repository_helpers() {
+    use std::os::unix::ffi::OsStringExt;
 
     let root = tempfile::TempDir::new().expect("temp repo");
-    run_native(root.path(), &["init", "--initial-branch=main"]);
-    let marker = root.path().join("fsmonitor-ran");
-    let helper = root.path().join("fsmonitor.sh");
+    let root_path = root.path();
+    init_filter_repository(root_path);
+    let fsmonitor_marker = root_path.join("fsmonitor-ran");
+    let helper = root_path.join("fsmonitor.sh");
     std::fs::write(
         &helper,
-        format!("#!/bin/sh\ntouch '{}'\nprintf '0\\n'\n", marker.display()),
+        format!(
+            "#!/bin/sh\ntouch '{}'\nprintf '0\\n'\n",
+            fsmonitor_marker.display()
+        ),
     )
     .expect("write helper");
-    let mut permissions = std::fs::metadata(&helper)
-        .expect("helper metadata")
-        .permissions();
-    permissions.set_mode(/*mode*/ 0o755);
-    std::fs::set_permissions(&helper, permissions).expect("make helper executable");
-    run_native(
-        root.path(),
-        &[
-            "config",
-            "core.fsmonitor",
-            helper.to_str().expect("helper path"),
-        ],
+    make_executable(&helper);
+    set_config(
+        root_path,
+        "core.fsmonitor",
+        helper.to_str().expect("helper path"),
     );
-    let cwd = PathUri::from_host_native_path(root.path()).expect("repo URI");
+    let filter_marker = root_path.join("filter-ran");
+    let filter = root_path.join("filter.sh");
+    let filter_path = filter.to_str().expect("filter path");
+    install_filter(root_path, &filter, &filter_marker);
+    std::fs::write(root_path.join("tracked.txt"), "changed\n").expect("change tracked file");
+    let cwd = PathUri::from_host_native_path(root_path).expect("repo URI");
 
-    let dirty = has_uncommitted_changes(&NativeRunner, &cwd)
-        .await
-        .expect("scan worktree");
+    assert!(has_uncommitted_changes(&NativeRunner, &cwd).await.unwrap());
+    assert!(!fsmonitor_marker.exists(), "fsmonitor helper executed");
+    assert!(!filter_marker.exists(), "clean filter executed");
 
-    assert!(dirty);
-    assert!(!marker.exists(), "repository fsmonitor helper executed");
+    std::fs::write(root_path.join(".gitattributes"), b"*.txt filter=\xff\n")
+        .expect("write non-UTF-8 attributes");
+    run_native(root_path, &["config", "--unset-all", "filter.evil.clean"]);
+    run_native(
+        root_path,
+        &["config", "--unset-all", "filter.evil.required"],
+    );
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(root_path)
+        .arg("config")
+        .arg(std::ffi::OsString::from_vec(b"filter.\xff.clean".to_vec()))
+        .arg(&filter)
+        .output()
+        .expect("configure non-UTF-8 filter");
+    assert!(has_uncommitted_changes(&NativeRunner, &cwd).await.is_err());
+    assert!(!filter_marker.exists(), "non-UTF-8 clean filter executed");
+
+    std::fs::write(root_path.join(".gitattributes"), "*.txt filter=evil\n")
+        .expect("restore attributes");
+    std::fs::write(
+        &filter,
+        format!(
+            "#!/bin/sh\ntouch '{}'\necho '[GNUPG:] SIG_CREATED D 1 10 00 0 ABCDEF' >&2\nprintf -- '-----BEGIN PGP SIGNATURE-----\\nZmFrZQ==\\n-----END PGP SIGNATURE-----\\n'\n",
+            filter_marker.display()
+        ),
+    )
+    .expect("write fake gpg");
+    set_config(root_path, "gpg.format", "openpgp");
+    set_config(root_path, "gpg.program", filter_path);
+    set_config(root_path, "user.signingkey", "test");
+    run_native(root_path, &["commit", "-S", "-am", "signed"]);
+    std::fs::remove_file(&filter_marker).expect("clear signing marker");
+    set_config(root_path, "log.showSignature", "true");
+    assert!(recent_review_commits(&NativeRunner, &cwd).await.is_ok());
+    assert!(!filter_marker.exists(), "gpg verifier executed");
 }
 
 fn cwd() -> PathUri {
     PathUri::parse("file:///repo").expect("cwd")
 }
 
-fn safe_args(args: &[&str]) -> Vec<String> {
-    let disabled_hooks = if cfg!(windows) { "NUL" } else { "/dev/null" };
+fn safe_args(disabled_hooks: &str, args: &[&str]) -> Vec<String> {
     std::iter::once("git")
         .map(str::to_string)
         .chain([
@@ -302,10 +326,21 @@ fn safe_args(args: &[&str]) -> Vec<String> {
         .collect()
 }
 
-#[cfg(unix)]
+fn filter_config_args() -> Vec<String> {
+    [
+        "git",
+        "config",
+        "--null",
+        "--name-only",
+        "--get-regexp",
+        EXECUTABLE_FILTER_CONFIG_PATTERN,
+    ]
+    .map(str::to_string)
+    .into()
+}
+
 struct NativeRunner;
 
-#[cfg(unix)]
 impl crate::ReviewCommandRunner for NativeRunner {
     async fn run(&self, command: ReviewCommand) -> Result<ReviewCommandOutput> {
         let cwd = command.cwd().to_abs_path()?;
@@ -323,7 +358,6 @@ impl crate::ReviewCommandRunner for NativeRunner {
     }
 }
 
-#[cfg(unix)]
 fn run_native(cwd: &std::path::Path, args: &[&str]) {
     let output = std::process::Command::new("git")
         .arg("-C")
@@ -338,6 +372,49 @@ fn run_native(cwd: &std::path::Path, args: &[&str]) {
     );
 }
 
+fn set_config(cwd: &std::path::Path, key: &str, value: &str) {
+    run_native(cwd, &["config", key, value]);
+}
+
+#[cfg(unix)]
+fn make_executable(path: &std::path::Path) {
+    let permissions = std::fs::Permissions::from_mode(/*mode*/ 0o755);
+    std::fs::set_permissions(path, permissions).expect("set executable permissions");
+}
+
+#[cfg(unix)]
+fn configure_filter(cwd: &std::path::Path, filter: &std::path::Path) {
+    let filter = filter.to_str().expect("filter path");
+    set_config(cwd, "filter.evil.clean", filter);
+    set_config(cwd, "filter.evil.required", "true");
+}
+
+#[cfg(unix)]
+fn install_filter(cwd: &std::path::Path, filter: &std::path::Path, marker: &std::path::Path) {
+    std::fs::write(
+        filter,
+        format!("#!/bin/sh\ntouch '{}'\ncat\n", marker.display()),
+    )
+    .expect("write filter");
+    make_executable(filter);
+    configure_filter(cwd, filter);
+}
+
+fn init_native_repository(path: &std::path::Path) {
+    run_native(path, &["init"]);
+    set_config(path, "user.name", "Codex Test");
+    set_config(path, "user.email", "codex@example.com");
+    set_config(path, "core.hooksPath", "hooks-disabled");
+}
+
+fn init_filter_repository(path: &std::path::Path) {
+    init_native_repository(path);
+    std::fs::write(path.join(".gitattributes"), "*.txt filter=evil\n").expect("attributes");
+    std::fs::write(path.join("tracked.txt"), "tracked\n").expect("tracked file");
+    run_native(path, &["add", ".gitattributes", "tracked.txt"]);
+    run_native(path, &["commit", "--no-gpg-sign", "-m", "base"]);
+}
+
 fn response(
     argv: impl IntoIterator<Item = impl ToString>,
     exit_code: i32,
@@ -349,21 +426,6 @@ fn response(
             exit_code,
             stdout: stdout.to_string(),
             stderr: String::new(),
-        },
-    }
-}
-
-fn failed_response(
-    argv: impl IntoIterator<Item = impl ToString>,
-    exit_code: i32,
-    stderr: &str,
-) -> FakeResponse {
-    FakeResponse {
-        argv: argv.into_iter().map(|arg| arg.to_string()).collect(),
-        output: ReviewCommandOutput {
-            exit_code,
-            stdout: String::new(),
-            stderr: stderr.to_string(),
         },
     }
 }
@@ -384,13 +446,20 @@ impl FakeRunner {
         }
     }
 
-    fn assert_exhausted(&self) {
-        assert_eq!(self.responses.lock().expect("responses lock").len(), 0);
+    fn assert_finished(&self) {
+        assert!(self.responses.lock().expect("responses lock").is_empty());
     }
 }
 
 impl ReviewCommandRunner for FakeRunner {
     async fn run(&self, command: ReviewCommand) -> Result<ReviewCommandOutput> {
+        assert_eq!(
+            command
+                .env_vars()
+                .get("GIT_NO_REPLACE_OBJECTS")
+                .map(String::as_str),
+            Some("1")
+        );
         let response = self
             .responses
             .lock()

@@ -5,6 +5,7 @@ use codex_config::config_toml::ModelPolicyToml;
 use codex_core::CodexThread;
 use codex_core::REVIEW_PROMPT;
 use codex_core::config::Config;
+use codex_core::review_prompts::EMPTY_REVIEW_SCOPE_ERROR;
 use codex_features::Feature;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -83,6 +84,8 @@ async fn review_op_emits_lifecycle_and_review_output() {
                 target: ReviewTarget::Custom {
                     instructions: "Please review my changes".to_string(),
                 },
+                verification: Default::default(),
+                action: Default::default(),
                 user_facing_hint: None,
             },
         })
@@ -179,10 +182,13 @@ async fn review_op_emits_lifecycle_and_review_output() {
                 absolute_file_path: PathBuf::from("/tmp/file.rs"),
                 line_range: ReviewLineRange { start: 10, end: 20 },
             },
+            pre_existing: Default::default(),
+            pre_existing_fix_rationale: None,
         }],
         overall_correctness: "good".to_string(),
         overall_explanation: "All good with some improvements suggested.".to_string(),
         overall_confidence_score: 0.8,
+        ..Default::default()
     };
     assert_eq!(expected, review);
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -206,6 +212,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
         request.header("x-openai-subagent").as_deref(),
         Some("review")
     );
+    assert_eq!(request.body_json()["instructions"], REVIEW_PROMPT);
     let turn_metadata: serde_json::Value = serde_json::from_str(
         &request
             .header("x-codex-turn-metadata")
@@ -238,7 +245,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
                         if text.contains("full review output from reviewer model") {
                             saw_header = true;
                         }
-                        if text.contains("- Prefer Stylize helpers — /tmp/file.rs:10-20") {
+                        if text.contains("[P1] Prefer Stylize helpers — /tmp/file.rs:10-20") {
                             saw_finding_line = true;
                         }
                     }
@@ -303,6 +310,8 @@ async fn cancelled_review_does_not_forward_delegate_mcp_startup() {
                 target: ReviewTarget::Custom {
                     instructions: "Cancel this review".to_string(),
                 },
+                verification: Default::default(),
+                action: Default::default(),
                 user_facing_hint: None,
             },
         })
@@ -387,6 +396,8 @@ async fn review_op_with_plain_text_emits_review_fallback() {
                 target: ReviewTarget::Custom {
                     instructions: "Plain text review".to_string(),
                 },
+                verification: Default::default(),
+                action: Default::default(),
                 user_facing_hint: None,
             },
         })
@@ -443,6 +454,8 @@ async fn review_filters_agent_message_related_events() {
                 target: ReviewTarget::Custom {
                     instructions: "Filter streaming events".to_string(),
                 },
+                verification: Default::default(),
+                action: Default::default(),
                 user_facing_hint: None,
             },
         })
@@ -517,6 +530,8 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
                 target: ReviewTarget::Custom {
                     instructions: "check structured".to_string(),
                 },
+                verification: Default::default(),
+                action: Default::default(),
                 user_facing_hint: None,
             },
         })
@@ -574,6 +589,8 @@ async fn review_uses_custom_review_model_from_config() {
                 target: ReviewTarget::Custom {
                     instructions: "use custom model".to_string(),
                 },
+                verification: Default::default(),
+                action: Default::default(),
                 user_facing_hint: None,
             },
         })
@@ -636,6 +653,8 @@ async fn review_uses_model_policy_override_when_configured() {
                 target: ReviewTarget::Custom {
                     instructions: "use policy model".to_string(),
                 },
+                verification: Default::default(),
+                action: Default::default(),
                 user_facing_hint: None,
             },
         })
@@ -690,6 +709,8 @@ async fn review_uses_session_model_when_review_model_unset() {
                 target: ReviewTarget::Custom {
                     instructions: "use session model".to_string(),
                 },
+                verification: Default::default(),
+                action: Default::default(),
                 user_facing_hint: None,
             },
         })
@@ -807,12 +828,15 @@ async fn review_input_isolated_from_parent_history() {
 
     // Submit review request; it must start fresh (no parent history in `input`).
     let review_prompt = "Please review only this".to_string();
+    let expected_review_prompt = format!("Follow these review instructions:\n{review_prompt}");
     codex
         .submit(Op::Review {
             review_request: ReviewRequest {
                 target: ReviewTarget::Custom {
                     instructions: review_prompt.clone(),
                 },
+                verification: Default::default(),
+                action: Default::default(),
                 user_facing_hint: None,
             },
         })
@@ -871,11 +895,11 @@ async fn review_input_isolated_from_parent_history() {
         .filter_map(|msg| msg.get("content").and_then(|content| content.as_array()))
         .flat_map(|content| content.iter())
         .filter_map(|entry| entry.get("text").and_then(|text| text.as_str()))
-        .find(|text| *text == review_prompt)
+        .find(|text| *text == expected_review_prompt)
         .expect("review prompt text");
     assert_eq!(
-        review_text, review_prompt,
-        "user message should only contain the raw review prompt"
+        review_text, expected_review_prompt,
+        "user message should contain the resolved review prompt"
     );
 
     // Ensure the REVIEW_PROMPT rubric is sent via instructions.
@@ -938,6 +962,8 @@ async fn review_history_surfaces_in_parent_session() {
                 target: ReviewTarget::Custom {
                     instructions: "Start a review".to_string(),
                 },
+                verification: Default::default(),
+                action: Default::default(),
                 user_facing_hint: None,
             },
         })
@@ -1016,14 +1042,13 @@ async fn review_history_surfaces_in_parent_session() {
     server.verify().await;
 }
 
-/// `/review` should use the session's current cwd (including runtime overrides)
-/// when resolving base-branch review prompts (merge-base computation).
+/// Checkout-scoped reviews resolve against the selected runtime cwd.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
+async fn review_resolves_checkout_targets_against_overridden_cwd() {
     skip_if_no_network!();
 
     let (server, request_log) =
-        start_responses_server_with_sse(completed_sse(), /*expected_requests*/ 1).await;
+        start_responses_server_with_sse(completed_sse(), /*expected_requests*/ 2).await;
 
     let initial_cwd = TempDir::new().unwrap();
 
@@ -1064,6 +1089,20 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
         .expect("utf8 sha")
         .trim()
         .to_string();
+    run_git(repo_path, &["checkout", "-b", "feature"]);
+    std::fs::write(repo_path.join("file.txt"), "hello from feature\n").unwrap();
+    run_git(repo_path, &["commit", "-am", "feature"]);
+    let feature_head_sha = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .expect("rev-parse feature HEAD");
+    assert!(feature_head_sha.status.success());
+    let feature_head_sha = String::from_utf8(feature_head_sha.stdout)
+        .expect("utf8 feature sha")
+        .trim()
+        .to_string();
 
     let codex_home = Arc::new(TempDir::new().unwrap());
     let initial_cwd_path = initial_cwd.path().to_path_buf();
@@ -1088,6 +1127,8 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
                 target: ReviewTarget::BaseBranch {
                     branch: "main".to_string(),
                 },
+                verification: Default::default(),
+                action: Default::default(),
                 user_facing_hint: None,
             },
         })
@@ -1099,9 +1140,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
 
     let requests = request_log.requests();
     assert_eq!(requests.len(), 1);
-    for request in &requests {
-        assert_eq!(request.path(), "/v1/responses");
-    }
+    assert_eq!(requests[0].path(), "/v1/responses");
     let body = requests[0].body_json();
     let input = body["input"].as_array().expect("input array");
 
@@ -1113,6 +1152,54 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
         saw_merge_base_sha,
         "expected review prompt to include merge-base sha {head_sha}"
     );
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Commit {
+                    sha: "HEAD".to_string(),
+                    title: Some("selected tip".to_string()),
+                },
+                verification: Default::default(),
+                action: Default::default(),
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::EnteredReviewMode(_))
+    })
+    .await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 2);
+    let commit_input = requests[1]
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.contains("Inspect the changes represented by commit"))
+        .expect("resolved commit review prompt");
+    assert!(commit_input.contains(&feature_head_sha));
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::UncommittedChanges,
+                verification: Default::default(),
+                action: Default::default(),
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+    let error = wait_for_event(&codex, |event| matches!(event, EventMsg::Error(_))).await;
+    match error {
+        EventMsg::Error(error) => assert_eq!(error.message, EMPTY_REVIEW_SCOPE_ERROR),
+        event => panic!("expected empty-scope error, got {event:?}"),
+    }
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    assert_eq!(request_log.requests().len(), 2);
 
     let _codex_home_guard = codex_home;
     server.verify().await;

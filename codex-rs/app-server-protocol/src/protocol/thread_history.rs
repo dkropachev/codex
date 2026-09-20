@@ -456,8 +456,12 @@ impl ThreadHistoryBuilder {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            self.pending_legacy_review_agent_message_text =
-                (!text.trim().is_empty()).then_some(text);
+            if text.trim().is_empty() {
+                self.pending_legacy_review_agent_message_text = None;
+            } else {
+                self.pending_legacy_review_agent_message_text = Some(text.clone());
+                self.upsert_review_agent_message(/*turn_id*/ None, text);
+            }
             return;
         }
 
@@ -4492,6 +4496,18 @@ mod tests {
                 internal_chat_message_metadata_passthrough: None,
             },
         ));
+        assert_eq!(
+            builder
+                .active_turn_snapshot()
+                .expect("review response should open a turn")
+                .items,
+            vec![ThreadItem::AgentMessage {
+                id: "review_rollout_assistant".to_string(),
+                text: "Legacy review report".to_string(),
+                phase: None,
+                memory_citation: None,
+            }]
+        );
         builder.handle_rollout_item(&RolloutItem::EventMsg(EventMsg::AgentMessage(
             AgentMessageEvent {
                 message: "Legacy review report".to_string(),
@@ -4582,10 +4598,22 @@ mod tests {
         )));
 
         let turns = builder.finish();
-        assert!(matches!(
-            &turns[0].items[0],
-            ThreadItem::AgentMessage { id, text, .. }
-                if id != "review_rollout_assistant" && text == "A later answer"
-        ));
+        assert_eq!(
+            turns[0].items,
+            vec![
+                ThreadItem::AgentMessage {
+                    id: "review_rollout_assistant".to_string(),
+                    text: "Legacy review report".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                },
+                ThreadItem::AgentMessage {
+                    id: "item-1".to_string(),
+                    text: "A later answer".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                },
+            ]
+        );
     }
 }

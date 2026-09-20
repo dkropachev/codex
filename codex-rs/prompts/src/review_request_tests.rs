@@ -60,12 +60,45 @@ fn review_prompt_template_renders_pull_request_scope_without_metadata() {
 }
 
 #[tokio::test]
-async fn fully_qualified_local_branch_uses_short_name_for_upstream_lookup() {
+async fn unavailable_review_stages_are_rejected() {
+    for (verification, action) in [
+        (ReviewVerification::DoubleCheck, ReviewAction::Report),
+        (ReviewVerification::SinglePass, ReviewAction::Fix),
+        (ReviewVerification::SinglePass, ReviewAction::FixAndCommit),
+    ] {
+        assert!(
+            resolve_review_request(
+                ReviewRequest {
+                    target: ReviewTarget::Custom {
+                        instructions: "review this".to_string(),
+                    },
+                    verification,
+                    action,
+                    user_facing_hint: None,
+                },
+                &AbsolutePathBuf::current_dir().expect("cwd"),
+            )
+            .await
+            .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn fully_qualified_local_branch_uses_full_ref_for_upstream_lookup() {
+    let head_oid = "0000000000000000000000000000000000000000";
+    let base_oid = "1111111111111111111111111111111111111111";
+    let merge_base_oid = "2222222222222222222222222222222222222222";
     let runner = FakeRunner::new(vec![
         output(
-            &["git", "rev-parse", "--show-toplevel"],
+            &["git", "rev-parse", "--is-inside-work-tree"],
             /*exit_code*/ 0,
-            "/remote/repository\n",
+            "true\n",
+        ),
+        output(
+            &["git", "rev-parse", "--show-cdup"],
+            /*exit_code*/ 0,
+            "../\n",
         ),
         output(
             &["git", "rev-parse", "--is-inside-work-tree"],
@@ -75,49 +108,50 @@ async fn fully_qualified_local_branch_uses_short_name_for_upstream_lookup() {
         output(
             &["git", "rev-parse", "--verify", "HEAD"],
             /*exit_code*/ 0,
-            "head-oid\n",
+            &format!("{head_oid}\n"),
         ),
         output(
-            &[
-                "git",
-                "rev-parse",
-                "--verify",
-                "--end-of-options",
-                "refs/heads/main",
-            ],
+            &["git", "rev-parse", "--verify", "refs/heads/main"],
             /*exit_code*/ 0,
-            "base-oid\n",
+            &format!("{base_oid}\n"),
         ),
         output(
             &[
                 "git",
-                "rev-parse",
-                "--abbrev-ref",
-                "--symbolic-full-name",
-                "--end-of-options",
-                "main@{upstream}",
+                "for-each-ref",
+                "--format=%(upstream)",
+                "--count=1",
+                "refs/heads/main",
             ],
             /*exit_code*/ 1,
             "",
         ),
         output(
-            &["git", "merge-base", "head-oid", "base-oid"],
+            &["git", "merge-base", head_oid, base_oid],
             /*exit_code*/ 0,
-            "merge-base-oid\n",
+            &format!("{merge_base_oid}\n"),
         ),
         output(
             &[
                 "git",
                 "rev-parse",
                 "--verify",
-                "--end-of-options",
-                "merge-base-oid^{commit}",
+                &format!("{merge_base_oid}^{{commit}}"),
             ],
             /*exit_code*/ 0,
-            "merge-base-oid\n",
+            &format!("{merge_base_oid}\n"),
         ),
-        safe_worktree_output(
-            &["diff", "--quiet", "merge-base-oid", "--"],
+        output(
+            &[
+                "git",
+                "diff-tree",
+                "--quiet",
+                "--ignore-submodules=none",
+                "-r",
+                merge_base_oid,
+                "HEAD",
+                "--",
+            ],
             /*exit_code*/ 1,
             "",
         ),
@@ -134,14 +168,16 @@ async fn fully_qualified_local_branch_uses_short_name_for_upstream_lookup() {
     let resolved = resolve_review_request_with_runner(
         request,
         &runner,
-        &PathUri::parse("file:///remote/workspace").expect("cwd URI"),
+        &PathUri::parse("file:///remote/repository/workspace").expect("cwd URI"),
     )
     .await
     .expect("resolved review request");
 
     assert_eq!(
         resolved.prompt,
-        "Inspect the local checkout relative to exact merge base merge-base-oid for refs/heads/main, including the working-tree changes covered by this review."
+        format!(
+            "Inspect the local checkout relative to exact merge base {merge_base_oid} for refs/heads/main, including the working-tree changes covered by this review."
+        )
     );
     assert_eq!(
         resolved.checkout_root,
@@ -154,12 +190,34 @@ async fn fully_qualified_local_branch_uses_short_name_for_upstream_lookup() {
 async fn empty_uncommitted_scope_is_rejected_before_review() {
     let runner = FakeRunner::new(vec![
         output(
-            &["git", "rev-parse", "--show-toplevel"],
+            &["git", "rev-parse", "--is-inside-work-tree"],
             /*exit_code*/ 0,
-            "/remote/repository\n",
+            "true\n",
+        ),
+        output(
+            &["git", "rev-parse", "--show-cdup"],
+            /*exit_code*/ 0,
+            "../\n",
+        ),
+        output(
+            &[
+                "git",
+                "config",
+                "--null",
+                "--name-only",
+                "--get-regexp",
+                r"^filter\..*\.(clean|process)$",
+            ],
+            /*exit_code*/ 1,
+            "",
         ),
         safe_worktree_output(
-            &["status", "--porcelain=v1", "--untracked-files=all"],
+            &[
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--ignore-submodules=dirty",
+            ],
             /*exit_code*/ 0,
             "",
         ),
@@ -172,7 +230,7 @@ async fn empty_uncommitted_scope_is_rejected_before_review() {
             user_facing_hint: None,
         },
         &runner,
-        &PathUri::parse("file:///remote/workspace").expect("cwd URI"),
+        &PathUri::parse("file:///remote/repository/workspace").expect("cwd URI"),
     )
     .await
     .expect_err("empty scope should fail");
@@ -182,27 +240,17 @@ async fn empty_uncommitted_scope_is_rejected_before_review() {
 }
 
 #[tokio::test]
-async fn option_shaped_base_branch_is_passed_after_end_of_options() {
+async fn option_shaped_base_branch_is_rejected() {
     let runner = FakeRunner::new(vec![
-        output(
-            &["git", "rev-parse", "--show-toplevel"],
-            /*exit_code*/ 0,
-            "/remote/repository\n",
-        ),
         output(
             &["git", "rev-parse", "--is-inside-work-tree"],
             /*exit_code*/ 0,
             "true\n",
         ),
         output(
-            &["git", "rev-parse", "--verify", "HEAD"],
+            &["git", "rev-parse", "--show-cdup"],
             /*exit_code*/ 0,
-            "head-oid\n",
-        ),
-        output(
-            &["git", "rev-parse", "--verify", "--end-of-options", "--help"],
-            /*exit_code*/ 1,
-            "",
+            "../\n",
         ),
     ]);
 
@@ -216,42 +264,60 @@ async fn option_shaped_base_branch_is_passed_after_end_of_options() {
             user_facing_hint: None,
         },
         &runner,
-        &PathUri::parse("file:///remote/workspace").expect("cwd URI"),
+        &PathUri::parse("file:///remote/repository/workspace").expect("cwd URI"),
     )
     .await
     .expect_err("option-shaped branch should not resolve");
 
-    assert_eq!(error.to_string(), "could not resolve an exact merge base");
+    assert_eq!(error.to_string(), "review branch must not start with '-'");
     runner.assert_finished();
 }
 
 #[tokio::test]
 async fn commit_review_is_pinned_to_the_resolved_object_id() {
     let resolved_sha = "0123456789abcdef0123456789abcdef01234567";
+    let parent_sha = "1111111111111111111111111111111111111111";
     let runner = FakeRunner::new(vec![
         output(
-            &["git", "rev-parse", "--show-toplevel"],
+            &["git", "rev-parse", "--is-inside-work-tree"],
             /*exit_code*/ 0,
-            "/remote/repository\n",
+            "true\n",
         ),
         output(
-            &[
-                "git",
-                "rev-parse",
-                "--verify",
-                "--end-of-options",
-                "HEAD^{commit}",
-            ],
+            &["git", "rev-parse", "--show-cdup"],
+            /*exit_code*/ 0,
+            "../\n",
+        ),
+        output(
+            &["git", "rev-parse", "--verify", "HEAD^{commit}"],
             /*exit_code*/ 0,
             &format!("{resolved_sha}\n"),
         ),
         output(
-            &["git", "rev-list", "--parents", "-n", "1", resolved_sha],
+            &[
+                "git",
+                "--no-replace-objects",
+                "cat-file",
+                "-p",
+                resolved_sha,
+            ],
             /*exit_code*/ 0,
-            &format!("{resolved_sha} parent-oid\n"),
+            &format!(
+                "tree 2222222222222222222222222222222222222222\nparent {parent_sha}\nauthor Reviewer <review@example.com> 0 +0000\n\nmessage\n"
+            ),
         ),
         output(
-            &["git", "diff", "--quiet", "parent-oid", resolved_sha, "--"],
+            &[
+                "git",
+                "--no-replace-objects",
+                "diff-tree",
+                "--quiet",
+                "--ignore-submodules=none",
+                "-r",
+                parent_sha,
+                resolved_sha,
+                "--",
+            ],
             /*exit_code*/ 1,
             "",
         ),
@@ -268,7 +334,7 @@ async fn commit_review_is_pinned_to_the_resolved_object_id() {
             user_facing_hint: None,
         },
         &runner,
-        &PathUri::parse("file:///remote/workspace").expect("cwd URI"),
+        &PathUri::parse("file:///remote/repository/workspace").expect("cwd URI"),
     )
     .await
     .expect("commit review");
@@ -303,11 +369,10 @@ fn safe_worktree_output(
     exit_code: i32,
     stdout: &str,
 ) -> (Vec<String>, ReviewCommandOutput) {
-    let disabled_hooks_path = if cfg!(windows) { "NUL" } else { "/dev/null" };
     let mut safe_argv = vec![
         "git".to_string(),
         "-c".to_string(),
-        format!("core.hooksPath={disabled_hooks_path}"),
+        "core.hooksPath=/dev/null".to_string(),
         "-c".to_string(),
         "core.fsmonitor=false".to_string(),
     ];

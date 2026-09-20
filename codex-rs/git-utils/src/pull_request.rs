@@ -248,6 +248,9 @@ pub async fn merge_base_with_head_with_runner(
     cwd: &PathUri,
     branch: &str,
 ) -> Result<Option<String>> {
+    if branch.starts_with('-') {
+        bail!("review branch must not start with '-'");
+    }
     let repository = run_git(runner, cwd, ["rev-parse", "--is-inside-work-tree"]).await?;
     if !repository.success() || repository.stdout.trim() != "true" {
         bail!(
@@ -259,12 +262,7 @@ pub async fn merge_base_with_head_with_runner(
     if !head.success() || head.stdout.trim().is_empty() {
         return Ok(None);
     }
-    let branch_revision = run_git(
-        runner,
-        cwd,
-        ["rev-parse", "--verify", "--end-of-options", branch],
-    )
-    .await?;
+    let branch_revision = run_git(runner, cwd, ["rev-parse", "--verify", branch]).await?;
     if !branch_revision.success() || branch_revision.stdout.trim().is_empty() {
         return Ok(None);
     }
@@ -274,28 +272,23 @@ pub async fn merge_base_with_head_with_runner(
         .strip_prefix("refs/heads/")
         .or_else(|| (!branch.starts_with("refs/")).then_some(branch));
     if let Some(local_branch) = local_branch {
-        let upstream_spec = format!("{local_branch}@{{upstream}}");
+        let local_ref = format!("refs/heads/{local_branch}");
         let upstream = run_git(
             runner,
             cwd,
             [
-                "rev-parse",
-                "--abbrev-ref",
-                "--symbolic-full-name",
-                "--end-of-options",
-                &upstream_spec,
+                "for-each-ref",
+                "--format=%(upstream)",
+                "--count=1",
+                &local_ref,
             ],
         )
         .await?;
         if upstream.success() {
             let upstream = upstream.stdout.trim();
             if !upstream.is_empty() {
-                let upstream_revision = run_git(
-                    runner,
-                    cwd,
-                    ["rev-parse", "--verify", "--end-of-options", upstream],
-                )
-                .await?;
+                let upstream_revision =
+                    run_git(runner, cwd, ["rev-parse", "--verify", upstream]).await?;
                 if upstream_revision.success() && !upstream_revision.stdout.trim().is_empty() {
                     let range = format!(
                         "{}...{}",
@@ -478,18 +471,12 @@ pub(crate) async fn resolve_revision_oid(
     cwd: &PathUri,
     revision: &str,
 ) -> Result<Option<String>> {
+    let revision = revision.trim();
+    if revision.is_empty() || revision.starts_with('-') {
+        bail!("review revision must not be empty or start with '-'");
+    }
     let commit_revision = format!("{revision}^{{commit}}");
-    let verify = run_git(
-        runner,
-        cwd,
-        [
-            "rev-parse",
-            "--verify",
-            "--end-of-options",
-            &commit_revision,
-        ],
-    )
-    .await?;
+    let verify = run_git(runner, cwd, ["rev-parse", "--verify", &commit_revision]).await?;
     if !verify.success() {
         return Ok(None);
     }
@@ -509,7 +496,9 @@ pub(crate) async fn run_git<const N: usize>(
         .run(
             ReviewCommand::new(std::iter::once("git").chain(args), cwd.clone())
                 .env("GIT_OPTIONAL_LOCKS", "0")
-                .env("GIT_TERMINAL_PROMPT", "0"),
+                .env("GIT_NO_REPLACE_OBJECTS", "1")
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .env("LC_ALL", "C"),
         )
         .await
 }

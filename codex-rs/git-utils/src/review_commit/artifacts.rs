@@ -5,7 +5,6 @@ use std::time::UNIX_EPOCH;
 
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::bail;
 use codex_file_system::ExecutorFileSystem;
 use codex_file_system::RemoveOptions;
 use codex_utils_path_uri::PathUri;
@@ -13,12 +12,12 @@ use codex_utils_path_uri::PathUri;
 pub(super) const TEMP_FILE_PREFIX: &str = ".codex-review-commit";
 static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(/*v*/ 0);
 
-pub(super) struct TemporaryGitArtifacts {
-    pub(super) paths: Vec<PathUri>,
+pub(super) struct TemporaryGitArtifact {
+    pub(super) path: PathUri,
 }
 
-impl TemporaryGitArtifacts {
-    pub(super) fn new(index_path: &PathUri, roles: &[&str]) -> Result<Self> {
+impl TemporaryGitArtifact {
+    pub(super) fn new(index_path: &PathUri, role: &str) -> Result<Self> {
         let parent = index_path
             .parent()
             .context("Git index path has no parent directory")?;
@@ -27,58 +26,45 @@ impl TemporaryGitArtifacts {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let nonce = format!("{}-{timestamp}-{sequence}", std::process::id());
-        let mut paths = Vec::with_capacity(roles.len());
-        for role in roles {
-            paths.push(
-                parent
-                    .join(&format!("{TEMP_FILE_PREFIX}-{nonce}-{role}"))
-                    .with_context(|| format!("failed to create temporary {role} path"))?,
-            );
-        }
-        Ok(Self { paths })
+        let name = format!(
+            "{TEMP_FILE_PREFIX}-{}-{timestamp}-{sequence}-{role}",
+            std::process::id()
+        );
+        Ok(Self {
+            path: parent
+                .join(&name)
+                .context("failed to create temporary Git path")?,
+        })
     }
 
     pub(super) async fn cleanup(&self, fs: &dyn ExecutorFileSystem) -> Result<()> {
-        let mut failures = Vec::new();
-        for path in &self.paths {
-            remove_file(fs, path, &mut failures).await;
-            let lock_path = path
-                .parent()
-                .and_then(|parent| {
-                    path.basename()
-                        .map(|basename| (parent, format!("{basename}.lock")))
-                })
-                .and_then(|(parent, basename)| parent.join(&basename).ok());
-            if let Some(lock_path) = lock_path {
-                remove_file(fs, &lock_path, &mut failures).await;
-            }
-        }
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            bail!(
-                "failed to clean temporary Git files: {}",
-                failures.join("; ")
-            )
-        }
+        cleanup_path(fs, &self.path).await
     }
 }
 
-async fn remove_file(fs: &dyn ExecutorFileSystem, path: &PathUri, failures: &mut Vec<String>) {
-    if let Err(err) = fs
-        .remove(
-            path,
-            RemoveOptions {
-                recursive: false,
-                force: true,
-            },
-            /*sandbox*/ None,
-        )
-        .await
-    {
-        failures.push(format!("{path}: {err}"));
-    }
+async fn cleanup_path(fs: &dyn ExecutorFileSystem, path: &PathUri) -> Result<()> {
+    remove_file(fs, path).await?;
+    let parent = path.parent().context("temporary Git path has no parent")?;
+    let basename = path
+        .basename()
+        .context("temporary Git path has no basename")?;
+    let lock_path = parent
+        .join(&format!("{basename}.lock"))
+        .context("failed to create temporary Git lock path")?;
+    remove_file(fs, &lock_path).await
+}
+
+async fn remove_file(fs: &dyn ExecutorFileSystem, path: &PathUri) -> Result<()> {
+    fs.remove(
+        path,
+        RemoveOptions {
+            recursive: false,
+            force: true,
+        },
+        /*sandbox*/ None,
+    )
+    .await
+    .with_context(|| format!("failed to clean temporary Git file {path}"))
 }
 
 pub(super) fn combine_with_cleanup<T>(result: Result<T>, cleanup: Result<()>) -> Result<T> {

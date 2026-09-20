@@ -9,7 +9,6 @@ use crate::ReviewCommandOutput;
 use crate::ReviewCommandRunner;
 use crate::has_uncommitted_changes;
 use crate::resolve_pr_base_ref_with_runner;
-use crate::resolve_review_repository_root;
 use crate::review_validation::recent_review_commits;
 
 const GIT_DETECTION_ERROR: &str = "Git detection failed";
@@ -88,15 +87,13 @@ pub async fn resolve_review_scope(
     runner: &impl ReviewCommandRunner,
     cwd: &PathUri,
 ) -> ReviewScopeResolution {
-    let repository_root = match resolve_review_repository_root(runner, cwd).await {
-        Ok(repository_root) => repository_root,
-        Err(_) => {
-            return ReviewScopeResolution {
-                git_error: Some(GIT_DETECTION_ERROR.to_string()),
-                ..Default::default()
-            };
-        }
-    };
+    let repository = run_git(runner, cwd, ["rev-parse", "--is-inside-work-tree"]).await;
+    if !repository.is_some_and(|output| output.success() && output.stdout.trim() == "true") {
+        return ReviewScopeResolution {
+            git_error: Some(GIT_DETECTION_ERROR.to_string()),
+            ..Default::default()
+        };
+    }
     let (
         mut pull_request,
         default_branch,
@@ -105,12 +102,12 @@ pub async fn resolve_review_scope(
         has_uncommitted_changes,
         commits,
     ) = tokio::join!(
-        open_pull_request(runner, &repository_root),
-        default_branch(runner, &repository_root),
-        current_branch(runner, &repository_root),
-        local_branches(runner, &repository_root),
-        has_uncommitted_changes(runner, &repository_root),
-        recent_review_commits(runner, &repository_root),
+        open_pull_request(runner, cwd),
+        default_branch(runner, cwd),
+        current_branch(runner, cwd),
+        local_branches(runner, cwd),
+        has_uncommitted_changes(runner, cwd),
+        recent_review_commits(runner, cwd),
     );
     let (has_uncommitted_changes, uncommitted_error) = match has_uncommitted_changes {
         Ok(has_uncommitted_changes) => (has_uncommitted_changes, false),
@@ -126,7 +123,7 @@ pub async fn resolve_review_scope(
                 .as_ref()
                 .map(|pull_request| pull_request.url.as_str())
                 .unwrap_or_default();
-            resolve_pr_base_ref_with_runner(runner, &repository_root, base_branch, pull_request_url)
+            resolve_pr_base_ref_with_runner(runner, cwd, base_branch, pull_request_url)
                 .await
                 .ok()
                 .flatten()

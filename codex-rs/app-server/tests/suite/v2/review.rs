@@ -12,10 +12,12 @@ use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ReviewAction;
 use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
+use codex_app_server_protocol::ReviewVerification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
@@ -71,9 +73,10 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         .send_review_start_request(ReviewStartParams {
             thread_id: thread_id.clone(),
             delivery: Some(ReviewDelivery::Inline),
-            target: ReviewTarget::Commit {
-                sha: "1234567deadbeef".to_string(),
-                title: Some("Tidy UI colors".to_string()),
+            verification: Some(ReviewVerification::SinglePass),
+            action: Some(ReviewAction::Report),
+            target: ReviewTarget::Custom {
+                instructions: "Tidy UI colors".to_string(),
             },
         })
         .await?;
@@ -96,7 +99,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
             id: turn_id.clone(),
             client_id: None,
             content: vec![V2UserInput::Text {
-                text: "commit 1234567: Tidy UI colors".to_string(),
+                text: "Tidy UI colors".to_string(),
                 text_elements: Vec::new(),
             }],
         }]
@@ -115,7 +118,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         match started.item {
             ThreadItem::EnteredReviewMode { review, .. } => {
                 assert_eq!(started.turn_id, turn_id);
-                assert_eq!(review, "commit 1234567: Tidy UI colors");
+                assert_eq!(review, "Tidy UI colors");
                 saw_entered_review_mode = true;
                 break;
             }
@@ -193,6 +196,8 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
         .send_review_start_request(ReviewStartParams {
             thread_id,
             delivery: Some(ReviewDelivery::Inline),
+            verification: None,
+            action: None,
             target: ReviewTarget::Commit {
                 sha: "1234567deadbeef".to_string(),
                 title: Some("Check review approvals".to_string()),
@@ -278,6 +283,8 @@ async fn review_start_rejects_empty_pull_request_url() -> Result<()> {
         .send_review_start_request(ReviewStartParams {
             thread_id,
             delivery: Some(ReviewDelivery::Inline),
+            verification: None,
+            action: None,
             target: ReviewTarget::PullRequest {
                 url: "   ".to_string(),
             },
@@ -315,6 +322,8 @@ async fn review_start_rejects_empty_base_branch() -> Result<()> {
         .send_review_start_request(ReviewStartParams {
             thread_id,
             delivery: Some(ReviewDelivery::Inline),
+            verification: None,
+            action: None,
             target: ReviewTarget::BaseBranch {
                 branch: "   ".to_string(),
             },
@@ -363,6 +372,8 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
         .send_review_start_request(ReviewStartParams {
             thread_id: thread_id.clone(),
             delivery: Some(ReviewDelivery::Detached),
+            verification: None,
+            action: None,
             target: ReviewTarget::Custom {
                 instructions: "detached review".to_string(),
             },
@@ -421,7 +432,6 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
         serde_json::from_value(notification.params.expect("params must be present"))?;
     assert_eq!(started.thread.id, review_thread_id);
     assert_eq!(started.thread.session_id, review_thread_id);
-
     Ok(())
 }
 
@@ -442,6 +452,8 @@ async fn review_start_rejects_empty_commit_sha() -> Result<()> {
         .send_review_start_request(ReviewStartParams {
             thread_id,
             delivery: Some(ReviewDelivery::Inline),
+            verification: None,
+            action: None,
             target: ReviewTarget::Commit {
                 sha: "\t".to_string(),
                 title: None,
@@ -480,6 +492,8 @@ async fn review_start_rejects_empty_custom_instructions() -> Result<()> {
         .send_review_start_request(ReviewStartParams {
             thread_id,
             delivery: Some(ReviewDelivery::Inline),
+            verification: None,
+            action: None,
             target: ReviewTarget::Custom {
                 instructions: "\n\n".to_string(),
             },
@@ -499,6 +513,51 @@ async fn review_start_rejects_empty_custom_instructions() -> Result<()> {
         "unexpected message: {}",
         error.error.message
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn review_start_rejects_unavailable_verification_and_fix_actions() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let thread_id = start_default_thread(&mut mcp).await?;
+
+    for (verification, action, expected_message) in [
+        (Some(ReviewVerification::DoubleCheck), None, "doubleCheck"),
+        (None, Some(ReviewAction::Fix), "fix actions"),
+        (None, Some(ReviewAction::FixAndCommit), "fix actions"),
+    ] {
+        let request_id = mcp
+            .send_review_start_request(ReviewStartParams {
+                thread_id: thread_id.clone(),
+                target: ReviewTarget::Custom {
+                    instructions: "review this".to_string(),
+                },
+                delivery: Some(ReviewDelivery::Inline),
+                verification,
+                action,
+            })
+            .await?;
+        let error: JSONRPCError = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
+        assert!(
+            error.error.message.contains(expected_message),
+            "unexpected message: {}",
+            error.error.message
+        );
+    }
 
     Ok(())
 }

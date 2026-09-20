@@ -20,6 +20,9 @@ use std::sync::LazyLock;
 
 pub const EMPTY_REVIEW_SCOPE_ERROR: &str = "Selected review scope has no changes";
 
+/// Review thread system prompt for the legacy single-stage reviewer.
+pub const REVIEW_PROMPT: &str = include_str!("../templates/review/rubric.md");
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedReviewRequest {
     pub target: ReviewTarget,
@@ -56,6 +59,7 @@ pub async fn resolve_review_request(
     request: ReviewRequest,
     cwd: &AbsolutePathBuf,
 ) -> anyhow::Result<ResolvedReviewRequest> {
+    reject_unavailable_stages(request.verification, request.action)?;
     let ReviewRequest {
         target,
         verification,
@@ -91,6 +95,7 @@ pub async fn resolve_review_request_with_runner(
     runner: &impl ReviewCommandRunner,
     cwd: &PathUri,
 ) -> anyhow::Result<ResolvedReviewRequest> {
+    reject_unavailable_stages(request.verification, request.action)?;
     let ReviewRequest {
         target,
         verification,
@@ -186,6 +191,19 @@ pub async fn resolve_review_request_with_runner(
         action,
         checkout_root,
     })
+}
+
+fn reject_unavailable_stages(
+    verification: ReviewVerification,
+    action: ReviewAction,
+) -> anyhow::Result<()> {
+    if verification == ReviewVerification::DoubleCheck {
+        anyhow::bail!("review verification `doubleCheck` is not available");
+    }
+    if matches!(action, ReviewAction::Fix | ReviewAction::FixAndCommit) {
+        anyhow::bail!("review fix actions are not available");
+    }
+    Ok(())
 }
 
 pub fn review_prompt(target: &ReviewTarget, cwd: &AbsolutePathBuf) -> anyhow::Result<String> {

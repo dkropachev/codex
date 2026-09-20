@@ -716,7 +716,10 @@ pub async fn review(
 ) {
     let scope_requires_executor = matches!(
         &review_request.target,
-        ReviewTarget::BaseBranch { .. } | ReviewTarget::PullRequest { .. }
+        ReviewTarget::UncommittedChanges
+            | ReviewTarget::BaseBranch { .. }
+            | ReviewTarget::Commit { .. }
+            | ReviewTarget::PullRequest { .. }
     );
     let mut environment_error = None;
     if scope_requires_executor
@@ -739,7 +742,10 @@ pub async fn review(
         Err(err)
     } else {
         match &review_request.target {
-            ReviewTarget::BaseBranch { .. } | ReviewTarget::PullRequest { .. } => {
+            ReviewTarget::UncommittedChanges
+            | ReviewTarget::BaseBranch { .. }
+            | ReviewTarget::Commit { .. }
+            | ReviewTarget::PullRequest { .. } => {
                 if let Some(environment) = turn_context.environments.primary() {
                     let runner = ExecutorReviewCommandRunner::new(
                         environment.environment.get_exec_backend(),
@@ -753,7 +759,7 @@ pub async fn review(
                     ))
                 }
             }
-            _ =>
+            ReviewTarget::WholeRepository | ReviewTarget::Custom { .. } =>
             {
                 #[allow(deprecated)]
                 resolve_review_request(review_request, &turn_context.cwd).await

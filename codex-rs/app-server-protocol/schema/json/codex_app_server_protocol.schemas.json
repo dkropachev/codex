@@ -16302,6 +16302,7 @@
             "type": "boolean"
           },
           "error": {
+            "default": null,
             "description": "Short diagnostic shown when Git repository detection failed.",
             "type": [
               "string",
