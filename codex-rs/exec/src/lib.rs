@@ -927,16 +927,22 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             task_id
         }
         InitialOperation::Review { review_request } => {
+            let ReviewRequest {
+                target,
+                verification,
+                action,
+                ..
+            } = review_request;
             let response: ReviewStartResponse = send_request_with_response(
                 &client,
                 ClientRequest::ReviewStart {
                     request_id: request_ids.next(),
                     params: ReviewStartParams {
                         thread_id: primary_thread_id_for_span.clone(),
-                        target: review_target_to_api(review_request.target),
+                        target: review_target_to_api(target),
                         delivery: None,
-                        verification: None,
-                        action: None,
+                        verification: Some(verification.into()),
+                        action: Some(action.into()),
                     },
                 },
                 "review/start",

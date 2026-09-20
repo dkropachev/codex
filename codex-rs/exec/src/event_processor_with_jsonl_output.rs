@@ -64,6 +64,7 @@ pub struct EventProcessorWithJsonOutput {
     last_critical_error: Option<ThreadErrorEvent>,
     final_message: Option<String>,
     emit_final_message_on_shutdown: bool,
+    suppress_legacy_review_agent: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +90,7 @@ impl EventProcessorWithJsonOutput {
             last_critical_error: None,
             final_message: None,
             emit_final_message_on_shutdown: false,
+            suppress_legacy_review_agent: false,
         }
     }
 
@@ -146,6 +148,10 @@ impl EventProcessorWithJsonOutput {
             ThreadItem::AgentMessage { text, .. } => Some(ExecThreadItem {
                 id: make_id(),
                 details: ThreadItemDetails::AgentMessage(AgentMessageItem { text }),
+            }),
+            ThreadItem::ExitedReviewMode { review, .. } => Some(ExecThreadItem {
+                id: make_id(),
+                details: ThreadItemDetails::AgentMessage(AgentMessageItem { text: review }),
             }),
             ThreadItem::Reasoning { summary, .. } => {
                 let text = summary.join("\n");
@@ -329,7 +335,9 @@ impl EventProcessorWithJsonOutput {
 
     fn map_started_item(&mut self, item: ThreadItem) -> Option<ExecThreadItem> {
         match item {
-            ThreadItem::AgentMessage { .. } | ThreadItem::Reasoning { .. } => None,
+            ThreadItem::AgentMessage { .. }
+            | ThreadItem::Reasoning { .. }
+            | ThreadItem::ExitedReviewMode { .. } => None,
             other => {
                 let raw_id = other.id().to_string();
                 Self::map_item_with_id(other, || self.started_item_id(&raw_id))
@@ -338,6 +346,17 @@ impl EventProcessorWithJsonOutput {
     }
 
     fn map_completed_item_mut(&mut self, item: ThreadItem) -> Option<ExecThreadItem> {
+        if matches!(
+            &item,
+            ThreadItem::AgentMessage { id, .. }
+                if id == "review_rollout_assistant" && self.suppress_legacy_review_agent
+        ) {
+            self.suppress_legacy_review_agent = false;
+            return None;
+        }
+        if matches!(&item, ThreadItem::ExitedReviewMode { .. }) {
+            self.suppress_legacy_review_agent = true;
+        }
         if let ThreadItem::Reasoning { summary, .. } = &item
             && summary.join("\n").trim().is_empty()
         {
@@ -376,7 +395,8 @@ impl EventProcessorWithJsonOutput {
             .iter()
             .rev()
             .find_map(|item| match item {
-                ThreadItem::AgentMessage { text, .. } => Some(text.clone()),
+                ThreadItem::AgentMessage { text, .. }
+                | ThreadItem::ExitedReviewMode { review: text, .. } => Some(text.clone()),
                 _ => None,
             })
             .or_else(|| {
@@ -498,6 +518,7 @@ impl EventProcessorWithJsonOutput {
                 CodexStatus::Running
             }
             ServerNotification::TurnCompleted(notification) => {
+                self.suppress_legacy_review_agent = false;
                 if let Some(running) = self.running_todo_list.take() {
                     events.push(ThreadEvent::ItemCompleted(ItemCompletedEvent {
                         item: ExecThreadItem {
