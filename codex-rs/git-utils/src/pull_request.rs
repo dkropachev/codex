@@ -19,7 +19,7 @@ use crate::review_branch::resolve_pr_base_ref_with_runner;
 
 pub(crate) const GH_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
-const REVIEW_COMMAND_OUTPUT_BYTES_CAP: usize = 512 * 1024;
+pub(crate) const REVIEW_COMMAND_OUTPUT_BYTES_CAP: usize = 512 * 1024;
 const GH_REPO_ENV_VAR: &str = "GH_REPO";
 
 /// A bounded, non-interactive command used to resolve a code-review scope.
@@ -259,7 +259,12 @@ pub async fn merge_base_with_head_with_runner(
     if !head.success() || head.stdout.trim().is_empty() {
         return Ok(None);
     }
-    let branch_revision = run_git(runner, cwd, ["rev-parse", "--verify", branch]).await?;
+    let branch_revision = run_git(
+        runner,
+        cwd,
+        ["rev-parse", "--verify", "--end-of-options", branch],
+    )
+    .await?;
     if !branch_revision.success() || branch_revision.stdout.trim().is_empty() {
         return Ok(None);
     }
@@ -277,6 +282,7 @@ pub async fn merge_base_with_head_with_runner(
                 "rev-parse",
                 "--abbrev-ref",
                 "--symbolic-full-name",
+                "--end-of-options",
                 &upstream_spec,
             ],
         )
@@ -284,20 +290,29 @@ pub async fn merge_base_with_head_with_runner(
         if upstream.success() {
             let upstream = upstream.stdout.trim();
             if !upstream.is_empty() {
-                let range = format!("{branch}...{upstream}");
-                let counts =
-                    run_git(runner, cwd, ["rev-list", "--left-right", "--count", &range]).await?;
-                let remote_is_ahead = counts.success()
-                    && counts
-                        .stdout
-                        .split_whitespace()
-                        .nth(1)
-                        .and_then(|count| count.parse::<u64>().ok())
-                        .is_some_and(|count| count > 0);
-                if remote_is_ahead {
-                    let upstream_revision =
-                        run_git(runner, cwd, ["rev-parse", "--verify", upstream]).await?;
-                    if upstream_revision.success() && !upstream_revision.stdout.trim().is_empty() {
+                let upstream_revision = run_git(
+                    runner,
+                    cwd,
+                    ["rev-parse", "--verify", "--end-of-options", upstream],
+                )
+                .await?;
+                if upstream_revision.success() && !upstream_revision.stdout.trim().is_empty() {
+                    let range = format!(
+                        "{}...{}",
+                        branch_revision.stdout.trim(),
+                        upstream_revision.stdout.trim()
+                    );
+                    let counts =
+                        run_git(runner, cwd, ["rev-list", "--left-right", "--count", &range])
+                            .await?;
+                    let remote_is_ahead = counts.success()
+                        && counts
+                            .stdout
+                            .split_whitespace()
+                            .nth(1)
+                            .and_then(|count| count.parse::<u64>().ok())
+                            .is_some_and(|count| count > 0);
+                    if remote_is_ahead {
                         preferred_revision = upstream_revision.stdout.trim().to_string();
                     }
                 }
@@ -464,7 +479,17 @@ pub(crate) async fn resolve_revision_oid(
     revision: &str,
 ) -> Result<Option<String>> {
     let commit_revision = format!("{revision}^{{commit}}");
-    let verify = run_git(runner, cwd, ["rev-parse", "--verify", &commit_revision]).await?;
+    let verify = run_git(
+        runner,
+        cwd,
+        [
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &commit_revision,
+        ],
+    )
+    .await?;
     if !verify.success() {
         return Ok(None);
     }

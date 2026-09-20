@@ -62,7 +62,12 @@ async fn resolver_prefers_pull_request_base_oid() {
     let runner = FakeRunner::new(vec![
         response(gh_argv(), /*exit_code*/ 0, &gh_output(), ""),
         response(
-            git_argv(&["rev-parse", "--verify", "base-oid^{commit}"]),
+            git_argv(&[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                "base-oid^{commit}",
+            ]),
             /*exit_code*/ 0,
             "resolved-base-oid\n",
             "",
@@ -94,7 +99,12 @@ async fn resolver_falls_back_to_unique_remote_pull_request_base_ref() {
     let runner = FakeRunner::new(vec![
         response(gh_argv(), /*exit_code*/ 0, &gh_output(), ""),
         response(
-            git_argv(&["rev-parse", "--verify", "base-oid^{commit}"]),
+            git_argv(&[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                "base-oid^{commit}",
+            ]),
             /*exit_code*/ 1,
             "",
             "missing oid",
@@ -107,13 +117,23 @@ async fn resolver_falls_back_to_unique_remote_pull_request_base_ref() {
             "",
         ),
         response(
-            git_argv(&["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"]),
+            git_argv(&[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                "refs/remotes/origin/main^{commit}",
+            ]),
             /*exit_code*/ 0,
             "resolved-main\n",
             "",
         ),
         response(
-            git_argv(&["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"]),
+            git_argv(&[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                "refs/remotes/origin/main^{commit}",
+            ]),
             /*exit_code*/ 0,
             "resolved-main\n",
             "",
@@ -139,7 +159,12 @@ async fn resolver_does_not_fall_back_when_base_oid_has_no_merge_base() {
     let runner = FakeRunner::new(vec![
         response(gh_argv(), /*exit_code*/ 0, &gh_output(), ""),
         response(
-            git_argv(&["rev-parse", "--verify", "base-oid^{commit}"]),
+            git_argv(&[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                "base-oid^{commit}",
+            ]),
             /*exit_code*/ 0,
             "resolved-base-oid\n",
             "",
@@ -167,7 +192,12 @@ async fn resolver_fails_when_oid_and_ref_cannot_be_resolved() {
     let runner = FakeRunner::new(vec![
         response(gh_argv(), /*exit_code*/ 0, &gh_output(), ""),
         response(
-            git_argv(&["rev-parse", "--verify", "base-oid^{commit}"]),
+            git_argv(&[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                "base-oid^{commit}",
+            ]),
             /*exit_code*/ 1,
             "",
             "missing oid",
@@ -191,7 +221,12 @@ async fn resolver_rejects_divergent_base_repository_refs() {
     let runner = FakeRunner::new(vec![
         response(gh_argv(), /*exit_code*/ 0, &gh_output(), ""),
         response(
-            git_argv(&["rev-parse", "--verify", "base-oid^{commit}"]),
+            git_argv(&[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                "base-oid^{commit}",
+            ]),
             /*exit_code*/ 1,
             "",
             "missing oid",
@@ -215,7 +250,12 @@ async fn resolver_rejects_divergent_base_repository_refs() {
             "",
         ),
         response(
-            git_argv(&["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"]),
+            git_argv(&[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                "refs/remotes/origin/main^{commit}",
+            ]),
             /*exit_code*/ 0,
             "origin-main\n",
             "",
@@ -224,6 +264,7 @@ async fn resolver_rejects_divergent_base_repository_refs() {
             git_argv(&[
                 "rev-parse",
                 "--verify",
+                "--end-of-options",
                 "refs/remotes/upstream/main^{commit}",
             ]),
             /*exit_code*/ 0,
@@ -248,7 +289,12 @@ async fn resolver_does_not_use_same_named_branch_from_fork_remote() {
     let runner = FakeRunner::new(vec![
         response(gh_argv(), /*exit_code*/ 0, &gh_output(), ""),
         response(
-            git_argv(&["rev-parse", "--verify", "base-oid^{commit}"]),
+            git_argv(&[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                "base-oid^{commit}",
+            ]),
             /*exit_code*/ 1,
             "",
             "missing oid",

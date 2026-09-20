@@ -328,7 +328,7 @@ fn parse_git_remote_urls(stdout: &str) -> Option<BTreeMap<String, String>> {
 }
 
 /// A minimal commit summary entry used for pickers (subject + timestamp + sha).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CommitLogEntry {
     pub sha: String,
     /// Unix timestamp (seconds since epoch) of the commit time (committer time).
