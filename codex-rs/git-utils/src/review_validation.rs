@@ -3,180 +3,97 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 
 use crate::CommitLogEntry;
 use crate::ReviewCommandOutput;
 use crate::ReviewCommandRunner;
+use crate::pull_request::REVIEW_COMMAND_OUTPUT_BYTES_CAP;
 use crate::pull_request::run_git;
 
 pub(crate) const REVIEW_SCOPE_COMMIT_LIMIT: usize = 100;
-const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
-
-fn safe_worktree_args<'a>(args: impl IntoIterator<Item = &'a str>) -> Vec<String> {
-    [
-        "-c".to_string(),
-        format!("core.hooksPath={DISABLED_HOOKS_PATH}"),
-        "-c".to_string(),
-        "core.fsmonitor=false".to_string(),
-    ]
-    .into_iter()
-    .chain(args.into_iter().map(str::to_string))
-    .collect()
-}
-
-/// Resolves the repository root containing `cwd` on the selected executor.
-pub async fn resolve_review_repository_root(
-    runner: &impl ReviewCommandRunner,
-    cwd: &PathUri,
-) -> Result<PathUri> {
-    let output = run_git(runner, cwd, ["rev-parse", "--show-toplevel"])
-        .await
-        .context("failed to detect the review repository")?;
-    require_success("git rev-parse --show-toplevel", &output)?;
-    let root = output.stdout.trim();
-    if root.is_empty() {
-        bail!("`git rev-parse --show-toplevel` returned an empty path");
-    }
-    cwd.join(root)
-        .with_context(|| format!("invalid review repository root {root:?}"))
-}
-
-/// Resolves the worktree Git directory and shared common directory on the selected executor.
-pub async fn resolve_review_git_directories(
-    runner: &impl ReviewCommandRunner,
-    repository_root: &PathUri,
-) -> Result<Vec<PathUri>> {
-    let output = run_git(
-        runner,
-        repository_root,
-        [
-            "rev-parse",
-            "--path-format=absolute",
-            "--git-dir",
-            "--git-common-dir",
-        ],
-    )
-    .await
-    .context("failed to resolve review Git directories")?;
-    require_success("git rev-parse --git-dir --git-common-dir", &output)?;
-    let mut directories = output
-        .stdout
-        .lines()
-        .filter(|path| !path.trim().is_empty())
-        .map(|path| repository_root.join(path.trim()))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    if directories.len() != 2 {
-        bail!("`git rev-parse --git-dir --git-common-dir` returned invalid output");
-    }
-    directories.dedup();
-    Ok(directories)
-}
+const EXECUTABLE_FILTER_CONFIG_PATTERN: &str = r"^filter\..*\.(clean|process)$";
 
 /// Returns whether the selected repository has staged, unstaged, or untracked changes.
 pub async fn has_uncommitted_changes(
     runner: &impl ReviewCommandRunner,
     repository_root: &PathUri,
 ) -> Result<bool> {
-    let output = run_git_dynamic(
+    let disabled_hooks_path = match repository_root.infer_path_convention() {
+        Some(PathConvention::Posix) => "/dev/null",
+        Some(PathConvention::Windows) => "NUL",
+        None => bail!("could not determine the review repository path convention"),
+    };
+    let filter_config = run_git(
         runner,
         repository_root,
-        safe_worktree_args(["status", "--porcelain=v1", "--untracked-files=all"]),
+        [
+            "config",
+            "--null",
+            "--name-only",
+            "--get-regexp",
+            EXECUTABLE_FILTER_CONFIG_PATTERN,
+        ],
     )
     .await
-    .context("failed to inspect uncommitted review changes")?;
+    .context("failed to inspect executable Git filters")?;
+    if !matches!(filter_config.exit_code, 0 | 1) {
+        return Err(command_error("git config", &filter_config));
+    }
+    if filter_config.stdout.len() >= REVIEW_COMMAND_OUTPUT_BYTES_CAP {
+        bail!("`git config` output exceeded the review command limit");
+    }
+    let mut drivers = filter_config
+        .stdout
+        .split('\0')
+        .filter_map(|key| {
+            key.strip_suffix(".clean")
+                .or_else(|| key.strip_suffix(".process"))
+        })
+        .collect::<Vec<_>>();
+    drivers.sort_unstable();
+    drivers.dedup();
+    if drivers
+        .iter()
+        .any(|driver| driver.contains(['=', '\u{fffd}']))
+    {
+        bail!("Git filter name cannot be overridden safely");
+    }
+
+    let mut argv = vec![
+        "git".to_string(),
+        "-c".to_string(),
+        format!("core.hooksPath={disabled_hooks_path}"),
+        "-c".to_string(),
+        "core.fsmonitor=false".to_string(),
+    ];
+    for driver in drivers {
+        argv.extend([
+            "-c".to_string(),
+            format!("{driver}.clean="),
+            "-c".to_string(),
+            format!("{driver}.process="),
+            "-c".to_string(),
+            format!("{driver}.required=false"),
+        ]);
+    }
+    argv.extend([
+        "status".to_string(),
+        "--porcelain=v1".to_string(),
+        "--untracked-files=all".to_string(),
+        "--ignore-submodules=dirty".to_string(),
+    ]);
+    let command = crate::ReviewCommand::new(argv, repository_root.clone())
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("LC_ALL", "C");
+    let output = runner
+        .run(command)
+        .await
+        .context("failed to inspect uncommitted review changes")?;
     require_success("git status", &output)?;
     Ok(!output.stdout.trim().is_empty())
-}
-
-/// Returns whether the working tree differs from `base_sha`, including untracked files.
-pub async fn has_changes_against_base(
-    runner: &impl ReviewCommandRunner,
-    repository_root: &PathUri,
-    base_sha: &str,
-) -> Result<bool> {
-    let base_oid = resolve_commit_oid(runner, repository_root, base_sha).await?;
-    let tracked = run_git_dynamic(
-        runner,
-        repository_root,
-        safe_worktree_args(["diff", "--quiet", &base_oid, "--"]),
-    )
-    .await
-    .context("failed to inspect tracked review changes")?;
-    if diff_has_changes("git diff", &tracked)? {
-        return Ok(true);
-    }
-    has_untracked_files(runner, repository_root).await
-}
-
-/// Returns whether `commit_sha` changes the tree relative to its first parent.
-///
-/// Root commits are compared with the empty tree. Merge commits are compared with their first
-/// parent, matching the change that applying the commit to its mainline introduces.
-pub async fn commit_has_changes(
-    runner: &impl ReviewCommandRunner,
-    repository_root: &PathUri,
-    commit_sha: &str,
-) -> Result<bool> {
-    let commit_oid = resolve_commit_oid(runner, repository_root, commit_sha).await?;
-    resolved_commit_has_changes(runner, repository_root, &commit_oid).await
-}
-
-/// Returns whether an already-resolved commit object changes its first-parent tree.
-pub async fn resolved_commit_has_changes(
-    runner: &impl ReviewCommandRunner,
-    repository_root: &PathUri,
-    commit_oid: &str,
-) -> Result<bool> {
-    let parents = run_git(
-        runner,
-        repository_root,
-        ["rev-list", "--parents", "-n", "1", commit_oid],
-    )
-    .await
-    .context("failed to inspect the review commit parents")?;
-    require_success("git rev-list", &parents)?;
-    let mut revisions = parents.stdout.split_whitespace();
-    let Some(resolved_commit) = revisions.next() else {
-        bail!("`git rev-list` returned no commit");
-    };
-    if resolved_commit != commit_oid {
-        bail!("`git rev-list` returned an unexpected commit");
-    }
-
-    let (command, output) = if let Some(first_parent) = revisions.next() {
-        (
-            "git diff",
-            run_git(
-                runner,
-                repository_root,
-                ["diff", "--quiet", first_parent, commit_oid, "--"],
-            )
-            .await
-            .context("failed to inspect review commit changes")?,
-        )
-    } else {
-        (
-            "git diff-tree",
-            run_git(
-                runner,
-                repository_root,
-                ["diff-tree", "--quiet", "--root", commit_oid, "--"],
-            )
-            .await
-            .context("failed to inspect root review commit changes")?,
-        )
-    };
-    diff_has_changes(command, &output)
-}
-
-/// Resolves an arbitrary review revision to its exact commit object ID.
-pub async fn resolve_review_commit_oid(
-    runner: &impl ReviewCommandRunner,
-    repository_root: &PathUri,
-    revision: &str,
-) -> Result<String> {
-    resolve_commit_oid(runner, repository_root, revision).await
 }
 
 pub(crate) async fn recent_review_commits(
@@ -184,9 +101,13 @@ pub(crate) async fn recent_review_commits(
     repository_root: &PathUri,
 ) -> Result<Vec<CommitLogEntry>> {
     let format = "--pretty=format:%H%x1f%ct%x1f%s";
-    let output = run_git(runner, repository_root, ["log", "-n", "100", format])
-        .await
-        .context("failed to list recent review commits")?;
+    let output = run_git(
+        runner,
+        repository_root,
+        ["-c", "log.showSignature=false", "log", "-n", "100", format],
+    )
+    .await
+    .context("failed to list recent review commits")?;
     require_success("git log", &output)?;
 
     output
@@ -196,75 +117,6 @@ pub(crate) async fn recent_review_commits(
         .take(REVIEW_SCOPE_COMMIT_LIMIT)
         .map(parse_commit_log_entry)
         .collect()
-}
-
-async fn resolve_commit_oid(
-    runner: &impl ReviewCommandRunner,
-    repository_root: &PathUri,
-    revision: &str,
-) -> Result<String> {
-    let revision = revision.trim();
-    if revision.is_empty() {
-        bail!("review revision must not be empty");
-    }
-    let commit_revision = format!("{revision}^{{commit}}");
-    let output = run_git(
-        runner,
-        repository_root,
-        [
-            "rev-parse",
-            "--verify",
-            "--end-of-options",
-            &commit_revision,
-        ],
-    )
-    .await
-    .with_context(|| format!("failed to resolve review revision {revision:?}"))?;
-    require_success("git rev-parse --verify", &output)?;
-    let oid = output.stdout.trim();
-    if oid.is_empty() {
-        bail!("`git rev-parse --verify` returned no commit");
-    }
-    Ok(oid.to_string())
-}
-
-async fn has_untracked_files(
-    runner: &impl ReviewCommandRunner,
-    repository_root: &PathUri,
-) -> Result<bool> {
-    let output = run_git_dynamic(
-        runner,
-        repository_root,
-        safe_worktree_args(["ls-files", "--others", "--exclude-standard"]),
-    )
-    .await
-    .context("failed to inspect untracked review files")?;
-    require_success("git ls-files", &output)?;
-    Ok(!output.stdout.trim().is_empty())
-}
-
-async fn run_git_dynamic(
-    runner: &impl ReviewCommandRunner,
-    cwd: &PathUri,
-    args: Vec<String>,
-) -> Option<ReviewCommandOutput> {
-    runner
-        .run(
-            crate::ReviewCommand::new(std::iter::once("git".to_string()).chain(args), cwd.clone())
-                .env("GIT_OPTIONAL_LOCKS", "0")
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .env("LC_ALL", "C"),
-        )
-        .await
-        .ok()
-}
-
-fn diff_has_changes(command: &str, output: &ReviewCommandOutput) -> Result<bool> {
-    match output.exit_code {
-        0 => Ok(false),
-        1 => Ok(true),
-        _ => Err(command_error(command, output)),
-    }
 }
 
 fn require_success(command: &str, output: &ReviewCommandOutput) -> Result<()> {
