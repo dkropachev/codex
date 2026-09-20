@@ -334,6 +334,8 @@ pub struct FsGetMetadataResponse {
     pub is_directory: bool,
     pub is_file: bool,
     pub is_symlink: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hard_link_count: Option<u64>,
     pub size: u64,
     pub created_at_ms: i64,
     pub modified_at_ms: i64,
@@ -568,6 +570,7 @@ mod tests {
     use super::EnvironmentInfo;
     use super::ExecExitedNotification;
     use super::ExecParams;
+    use super::FsGetMetadataResponse;
     use super::FsReadFileParams;
     use super::HttpRequestParams;
     use super::ProcessId;
@@ -640,6 +643,35 @@ mod tests {
                 cwd: None,
             }
         );
+    }
+
+    #[test]
+    fn get_metadata_link_count_is_optional_for_legacy_exec_servers() {
+        let legacy: FsGetMetadataResponse = serde_json::from_value(serde_json::json!({
+            "isDirectory": false,
+            "isFile": true,
+            "isSymlink": false,
+            "size": 12,
+            "createdAtMs": 123,
+            "modifiedAtMs": 456
+        }))
+        .expect("legacy metadata response should deserialize");
+        assert_eq!(legacy.hard_link_count, None);
+
+        let response = FsGetMetadataResponse {
+            hard_link_count: Some(2),
+            ..legacy
+        };
+        let serialized = serde_json::to_value(&response).expect("serialize metadata response");
+        assert_eq!(serialized["hardLinkCount"], 2);
+
+        let without_count = FsGetMetadataResponse {
+            hard_link_count: None,
+            ..response
+        };
+        let serialized =
+            serde_json::to_value(without_count).expect("serialize metadata without link count");
+        assert!(serialized.get("hardLinkCount").is_none());
     }
 
     #[test]

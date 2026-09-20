@@ -36,6 +36,23 @@ pub(crate) async fn apply_patch(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
+    // Review fixes use an exact checkout root and protected-path set. The
+    // apply-patch runtime validates every source and move path against those
+    // PathUri boundaries before mutation, including on remote executors.
+    if turn_context
+        .extension_data
+        .get::<crate::review_stage_runtime::ReviewWritableRoot>()
+        .is_some()
+    {
+        return InternalApplyPatchInvocation::DelegateToRuntime(ApplyPatchRuntimeInvocation {
+            action,
+            auto_approved: true,
+            exec_approval_requirement: ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            },
+        });
+    }
     match assess_patch_safety(
         &action,
         turn_context.approval_policy.value(),

@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 pub struct CommandToolOptions {
     pub allow_login_shell: bool,
     pub exec_permission_approvals_enabled: bool,
+    pub sandbox_override_allowed: bool,
 }
 
 #[cfg(test)]
@@ -81,9 +82,7 @@ pub(crate) fn create_exec_command_tool_with_environment_id(
             )),
         );
     }
-    properties.extend(create_approval_parameters(
-        options.exec_permission_approvals_enabled,
-    ));
+    properties.extend(create_approval_parameters(options));
 
     ToolSpec::Function(ResponsesApiTool {
         name: "exec_command".to_string(),
@@ -236,9 +235,7 @@ pub fn create_shell_command_tool(options: CommandToolOptions) -> ToolSpec {
             )),
         );
     }
-    properties.extend(create_approval_parameters(
-        options.exec_permission_approvals_enabled,
-    ));
+    properties.extend(create_approval_parameters(options));
 
     let description = if cfg!(windows) {
         format!(
@@ -359,9 +356,11 @@ fn unified_exec_output_schema() -> Value {
     })
 }
 
-fn create_approval_parameters(
-    exec_permission_approvals_enabled: bool,
-) -> BTreeMap<String, JsonSchema> {
+fn create_approval_parameters(options: CommandToolOptions) -> BTreeMap<String, JsonSchema> {
+    if !options.sandbox_override_allowed {
+        return BTreeMap::new();
+    }
+    let exec_permission_approvals_enabled = options.exec_permission_approvals_enabled;
     let mut sandbox_permission_values = vec![json!("use_default")];
     if exec_permission_approvals_enabled {
         sandbox_permission_values.push(json!("with_additional_permissions"));

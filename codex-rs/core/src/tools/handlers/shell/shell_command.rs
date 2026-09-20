@@ -49,6 +49,7 @@ pub(crate) struct ShellCommandHandlerOptions {
     pub(crate) backend_config: ShellCommandBackendConfig,
     pub(crate) allow_login_shell: bool,
     pub(crate) exec_permission_approvals_enabled: bool,
+    pub(crate) sandbox_override_allowed: bool,
 }
 
 impl ShellCommandHandler {
@@ -133,6 +134,7 @@ impl From<ShellCommandBackendConfig> for ShellCommandHandler {
             backend_config,
             allow_login_shell: false,
             exec_permission_approvals_enabled: false,
+            sandbox_override_allowed: true,
         })
     }
 }
@@ -146,6 +148,7 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
         create_shell_command_tool(CommandToolOptions {
             allow_login_shell: self.options.allow_login_shell,
             exec_permission_approvals_enabled: self.options.exec_permission_approvals_enabled,
+            sandbox_override_allowed: self.options.sandbox_override_allowed,
         })
     }
 

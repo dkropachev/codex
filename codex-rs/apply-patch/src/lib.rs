@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileSystemSandboxContext;
@@ -52,6 +53,9 @@ pub enum ApplyPatchError {
     /// A patch path could not be resolved as a path URI.
     #[error(transparent)]
     PathUri(#[from] PathUriParseError),
+    /// A patch mentions one source or destination path more than once.
+    #[error("patch uses a path more than once: {0}")]
+    ConflictingPath(String),
     /// A raw patch body was provided without an explicit `apply_patch` invocation.
     #[error(
         "patch detected without explicit call to apply_patch. Rerun as [\"apply_patch\", \"<patch>\"]"
@@ -475,15 +479,34 @@ async fn apply_hunks_to_files(
                     let overwritten_move_content =
                         read_optional_file_text_for_delta(&dest_uri, fs, sandbox, &mut delta.exact)
                             .await;
-                    try_write!(
-                        write_file_with_missing_parent_retry(
-                            fs,
-                            &dest_uri,
-                            new_contents.clone().into_bytes(),
-                            sandbox,
-                        )
+                    let source_is_regular = fs
+                        .get_metadata(&path_uri, sandbox)
                         .await
-                    );
+                        .is_ok_and(|metadata| metadata.is_file && !metadata.is_symlink);
+                    if source_is_regular {
+                        try_write!(
+                            copy_file_with_missing_parent_retry(fs, &path_uri, &dest_uri, sandbox)
+                                .await
+                        );
+                        try_write!(
+                            fs.write_file(&dest_uri, new_contents.clone().into_bytes(), sandbox)
+                                .await
+                                .with_context(|| format!(
+                                    "Failed to write file {}",
+                                    dest_uri.inferred_native_path_string()
+                                ))
+                        );
+                    } else {
+                        try_write!(
+                            write_file_with_missing_parent_retry(
+                                fs,
+                                &dest_uri,
+                                new_contents.clone().into_bytes(),
+                                sandbox,
+                            )
+                            .await
+                        );
+                    }
                     let dest_write_change_index = delta.changes.len();
                     delta.changes.push(AppliedPatchChange {
                         path: dest_uri.to_path_buf(),
@@ -660,6 +683,44 @@ async fn write_file_with_missing_parent_retry(
             format!(
                 "Failed to write file {}",
                 path.inferred_native_path_string()
+            )
+        }),
+    }
+}
+
+async fn copy_file_with_missing_parent_retry(
+    fs: &dyn ExecutorFileSystem,
+    source: &PathUri,
+    destination: &PathUri,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> anyhow::Result<()> {
+    let options = CopyOptions { recursive: false };
+    match fs.copy(source, destination, options, sandbox).await {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            if let Some(parent) = destination.parent() {
+                fs.create_directory(&parent, CreateDirectoryOptions { recursive: true }, sandbox)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Failed to create parent directories for {}",
+                            destination.inferred_native_path_string()
+                        )
+                    })?;
+            }
+            fs.copy(source, destination, options, sandbox)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to copy file to {}",
+                        destination.inferred_native_path_string()
+                    )
+                })
+        }
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "Failed to copy file to {}",
+                destination.inferred_native_path_string()
             )
         }),
     }
@@ -1112,6 +1173,76 @@ mod tests {
         assert!(!src.exists());
         let contents = fs::read_to_string(&dest).unwrap();
         assert_eq!(contents, "line2\n");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_update_file_hunk_preserves_executable_mode_when_moving() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("script.sh");
+        let dest = dir.path().join("bin/script.sh");
+        fs::write(&src, "echo old\n").unwrap();
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o755)).unwrap();
+        let patch = wrap_patch(
+            "*** Update File: script.sh\n*** Move to: bin/script.sh\n@@\n-echo old\n+echo new",
+        );
+
+        apply_patch(
+            &patch,
+            &PathUri::from_host_native_path(dir.path()).expect("absolute test path"),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            fs::metadata(dest).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_update_file_hunk_move_does_not_copy_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempdir().unwrap();
+        let root = parent.path().join("checkout");
+        fs::create_dir(&root).unwrap();
+        let outside = parent.path().join("outside.txt");
+        fs::write(&outside, "before\n").unwrap();
+        symlink(&outside, root.join("source.txt")).unwrap();
+        let patch = wrap_patch(
+            "*** Update File: source.txt\n*** Move to: destination.txt\n@@\n-before\n+after",
+        );
+
+        apply_patch(
+            &patch,
+            &PathUri::from_host_native_path(&root).expect("absolute test path"),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(outside).unwrap(), "before\n");
+        assert_eq!(
+            fs::read_to_string(root.join("destination.txt")).unwrap(),
+            "after\n"
+        );
+        assert!(
+            !fs::symlink_metadata(root.join("destination.txt"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[cfg(unix)]

@@ -552,7 +552,6 @@ pub(crate) async fn intercept_apply_patch(
     turn: Arc<TurnContext>,
     tracker: Option<&SharedTurnDiffTracker>,
     call_id: &str,
-    tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
     let sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None, cwd);
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, Some(&sandbox))
@@ -609,7 +608,7 @@ pub(crate) async fn intercept_apply_patch(
                         session: session.clone(),
                         turn: turn.clone(),
                         call_id: call_id.to_string(),
-                        tool_name: ToolName::plain(tool_name),
+                        tool_name: ToolName::plain("apply_patch"),
                     };
                     let out = orchestrator
                         .run(
