@@ -18,6 +18,7 @@ use super::git::run_git_checked;
 use super::git::set_index_entry;
 use super::git::write_tree;
 use super::index_flags::restore_preserved_index_flags;
+use super::index_flags::restore_preserved_index_flags_for_paths;
 use super::prepare::IndexMutation;
 use crate::ReviewCommandRunner;
 
@@ -143,17 +144,38 @@ async fn restore_index(
     snapshot: &ReviewFixCommitSnapshot,
     mutations: &[IndexMutation],
 ) -> Result<()> {
+    let mut restored_paths = Vec::new();
+    let mut conflicts = Vec::new();
     for mutation in mutations.iter().rev() {
-        require_index_entry(runner, snapshot, &mutation.path, mutation.after.as_ref()).await?;
-        write_index_entry(runner, snapshot, &mutation.path, mutation.before.as_ref()).await?;
+        let actual = index_entry(
+            runner,
+            &snapshot.repository_root,
+            &snapshot.index_path,
+            &mutation.path,
+            &snapshot.empty_tree,
+        )
+        .await?;
+        if actual == mutation.after {
+            write_index_entry(runner, snapshot, &mutation.path, mutation.before.as_ref()).await?;
+            restored_paths.push(mutation.path.clone());
+        } else if actual != mutation.before {
+            conflicts.push(mutation.path.clone());
+        }
     }
-    restore_preserved_index_flags(
+    restore_preserved_index_flags_for_paths(
         runner,
         &snapshot.repository_root,
         &snapshot.index_path,
         &snapshot.index_flags,
+        &restored_paths,
     )
     .await?;
+    if !conflicts.is_empty() {
+        bail!(
+            "Git index entries changed during review fix rollback: {}",
+            conflicts.join(", ")
+        );
+    }
     let restored_tree = write_tree(
         runner,
         &snapshot.repository_root,
@@ -260,7 +282,15 @@ async fn reconcile_reference_update(
                 .err()
         }
         Ok(_) => None,
-        Err(error) => Some(error.context("could not inspect the review fix target ref")),
+        Err(error) => {
+            let inspect_error = error.context("could not inspect the review fix target ref");
+            match rollback_reference(runner, snapshot, target_ref, commit_sha).await {
+                Ok(()) => Some(inspect_error),
+                Err(rollback_error) => Some(anyhow::anyhow!(
+                    "{inspect_error:#}; additionally, {rollback_error:#}"
+                )),
+            }
+        }
     };
     let index_restore =
         restore_index_if_installed(runner, snapshot, mutations, installed_index_tree)
@@ -333,12 +363,8 @@ async fn restore_index_if_installed(
     runner: &impl ReviewCommandRunner,
     snapshot: &ReviewFixCommitSnapshot,
     mutations: &[IndexMutation],
-    installed_index_tree: &str,
+    _installed_index_tree: &str,
 ) -> Result<()> {
-    let current_tree = current_index_tree(runner, snapshot).await?;
-    if current_tree != installed_index_tree {
-        bail!("Git index changed after the review fix index was installed");
-    }
     restore_index(runner, snapshot, mutations).await
 }
 

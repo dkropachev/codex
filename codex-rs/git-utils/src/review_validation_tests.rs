@@ -55,6 +55,76 @@ async fn resolves_executor_git_and_common_directories() {
 }
 
 #[tokio::test]
+async fn fix_commit_target_requires_an_attached_branch() {
+    let attached = FakeRunner::new(vec![
+        response(
+            ["git", "symbolic-ref", "--quiet", "HEAD"],
+            /*exit_code*/ 0,
+            "refs/heads/feature\n",
+        ),
+        response(
+            [
+                "git",
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                "HEAD^{commit}",
+            ],
+            /*exit_code*/ 0,
+            "abc123\n",
+        ),
+    ]);
+    validate_review_fix_commit_target(&attached, &cwd())
+        .await
+        .expect("attached branch");
+    attached.assert_exhausted();
+
+    let detached = FakeRunner::new(vec![response(
+        ["git", "symbolic-ref", "--quiet", "HEAD"],
+        /*exit_code*/ 1,
+        "",
+    )]);
+    let error = validate_review_fix_commit_target(&detached, &cwd())
+        .await
+        .expect_err("detached HEAD");
+    assert!(error.to_string().contains("attached branch"));
+    detached.assert_exhausted();
+
+    let tag = FakeRunner::new(vec![response(
+        ["git", "symbolic-ref", "--quiet", "HEAD"],
+        /*exit_code*/ 0,
+        "refs/tags/v1\n",
+    )]);
+    let error = validate_review_fix_commit_target(&tag, &cwd())
+        .await
+        .expect_err("symbolic tag HEAD");
+    assert!(error.to_string().contains("attached branch"));
+    tag.assert_exhausted();
+}
+
+#[tokio::test]
+async fn fix_target_requires_an_existing_head_commit() {
+    let unborn = FakeRunner::new(vec![response(
+        [
+            "git",
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            "HEAD^{commit}",
+        ],
+        /*exit_code*/ 128,
+        "",
+    )]);
+
+    let error = validate_review_fix_target(&unborn, &cwd())
+        .await
+        .expect_err("unborn HEAD");
+
+    assert!(format!("{error:#}").contains("existing HEAD commit"));
+    unborn.assert_exhausted();
+}
+
+#[tokio::test]
 async fn detects_uncommitted_changes_from_porcelain_status() {
     let runner = FakeRunner::new(vec![response(
         safe_args(&["status", "--porcelain=v1", "--untracked-files=all"]),

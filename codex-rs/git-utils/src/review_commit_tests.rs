@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::future::Future;
 use std::io;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -45,13 +46,15 @@ async fn commits_exact_add_and_preserves_dirty_state() {
     let original_status = repository.git(&["status", "--porcelain=v1", "--untracked-files=all"]);
 
     let (runner, fs, root, snapshot) = snapshot(&repository).await;
+    let protected_paths = snapshot.protected_paths();
+    assert!(protected_paths.contains(&root.join(".git/index").expect("index URI")));
     let path = root.join("review_fix.rs").expect("review fix URI");
     let changes = vec![ReviewFixFileChange::Add {
         path,
         content: "pub fn fixed() {}\n".to_string(),
     }];
     assert!(
-        review_fix_snapshot_has_changes(runner.as_ref(), fs.as_ref(), &snapshot, &changes)
+        review_fix_snapshot_has_changes(runner.as_ref(), Arc::clone(&fs), &snapshot, &changes)
             .await
             .expect("detect exact change")
     );
@@ -80,6 +83,78 @@ async fn commits_exact_add_and_preserves_dirty_state() {
         original_status
     );
     assert_no_temporary_files(repository.path());
+}
+
+#[tokio::test]
+async fn commit_ignores_git_replace_objects() {
+    let repository = TestRepository::new();
+    repository.write("base.txt", "base\n");
+    repository.git(&["add", "."]);
+    repository.git(&["commit", "-m", "base"]);
+    let base = repository.git(&["rev-parse", "HEAD"]);
+    repository.write("replacement.txt", "replacement\n");
+    repository.git(&["add", "."]);
+    repository.git(&["commit", "-m", "replacement"]);
+    let replacement = repository.git(&["rev-parse", "HEAD"]);
+    repository.git(&["reset", "--hard", &base]);
+    repository.git(&["replace", &base, &replacement]);
+    let (runner, fs, root, snapshot) = snapshot(&repository).await;
+    let changes = vec![ReviewFixFileChange::Add {
+        path: root.join("fixed.txt").expect("fixed URI"),
+        content: "fixed\n".to_string(),
+    }];
+    repository.write("fixed.txt", "fixed\n");
+
+    let outcome = commit_review_fixes(runner, fs, &snapshot, &changes, "Apply review fix")
+        .await
+        .expect("commit review fixes");
+
+    assert!(matches!(outcome, ReviewFixCommitOutcome::Committed { .. }));
+    assert_eq!(
+        repository.git(&["ls-tree", "--name-only", "HEAD"]),
+        "base.txt\nfixed.txt"
+    );
+}
+
+#[tokio::test]
+async fn committed_outcome_survives_temporary_file_cleanup_failure() {
+    let repository = TestRepository::new();
+    repository.write("base.txt", "base\n");
+    repository.git(&["add", "."]);
+    repository.git(&["commit", "-m", "initial"]);
+    let runner = Arc::new(NativeTestRunner);
+    let filesystem = Arc::new(NativeTestFileSystem::default());
+    let root = PathUri::from_host_native_path(repository.path()).expect("repository URI");
+    let snapshot = capture_review_fix_commit_snapshot(&*runner, filesystem.clone(), &root)
+        .await
+        .expect("snapshot");
+    let path = root.join("fixed.txt").expect("fixed path");
+    let changes = vec![ReviewFixFileChange::Add {
+        path,
+        content: "fixed\n".to_string(),
+    }];
+    repository.write("fixed.txt", "fixed\n");
+    filesystem
+        .fail_temporary_removes
+        .store(true, Ordering::Relaxed);
+
+    let outcome = commit_review_fixes(
+        runner,
+        filesystem.clone(),
+        &snapshot,
+        &changes,
+        "Apply verified review fixes",
+    )
+    .await
+    .expect("committed outcome");
+    let ReviewFixCommitOutcome::Committed { commit_sha } = outcome else {
+        panic!("expected committed outcome");
+    };
+
+    assert_eq!(repository.git(&["rev-parse", "HEAD"]), commit_sha);
+    filesystem
+        .fail_temporary_removes
+        .store(false, Ordering::Relaxed);
 }
 
 #[tokio::test]
@@ -146,7 +221,7 @@ async fn never_executes_configured_clean_filters() {
         content: "exact content\n".to_string(),
     }];
     assert!(
-        review_fix_snapshot_has_changes(runner.as_ref(), fs.as_ref(), &snapshot, &changes)
+        review_fix_snapshot_has_changes(runner.as_ref(), Arc::clone(&fs), &snapshot, &changes)
             .await
             .expect("verify change")
     );
@@ -339,11 +414,12 @@ async fn update_ref_failure_rolls_back_the_real_index() {
     repository.git(&["add", "."]);
     repository.git(&["commit", "-m", "initial"]);
     let native_runner = Arc::new(NativeTestRunner);
-    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(NativeTestFileSystem);
+    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(NativeTestFileSystem::default());
     let root = PathUri::from_host_native_path(repository.path()).expect("repository URI");
-    let snapshot = capture_review_fix_commit_snapshot(native_runner.as_ref(), fs.as_ref(), &root)
-        .await
-        .expect("snapshot");
+    let snapshot =
+        capture_review_fix_commit_snapshot(native_runner.as_ref(), Arc::clone(&fs), &root)
+            .await
+            .expect("snapshot");
     let head = repository.git(&["rev-parse", "HEAD"]);
     let staged = repository.git(&["diff", "--cached", "--binary"]);
     let changes = vec![ReviewFixFileChange::Update {
@@ -368,6 +444,93 @@ async fn update_ref_failure_rolls_back_the_real_index() {
 }
 
 #[tokio::test]
+async fn target_probe_failure_after_ref_update_rolls_back_ref_and_index() -> Result<()> {
+    let repository = TestRepository::new();
+    repository.write("fix.txt", "before\n");
+    repository.git(&["add", "."]);
+    repository.git(&["commit", "-m", "initial"]);
+    let native_runner = Arc::new(NativeTestRunner);
+    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(NativeTestFileSystem::default());
+    let root = PathUri::from_host_native_path(repository.path()).expect("repository URI");
+    let snapshot =
+        capture_review_fix_commit_snapshot(native_runner.as_ref(), Arc::clone(&fs), &root)
+            .await
+            .expect("snapshot");
+    let original_head = repository.git(&["rev-parse", "HEAD"]);
+    let changes = vec![ReviewFixFileChange::Update {
+        path: root.join("fix.txt").expect("fix URI"),
+        unified_diff: "@@ -1 +1 @@\n-before\n+after\n".to_string(),
+        move_path: None,
+    }];
+    repository.write("fix.txt", "after\n");
+
+    let error = commit_review_fixes(
+        Arc::new(SuccessfulUpdateThenProbeErrorRunner {
+            fail_probe: AtomicBool::new(false),
+        }),
+        fs,
+        &snapshot,
+        &changes,
+        "Apply review fix",
+    )
+    .await
+    .expect_err("target probe must fail the transaction");
+
+    assert!(error.to_string().contains("consistent state"));
+    assert_eq!(repository.git(&["rev-parse", "HEAD"]), original_head);
+    assert_eq!(repository.git(&["show", ":fix.txt"]), "before");
+    assert_eq!(repository.git(&["diff", "--cached", "--binary"]), "");
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_ref_failure_restores_unchanged_entries_and_preserves_index_races() {
+    let repository = TestRepository::new();
+    repository.write("first.txt", "first before\n");
+    repository.write("second.txt", "second before\n");
+    repository.write("other.txt", "other before\n");
+    repository.git(&["add", "."]);
+    repository.git(&["commit", "-m", "initial"]);
+    let native_runner = Arc::new(NativeTestRunner);
+    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(NativeTestFileSystem::default());
+    let root = PathUri::from_host_native_path(repository.path()).expect("repository URI");
+    let snapshot =
+        capture_review_fix_commit_snapshot(native_runner.as_ref(), Arc::clone(&fs), &root)
+            .await
+            .expect("snapshot");
+    let changes = vec![
+        ReviewFixFileChange::Update {
+            path: root.join("first.txt").expect("first URI"),
+            unified_diff: "@@ -1 +1 @@\n-first before\n+first after\n".to_string(),
+            move_path: None,
+        },
+        ReviewFixFileChange::Update {
+            path: root.join("second.txt").expect("second URI"),
+            unified_diff: "@@ -1 +1 @@\n-second before\n+second after\n".to_string(),
+            move_path: None,
+        },
+    ];
+    repository.write("first.txt", "first after\n");
+    repository.write("second.txt", "second after\n");
+    repository.write("other.txt", "other concurrent\n");
+
+    let error = commit_review_fixes(
+        Arc::new(IndexRaceRejectUpdateRefRunner),
+        fs,
+        &snapshot,
+        &changes,
+        "Apply review fix",
+    )
+    .await
+    .expect_err("update-ref must fail");
+
+    assert!(error.to_string().contains("failed to update HEAD"));
+    assert_eq!(repository.git(&["show", ":first.txt"]), "first concurrent");
+    assert_eq!(repository.git(&["show", ":second.txt"]), "second before");
+    assert_eq!(repository.git(&["show", ":other.txt"]), "other concurrent");
+}
+
+#[tokio::test]
 async fn concurrent_ref_advance_after_index_install_restores_the_index() {
     let repository = TestRepository::new();
     repository.write("fix.txt", "before\n");
@@ -384,11 +547,12 @@ async fn concurrent_ref_advance_after_index_install_restores_the_index() {
     repository.git(&["checkout", "-q", &branch_name]);
 
     let native_runner = Arc::new(NativeTestRunner);
-    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(NativeTestFileSystem);
+    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(NativeTestFileSystem::default());
     let root = PathUri::from_host_native_path(repository.path()).expect("repository URI");
-    let snapshot = capture_review_fix_commit_snapshot(native_runner.as_ref(), fs.as_ref(), &root)
-        .await
-        .expect("snapshot");
+    let snapshot =
+        capture_review_fix_commit_snapshot(native_runner.as_ref(), Arc::clone(&fs), &root)
+            .await
+            .expect("snapshot");
     let changes = vec![ReviewFixFileChange::Update {
         path: root.join("fix.txt").expect("fix URI"),
         unified_diff: "@@ -1 +1 @@\n-before\n+after\n".to_string(),
@@ -542,9 +706,9 @@ async fn cancellation_cannot_interrupt_the_real_index_ref_transaction() {
         entered: Arc::clone(&entered),
         release: Arc::clone(&release),
     });
-    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(NativeTestFileSystem);
+    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(NativeTestFileSystem::default());
     let root = PathUri::from_host_native_path(repository.path()).expect("repository URI");
-    let snapshot = capture_review_fix_commit_snapshot(runner.as_ref(), fs.as_ref(), &root)
+    let snapshot = capture_review_fix_commit_snapshot(runner.as_ref(), Arc::clone(&fs), &root)
         .await
         .expect("snapshot");
     let changes = vec![ReviewFixFileChange::Update {
@@ -582,6 +746,38 @@ async fn cancellation_cannot_interrupt_the_real_index_ref_transaction() {
     .expect("shielded transaction should finish");
     assert_eq!(repository.git(&["status", "--short"]), "");
     assert_no_temporary_files(repository.path());
+}
+
+#[tokio::test]
+async fn cancelling_snapshot_capture_cleans_temporary_git_files() {
+    let repository = TestRepository::new();
+    repository.write("fix.txt", "before\n");
+    repository.git(&["add", "."]);
+    repository.git(&["commit", "-m", "initial"]);
+    let entered = Arc::new(Notify::new());
+    let runner = Arc::new(BlockingWriteTreeRunner {
+        entered: Arc::clone(&entered),
+    });
+    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(NativeTestFileSystem::default());
+    let root = PathUri::from_host_native_path(repository.path()).expect("repository URI");
+    let task = tokio::spawn(async move {
+        capture_review_fix_commit_snapshot(runner.as_ref(), fs, &root).await
+    });
+    entered.notified().await;
+
+    task.abort();
+    let _ = task.await;
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if temporary_files(repository.path()).is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("temporary snapshot files should be cleaned");
 }
 
 #[tokio::test]
@@ -628,7 +824,7 @@ async fn windows_snapshot_uses_remote_path_uris_without_staging_worktree() {
     const EMPTY_TREE: &str = "dddddddddddddddddddddddddddddddddddddddd";
     let root = PathUri::parse("file:///C:/workspace").expect("root URI");
     let index = PathUri::parse("file:///C:/workspace/.git/index").expect("index URI");
-    let fs = MemoryFileSystem::with_file(index, b"raw-index".to_vec());
+    let fs = Arc::new(MemoryFileSystem::with_file(index, b"raw-index".to_vec()));
     let runner = ScriptedRunner::new(
         root.clone(),
         vec![
@@ -644,7 +840,7 @@ async fn windows_snapshot_uses_remote_path_uris_without_staging_worktree() {
         ],
     );
 
-    let snapshot = capture_review_fix_commit_snapshot(&runner, &fs, &root)
+    let snapshot = capture_review_fix_commit_snapshot(&runner, fs.clone(), &root)
         .await
         .expect("capture Windows snapshot");
 
@@ -672,9 +868,9 @@ async fn snapshot(
     ReviewFixCommitSnapshot,
 ) {
     let runner = Arc::new(NativeTestRunner);
-    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(NativeTestFileSystem);
+    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(NativeTestFileSystem::default());
     let root = PathUri::from_host_native_path(repository.path()).expect("repository URI");
-    let snapshot = capture_review_fix_commit_snapshot(runner.as_ref(), fs.as_ref(), &root)
+    let snapshot = capture_review_fix_commit_snapshot(runner.as_ref(), Arc::clone(&fs), &root)
         .await
         .expect("capture review fix snapshot");
     (runner, fs, root, snapshot)
@@ -718,6 +914,57 @@ impl ReviewCommandRunner for RejectUpdateRefRunner {
                 stdout: String::new(),
                 stderr: "injected update-ref failure".to_string(),
             });
+        }
+        run_native(command)
+    }
+}
+
+struct IndexRaceRejectUpdateRefRunner;
+
+impl ReviewCommandRunner for IndexRaceRejectUpdateRefRunner {
+    async fn run(&self, command: ReviewCommand) -> Result<ReviewCommandOutput> {
+        if command_args(&command).first().map(String::as_str) == Some("update-ref") {
+            let cwd = command.cwd().to_abs_path()?;
+            std::fs::write(cwd.join("first.txt"), "first concurrent\n")?;
+            run_side_effect_git(
+                &command,
+                &[
+                    "add".to_string(),
+                    "first.txt".to_string(),
+                    "other.txt".to_string(),
+                ],
+            )?;
+            return Ok(ReviewCommandOutput {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "injected update-ref failure".to_string(),
+            });
+        }
+        run_native(command)
+    }
+}
+
+struct SuccessfulUpdateThenProbeErrorRunner {
+    fail_probe: AtomicBool,
+}
+
+impl ReviewCommandRunner for SuccessfulUpdateThenProbeErrorRunner {
+    async fn run(&self, command: ReviewCommand) -> Result<ReviewCommandOutput> {
+        let args = command_args(&command);
+        if args.first().map(String::as_str) == Some("update-ref") {
+            let output = run_native(command)?;
+            if output.exit_code == 0
+                && args.get(2).map(String::as_str) == Some("review: apply verified fixes")
+            {
+                self.fail_probe.store(true, Ordering::Relaxed);
+            }
+            return Ok(output);
+        }
+        if self.fail_probe.load(Ordering::Relaxed)
+            && matches!(args.as_slice(), [command, verify, quiet, ..] if command == "rev-parse" && verify == "--verify" && quiet == "--quiet")
+        {
+            self.fail_probe.store(false, Ordering::Relaxed);
+            anyhow::bail!("injected target probe failure");
         }
         run_native(command)
     }
@@ -804,18 +1051,27 @@ struct BlockingUpdateRefRunner {
     release: Arc<Notify>,
 }
 
-impl ReviewCommandRunner for BlockingUpdateRefRunner {
-    fn run(
-        &self,
-        command: ReviewCommand,
-    ) -> impl Future<Output = Result<ReviewCommandOutput>> + Send {
-        async move {
-            if command_args(&command).first().map(String::as_str) == Some("update-ref") {
-                self.entered.notify_waiters();
-                self.release.notified().await;
-            }
-            run_native(command)
+struct BlockingWriteTreeRunner {
+    entered: Arc<Notify>,
+}
+
+impl ReviewCommandRunner for BlockingWriteTreeRunner {
+    async fn run(&self, command: ReviewCommand) -> Result<ReviewCommandOutput> {
+        if command_args(&command).first().map(String::as_str) == Some("write-tree") {
+            self.entered.notify_one();
+            std::future::pending::<()>().await;
         }
+        run_native(command)
+    }
+}
+
+impl ReviewCommandRunner for BlockingUpdateRefRunner {
+    async fn run(&self, command: ReviewCommand) -> Result<ReviewCommandOutput> {
+        if command_args(&command).first().map(String::as_str) == Some("update-ref") {
+            self.entered.notify_waiters();
+            self.release.notified().await;
+        }
+        run_native(command)
     }
 }
 
@@ -859,7 +1115,11 @@ impl TestRepository {
 }
 
 fn assert_no_temporary_files(repository: &Path) {
-    let names = std::fs::read_dir(repository.join(".git"))
+    assert_eq!(temporary_files(repository), Vec::<String>::new());
+}
+
+fn temporary_files(repository: &Path) -> Vec<String> {
+    std::fs::read_dir(repository.join(".git"))
         .expect("read Git directory")
         .map(|entry| {
             entry
@@ -869,8 +1129,7 @@ fn assert_no_temporary_files(repository: &Path) {
                 .into_owned()
         })
         .filter(|name| name.starts_with(TEMP_FILE_PREFIX))
-        .collect::<Vec<_>>();
-    assert_eq!(names, Vec::<String>::new());
+        .collect()
 }
 
 fn command_args(command: &ReviewCommand) -> Vec<String> {
@@ -1065,7 +1324,10 @@ impl ExecutorFileSystem for MemoryFileSystem {
     }
 }
 
-struct NativeTestFileSystem;
+#[derive(Default)]
+struct NativeTestFileSystem {
+    fail_temporary_removes: AtomicBool,
+}
 
 impl ExecutorFileSystem for NativeTestFileSystem {
     fn canonicalize<'a>(
@@ -1134,6 +1396,16 @@ impl ExecutorFileSystem for NativeTestFileSystem {
         _: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async move {
+            if self.fail_temporary_removes.load(Ordering::Relaxed)
+                && path
+                    .basename()
+                    .is_some_and(|name| name.starts_with(TEMP_FILE_PREFIX))
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "injected temporary-file cleanup failure",
+                ));
+            }
             match std::fs::remove_file(path.to_abs_path()?.as_path()) {
                 Ok(()) => Ok(()),
                 Err(error) if options.force && error.kind() == io::ErrorKind::NotFound => Ok(()),

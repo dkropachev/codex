@@ -85,6 +85,43 @@ pub(super) async fn restore_preserved_index_flags(
     .await
 }
 
+pub(super) async fn restore_preserved_index_flags_for_paths(
+    runner: &impl ReviewCommandRunner,
+    repository_root: &PathUri,
+    index_path: &PathUri,
+    flags: &PreservedIndexFlags,
+    paths: &[String],
+) -> Result<()> {
+    let assume_unchanged = flags
+        .assume_unchanged
+        .iter()
+        .filter(|path| paths.contains(path))
+        .cloned()
+        .collect::<Vec<_>>();
+    let skip_worktree = flags
+        .skip_worktree
+        .iter()
+        .filter(|path| paths.contains(path))
+        .cloned()
+        .collect::<Vec<_>>();
+    restore_index_flag_group(
+        runner,
+        repository_root,
+        index_path,
+        "--assume-unchanged",
+        &assume_unchanged,
+    )
+    .await?;
+    restore_index_flag_group(
+        runner,
+        repository_root,
+        index_path,
+        "--skip-worktree",
+        &skip_worktree,
+    )
+    .await
+}
+
 async fn restore_index_flag_group(
     runner: &impl ReviewCommandRunner,
     repository_root: &PathUri,
