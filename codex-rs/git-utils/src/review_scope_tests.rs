@@ -69,6 +69,12 @@ async fn current_branch_pull_request_wins_and_its_base_is_preferred() {
     assert_eq!(
         resolution,
         ReviewScopeResolution {
+            review_execution_available: true,
+            review_unavailable_reason: None,
+            fix_execution_available: true,
+            fix_unavailable_reason: None,
+            double_check_available: true,
+            whole_repository_available: true,
             pull_request: Some(ReviewScopePullRequest {
                 number: 42,
                 url: "https://github.com/acme/repo/pull/42".to_string(),

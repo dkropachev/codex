@@ -10503,8 +10503,27 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
         }],
         client_id: None,
     }];
-    sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new())
-        .await;
+    let checkout_root = tc
+        .environments
+        .primary()
+        .expect("primary environment")
+        .cwd()
+        .clone();
+    let model = tc.model_info.slug.clone();
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        ReviewTask::new(ReviewTaskConfig {
+            target: codex_protocol::protocol::ReviewTarget::WholeRepository,
+            target_instructions: "Inspect the repository.".to_string(),
+            verification: codex_protocol::protocol::ReviewVerification::SinglePass,
+            action: codex_protocol::protocol::ReviewAction::Report,
+            review_model: model.clone(),
+            coding_model: model,
+            checkout_root,
+        }),
+    )
+    .await;
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 

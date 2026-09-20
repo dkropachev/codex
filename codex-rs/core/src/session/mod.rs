@@ -232,6 +232,7 @@ pub(crate) use self::input_queue::TurnInput;
 pub(crate) use self::input_queue::TurnInputQueue;
 pub use self::mcp_runtime::McpRuntimeSnapshot;
 use self::review::spawn_review_thread;
+pub(crate) use self::review_command_runner::ExecutorReviewCommandRunner;
 use self::session::AppServerClientMetadata;
 use self::session::Session;
 use self::session::SessionConfiguration;
@@ -321,6 +322,7 @@ use crate::stream_events_utils::HandleOutputCtx;
 #[cfg(test)]
 use crate::stream_events_utils::handle_output_item_done;
 use crate::tasks::ReviewTask;
+use crate::tasks::ReviewTaskConfig;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::network_approval::build_blocked_request_observer;
 use crate::tools::network_approval::build_network_policy_decider;

@@ -31,8 +31,14 @@ pub struct ReviewDefaultBranch {
 }
 
 /// Repository metadata used to populate a review-scope picker.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewScopeResolution {
+    pub review_execution_available: bool,
+    pub review_unavailable_reason: Option<String>,
+    pub fix_execution_available: bool,
+    pub fix_unavailable_reason: Option<String>,
+    pub double_check_available: bool,
+    pub whole_repository_available: bool,
     pub pull_request: Option<ReviewScopePullRequest>,
     pub default_branch: Option<ReviewDefaultBranch>,
     pub current_branch: Option<String>,
@@ -40,6 +46,26 @@ pub struct ReviewScopeResolution {
     pub has_uncommitted_changes: bool,
     pub commits: Vec<CommitLogEntry>,
     pub git_error: Option<String>,
+}
+
+impl Default for ReviewScopeResolution {
+    fn default() -> Self {
+        Self {
+            review_execution_available: true,
+            review_unavailable_reason: None,
+            fix_execution_available: true,
+            fix_unavailable_reason: None,
+            double_check_available: true,
+            whole_repository_available: true,
+            pull_request: None,
+            default_branch: None,
+            current_branch: None,
+            branches: Vec::new(),
+            has_uncommitted_changes: false,
+            commits: Vec::new(),
+            git_error: None,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -156,6 +182,12 @@ pub async fn resolve_review_scope(
     );
 
     ReviewScopeResolution {
+        review_execution_available: true,
+        review_unavailable_reason: None,
+        fix_execution_available: true,
+        fix_unavailable_reason: None,
+        double_check_available: true,
+        whole_repository_available: true,
         pull_request,
         default_branch,
         current_branch,

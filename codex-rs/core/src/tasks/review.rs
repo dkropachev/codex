@@ -1,53 +1,323 @@
 use std::sync::Arc;
 
-use codex_extension_api::ExtensionDataInit;
-use codex_features::Feature;
-use codex_prompts::render_review_exit_interrupted;
-use codex_prompts::render_review_exit_success;
-use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::items::ExitedReviewModeItem;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::ContentItem;
+use anyhow::Context as _;
+use codex_prompts::REVIEW_DOUBLE_CHECK_PROMPT;
+use codex_prompts::REVIEW_PROMPT;
+use codex_prompts::REVIEW_REPAIR_PROMPT;
+use codex_prompts::review_repair_prompt;
+use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::AgentMessageContentDeltaEvent;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::protocol::ReviewAction;
 use codex_protocol::protocol::ReviewOutputEvent;
-use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::review_format::format_review_findings_block;
-use codex_protocol::review_format::render_review_output_text;
-use codex_protocol::user_input::UserInput;
+use codex_protocol::protocol::ReviewTarget;
+use codex_protocol::protocol::ReviewVerification;
+use codex_utils_path_uri::PathUri;
+use serde::de::DeserializeOwned;
 use tokio_util::sync::CancellationToken;
 
-use crate::codex_delegate::DelegateContextPolicy;
-use crate::codex_delegate::run_codex_thread_one_shot;
-use crate::config::Constrained;
 use crate::context::ContextualUserFragment;
-use crate::context::PullRequestContext;
-use crate::model_policy::ModelPolicySource;
-use crate::model_policy::apply_model_policy;
+use crate::context::ReviewRepairInputFragment;
+use crate::context::ReviewStageControlFragment;
+use crate::context::ReviewTargetInstructionsFragment;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
+
+use self::context::SourceRange;
+use self::context::collect_review_context_with_sandbox;
+use self::output::DiscoveryOutput;
+use self::output::StageCodeLocation;
+use self::output::VerificationOutput;
+use self::output::normalize_review_assessment;
+use self::schema::discovery_schema;
+use self::schema::verification_schema;
+use self::stage::ReviewStageEvidence;
+use self::stage::ReviewStageRequest;
+use self::stage::StagePermissions;
+use self::stage::run_review_stage;
 
 use super::SessionTask;
 use super::SessionTaskContext;
 use super::SessionTaskResult;
 
 mod context;
+mod exit;
+mod git_paths;
 mod output;
 mod schema;
 mod stage;
 
-#[derive(Clone, Copy)]
-pub(crate) struct ReviewTask;
+const MAX_STAGE_OUTPUT_BYTES: usize = 256 * 1024;
+
+pub(crate) struct ReviewTaskConfig {
+    pub(crate) target: ReviewTarget,
+    pub(crate) target_instructions: String,
+    pub(crate) verification: ReviewVerification,
+    pub(crate) action: ReviewAction,
+    pub(crate) review_model: String,
+    pub(crate) coding_model: String,
+    pub(crate) checkout_root: PathUri,
+}
+
+pub(crate) struct ReviewTask {
+    config: ReviewTaskConfig,
+    exit_state: Arc<exit::ReviewExitCoordinator>,
+}
 
 impl ReviewTask {
-    pub(crate) fn new() -> Self {
-        Self
+    pub(crate) fn new(config: ReviewTaskConfig) -> Self {
+        Self {
+            config,
+            exit_state: Arc::new(exit::ReviewExitCoordinator::new()),
+        }
+    }
+
+    async fn exit_once(
+        &self,
+        session: Arc<Session>,
+        output: Option<ReviewOutputEvent>,
+        ctx: Arc<TurnContext>,
+    ) {
+        self.exit_state.exit_once(session, output, ctx).await;
+    }
+
+    async fn remember_review_output(&self, output: &ReviewOutputEvent) {
+        self.exit_state.remember_review_output(output).await;
+    }
+
+    async fn run_chain(
+        self: &Arc<Self>,
+        session: Arc<Session>,
+        ctx: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
+    ) -> anyhow::Result<ReviewOutputEvent> {
+        let environment = ctx
+            .environments
+            .primary()
+            .context("review requires a selected environment")?;
+        let parent_sandbox = ctx.file_system_sandbox_context(
+            /*additional_permissions*/ None,
+            &self.config.checkout_root,
+        );
+        environment
+            .environment
+            .get_filesystem()
+            .canonicalize(&self.config.checkout_root, Some(&parent_sandbox))
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "Review cannot read the checkout under the active permissions: {error}"
+                )
+            })?;
+        let read_deny_entries = match &parent_sandbox.permissions {
+            PermissionProfile::Managed {
+                file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+                ..
+            } => entries
+                .iter()
+                .filter(|entry| entry.access == FileSystemAccessMode::Deny)
+                .cloned()
+                .collect::<Vec<_>>(),
+            PermissionProfile::Managed {
+                file_system: ManagedFileSystemPermissions::Unrestricted,
+                ..
+            }
+            | PermissionProfile::Disabled
+            | PermissionProfile::External { .. } => Vec::new(),
+        };
+        if !read_deny_entries.is_empty() {
+            ctx.extension_data
+                .insert(crate::review_stage_runtime::ReviewReadDenyEntries(
+                    read_deny_entries,
+                ));
+        }
+        if cfg!(target_os = "windows")
+            && ctx
+                .environments
+                .primary()
+                .is_some_and(|environment| !environment.environment.is_remote())
+            && ctx.windows_sandbox_level
+                == codex_protocol::config_types::WindowsSandboxLevel::Disabled
+        {
+            anyhow::bail!(
+                "Review requires the Windows sandbox for a local environment; enable unelevated or elevated Windows sandboxing"
+            );
+        }
+        anyhow::ensure!(
+            self.config.action == ReviewAction::Report,
+            "Fix requires the review mutation stage"
+        );
+        let mut read_only_paths = Vec::new();
+        match git_paths::resolve_git_protected_paths(
+            ctx.as_ref(),
+            &self.config.checkout_root,
+            &parent_sandbox,
+        )
+        .await
+        {
+            Ok(paths) => read_only_paths.extend(paths),
+            Err(error) => {
+                tracing::debug!(%error, "review Git metadata paths were unavailable");
+            }
+        }
+        if !read_only_paths.is_empty() {
+            ctx.extension_data
+                .insert(crate::review_stage_runtime::ReviewProtectedPaths(
+                    read_only_paths,
+                ));
+        }
+        if ctx
+            .environments
+            .primary()
+            .is_some_and(|environment| !environment.environment.is_remote())
+            && let Some(executable_path) = std::env::current_exe()
+                .ok()
+                .and_then(|path| PathUri::from_host_native_path(path).ok())
+            && environment
+                .environment
+                .get_filesystem()
+                .canonicalize(&executable_path, Some(&parent_sandbox))
+                .await
+                .is_ok()
+        {
+            ctx.extension_data
+                .insert(crate::review_stage_runtime::ReviewAdditionalReadPaths(
+                    vec![executable_path],
+                ));
+        }
+        let discovery = run_structured_stage::<DiscoveryOutput>(
+            session.clone(),
+            ctx.clone(),
+            ReviewStageRequest {
+                model: self.config.review_model.clone(),
+                system_prompt: REVIEW_PROMPT.to_string(),
+                context_items: vec![target_context_item(&self.config.target_instructions)?],
+                user_prompt: stage_control_prompt("Discover review candidates.")?,
+                output_schema: discovery_schema(),
+                permissions: StagePermissions::ReadOnly,
+                workspace_read_root: Some(self.config.checkout_root.clone()),
+                workspace_write_root: None,
+                include_pull_request_context: true,
+            },
+            cancellation_token.clone(),
+        )
+        .await
+        .context("review discovery failed")?
+        .output;
+
+        let output = match self.config.verification {
+            ReviewVerification::SinglePass => discovery.clone().single_pass_output(),
+            ReviewVerification::DoubleCheck => {
+                self.run_double_check(
+                    session.clone(),
+                    ctx.clone(),
+                    &discovery,
+                    cancellation_token.clone(),
+                )
+                .await?
+            }
+        };
+        self.remember_review_output(&output).await;
+        Ok(output)
+    }
+
+    async fn run_double_check(
+        &self,
+        session: Arc<Session>,
+        ctx: Arc<TurnContext>,
+        discovery: &DiscoveryOutput,
+        cancellation_token: CancellationToken,
+    ) -> anyhow::Result<ReviewOutputEvent> {
+        if discovery.candidates.is_empty() {
+            return Ok(discovery.clone().single_pass_output());
+        }
+        let mut bounded = discovery.bounded_candidates();
+        if bounded.included_indices.is_empty() {
+            let mut output = discovery.clone().single_pass_output();
+            output.unverified_findings.append(&mut output.findings);
+            normalize_review_assessment(&self.config.target, &mut output);
+            return Ok(output);
+        }
+        let candidate_ranges = bounded
+            .included_indices
+            .iter()
+            .filter_map(|index| discovery.candidates.get(*index))
+            .map(|candidate| source_range(&candidate.code_location))
+            .collect::<Vec<_>>();
+        let review_ranges = discovery
+            .review_context
+            .iter()
+            .map(source_range)
+            .collect::<Vec<_>>();
+        let environment = ctx
+            .environments
+            .primary()
+            .context("review verification requires a selected environment")?;
+        let collector_sandbox = ctx.file_system_sandbox_context(
+            /*additional_permissions*/ None,
+            &self.config.checkout_root,
+        );
+        let collected = collect_review_context_with_sandbox(
+            environment.environment.get_filesystem().as_ref(),
+            &self.config.checkout_root,
+            &collector_sandbox,
+            &bounded.json,
+            &candidate_ranges,
+            &review_ranges,
+            &discovery.external_references,
+        )
+        .await;
+        let references = collected.references.clone();
+        let external_references = collected.external_references.clone();
+        let mut context_items = vec![target_context_item(&self.config.target_instructions)?];
+        context_items.extend(
+            collected
+                .into_fragments()
+                .into_iter()
+                .map(ContextualUserFragment::into_boxed_response_item),
+        );
+        let mut verified = run_structured_stage::<VerificationOutput>(
+            session,
+            ctx,
+            ReviewStageRequest {
+                model: self.config.review_model.clone(),
+                system_prompt: REVIEW_DOUBLE_CHECK_PROMPT.to_string(),
+                context_items,
+                user_prompt: stage_control_prompt("Verify the supplied candidates only.")?,
+                output_schema: verification_schema(),
+                permissions: StagePermissions::ReadOnly,
+                workspace_read_root: Some(self.config.checkout_root.clone()),
+                workspace_write_root: None,
+                include_pull_request_context: matches!(
+                    self.config.target,
+                    ReviewTarget::PullRequest { .. }
+                ),
+            },
+            cancellation_token,
+        )
+        .await
+        .context("review verification failed")?
+        .output;
+        let missing = verified.retain_candidates(&bounded.included_indices);
+        bounded
+            .omitted
+            .extend(missing.into_iter().filter_map(|index| {
+                discovery
+                    .candidates
+                    .get(index)
+                    .cloned()
+                    .map(output::StageFinding::into_review_finding)
+            }));
+        Ok(verified.into_review_output(
+            &self.config.target,
+            &discovery.candidates,
+            references,
+            external_references,
+            bounded.omitted,
+        ))
     }
 }
 
@@ -64,7 +334,7 @@ impl SessionTask for ReviewTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        input: Vec<TurnInput>,
+        _input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
         session.session.services.session_telemetry.counter(
@@ -72,248 +342,118 @@ impl SessionTask for ReviewTask {
             /*inc*/ 1,
             &[],
         );
-
-        let mut user_input = Vec::new();
-        for item in input {
-            match item {
-                TurnInput::UserInput { mut content, .. } => user_input.append(&mut content),
-                TurnInput::ResponseItem(_) | TurnInput::InterAgentCommunication(_) => {}
-            }
+        let result = self
+            .run_chain(
+                session.clone_session(),
+                ctx.clone(),
+                cancellation_token.clone(),
+            )
+            .await;
+        if cancellation_token.is_cancelled() {
+            return Ok(None);
         }
-
-        // Start sub-codex conversation and get the receiver for events.
-        let output = match start_review_conversation(
-            session.clone(),
-            ctx.clone(),
-            user_input,
-            cancellation_token.clone(),
-        )
-        .await
-        {
-            Some(receiver) => process_review_events(session.clone(), ctx.clone(), receiver).await,
-            None => None,
+        let output = match result {
+            Ok(output) => Some(output),
+            Err(err) => Some(ReviewOutputEvent {
+                overall_correctness: "uncertain".to_string(),
+                overall_explanation: format!("Review failed: {err}"),
+                ..Default::default()
+            }),
         };
-        if !cancellation_token.is_cancelled() {
-            exit_review_mode(session.clone_session(), output.clone(), ctx.clone()).await;
-        }
+        self.exit_once(session.clone_session(), output, ctx).await;
         Ok(None)
     }
 
     async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
-        exit_review_mode(session.clone_session(), /*review_output*/ None, ctx).await;
+        self.exit_once(session.clone_session(), /*output*/ None, ctx)
+            .await;
     }
 }
 
-async fn start_review_conversation(
-    session: Arc<SessionTaskContext>,
-    ctx: Arc<TurnContext>,
-    input: Vec<UserInput>,
-    cancellation_token: CancellationToken,
-) -> Option<async_channel::Receiver<Event>> {
-    let config = ctx.config.clone();
-    let mut sub_agent_config = config.as_ref().clone();
-    // Carry over review-only feature restrictions so the delegate cannot
-    // re-enable blocked tools (web search, collab tools, view image).
-    if let Err(err) = sub_agent_config
-        .web_search_mode
-        .set(WebSearchMode::Disabled)
-    {
-        panic!("by construction Constrained<WebSearchMode> must always support Disabled: {err}");
-    }
-    let _ = sub_agent_config.features.disable(Feature::SpawnCsv);
-    let _ = sub_agent_config.features.disable(Feature::Collab);
-    let _ = sub_agent_config.features.disable(Feature::MultiAgentV2);
-    // Review children must retain the exact selected-scope user prompt; token-budget compaction
-    // replaces history with world state and would otherwise drop that separate prompt.
-    let _ = sub_agent_config.features.disable(Feature::TokenBudget);
-
-    // Set explicit review rubric for the sub-agent
-    sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
-    sub_agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
-
-    let model = config
-        .review_model
-        .clone()
-        .unwrap_or_else(|| ctx.model_info.slug.clone());
-    sub_agent_config.model = Some(model);
-    let pull_request_context = ctx.extension_data.get::<PullRequestContext>();
-    let pull_request_context_bytes = pull_request_context
-        .as_deref()
-        .map(ContextualUserFragment::render)
-        .map_or(0, |context| context.len());
-    let prompt_bytes = input
-        .iter()
-        .filter_map(|item| serde_json::to_vec(item).ok())
-        .map(|item| item.len())
-        .sum::<usize>()
-        .saturating_add(pull_request_context_bytes);
-    if let Err(err) = apply_model_policy(
-        &mut sub_agent_config,
-        ModelPolicySource::SubAgent(SubAgentSource::Review),
-        prompt_bytes,
-    ) {
-        tracing::warn!("failed to apply review model policy: {err}");
-    }
-    let mut thread_extension_init = ExtensionDataInit::default();
-    if let Some(context) = pull_request_context {
-        thread_extension_init.insert(context.as_ref().clone());
-    }
-    (run_codex_thread_one_shot(
-        sub_agent_config,
-        session.auth_manager(),
-        session.models_manager(),
-        input,
-        session.clone_session(),
-        ctx.clone(),
-        cancellation_token,
-        SubAgentSource::Review,
-        /*final_output_json_schema*/ None,
-        /*initial_history*/ None,
-        thread_extension_init,
-        DelegateContextPolicy::Inherit,
-    )
-    .await)
-        .ok()
-        .map(|io| io.rx_event)
+struct StructuredStageResult<T> {
+    output: T,
+    evidence: ReviewStageEvidence,
 }
 
-async fn process_review_events(
-    session: Arc<SessionTaskContext>,
-    ctx: Arc<TurnContext>,
-    receiver: async_channel::Receiver<Event>,
-) -> Option<ReviewOutputEvent> {
-    let mut prev_agent_message: Option<Event> = None;
-    while let Ok(event) = receiver.recv().await {
-        match event.clone().msg {
-            EventMsg::AgentMessage(_) => {
-                if let Some(prev) = prev_agent_message.take() {
-                    session
-                        .clone_session()
-                        .send_event(ctx.as_ref(), prev.msg)
-                        .await;
-                }
-                prev_agent_message = Some(event);
-            }
-            // Suppress ItemCompleted only for assistant messages: forwarding it
-            // would trigger legacy AgentMessage via as_legacy_events(), which this
-            // review flow intentionally hides in favor of structured output.
-            EventMsg::ItemCompleted(ItemCompletedEvent {
-                item: TurnItem::AgentMessage(_),
-                ..
-            })
-            | EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent { .. }) => {}
-            EventMsg::TurnComplete(task_complete) => {
-                // Parse review output from the last agent message (if present).
-                let out = task_complete
-                    .last_agent_message
-                    .as_deref()
-                    .map(parse_review_output_event);
-                return out;
-            }
-            EventMsg::TurnAborted(_) => {
-                // Cancellation or abort: consumer will finalize with None.
-                return None;
-            }
-            other => {
-                session
-                    .clone_session()
-                    .send_event(ctx.as_ref(), other)
-                    .await;
-            }
-        }
-    }
-    // Channel closed without TurnComplete: treat as interrupted.
-    None
-}
-
-/// Parse a ReviewOutputEvent from a text blob returned by the reviewer model.
-/// If the text is valid JSON matching ReviewOutputEvent, deserialize it.
-/// Otherwise, attempt to extract the first JSON object substring and parse it.
-/// If parsing still fails, return a structured fallback carrying the plain text
-/// in `overall_explanation`.
-fn parse_review_output_event(text: &str) -> ReviewOutputEvent {
-    if let Ok(ev) = serde_json::from_str::<ReviewOutputEvent>(text) {
-        return ev;
-    }
-    if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}'))
-        && start < end
-        && let Some(slice) = text.get(start..=end)
-        && let Ok(ev) = serde_json::from_str::<ReviewOutputEvent>(slice)
-    {
-        return ev;
-    }
-    ReviewOutputEvent {
-        overall_explanation: text.to_string(),
-        ..Default::default()
-    }
-}
-
-/// Emits ExitedReviewMode item lifecycle with optional ReviewOutput,
-/// and records the review output back into conversation history.
-pub(crate) async fn exit_review_mode(
+async fn run_structured_stage<T: DeserializeOwned>(
     session: Arc<Session>,
-    review_output: Option<ReviewOutputEvent>,
     ctx: Arc<TurnContext>,
-) {
-    const REVIEW_USER_MESSAGE_ID: &str = "review_rollout_user";
-    const REVIEW_ASSISTANT_MESSAGE_ID: &str = "review_rollout_assistant";
-    let (user_message, assistant_message) = if let Some(out) = review_output.clone() {
-        let mut findings_str = String::new();
-        let text = out.overall_explanation.trim();
-        if !text.is_empty() {
-            findings_str.push_str(text);
+    request: ReviewStageRequest,
+    cancellation_token: CancellationToken,
+) -> anyhow::Result<StructuredStageResult<T>> {
+    let model = request.model.clone();
+    let output_schema = request.output_schema.clone();
+    let initial_response = run_review_stage(
+        session.clone(),
+        ctx.clone(),
+        request,
+        cancellation_token.clone(),
+    )
+    .await?;
+    // Repairs may correct JSON, but they cannot contribute execution evidence.
+    let evidence = initial_response.evidence;
+    let mut response = initial_response
+        .output
+        .context("review stage returned no final output")?;
+    for repair_attempt in 0..=2 {
+        match parse_stage_response(&response, &output_schema) {
+            Ok(output) => return Ok(StructuredStageResult { output, evidence }),
+            Err(error) if repair_attempt == 2 => return Err(error),
+            Err(_) => {
+                let prompt = review_repair_prompt();
+                response = run_review_stage(
+                    session.clone(),
+                    ctx.clone(),
+                    ReviewStageRequest {
+                        model: model.clone(),
+                        system_prompt: REVIEW_REPAIR_PROMPT.to_string(),
+                        context_items: vec![ContextualUserFragment::into(
+                            ReviewRepairInputFragment::new(&response),
+                        )],
+                        user_prompt: stage_control_prompt(prompt)?,
+                        output_schema: output_schema.clone(),
+                        permissions: StagePermissions::ToolFree,
+                        workspace_read_root: None,
+                        workspace_write_root: None,
+                        include_pull_request_context: false,
+                    },
+                    cancellation_token.clone(),
+                )
+                .await?
+                .output
+                .context("review repair stage returned no final output")?;
+            }
         }
-        if !out.findings.is_empty() {
-            let block = format_review_findings_block(&out.findings, /*selection*/ None);
-            findings_str.push_str(&format!("\n{block}"));
-        }
-        let rendered = render_review_exit_success(&findings_str);
-        let assistant_message = render_review_output_text(&out);
-        (rendered, assistant_message)
-    } else {
-        let rendered = render_review_exit_interrupted();
-        let assistant_message =
-            "Review was interrupted. Please re-run /review and wait for it to complete."
-                .to_string();
-        (rendered, assistant_message)
-    };
+    }
+    unreachable!("repair loop returns after its final attempt")
+}
 
-    session
-        .record_conversation_items(
-            &ctx,
-            &[ResponseItem::Message {
-                id: Some(REVIEW_USER_MESSAGE_ID.to_string()),
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText { text: user_message }],
-                phase: None,
-                internal_chat_message_metadata_passthrough: None,
-            }],
-        )
-        .await;
+fn parse_stage_response<T: DeserializeOwned>(
+    response: &str,
+    output_schema: &serde_json::Value,
+) -> anyhow::Result<T> {
+    anyhow::ensure!(
+        response.len() <= MAX_STAGE_OUTPUT_BYTES,
+        "review stage output exceeds the 256 KiB limit"
+    );
+    let value: serde_json::Value = serde_json::from_str(response)?;
+    self::schema::validate(&value, output_schema)?;
+    Ok(serde_json::from_value(value)?)
+}
 
-    let item = TurnItem::ExitedReviewMode(ExitedReviewModeItem {
-        id: uuid::Uuid::now_v7().to_string(),
-        review_output,
-    });
-    session.emit_turn_item_started(ctx.as_ref(), &item).await;
-    session.emit_turn_item_completed(ctx.as_ref(), item).await;
-    session
-        .record_response_item_and_emit_turn_item(
-            ctx.as_ref(),
-            ResponseItem::Message {
-                id: Some(REVIEW_ASSISTANT_MESSAGE_ID.to_string()),
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: assistant_message,
-                }],
-                phase: None,
-                internal_chat_message_metadata_passthrough: None,
-            },
-        )
-        .await;
+fn source_range(location: &StageCodeLocation) -> SourceRange {
+    SourceRange {
+        path: location.absolute_file_path.clone(),
+        line_range: location.line_range.clone(),
+    }
+}
 
-    // Review turns can run before any regular user turn, so explicitly
-    // materialize rollout persistence. Do this after emitting review output so
-    // file creation + git metadata collection cannot delay client-facing items.
-    session.ensure_rollout_materialized().await;
+fn target_context_item(instructions: &str) -> anyhow::Result<ResponseItem> {
+    Ok(ContextualUserFragment::into(
+        ReviewTargetInstructionsFragment::new(instructions.to_string())?,
+    ))
+}
+
+fn stage_control_prompt(control: &str) -> anyhow::Result<String> {
+    Ok(ReviewStageControlFragment::new(control.to_string())?.render())
 }
