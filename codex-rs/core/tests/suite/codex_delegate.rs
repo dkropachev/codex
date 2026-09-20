@@ -45,10 +45,14 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
 
     // Sub-agent turn 2: return structured review output and complete.
     let review_json = serde_json::json!({
-        "findings": [],
-        "overall_correctness": "ok",
-        "overall_explanation": "delegate approved exec",
-        "overall_confidence_score": 0.5
+        "candidates": [],
+        "assessment": {
+            "verdict": "patch is correct",
+            "explanation": "No issues found.",
+            "confidenceScore": 0.5
+        },
+        "reviewContext": [],
+        "externalReferences": []
     })
     .to_string();
     let sse2 = sse(vec![
@@ -78,6 +82,8 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
                 target: ReviewTarget::Custom {
                     instructions: "Please review".to_string(),
                 },
+                verification: Default::default(),
+                action: Default::default(),
                 user_facing_hint: None,
             },
         })
@@ -131,10 +137,14 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
         ev_completed("resp-1"),
     ]);
     let review_json = serde_json::json!({
-        "findings": [],
-        "overall_correctness": "ok",
-        "overall_explanation": "delegate patch handled",
-        "overall_confidence_score": 0.5
+        "candidates": [],
+        "assessment": {
+            "verdict": "patch is correct",
+            "explanation": "No issues found.",
+            "confidenceScore": 0.5
+        },
+        "reviewContext": [],
+        "externalReferences": []
     })
     .to_string();
     let sse2 = sse(vec![
@@ -162,6 +172,8 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
                 target: ReviewTarget::Custom {
                     instructions: "Please review".to_string(),
                 },
+                verification: Default::default(),
+                action: Default::default(),
                 user_facing_hint: None,
             },
         })
@@ -205,6 +217,20 @@ async fn codex_delegate_ignores_legacy_deltas() {
         ev_response_created("resp-1"),
         ev_reasoning_item_added("reason-1", &["initial"]),
         ev_reasoning_summary_text_delta("think-1"),
+        ev_assistant_message(
+            "msg-1",
+            &serde_json::json!({
+                "candidates": [],
+                "assessment": {
+                    "verdict": "patch is correct",
+                    "explanation": "No issues found.",
+                    "confidenceScore": 1.0
+                },
+                "reviewContext": [],
+                "externalReferences": []
+            })
+            .to_string(),
+        ),
         ev_completed("resp-1"),
     ]);
 
@@ -221,6 +247,8 @@ async fn codex_delegate_ignores_legacy_deltas() {
                 target: ReviewTarget::Custom {
                     instructions: "Please review".to_string(),
                 },
+                verification: Default::default(),
+                action: Default::default(),
                 user_facing_hint: None,
             },
         })

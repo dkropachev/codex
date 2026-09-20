@@ -21,6 +21,7 @@ use codex_protocol::review_format::render_review_output_text;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 
+use crate::codex_delegate::DelegateContextPolicy;
 use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::config::Constrained;
 use crate::context::ContextualUserFragment;
@@ -39,6 +40,7 @@ use super::SessionTaskResult;
 mod context;
 mod output;
 mod schema;
+mod stage;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ReviewTask;
@@ -168,6 +170,7 @@ async fn start_review_conversation(
         /*final_output_json_schema*/ None,
         /*initial_history*/ None,
         thread_extension_init,
+        DelegateContextPolicy::Inherit,
     )
     .await)
         .ok()
