@@ -34,7 +34,7 @@ use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
-use codex_protocol::review_format::REVIEW_FALLBACK_MESSAGE;
+use codex_protocol::review_format::REVIEW_INTERRUPTED_MESSAGE;
 use codex_protocol::review_format::render_review_output_text;
 use codex_shell_command::parse_command::parse_command;
 use codex_shell_command::parse_command::shlex_join;
@@ -47,7 +47,7 @@ use tracing::warn;
 pub(crate) fn review_output_text(output: Option<&ReviewOutputEvent>) -> String {
     output
         .map(render_review_output_text)
-        .unwrap_or_else(|| REVIEW_FALLBACK_MESSAGE.to_string())
+        .unwrap_or_else(|| REVIEW_INTERRUPTED_MESSAGE.to_string())
 }
 
 pub(crate) fn review_finding_count(output: Option<&ReviewOutputEvent>) -> usize {

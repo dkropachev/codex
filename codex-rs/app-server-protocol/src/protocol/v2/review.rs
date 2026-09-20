@@ -11,6 +11,18 @@ v2_enum_from_core!(
     }
 );
 
+v2_enum_from_core!(
+    pub enum ReviewVerification from codex_protocol::protocol::ReviewVerification {
+        SinglePass, DoubleCheck
+    }
+);
+
+v2_enum_from_core!(
+    pub enum ReviewAction from codex_protocol::protocol::ReviewAction {
+        Report, Fix, FixAndCommit
+    }
+);
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -23,6 +35,16 @@ pub struct ReviewStartParams {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub delivery: Option<ReviewDelivery>,
+
+    /// Whether to verify discovery candidates in a second isolated stage.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub verification: Option<ReviewVerification>,
+
+    /// What to do after the report is ready.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub action: Option<ReviewAction>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -48,6 +70,24 @@ pub struct ReviewResolveScopeParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ReviewResolveScopeResponse {
+    /// Whether reviews can run on the selected executor with the server's active sandbox setup.
+    #[serde(default = "default_review_execution_available")]
+    pub review_execution_available: bool,
+    /// Short diagnostic when review execution is unavailable.
+    #[serde(default)]
+    pub review_unavailable_reason: Option<String>,
+    /// Whether Fix actions can use the required workspace-write profile on the server.
+    #[serde(default)]
+    pub fix_execution_available: bool,
+    /// Short diagnostic when Fix actions are unavailable.
+    #[serde(default)]
+    pub fix_unavailable_reason: Option<String>,
+    /// Whether the server supports the isolated Double-check stage.
+    #[serde(default)]
+    pub double_check_available: bool,
+    /// Whether the server supports the whole-repository review target.
+    #[serde(default)]
+    pub whole_repository_available: bool,
     /// Open pull request associated with the selected checkout, when one was found.
     pub pull_request: Option<ReviewScopePullRequest>,
     /// Detected repository default branch, when one was found.
@@ -56,6 +96,18 @@ pub struct ReviewResolveScopeResponse {
     pub current_branch: Option<String>,
     /// Available explicit base-branch targets, with the preferred target first.
     pub branches: Vec<String>,
+    /// Whether staged, unstaged, or untracked changes are present.
+    #[serde(default)]
+    pub has_uncommitted_changes: bool,
+    /// Recent commits reachable from HEAD, capped at 100 entries.
+    #[serde(default)]
+    pub commits: Vec<ReviewScopeCommit>,
+    /// Short diagnostic shown when Git repository detection failed.
+    pub error: Option<String>,
+}
+
+fn default_review_execution_available() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -79,6 +131,14 @@ pub struct ReviewScopeBranch {
     pub display_name: String,
     /// Exact local or remote ref used as the review target.
     pub target: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ReviewScopeCommit {
+    pub sha: String,
+    pub title: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -106,6 +166,9 @@ pub enum ReviewTarget {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     PullRequest { url: String },
+
+    /// Review the accessible checkout without a comparison baseline.
+    WholeRepository,
 
     /// Arbitrary instructions, equivalent to the old free-form prompt.
     #[serde(rename_all = "camelCase")]

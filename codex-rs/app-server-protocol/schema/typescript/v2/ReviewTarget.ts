@@ -6,4 +6,4 @@ export type ReviewTarget = { "type": "uncommittedChanges" } | { "type": "baseBra
 /**
  * Optional human-readable label (e.g., commit subject) for UIs.
  */
-title: string | null, } | { "type": "pullRequest", url: string, } | { "type": "custom", instructions: string, };
+title: string | null, } | { "type": "pullRequest", url: string, } | { "type": "wholeRepository" } | { "type": "custom", instructions: string, };

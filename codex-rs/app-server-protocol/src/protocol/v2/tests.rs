@@ -124,6 +124,12 @@ fn review_resolve_scope_request_and_response_round_trip() {
     );
 
     let response = ReviewResolveScopeResponse {
+        review_execution_available: true,
+        review_unavailable_reason: None,
+        fix_execution_available: true,
+        fix_unavailable_reason: None,
+        double_check_available: true,
+        whole_repository_available: true,
         pull_request: Some(ReviewScopePullRequest {
             number: 123,
             url: "https://github.com/openai/codex/pull/123".to_string(),
@@ -139,11 +145,23 @@ fn review_resolve_scope_request_and_response_round_trip() {
             "refs/remotes/origin/main".to_string(),
             "refs/heads/feature/review-picker".to_string(),
         ],
+        has_uncommitted_changes: true,
+        commits: vec![ReviewScopeCommit {
+            sha: "abc123".to_string(),
+            title: "Add review picker".to_string(),
+        }],
+        error: None,
     };
     let response_value = serde_json::to_value(&response).expect("serialize scope response");
     assert_eq!(
         response_value,
         json!({
+            "reviewExecutionAvailable": true,
+            "reviewUnavailableReason": null,
+            "fixExecutionAvailable": true,
+            "fixUnavailableReason": null,
+            "doubleCheckAvailable": true,
+            "wholeRepositoryAvailable": true,
             "pullRequest": {
                 "number": 123,
                 "url": "https://github.com/openai/codex/pull/123",
@@ -155,7 +173,10 @@ fn review_resolve_scope_request_and_response_round_trip() {
                 "target": "refs/remotes/origin/main"
             },
             "currentBranch": "feature/review-picker",
-            "branches": ["refs/remotes/origin/main", "refs/heads/feature/review-picker"]
+            "branches": ["refs/remotes/origin/main", "refs/heads/feature/review-picker"],
+            "hasUncommittedChanges": true,
+            "commits": [{"sha": "abc123", "title": "Add review picker"}],
+            "error": null
         })
     );
     assert_eq!(
@@ -163,6 +184,25 @@ fn review_resolve_scope_request_and_response_round_trip() {
             .expect("deserialize scope response"),
         response
     );
+}
+
+#[test]
+fn review_resolve_scope_response_defaults_fields_missing_from_older_servers() {
+    let response = serde_json::from_value::<ReviewResolveScopeResponse>(json!({
+        "pullRequest": null,
+        "defaultBranch": null,
+        "currentBranch": null,
+        "branches": [],
+        "error": null
+    }))
+    .expect("deserialize old review scope response");
+
+    assert!(response.review_execution_available);
+    assert!(!response.fix_execution_available);
+    assert!(!response.double_check_available);
+    assert!(!response.whole_repository_available);
+    assert!(!response.has_uncommitted_changes);
+    assert!(response.commits.is_empty());
 }
 
 #[test]

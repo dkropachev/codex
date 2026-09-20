@@ -935,6 +935,8 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         thread_id: primary_thread_id_for_span.clone(),
                         target: review_target_to_api(review_request.target),
                         delivery: None,
+                        verification: None,
+                        action: None,
                     },
                 },
                 "review/start",
@@ -1226,6 +1228,7 @@ fn review_target_to_api(target: ReviewTarget) -> ApiReviewTarget {
         ReviewTarget::BaseBranch { branch } => ApiReviewTarget::BaseBranch { branch },
         ReviewTarget::Commit { sha, title } => ApiReviewTarget::Commit { sha, title },
         ReviewTarget::PullRequest { url } => ApiReviewTarget::PullRequest { url },
+        ReviewTarget::WholeRepository => ApiReviewTarget::WholeRepository,
         ReviewTarget::Custom { instructions } => ApiReviewTarget::Custom { instructions },
     }
 }
@@ -2029,6 +2032,8 @@ fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
 
     Ok(ReviewRequest {
         target,
+        verification: Default::default(),
+        action: Default::default(),
         user_facing_hint: None,
     })
 }

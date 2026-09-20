@@ -1101,6 +1101,8 @@ impl AppServerSession {
                     thread_id: thread_id.to_string(),
                     target,
                     delivery: Some(ReviewDelivery::Inline),
+                    verification: None,
+                    action: None,
                 },
             })
             .await
