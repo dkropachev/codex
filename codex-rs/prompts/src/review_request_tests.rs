@@ -68,7 +68,7 @@ fn review_prompt_template_renders_pull_request_scope_without_metadata() {
 }
 
 #[tokio::test]
-async fn fully_qualified_local_branch_uses_short_name_for_upstream_lookup() {
+async fn fully_qualified_local_branch_uses_full_ref_for_upstream_lookup() {
     let runner = FakeRunner::new(vec![
         output(
             &["git", "rev-parse", "--is-inside-work-tree"],
@@ -88,10 +88,10 @@ async fn fully_qualified_local_branch_uses_short_name_for_upstream_lookup() {
         output(
             &[
                 "git",
-                "rev-parse",
-                "--abbrev-ref",
-                "--symbolic-full-name",
-                "main@{upstream}",
+                "for-each-ref",
+                "--format=%(upstream)",
+                "--count=1",
+                "refs/heads/main",
             ],
             /*exit_code*/ 1,
             "",
