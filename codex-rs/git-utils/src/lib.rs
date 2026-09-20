@@ -8,6 +8,7 @@ mod operations;
 mod platform;
 mod pull_request;
 mod review_branch;
+mod review_commit;
 mod review_scope;
 mod review_validation;
 
@@ -56,6 +57,9 @@ pub use pull_request::merge_base_with_head_with_runner;
 pub use pull_request::resolve_pull_request_for_review;
 pub use pull_request::resolve_pull_request_for_review_with_runner;
 pub use review_branch::resolve_pr_base_ref_with_runner;
+pub use review_commit::ReviewFixCommitSnapshot;
+pub use review_commit::ReviewSnapshotCommandRunner;
+pub use review_commit::capture_review_fix_commit_snapshot;
 pub use review_scope::ReviewDefaultBranch;
 pub use review_scope::ReviewScopePullRequest;
 pub use review_scope::ReviewScopeResolution;
