@@ -13,6 +13,7 @@ use super::PullRequestContext;
 use super::RecommendedPluginsInstructions;
 use super::ReviewCandidatesFragment;
 use super::ReviewFixFindingsFragment;
+use super::ReviewHandoffFragment;
 use super::ReviewReferencesFragment;
 use super::ReviewRepairInputFragment;
 use super::ReviewSourceFragment;
@@ -57,6 +58,8 @@ static PULL_REQUEST_CONTEXT_REGISTRATION: FragmentRegistrationProxy<PullRequestC
     FragmentRegistrationProxy::new();
 static REVIEW_CANDIDATES_REGISTRATION: FragmentRegistrationProxy<ReviewCandidatesFragment> =
     FragmentRegistrationProxy::new();
+static REVIEW_HANDOFF_REGISTRATION: FragmentRegistrationProxy<ReviewHandoffFragment> =
+    FragmentRegistrationProxy::new();
 static REVIEW_SOURCE_REGISTRATION: FragmentRegistrationProxy<ReviewSourceFragment> =
     FragmentRegistrationProxy::new();
 static REVIEW_REFERENCES_REGISTRATION: FragmentRegistrationProxy<ReviewReferencesFragment> =
@@ -85,6 +88,7 @@ static CONTEXTUAL_USER_FRAGMENTS: &[&dyn FragmentRegistration] = &[
     &LEGACY_MODEL_MISMATCH_WARNING_REGISTRATION,
     &PULL_REQUEST_CONTEXT_REGISTRATION,
     &REVIEW_CANDIDATES_REGISTRATION,
+    &REVIEW_HANDOFF_REGISTRATION,
     &REVIEW_SOURCE_REGISTRATION,
     &REVIEW_REFERENCES_REGISTRATION,
     &REVIEW_FIX_FINDINGS_REGISTRATION,
