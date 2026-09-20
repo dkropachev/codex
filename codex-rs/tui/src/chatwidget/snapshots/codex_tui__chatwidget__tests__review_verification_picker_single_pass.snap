@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests/review_flow.rs
+assertion_line: 586
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Choose review verification
+
+› 1. Don't double-check  Use the discovery report directly.
+
+  Press enter to confirm or esc to go back

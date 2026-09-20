@@ -2019,9 +2019,7 @@ impl App {
                 self.chat_widget.show_review_branch_picker(thread_id, &cwd);
             }
             AppEvent::OpenReviewCommitPicker { thread_id, cwd } => {
-                self.chat_widget
-                    .show_review_commit_picker(thread_id, &cwd)
-                    .await;
+                self.chat_widget.show_review_commit_picker(thread_id, &cwd);
             }
             AppEvent::OpenReviewCustomPrompt { thread_id, cwd } => {
                 self.chat_widget.show_review_custom_prompt(thread_id, &cwd);
@@ -2034,22 +2032,54 @@ impl App {
                 self.chat_widget
                     .apply_review_scope_resolution(request_id, cwd, resolution);
             }
-            AppEvent::OpenReviewActionPicker {
+            AppEvent::OpenReviewVerificationPicker {
                 thread_id,
                 cwd,
                 target,
             } => {
                 self.chat_widget
-                    .show_review_action_picker(thread_id, cwd, target);
+                    .show_review_verification_picker(thread_id, cwd, target);
+            }
+            AppEvent::OpenReviewActionPicker {
+                thread_id,
+                cwd,
+                target,
+                verification,
+            } => {
+                self.chat_widget
+                    .show_review_action_picker(thread_id, cwd, target, verification);
+            }
+            AppEvent::ReviewActionScopeResolved {
+                request_id,
+                thread_id,
+                cwd,
+                target,
+                verification,
+                resolution,
+            } => {
+                self.chat_widget.apply_review_action_scope_resolution(
+                    request_id,
+                    thread_id,
+                    cwd,
+                    target,
+                    verification,
+                    resolution,
+                );
             }
             AppEvent::StartReview {
                 thread_id,
                 cwd,
                 target,
+                verification,
                 action,
             } => {
-                self.chat_widget
-                    .start_review_for_thread(thread_id, cwd, target, action);
+                self.chat_widget.start_review_for_thread(
+                    thread_id,
+                    cwd,
+                    target,
+                    verification,
+                    action,
+                );
             }
             AppEvent::SubmitUserMessageWithMode {
                 text,

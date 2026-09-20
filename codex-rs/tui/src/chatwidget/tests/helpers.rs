@@ -597,6 +597,14 @@ pub(super) fn handle_exited_review_mode(chat: &mut ChatWidget) {
 }
 
 pub(super) fn handle_exited_review_mode_with_findings(chat: &mut ChatWidget, finding_count: usize) {
+    handle_exited_review_mode_with_output(chat, String::new(), finding_count);
+}
+
+pub(super) fn handle_exited_review_mode_with_output(
+    chat: &mut ChatWidget,
+    review: impl Into<String>,
+    finding_count: usize,
+) {
     chat.handle_server_notification(
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: thread_id(chat),
@@ -608,7 +616,7 @@ pub(super) fn handle_exited_review_mode_with_findings(chat: &mut ChatWidget, fin
             completed_at_ms: 0,
             item: AppServerThreadItem::ExitedReviewMode {
                 id: "review-end".to_string(),
-                review: String::new(),
+                review: review.into(),
                 finding_count,
             },
         }),

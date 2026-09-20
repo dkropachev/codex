@@ -162,12 +162,6 @@ impl ChatWidget {
                 }
             }
         }
-        if !submitted_follow_up
-            && self.bottom_pane.no_modal_or_popup_active()
-            && !self.is_user_turn_pending_or_running()
-        {
-            submitted_follow_up = self.maybe_submit_ready_review_follow_up();
-        }
         // Update the list to reflect the remaining queued messages (if any).
         self.refresh_pending_input_preview();
         submitted_follow_up

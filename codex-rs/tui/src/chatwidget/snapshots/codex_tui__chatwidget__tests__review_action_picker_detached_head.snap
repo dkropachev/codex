@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests/review_flow.rs
+expression: rendered
+---
+  Choose a review action
+
+› 1. Report findings  Show the review in this conversation.
+  2. Fix findings     Revalidate and fix every valid finding.
+
+  Press enter to confirm or esc to go back
