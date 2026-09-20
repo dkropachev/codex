@@ -1,0 +1,71 @@
+{
+  "pagination": {
+    "files": {
+      "pager.py": {
+        "before": "def collect_pages(fetch_page):\n    items = []\n    cursor = None\n    while True:\n        page, cursor = fetch_page(cursor)\n        items.extend(page)\n        if cursor is None:\n            return items\n",
+        "after": "def collect_pages(fetch_page):\n    items = []\n    cursor = None\n    while True:\n        page, cursor = fetch_page(cursor)\n        items.extend(page)\n        if cursor is None:\n            return items[:-1]\n"
+      }
+    },
+    "expectedFinding": true,
+    "priority": 1,
+    "rootCauseTerms": ["last", "final", "drop"]
+  },
+  "tenant_cache": {
+    "files": {
+      "cache.py": {
+        "before": "def load_record(store, tenant_id, record_id):\n    return store.read(tenant_id, record_id)\n",
+        "after": "_cache = {}\n\n\ndef load_record(store, tenant_id, record_id):\n    if record_id not in _cache:\n        _cache[record_id] = store.read(tenant_id, record_id)\n    return _cache[record_id]\n"
+      }
+    },
+    "expectedFinding": true,
+    "priority": 1,
+    "rootCauseTerms": ["tenant", "cache", "record"]
+  },
+  "preexisting": {
+    "files": {
+      "service.py": {
+        "before": "def average_latency(total_ms, request_count):\n    return total_ms / request_count\n\n\ndef service_label(name):\n    return name.strip()\n",
+        "after": "def average_latency(total_ms, request_count):\n    return total_ms / request_count\n\n\ndef service_label(name):\n    \"\"\"Return the trimmed label shown in service lists.\"\"\"\n    return name.strip()\n"
+      }
+    },
+    "expectedFinding": false,
+    "rootCauseTerms": []
+  },
+  "intentional": {
+    "files": {
+      "config.py": {
+        "before": "class MissingOptionalConfig(Exception):\n    pass\n\n\ndef read_optional(loader, key):\n    return loader.read(key)\n",
+        "after": "class MissingOptionalConfig(Exception):\n    pass\n\n\ndef read_optional(loader, key):\n    \"\"\"Return None when an optional key is not configured.\"\"\"\n    try:\n        return loader.read(key)\n    except MissingOptionalConfig:\n        return None\n"
+      },
+      "test_config.py": {
+        "before": "from config import MissingOptionalConfig, read_optional\n\n\nclass Loader:\n    def read(self, key):\n        raise MissingOptionalConfig(key)\n\n\ndef test_missing_optional_config_raises():\n    try:\n        read_optional(Loader(), \"theme\")\n    except MissingOptionalConfig:\n        return\n    raise AssertionError(\"expected missing optional config\")\n",
+        "after": "from config import MissingOptionalConfig, read_optional\n\n\nclass Loader:\n    def read(self, key):\n        raise MissingOptionalConfig(key)\n\n\ndef test_missing_optional_config_returns_none():\n    assert read_optional(Loader(), \"theme\") is None\n"
+      }
+    },
+    "expectedFinding": false,
+    "rootCauseTerms": []
+  },
+  "legacy_compat": {
+    "files": {
+      "rollout.py": {
+        "before": "from dataclasses import dataclass\n\n\n@dataclass\nclass Rollout:\n    prompt: str\n    trace_id: str | None = None\n\n\ndef decode_rollout(payload):\n    return Rollout(**payload)\n",
+        "after": "from dataclasses import dataclass\n\n\n@dataclass\nclass Rollout:\n    prompt: str\n    trace_id: str\n\n\ndef decode_rollout(payload):\n    return Rollout(**payload)\n"
+      }
+    },
+    "expectedFinding": true,
+    "priority": 1,
+    "rootCauseTerms": ["legacy", "trace_id", "missing"]
+  },
+  "duplicate_root": {
+    "files": {
+      "identifiers.py": {
+        "before": "def normalize_external_id(value):\n    return value.strip().lower()\n\n\ndef user_lookup_key(user_id):\n    return f\"user:{normalize_external_id(user_id)}\"\n\n\ndef order_lookup_key(order_id):\n    return f\"order:{normalize_external_id(order_id)}\"\n",
+        "after": "def normalize_external_id(value):\n    return value.strip().lower().replace(\"-\", \"\")\n\n\ndef user_lookup_key(user_id):\n    return f\"user:{normalize_external_id(user_id)}\"\n\n\ndef order_lookup_key(order_id):\n    return f\"order:{normalize_external_id(order_id)}\"\n"
+      }
+    },
+    "expectedFinding": true,
+    "priority": 1,
+    "maxFindings": 1,
+    "rootCauseTerms": ["hyphen", "collision", "distinct"]
+  }
+}
