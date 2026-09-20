@@ -937,6 +937,15 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::ViewImageToolCall(_) => {}
         EventMsg::ItemStarted(event) => {
+            if let CoreTurnItem::ExitedReviewMode(item) = &event.item {
+                crate::review_compat::emit_legacy_review_user_raw_item(
+                    conversation_id,
+                    &event.turn_id,
+                    item.review_output.as_ref(),
+                    &outgoing,
+                )
+                .await;
+            }
             let should_emit = match &event.item {
                 // Approval and guardian flows can emit the command start notification before core
                 // emits the canonical item. Reuse the same set to suppress that duplicate.
@@ -978,6 +987,28 @@ pub(crate) async fn apply_bespoke_event_handling(
             }
         }
         EventMsg::ItemCompleted(event) => {
+            let legacy_review_report = match ThreadItem::from(event.item.clone()) {
+                ThreadItem::ExitedReviewMode { review, .. } => Some(review),
+                ThreadItem::AgentMessage { .. }
+                | ThreadItem::Plan { .. }
+                | ThreadItem::Reasoning { .. }
+                | ThreadItem::CommandExecution { .. }
+                | ThreadItem::FileChange { .. }
+                | ThreadItem::McpToolCall { .. }
+                | ThreadItem::DynamicToolCall { .. }
+                | ThreadItem::CollabAgentToolCall { .. }
+                | ThreadItem::WebSearch(_)
+                | ThreadItem::ImageView { .. }
+                | ThreadItem::ImageGeneration(_)
+                | ThreadItem::UserMessage { .. }
+                | ThreadItem::EnteredReviewMode { .. }
+                | ThreadItem::ContextCompaction { .. }
+                | ThreadItem::HookPrompt { .. }
+                | ThreadItem::SubAgentActivity { .. }
+                | ThreadItem::Sleep { .. } => None,
+            };
+            let completed_at_ms = event.completed_at_ms;
+            let turn_id = event.turn_id.clone();
             apply_canonical_item_completed_side_effects(
                 &thread_manager,
                 &thread_watch_manager,
@@ -991,6 +1022,16 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &event_turn_id,
             );
             outgoing.send_server_notification(notification).await;
+            if let Some(review) = legacy_review_report {
+                crate::review_compat::emit_legacy_review_agent_message(
+                    conversation_id,
+                    turn_id,
+                    review,
+                    completed_at_ms,
+                    &outgoing,
+                )
+                .await;
+            }
         }
         msg @ (EventMsg::PatchApplyUpdated(_) | EventMsg::TerminalInteraction(_)) => {
             let notification = item_event_to_server_notification(
