@@ -65,3 +65,22 @@ async fn plan_mode_uses_contributed_turn_item_for_last_agent_message() {
         Some("plan contributed assistant text")
     );
 }
+
+#[test]
+fn pending_review_handoff_tokens_use_one_byte_per_token() {
+    let item = ResponseItem::Message {
+        id: Some("review_handoff_part:test:0".to_string()),
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "!".repeat(8 * 1024),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let serialized_bytes = serde_json::to_vec(&item).expect("serialize handoff").len();
+
+    assert_eq!(
+        pending_review_handoff_tokens(&[item]),
+        i64::try_from(serialized_bytes).expect("serialized size")
+    );
+}

@@ -11,6 +11,7 @@ use super::AdditionalContextStore;
 use super::auto_compact_window::AutoCompactWindow;
 use super::auto_compact_window::AutoCompactWindowIds;
 use super::auto_compact_window::AutoCompactWindowSnapshot;
+use crate::context::PendingReviewReport;
 use crate::context_manager::ContextManager;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::SessionConfiguration;
@@ -21,6 +22,8 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
 use codex_utils_output_truncation::TruncationPolicy;
+
+const MAX_PENDING_REVIEW_REPORTS: usize = 256;
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
@@ -41,6 +44,8 @@ pub(crate) struct SessionState {
     pub(crate) current_time_reminder: CurrentTimeReminderState,
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_sources: VecDeque<codex_hooks::SessionStartSource>,
+    pending_review_reports: VecDeque<PendingReviewReport>,
+    pending_review_report_overflow: usize,
     granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
     next_turn_is_first: bool,
 }
@@ -73,6 +78,8 @@ impl SessionState {
             current_time_reminder: CurrentTimeReminderState::default(),
             active_connector_selection: HashSet::new(),
             pending_session_start_sources: VecDeque::new(),
+            pending_review_reports: VecDeque::new(),
+            pending_review_report_overflow: 0,
             granted_permissions_by_environment_id: HashMap::new(),
             next_turn_is_first: true,
         }
@@ -109,6 +116,47 @@ impl SessionState {
 
     pub(crate) fn clone_history(&self) -> ContextManager {
         self.history.clone()
+    }
+
+    pub(crate) fn enqueue_review_report(&mut self, report: PendingReviewReport) {
+        if self
+            .pending_review_reports
+            .iter()
+            .any(|pending| pending.item_id == report.item_id)
+        {
+            return;
+        }
+        if self.pending_review_reports.len() >= MAX_PENDING_REVIEW_REPORTS {
+            self.pending_review_reports.pop_front();
+            self.pending_review_report_overflow =
+                self.pending_review_report_overflow.saturating_add(1);
+        }
+        self.pending_review_reports.push_back(report);
+    }
+
+    pub(crate) fn pending_review_reports(&self) -> Vec<PendingReviewReport> {
+        self.pending_review_reports.iter().cloned().collect()
+    }
+
+    pub(crate) fn pending_review_report_overflow(&self) -> usize {
+        self.pending_review_report_overflow
+    }
+
+    pub(crate) fn clear_pending_review_reports(&mut self) {
+        self.pending_review_reports.clear();
+        self.pending_review_report_overflow = 0;
+    }
+
+    pub(crate) fn clear_pending_review_reports_through(&mut self, item_id: &str) {
+        let Some(index) = self
+            .pending_review_reports
+            .iter()
+            .position(|report| report.item_id == item_id)
+        else {
+            return;
+        };
+        self.pending_review_report_overflow = 0;
+        self.pending_review_reports.drain(..=index);
     }
 
     pub(crate) fn replace_history(
