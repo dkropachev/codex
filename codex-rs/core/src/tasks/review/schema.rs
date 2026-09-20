@@ -14,8 +14,8 @@ fn line_range_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-            "start": {"type": "integer", "minimum": 1},
-            "end": {"type": "integer", "minimum": 1}
+            "start": {"type": "integer", "minimum": 1, "maximum": u32::MAX},
+            "end": {"type": "integer", "minimum": 1, "maximum": u32::MAX}
         },
         "required": ["start", "end"]
     })

@@ -76,6 +76,14 @@ struct ContextLimits {
     total_scan_timeout: Duration,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct ReviewContextInput<'a> {
+    candidates_json: &'a str,
+    candidate_ranges: &'a [SourceRange],
+    review_ranges: &'a [SourceRange],
+    external_references: &'a [ReviewExternalReference],
+}
+
 impl Default for ContextLimits {
     fn default() -> Self {
         Self {
@@ -92,29 +100,6 @@ impl Default for ContextLimits {
     }
 }
 
-#[cfg(test)]
-pub(crate) async fn collect_review_context(
-    filesystem: &dyn ExecutorFileSystem,
-    checkout_root: &PathUri,
-    candidates_json: &str,
-    candidate_ranges: &[SourceRange],
-    review_ranges: &[SourceRange],
-    external_references: &[ReviewExternalReference],
-) -> CollectedReviewContext {
-    let limits = ContextLimits::default();
-    collect_review_context_with_limits_and_timeout(
-        filesystem,
-        checkout_root,
-        /*sandbox*/ None,
-        candidates_json,
-        candidate_ranges,
-        review_ranges,
-        external_references,
-        limits,
-    )
-    .await
-}
-
 pub(crate) async fn collect_review_context_with_sandbox(
     filesystem: &dyn ExecutorFileSystem,
     checkout_root: &PathUri,
@@ -128,10 +113,12 @@ pub(crate) async fn collect_review_context_with_sandbox(
         filesystem,
         checkout_root,
         Some(sandbox),
-        candidates_json,
-        candidate_ranges,
-        review_ranges,
-        external_references,
+        ReviewContextInput {
+            candidates_json,
+            candidate_ranges,
+            review_ranges,
+            external_references,
+        },
         ContextLimits::default(),
     )
     .await
@@ -141,20 +128,14 @@ async fn collect_review_context_with_limits_and_timeout(
     filesystem: &dyn ExecutorFileSystem,
     checkout_root: &PathUri,
     sandbox: Option<&FileSystemSandboxContext>,
-    candidates_json: &str,
-    candidate_ranges: &[SourceRange],
-    review_ranges: &[SourceRange],
-    external_references: &[ReviewExternalReference],
+    input: ReviewContextInput<'_>,
     limits: ContextLimits,
 ) -> CollectedReviewContext {
     let collection = collector::collect_review_context_with_limits(
         filesystem,
         checkout_root,
         sandbox,
-        candidates_json,
-        candidate_ranges,
-        review_ranges,
-        external_references,
+        input,
         limits,
     );
     match tokio::time::timeout(limits.total_scan_timeout, collection).await {
@@ -164,13 +145,14 @@ async fn collect_review_context_with_limits_and_timeout(
                 reference: "review context".to_string(),
                 explanation: "Source collection exceeded the overall timeout.".to_string(),
             }];
-            let external_references = external_references
+            let external_references = input
+                .external_references
                 .iter()
                 .take(limits.references)
                 .cloned()
                 .collect::<Vec<_>>();
             CollectedReviewContext {
-                candidates: bounded_candidates(candidates_json),
+                candidates: bounded_candidates(input.candidates_json),
                 source_fragments: Vec::new(),
                 reference_fragments: bounded_reference_fragments(&references, &external_references),
                 references,

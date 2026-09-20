@@ -28,6 +28,8 @@ mod realtime_end_instructions;
 mod realtime_start_instructions;
 mod realtime_start_with_instructions;
 mod recommended_plugins_instructions;
+// These primitives are staged before the review runtime that consumes them.
+#[allow(dead_code)]
 mod review_stage;
 mod rollout_budget;
 mod subagent_notification;
@@ -75,14 +77,14 @@ pub(crate) use realtime_end_instructions::RealtimeEndInstructions;
 pub(crate) use realtime_start_instructions::RealtimeStartInstructions;
 pub(crate) use realtime_start_with_instructions::RealtimeStartWithInstructions;
 pub(crate) use recommended_plugins_instructions::RecommendedPluginsInstructions;
+#[cfg(test)]
 pub(crate) use review_stage::MAX_REVIEW_FRAGMENT_BYTES;
+pub(crate) use review_stage::MAX_REVIEW_SOURCE_PAYLOAD_BYTES;
 pub(crate) use review_stage::ReviewCandidatesFragment;
+#[cfg(test)]
 pub(crate) use review_stage::ReviewFixFindingsFragment;
 pub(crate) use review_stage::ReviewReferencesFragment;
-pub(crate) use review_stage::ReviewRepairInputFragment;
 pub(crate) use review_stage::ReviewSourceFragment;
-pub(crate) use review_stage::ReviewStageControlFragment;
-pub(crate) use review_stage::ReviewTargetInstructionsFragment;
 pub(crate) use review_stage::SourceFragmentPacker;
 pub(crate) use review_stage::bounded_candidates;
 pub(crate) use review_stage::bounded_reference_fragments;

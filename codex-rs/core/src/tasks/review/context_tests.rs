@@ -1,5 +1,8 @@
 use std::fs;
 use std::io;
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_exec_server::LocalFileSystem;
@@ -38,6 +41,29 @@ fn source(path: impl Into<String>, start: u32, end: u32) -> SourceRange {
         path: path.into(),
         line_range: ReviewLineRange { start, end },
     }
+}
+
+async fn collect_review_context(
+    filesystem: &dyn ExecutorFileSystem,
+    checkout_root: &PathUri,
+    candidates_json: &str,
+    candidate_ranges: &[SourceRange],
+    review_ranges: &[SourceRange],
+    external_references: &[ReviewExternalReference],
+) -> CollectedReviewContext {
+    collect_review_context_with_limits_and_timeout(
+        filesystem,
+        checkout_root,
+        /*sandbox*/ None,
+        ReviewContextInput {
+            candidates_json,
+            candidate_ranges,
+            review_ranges,
+            external_references,
+        },
+        ContextLimits::default(),
+    )
+    .await
 }
 
 fn source_text(context: &CollectedReviewContext) -> String {
@@ -113,7 +139,7 @@ async fn frames_untrusted_input_and_reports_candidate_truncation() {
         reference.reference == "review candidates" && reference.explanation.contains("truncated")
     }));
     let reference_text = context.reference_fragments[0].render();
-    assert!(reference_text.starts_with("<review_references>Some requested"));
+    assert!(reference_text.starts_with("<review_references>SECURITY:"));
     assert!(reference_text.contains("External reference:"));
 
     let invalid = crate::context::bounded_candidates("not JSON");
@@ -166,6 +192,107 @@ async fn loads_candidate_ranges_first_and_merges_overlaps() {
     assert_eq!(text.matches(":7: line-7").count(), 1);
     assert!(text.contains(":10: line-10"));
     assert!(context.references.is_empty());
+}
+
+#[tokio::test]
+async fn overlapping_ranges_cannot_displace_an_earlier_candidate() {
+    let root = TempDir::new().expect("temporary directory");
+    let contents = (1..=400)
+        .map(|line| format!("line-{line}-abcdefghijklmnopqrstuvwx"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(root.path().join("source.rs"), contents).expect("write source");
+    let limits = ContextLimits {
+        file_source_bytes: 120,
+        total_source_bytes: 1_024,
+        ..ContextLimits::default()
+    };
+
+    for (candidate_ranges, review_ranges) in [
+        (
+            vec![source("source.rs", /*start*/ 200, /*end*/ 200)],
+            vec![source("source.rs", /*start*/ 1, /*end*/ 400)],
+        ),
+        (
+            vec![
+                source("source.rs", /*start*/ 200, /*end*/ 200),
+                source("source.rs", /*start*/ 1, /*end*/ 400),
+            ],
+            Vec::new(),
+        ),
+    ] {
+        let context = collect_review_context_with_limits(
+            &LocalFileSystem::unsandboxed(),
+            &root_uri(&root),
+            /*sandbox*/ None,
+            ReviewContextInput {
+                candidates_json: "[]",
+                candidate_ranges: &candidate_ranges,
+                review_ranges: &review_ranges,
+                external_references: &[],
+            },
+            limits,
+        )
+        .await;
+
+        let text = source_text(&context);
+        assert!(text.contains("source.rs:200: line-200"));
+        assert_eq!(text.matches("source.rs:200:").count(), 1);
+    }
+}
+
+#[tokio::test]
+async fn source_line_uses_the_full_fragment_payload_capacity() {
+    let root = TempDir::new().expect("temporary directory");
+    let line = "x".repeat(5 * 1024);
+    fs::write(root.path().join("source.rs"), format!("{line}\n")).expect("write source");
+
+    let context = collect_review_context(
+        &LocalFileSystem::unsandboxed(),
+        &root_uri(&root),
+        "[]",
+        &[source("source.rs", /*start*/ 1, /*end*/ 1)],
+        &[],
+        &[],
+    )
+    .await;
+
+    assert!(context.references.is_empty());
+    assert!(source_text(&context).contains(&line));
+}
+
+#[tokio::test]
+async fn invalid_ranges_do_not_consume_the_filesystem_work_budget() {
+    let root = TempDir::new().expect("temporary directory");
+    fs::write(root.path().join("source.rs"), "first\nsecond\n").expect("write source");
+    let limits = ContextLimits {
+        requested_ranges: 2,
+        ..ContextLimits::default()
+    };
+
+    let context = collect_review_context_with_limits(
+        &LocalFileSystem::unsandboxed(),
+        &root_uri(&root),
+        /*sandbox*/ None,
+        ReviewContextInput {
+            candidates_json: "[]",
+            candidate_ranges: &[
+                source("invalid-1.rs", /*start*/ 0, /*end*/ 1),
+                source("invalid-2.rs", /*start*/ 0, /*end*/ 1),
+            ],
+            review_ranges: &[
+                source("source.rs", /*start*/ 1, /*end*/ 1),
+                source("source.rs", /*start*/ 2, /*end*/ 2),
+            ],
+            external_references: &[],
+        },
+        limits,
+    )
+    .await;
+
+    let text = source_text(&context);
+    assert!(text.contains("source.rs:1: first"));
+    assert!(text.contains("source.rs:2: second"));
 }
 
 #[tokio::test]
@@ -242,6 +369,78 @@ async fn rejects_binary_invalid_utf8_oversized_and_overlong_ranges() {
     }));
 }
 
+#[tokio::test]
+async fn rejects_a_range_that_ends_beyond_the_file() {
+    let root = TempDir::new().expect("temporary directory");
+    fs::write(root.path().join("source.rs"), "first\nsecond\n").expect("write source");
+
+    let context = collect_review_context(
+        &LocalFileSystem::unsandboxed(),
+        &root_uri(&root),
+        "[]",
+        &[source("source.rs", /*start*/ 1, /*end*/ 3)],
+        &[],
+        &[],
+    )
+    .await;
+
+    assert!(context.source_fragments.is_empty());
+    assert_eq!(
+        context.references,
+        vec![ReviewReference {
+            reference: "source.rs:1-3".to_string(),
+            explanation: "Range ends beyond the end of the file.".to_string(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn reports_references_omitted_at_the_count_limit() {
+    let root = TempDir::new().expect("temporary directory");
+    let limits = ContextLimits {
+        references: 2,
+        ..ContextLimits::default()
+    };
+    let external_references = (0..3)
+        .map(|index| ReviewExternalReference {
+            reference: format!("external-{index}"),
+            explanation: "not loaded".to_string(),
+        })
+        .collect::<Vec<_>>();
+
+    let context = collect_review_context_with_limits(
+        &LocalFileSystem::unsandboxed(),
+        &root_uri(&root),
+        /*sandbox*/ None,
+        ReviewContextInput {
+            candidates_json: "[]",
+            candidate_ranges: &[
+                source("missing-1.rs", /*start*/ 1, /*end*/ 1),
+                source("missing-2.rs", /*start*/ 1, /*end*/ 1),
+                source("missing-3.rs", /*start*/ 1, /*end*/ 1),
+            ],
+            review_ranges: &[],
+            external_references: &external_references,
+        },
+        limits,
+    )
+    .await;
+
+    assert_eq!(context.references.len(), limits.references);
+    assert_eq!(context.external_references.len(), limits.references);
+    assert_eq!(context.references[0].reference, "review context limits");
+    assert!(
+        context.references[0]
+            .explanation
+            .contains("2 source references and 1 external reference")
+    );
+    assert!(
+        context.reference_fragments[0]
+            .render()
+            .contains("review context limits")
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn rejects_symlink_whose_target_is_outside_checkout() {
@@ -298,13 +497,15 @@ async fn enforces_fragment_file_and_total_byte_limits() {
         &LocalFileSystem::unsandboxed(),
         &root_uri(&root),
         /*sandbox*/ None,
-        "[]",
-        &[source("first.rs", /*start*/ 1, /*end*/ 10)],
-        &[
-            source("first.rs", /*start*/ 11, /*end*/ 20),
-            source("second.rs", /*start*/ 1, /*end*/ 10),
-        ],
-        &[],
+        ReviewContextInput {
+            candidates_json: "[]",
+            candidate_ranges: &[source("first.rs", /*start*/ 1, /*end*/ 10)],
+            review_ranges: &[
+                source("first.rs", /*start*/ 11, /*end*/ 20),
+                source("second.rs", /*start*/ 1, /*end*/ 10),
+            ],
+            external_references: &[],
+        },
         limits,
     )
     .await;
@@ -335,6 +536,7 @@ struct SlowCanonicalizeFileSystem {
     inner: LocalFileSystem,
     delay: Duration,
     denied_path: Option<PathUri>,
+    canonicalize_calls: Arc<AtomicUsize>,
 }
 
 impl SlowCanonicalizeFileSystem {
@@ -361,6 +563,7 @@ impl ExecutorFileSystem for SlowCanonicalizeFileSystem {
     ) -> ExecutorFileSystemFuture<'a, PathUri> {
         Box::pin(async move {
             self.reject_denied(path, sandbox)?;
+            self.canonicalize_calls.fetch_add(1, Ordering::Relaxed);
             tokio::time::sleep(self.delay).await;
             self.inner.canonicalize(path, /*sandbox*/ None).await
         })
@@ -470,6 +673,7 @@ async fn parent_sandbox_denial_keeps_candidate_source_out_of_context() {
         inner: LocalFileSystem::unsandboxed(),
         delay: Duration::ZERO,
         denied_path: Some(denied_path.clone()),
+        canonicalize_calls: Arc::new(AtomicUsize::new(0)),
     };
     let sandbox = FileSystemSandboxContext {
         permissions: PermissionProfile::Managed {
@@ -518,21 +722,94 @@ async fn parent_sandbox_denial_keeps_candidate_source_out_of_context() {
 }
 
 #[tokio::test]
+async fn canonicalizes_each_requested_path_once() {
+    let root = TempDir::new().expect("temporary directory");
+    fs::write(root.path().join("source.rs"), "first\nsecond\nthird\n").expect("write source");
+    let canonicalize_calls = Arc::new(AtomicUsize::new(0));
+    let filesystem = SlowCanonicalizeFileSystem {
+        inner: LocalFileSystem::unsandboxed(),
+        delay: Duration::ZERO,
+        denied_path: None,
+        canonicalize_calls: Arc::clone(&canonicalize_calls),
+    };
+
+    collect_review_context(
+        &filesystem,
+        &root_uri(&root),
+        "[]",
+        &[
+            source("source.rs", /*start*/ 1, /*end*/ 1),
+            source("source.rs", /*start*/ 2, /*end*/ 2),
+            source("source.rs", /*start*/ 3, /*end*/ 3),
+        ],
+        &[],
+        &[],
+    )
+    .await;
+
+    assert_eq!(canonicalize_calls.load(Ordering::Relaxed), 2);
+}
+
+#[tokio::test]
+async fn resolves_remote_paths_concurrently_within_the_total_timeout() {
+    let root = TempDir::new().expect("temporary directory");
+    let filesystem = SlowCanonicalizeFileSystem {
+        inner: LocalFileSystem::unsandboxed(),
+        delay: Duration::from_millis(25),
+        denied_path: None,
+        canonicalize_calls: Arc::new(AtomicUsize::new(0)),
+    };
+    let ranges = (0..32)
+        .map(|index| {
+            source(
+                format!("missing-{index}.rs"),
+                /*start*/ 1,
+                /*end*/ 1,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let context = collect_review_context_with_limits_and_timeout(
+        &filesystem,
+        &root_uri(&root),
+        /*sandbox*/ None,
+        ReviewContextInput {
+            candidates_json: "[]",
+            candidate_ranges: &ranges,
+            review_ranges: &[],
+            external_references: &[],
+        },
+        timeout_limits(Duration::from_millis(100), Duration::from_millis(250)),
+    )
+    .await;
+
+    assert_eq!(context.references.len(), ranges.len());
+    assert!(context.references.iter().all(|reference| {
+        reference
+            .explanation
+            .contains("could not be resolved in the checkout")
+    }));
+}
+
+#[tokio::test]
 async fn reports_a_filesystem_operation_timeout() {
     let root = TempDir::new().expect("temporary directory");
     let filesystem = SlowCanonicalizeFileSystem {
         inner: LocalFileSystem::unsandboxed(),
         delay: Duration::from_millis(25),
         denied_path: None,
+        canonicalize_calls: Arc::new(AtomicUsize::new(0)),
     };
     let context = collect_review_context_with_limits_and_timeout(
         &filesystem,
         &root_uri(&root),
         /*sandbox*/ None,
-        "[]",
-        &[source("source.rs", /*start*/ 1, /*end*/ 1)],
-        &[],
-        &[],
+        ReviewContextInput {
+            candidates_json: "[]",
+            candidate_ranges: &[source("source.rs", /*start*/ 1, /*end*/ 1)],
+            review_ranges: &[],
+            external_references: &[],
+        },
         timeout_limits(Duration::from_millis(1), Duration::from_secs(/*secs*/ 1)),
     )
     .await;
@@ -551,15 +828,18 @@ async fn reports_the_total_context_scan_timeout() {
         inner: LocalFileSystem::unsandboxed(),
         delay: Duration::from_millis(25),
         denied_path: None,
+        canonicalize_calls: Arc::new(AtomicUsize::new(0)),
     };
     let context = collect_review_context_with_limits_and_timeout(
         &filesystem,
         &root_uri(&root),
         /*sandbox*/ None,
-        "[]",
-        &[source("source.rs", /*start*/ 1, /*end*/ 1)],
-        &[],
-        &[],
+        ReviewContextInput {
+            candidates_json: "[]",
+            candidate_ranges: &[source("source.rs", /*start*/ 1, /*end*/ 1)],
+            review_ranges: &[],
+            external_references: &[],
+        },
         timeout_limits(Duration::from_secs(/*secs*/ 1), Duration::from_millis(1)),
     )
     .await;

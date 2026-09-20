@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -196,20 +197,36 @@ impl DiscoveryOutput {
 
 impl VerificationOutput {
     pub(super) fn retain_candidates(&mut self, candidate_indices: &[usize]) -> Vec<usize> {
-        let mut remaining = candidate_indices.iter().copied().collect::<HashSet<_>>();
+        let allowed = candidate_indices.iter().copied().collect::<HashSet<_>>();
+        let mut occurrences = HashMap::new();
+        for candidate_index in self
+            .findings
+            .iter()
+            .chain(&self.out_of_scope_findings)
+            .chain(&self.unverified_findings)
+            .map(|finding| finding.candidate_index)
+            .chain(self.rejected_candidate_indices.iter().copied())
+            .filter(|candidate_index| allowed.contains(candidate_index))
+        {
+            *occurrences.entry(candidate_index).or_insert(0usize) += 1;
+        }
+        let retained = occurrences
+            .iter()
+            .filter_map(|(candidate_index, count)| (*count == 1).then_some(*candidate_index))
+            .collect::<HashSet<_>>();
         for findings in [
             &mut self.findings,
             &mut self.out_of_scope_findings,
             &mut self.unverified_findings,
         ] {
-            findings.retain(|finding| remaining.remove(&finding.candidate_index));
+            findings.retain(|finding| retained.contains(&finding.candidate_index));
         }
         self.rejected_candidate_indices
-            .retain(|index| remaining.remove(index));
+            .retain(|index| retained.contains(index));
         candidate_indices
             .iter()
             .copied()
-            .filter(|index| remaining.contains(index))
+            .filter(|index| occurrences.get(index) != Some(&1))
             .collect()
     }
 
