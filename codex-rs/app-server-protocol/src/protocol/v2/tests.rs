@@ -192,8 +192,7 @@ fn review_resolve_scope_response_defaults_fields_missing_from_older_servers() {
         "pullRequest": null,
         "defaultBranch": null,
         "currentBranch": null,
-        "branches": [],
-        "error": null
+        "branches": []
     }))
     .expect("deserialize old review scope response");
 

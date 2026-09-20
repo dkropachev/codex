@@ -103,6 +103,7 @@ pub struct ReviewResolveScopeResponse {
     #[serde(default)]
     pub commits: Vec<ReviewScopeCommit>,
     /// Short diagnostic shown when Git repository detection failed.
+    #[serde(default)]
     pub error: Option<String>,
 }
 

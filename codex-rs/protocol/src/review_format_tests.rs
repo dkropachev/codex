@@ -59,21 +59,34 @@ fn report_sections_follow_the_stable_order() {
         }),
     };
 
-    let report = render_review_output_text(&output);
-    let headings = [
-        "Assessment before fixes",
-        "Findings",
-        "Out-of-scope findings",
-        "Unverified",
-        "References",
-        "External references",
-        "Resolution",
-    ];
-    let positions =
-        headings.map(|heading| report.find(heading).expect("heading should be present"));
-    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
-    assert!(report.contains("[P1] Handle the failed send — src/lib.rs:10-14"));
-    assert!(report.contains("Pre-existing: no"));
+    assert_eq!(
+        render_review_output_text(&output),
+        "Assessment before fixes\n\n\
+patch is incorrect (confidence 0.90)\n\
+One bug remains.\n\n\
+Findings\n\n\
+[P1] Handle the failed send — src/lib.rs:10-14\n\
+The error is ignored and the request can hang.\n\
+Pre-existing: no\n\n\
+Out-of-scope findings\n\n\
+[P1] Close the stale handle — src/lib.rs:10-14\n\
+The error is ignored and the request can hang.\n\
+Pre-existing: yes\n\n\
+Unverified\n\n\
+[P1] Check the platform fallback — src/lib.rs:10-14\n\
+The error is ignored and the request can hang.\n\
+Pre-existing: undetermined\n\n\
+References\n\n\
+- src/large.rs:1-900 — The requested range exceeds 400 lines.\n\n\
+External references\n\n\
+- upstream API — Its contract affects this call.\n\n\
+Resolution\n\n\
+Status: complete. Fixed: 1. Rejected: 0. Unresolved: 0.\n\
+- Handled the failed send.\n\
+Tests:\n\
+- `just test -p codex-core` — passed\n\
+Commit: abc123"
+    );
 }
 
 #[test]

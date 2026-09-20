@@ -48,7 +48,7 @@ pub const REVIEW_FIX_SCOPE_PROMPT: &str = concat!(
     "only for preExisting=true when fixing it may still help."
 );
 
-pub const REVIEW_PROMPT: &str = concat!(
+pub const REVIEW_DISCOVERY_PROMPT: &str = concat!(
     shared_review_agent_prompt!(),
     "\n\n",
     "You discover code-review candidates.\n\n",

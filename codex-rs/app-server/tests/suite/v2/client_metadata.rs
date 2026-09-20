@@ -260,6 +260,8 @@ async fn review_start_sends_parent_lineage_in_turn_metadata_for_thread_fork_v2()
         .send_review_start_request(ReviewStartParams {
             thread_id: thread.id.clone(),
             delivery: Some(ReviewDelivery::Inline),
+            verification: None,
+            action: None,
             target: ReviewTarget::Custom {
                 instructions: "Review the fork".to_string(),
             },

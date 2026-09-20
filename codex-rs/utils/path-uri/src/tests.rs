@@ -1,6 +1,6 @@
 use super::*;
 use pretty_assertions::assert_eq;
-#[cfg(windows)]
+#[cfg(any(unix, windows))]
 use std::ffi::OsString;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
@@ -309,6 +309,21 @@ fn file_uri_parses_a_posix_path_on_any_host() {
     assert_eq!(uri.encoded_path(), "/home/alice/src/main.rs");
     assert_eq!(uri.basename(), Some("main.rs".to_string()));
     assert_eq!(uri.to_string(), "file:///home/alice/src/main.rs");
+}
+
+#[cfg(unix)]
+#[test]
+fn opaque_posix_path_parent_preserves_non_utf8_bytes() {
+    let root = PathBuf::from(OsString::from_vec(b"/repo/non-utf8-\xff".to_vec()));
+    let nested = root.join("nested");
+    let root = PathUri::from_host_native_path(&root).expect("root URI");
+    let nested = PathUri::from_host_native_path(&nested).expect("nested URI");
+
+    assert_eq!(nested.parent(), Some(root.clone()));
+    assert_eq!(
+        root.parent(),
+        Some(PathUri::parse("file:///repo").expect("UTF-8 parent URI"))
+    );
 }
 
 #[test]

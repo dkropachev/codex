@@ -210,11 +210,30 @@ impl PathUri {
 
     /// Returns the lexical parent without crossing the inferred native path root.
     ///
-    /// POSIX `/`, Windows drive roots, Windows UNC share roots, and opaque fallback
-    /// URIs created by [`Self::from_abs_path`] have no parent.
+    /// POSIX `/`, Windows drive roots, and Windows UNC share roots have no parent.
+    /// Opaque POSIX fallbacks preserve their original path bytes during traversal;
+    /// other opaque fallback forms have no parent.
     pub fn parent(&self) -> Option<Self> {
-        if decode_bad_path_uri(&self.0).is_some() {
-            return None;
+        if let Some(path_bytes) = decode_bad_path_uri(&self.0) {
+            if infer_opaque_path_convention(&path_bytes) != Some(PathConvention::Posix) {
+                return None;
+            }
+            let mut end = path_bytes.len();
+            while end > 1 && path_bytes.get(end - 1) == Some(&b'/') {
+                end -= 1;
+            }
+            if end <= 1 {
+                return None;
+            }
+            let separator = path_bytes[..end].iter().rposition(|byte| *byte == b'/')?;
+            let parent_end = separator.max(1);
+            let parent_bytes = &path_bytes[..parent_end];
+            if let Ok(parent) = std::str::from_utf8(parent_bytes)
+                && let Some(parent) = Self::from_absolute_native_path(parent, PathConvention::Posix)
+            {
+                return Some(parent);
+            }
+            return Some(Self::from_opaque_path_bytes(parent_bytes));
         }
 
         let convention = self.infer_path_convention()?;

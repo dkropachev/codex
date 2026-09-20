@@ -64,4 +64,8 @@ pub use review_scope::ReviewDefaultBranch;
 pub use review_scope::ReviewScopePullRequest;
 pub use review_scope::ReviewScopeResolution;
 pub use review_scope::resolve_review_scope;
+pub use review_validation::has_changes_against_base;
 pub use review_validation::has_uncommitted_changes;
+pub use review_validation::resolve_review_commit_oid;
+pub use review_validation::resolve_review_repository_root;
+pub use review_validation::resolved_commit_has_changes;

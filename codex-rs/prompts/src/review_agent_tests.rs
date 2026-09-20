@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn every_stage_uses_shared_concise_rules() {
     for prompt in [
-        REVIEW_PROMPT.to_string(),
+        REVIEW_DISCOVERY_PROMPT.to_string(),
         REVIEW_DOUBLE_CHECK_PROMPT.to_string(),
         REVIEW_FIX_SCOPE_PROMPT.to_string(),
         review_fix_prompt(ReviewAction::Fix),
@@ -16,10 +16,10 @@ fn every_stage_uses_shared_concise_rules() {
 
 #[test]
 fn discovery_omits_pre_existing_classification() {
-    assert!(!REVIEW_PROMPT.contains("preExisting"));
-    assert!(!REVIEW_PROMPT.contains("introduced by the selected change"));
-    assert!(REVIEW_PROMPT.contains("Do not run a separate"));
-    assert!(REVIEW_PROMPT.contains("DoubleCheck"));
+    assert!(!REVIEW_DISCOVERY_PROMPT.contains("preExisting"));
+    assert!(!REVIEW_DISCOVERY_PROMPT.contains("introduced by the selected change"));
+    assert!(REVIEW_DISCOVERY_PROMPT.contains("Do not run a separate"));
+    assert!(REVIEW_DISCOVERY_PROMPT.contains("DoubleCheck"));
 }
 
 #[test]
@@ -51,9 +51,9 @@ fn stage_prompts_remain_compact() {
         SHARED_REVIEW_AGENT_PROMPT.len()
     );
     assert!(
-        REVIEW_PROMPT.len() <= 1_600,
+        REVIEW_DISCOVERY_PROMPT.len() <= 1_600,
         "review prompt is {} bytes",
-        REVIEW_PROMPT.len()
+        REVIEW_DISCOVERY_PROMPT.len()
     );
     assert!(
         REVIEW_DOUBLE_CHECK_PROMPT.len() <= 1_800,
