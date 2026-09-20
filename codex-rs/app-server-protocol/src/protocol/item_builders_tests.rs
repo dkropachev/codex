@@ -2,6 +2,11 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn missing_review_output_is_rendered_as_interrupted() {
+    assert_eq!(review_output_text(/*output*/ None), "Review interrupted.");
+}
+
+#[test]
 fn foreign_read_is_omitted_without_dropping_other_command_actions() {
     #[cfg(windows)]
     let cwd = PathUri::parse("file:///usr/local/src").expect("valid foreign POSIX cwd");

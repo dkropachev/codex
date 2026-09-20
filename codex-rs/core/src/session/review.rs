@@ -15,6 +15,7 @@ pub(super) async fn spawn_review_thread(
         prompt: review_prompt,
         user_facing_hint,
         pull_request_context,
+        ..
     } = resolved;
     let model = config
         .review_model

@@ -165,6 +165,7 @@ use codex_app_server_protocol::ReviewDelivery as ApiReviewDelivery;
 use codex_app_server_protocol::ReviewResolveScopeParams;
 use codex_app_server_protocol::ReviewResolveScopeResponse;
 use codex_app_server_protocol::ReviewScopeBranch;
+use codex_app_server_protocol::ReviewScopeCommit;
 use codex_app_server_protocol::ReviewScopePullRequest;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;

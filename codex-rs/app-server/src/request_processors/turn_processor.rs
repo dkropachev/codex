@@ -295,6 +295,12 @@ impl TurnRequestProcessor {
 
         Ok(Some(
             ReviewResolveScopeResponse {
+                review_execution_available: true,
+                review_unavailable_reason: None,
+                fix_execution_available: false,
+                fix_unavailable_reason: Some("Fix requires the staged review runtime".to_string()),
+                double_check_available: false,
+                whole_repository_available: true,
                 pull_request: resolution
                     .pull_request
                     .map(|pull_request| ReviewScopePullRequest {
@@ -311,6 +317,16 @@ impl TurnRequestProcessor {
                     }),
                 current_branch: resolution.current_branch,
                 branches: resolution.branches,
+                has_uncommitted_changes: resolution.has_uncommitted_changes,
+                commits: resolution
+                    .commits
+                    .into_iter()
+                    .map(|commit| ReviewScopeCommit {
+                        sha: commit.sha,
+                        title: commit.subject,
+                    })
+                    .collect(),
+                error: resolution.git_error,
             }
             .into(),
         ))
@@ -414,6 +430,7 @@ impl TurnRequestProcessor {
                 }
                 ApiReviewTarget::PullRequest { url }
             }
+            ApiReviewTarget::WholeRepository => ApiReviewTarget::WholeRepository,
             ApiReviewTarget::Custom { instructions } => {
                 let trimmed = instructions.trim().to_string();
                 if trimmed.is_empty() {
@@ -432,12 +449,15 @@ impl TurnRequestProcessor {
             ApiReviewTarget::BaseBranch { branch } => CoreReviewTarget::BaseBranch { branch },
             ApiReviewTarget::Commit { sha, title } => CoreReviewTarget::Commit { sha, title },
             ApiReviewTarget::PullRequest { url } => CoreReviewTarget::PullRequest { url },
+            ApiReviewTarget::WholeRepository => CoreReviewTarget::WholeRepository,
             ApiReviewTarget::Custom { instructions } => CoreReviewTarget::Custom { instructions },
         };
 
         let hint = codex_core::review_prompts::user_facing_hint(&core_target);
         let review_request = ReviewRequest {
             target: core_target,
+            verification: Default::default(),
+            action: Default::default(),
             user_facing_hint: Some(hint.clone()),
         };
 
@@ -1357,6 +1377,7 @@ impl TurnRequestProcessor {
             thread_id,
             target,
             delivery,
+            ..
         } = params;
 
         let (parent_thread_id, parent_thread) = self.load_thread(&thread_id).await?;
