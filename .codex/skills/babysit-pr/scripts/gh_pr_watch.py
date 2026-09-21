@@ -331,14 +331,12 @@ def get_workflow_runs_for_sha(repo, head_sha):
     return runs
 
 
-def failed_runs_from_workflow_runs(runs, head_sha, current_run_ids=None):
+def failed_runs_from_workflow_runs(runs, head_sha):
     failed_runs = []
     for run in runs:
         if not isinstance(run, dict):
             continue
         if str(run.get("head_sha") or "") != head_sha:
-            continue
-        if current_run_ids is not None and run.get("id") not in current_run_ids:
             continue
         conclusion = str(run.get("conclusion") or "")
         if conclusion not in FAILED_RUN_CONCLUSIONS:
@@ -782,9 +780,7 @@ def collect_snapshot(args):
     else:
         state.pop("terminal_key", None)
         state.pop("terminal_since", None)
-    failed_runs = failed_runs_from_workflow_runs(
-        workflow_runs, pr["head_sha"], current_run_ids
-    )
+    failed_runs = failed_runs_from_workflow_runs(workflow_runs, pr["head_sha"])
     failed_jobs = failed_jobs_from_workflow_runs(
         pr["repo"], workflow_runs, pr["head_sha"], current_run_ids
     )
@@ -837,6 +833,16 @@ def collect_snapshot(args):
     return snapshot, state_path
 
 
+def snapshot_for_output(snapshot):
+    output = dict(snapshot)
+    check_details, check_details_summary = ci_wait.bounded_check_details(
+        snapshot.get("check_details") or []
+    )
+    output["check_details"] = check_details
+    output["check_details_summary"] = check_details_summary
+    return output
+
+
 def retry_failed_now(args):
     snapshot, state_path = collect_snapshot(args)
     pr = snapshot["pr"]
@@ -846,7 +852,7 @@ def retry_failed_now(args):
     max_retries = snapshot["retry_state"]["max_flaky_retries"]
 
     result = {
-        "snapshot": snapshot,
+        "snapshot": snapshot_for_output(snapshot),
         "state_file": str(state_path),
         "rerun_attempted": False,
         "rerun_count": 0,
@@ -964,7 +970,7 @@ def run_watch(args):
         actions = set(snapshot.get("actions") or [])
         current_change_key = snapshot_change_key(snapshot)
         if current_change_key != last_change_key or snapshot.get("new_review_items"):
-            print_event("snapshot", {"snapshot": snapshot, "state_file": str(state_path), "next_poll_seconds": poll_seconds})
+            print_event("snapshot", {"snapshot": snapshot_for_output(snapshot), "state_file": str(state_path), "next_poll_seconds": poll_seconds})
         if "stop_pr_closed" in actions or "stop_exhausted_retries" in actions:
             print_event("stop", {"actions": snapshot.get("actions"), "pr": snapshot.get("pr")})
             return 0
@@ -994,8 +1000,9 @@ def main():
         if args.wait_for:
             return ci_wait.run_wait(args, collect_snapshot, load_state, save_state, print_json)
         snapshot, state_path = collect_snapshot(args)
-        snapshot["state_file"] = str(state_path)
-        print_json(snapshot)
+        output = snapshot_for_output(snapshot)
+        output["state_file"] = str(state_path)
+        print_json(output)
         return 0
     except (GhCommandError, RuntimeError, ValueError) as err:
         sys.stderr.write(f"gh_pr_watch.py error: {err}\n")

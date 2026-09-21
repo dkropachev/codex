@@ -1,5 +1,6 @@
 import argparse
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -57,6 +58,22 @@ def sample_snapshot(checks=None, check_details=None, **overrides):
     }
     snapshot.update(overrides)
     return snapshot
+
+
+def sample_check_detail(index, status="passed", padding=""):
+    state = {"running": "IN_PROGRESS", "queued": "QUEUED"}.get(status, "COMPLETED")
+    return {
+        "id": f"CI\x1fcheck-{index}{padding}",
+        "workflow": f"CI{padding}",
+        "name": f"check-{index}{padding}",
+        "status": status,
+        "state": state,
+        "started_at": "2026-09-21T10:00:00Z",
+        "completed_at": "2026-09-21T10:01:00Z" if state == "COMPLETED" else "",
+        "url": f"https://github.com/openai/codex/actions/runs/99/job/{index}{padding}",
+        "run_id": 99,
+        "job_id": index,
+    }
 
 
 def test_collect_snapshot_fetches_review_items_before_ci(monkeypatch, tmp_path):
@@ -218,9 +235,11 @@ def test_pending_review_feedback_surfaces_only_after_publication(monkeypatch):
 def test_run_watch_keeps_polling_open_ready_to_merge_pr(monkeypatch):
     sleeps = []
     events = []
+    check_details = [sample_check_detail(index) for index in range(12)]
     snapshot = {
         "pr": sample_pr(),
         "checks": sample_checks(),
+        "check_details": check_details,
         "failed_runs": [],
         "failed_jobs": [],
         "new_review_items": [],
@@ -257,6 +276,84 @@ def test_run_watch_keeps_polling_open_ready_to_merge_pr(monkeypatch):
 
     assert sleeps == [30, 30]
     assert [event for event, _ in events] == ["snapshot"]
+    assert events[0][1]["snapshot"]["check_details_summary"] == {
+        "total_count": 12,
+        "emitted_count": 10,
+        "omitted_count": 2,
+        "truncated": True,
+    }
+    assert snapshot["check_details"] == check_details
+
+
+def test_check_detail_output_is_hard_capped_and_prioritizes_failures():
+    at_cap = [
+        {"name": f"check-{index}", "status": "passed"}
+        for index in range(gh_pr_watch.ci_wait.MAX_OUTPUT_CHECK_DETAILS)
+    ]
+    details, summary = gh_pr_watch.ci_wait.bounded_check_details(at_cap)
+    assert details == at_cap
+    assert summary == {
+        "total_count": 10,
+        "emitted_count": 10,
+        "omitted_count": 0,
+        "truncated": False,
+    }
+
+    over_cap = at_cap + [{"name": "last", "status": "passed"}]
+    _, summary = gh_pr_watch.ci_wait.bounded_check_details(over_cap)
+    assert summary == {
+        "total_count": 11,
+        "emitted_count": 10,
+        "omitted_count": 1,
+        "truncated": True,
+    }
+
+    long_checks = [sample_check_detail(index, padding="x" * 1_000) for index in range(15)]
+    long_checks[-1]["status"] = "failed"
+    snapshot = sample_snapshot(check_details=long_checks)
+    output = gh_pr_watch.snapshot_for_output(snapshot)
+
+    assert output["check_details"][0]["status"] == "failed"
+    assert output["check_details_summary"]["total_count"] == 15
+    assert output["check_details_summary"]["truncated"] is True
+    assert (
+        len(json.dumps(output["check_details"], sort_keys=True))
+        <= gh_pr_watch.ci_wait.MAX_OUTPUT_CHECK_DETAILS_JSON_CHARS
+    )
+    assert len(snapshot["check_details"]) == 15
+    assert len(snapshot["check_details"][-1]["name"]) > len(output["check_details"][0]["name"])
+
+
+def test_once_and_retry_emit_bounded_snapshots(monkeypatch, tmp_path):
+    check_details = [sample_check_detail(index) for index in range(12)]
+    snapshot = sample_snapshot(
+        check_details=check_details,
+        retry_state={"current_sha_retries_used": 0, "max_flaky_retries": 3},
+    )
+    snapshot["ci"].update({"rerun_pending": False, "check_set_current": True})
+    state_path = tmp_path / "pr-123.json"
+    monkeypatch.setattr(gh_pr_watch, "collect_snapshot", lambda args: (snapshot, state_path))
+
+    emitted = []
+    monkeypatch.setattr(
+        gh_pr_watch,
+        "parse_args",
+        lambda: argparse.Namespace(
+            retry_failed_now=False,
+            watch=False,
+            wait_for=None,
+        ),
+    )
+    monkeypatch.setattr(gh_pr_watch, "print_json", emitted.append)
+
+    assert gh_pr_watch.main() == 0
+    assert emitted[0]["check_details_summary"]["truncated"] is True
+    assert emitted[0]["state_file"] == str(state_path)
+
+    result = gh_pr_watch.retry_failed_now(argparse.Namespace())
+    assert result["reason"] == "no_failed_runs"
+    assert result["snapshot"]["check_details_summary"]["truncated"] is True
+    assert len(snapshot["check_details"]) == 12
 
 
 def test_failed_jobs_include_direct_logs_endpoint(monkeypatch):
@@ -323,11 +420,47 @@ def test_failed_jobs_include_direct_logs_endpoint(monkeypatch):
     assert gh_pr_watch.snapshot_change_key(before) != gh_pr_watch.snapshot_change_key(after)
 
 
+def test_failed_runs_include_startup_failure_without_check_run():
+    failed_runs = gh_pr_watch.failed_runs_from_workflow_runs(
+        [
+            {
+                "id": 99,
+                "run_attempt": 2,
+                "name": "CI startup",
+                "status": "completed",
+                "conclusion": "startup_failure",
+                "head_sha": "abc123",
+                "html_url": "https://github.com/openai/codex/actions/runs/99",
+            },
+            {
+                "id": 100,
+                "name": "old head",
+                "status": "completed",
+                "conclusion": "failure",
+                "head_sha": "old123",
+            },
+        ],
+        "abc123",
+    )
+
+    assert failed_runs == [
+        {
+            "run_id": 99,
+            "run_attempt": 2,
+            "workflow_name": "CI startup",
+            "status": "completed",
+            "conclusion": "startup_failure",
+            "html_url": "https://github.com/openai/codex/actions/runs/99",
+        }
+    ]
+
+
 def test_wait_for_first_failure_polls_silently(monkeypatch, tmp_path):
     pending_checks = sample_checks(pending_count=1, passed_count=0, all_terminal=False, total_count=1)
     pending = sample_snapshot(pending_checks)
     failed = sample_snapshot(
         sample_checks(pending_count=1, failed_count=1, passed_count=0, all_terminal=False, total_count=2),
+        check_details=[sample_check_detail(index, status="failed") for index in range(12)],
         failed_jobs=[{"job_id": 44, "job_name": "tests"}],
     )
     snapshots = iter([pending, pending, failed])
@@ -343,6 +476,12 @@ def test_wait_for_first_failure_polls_silently(monkeypatch, tmp_path):
         emitted.append,
     )
     assert (result, sleeps, [item["reason"] for item in emitted]) == (0, [30, 30], ["first_failure"])
+    assert emitted[0]["failures_summary"] == {
+        "total_count": 12,
+        "emitted_count": 10,
+        "omitted_count": 2,
+        "truncated": True,
+    }
     generation = ("abc123", "base123", "ci-v1")
     finished = gh_pr_watch.ci_wait.wait_reason("finished", sample_snapshot(), state_path, {}, generation, 1_000)
     assert finished == ("finished", [])
@@ -391,7 +530,22 @@ def test_execution_timeout_uses_persisted_runtime_and_excludes_queue(tmp_path):
     late_state = {}
     late_running = dict(running_sample)
     late_completed = gh_pr_watch.ci_wait.normalize_check(completed_payload)
-    gh_pr_watch.ci_wait.update_active_checks(late_state, [late_running], started_at, "ci-v1")
+    late_observed_at = started_at + gh_pr_watch.ci_wait.DEFAULT_TIMEOUT + 1
+    gh_pr_watch.ci_wait.update_active_checks(late_state, [late_running], late_observed_at, "ci-v1")
+    assert late_running["active_since"] == started_at
+    late_timeout = gh_pr_watch.ci_wait.execution_timeouts(
+        sample_snapshot(
+            sample_checks(pending_count=1, passed_count=0, all_terminal=False),
+            [late_running],
+        ),
+        late_observed_at,
+        state_path,
+        late_state,
+    )[0]
+    assert (late_timeout["active_seconds"], late_timeout["history_source"]) == (
+        gh_pr_watch.ci_wait.DEFAULT_TIMEOUT + 1,
+        "fallback",
+    )
     gh_pr_watch.ci_wait.update_active_checks(late_state, [late_completed], completed_at, "ci-v1")
     gh_pr_watch.ci_wait.record_timing_samples(late_state, sample_pr(), [late_completed], "ci-v1")
     assert late_state["timing_samples"] == []
@@ -460,8 +614,10 @@ def test_rerun_attempt_waits_for_new_check_rollup():
 
 
 def test_partial_rerun_is_persisted(monkeypatch, tmp_path):
+    check_details = [sample_check_detail(index, status="failed") for index in range(12)]
     snapshot = sample_snapshot(
         checks=sample_checks(failed_count=2),
+        check_details=check_details,
         failed_runs=[
             {"run_id": 1, "run_attempt": 1, "conclusion": "failure"},
             {"run_id": 2, "run_attempt": 1, "conclusion": "failure"},
@@ -483,3 +639,6 @@ def test_partial_rerun_is_persisted(monkeypatch, tmp_path):
     with pytest.raises(gh_pr_watch.GhCommandError):
         gh_pr_watch.retry_failed_now(argparse.Namespace(pr="123", repo=None))
     assert saved[-1]["pending_rerun"]["attempts"] == {"1": 1}
+    assert saved[-1]["pending_rerun"]["check_signature"] == gh_pr_watch.ci_wait.check_signature(
+        check_details
+    )

@@ -13,6 +13,22 @@ PENDING_STATES = {"QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED"}
 MAX_CI_REVISIONS, MAX_HISTORY_FILES, MAX_SAMPLES = 20, 20, 500
 MIN_TIMEOUT, DEFAULT_TIMEOUT, MAX_TIMEOUT = 10 * 60, 60 * 60, 4 * 60 * 60
 REGISTRATION_GRACE_SECONDS = 60
+MAX_OUTPUT_CHECK_DETAILS = 10
+MAX_OUTPUT_CHECK_DETAILS_JSON_CHARS = 3_000
+MAX_OUTPUT_CHECK_DETAIL_VALUE_CHARS = 256
+OUTPUT_CHECK_DETAIL_FIELDS = (
+    "id",
+    "workflow",
+    "name",
+    "status",
+    "state",
+    "started_at",
+    "completed_at",
+    "url",
+    "run_id",
+    "job_id",
+    "active_since",
+)
 
 def effective_ci_revision(base_revision, head_revision):
     return hashlib.sha256(f"{base_revision}\0{head_revision}".encode()).hexdigest()
@@ -74,6 +90,42 @@ def normalize_check(check):
         "job_id": int(match.group(2)) if match and match.group(2) else None,
     }
 
+def bounded_check_details(checks):
+    all_checks = list(checks or [])
+    priorities = {"failed": 0, "running": 1, "queued": 2, "terminal": 3, "passed": 4}
+    ordered = sorted(
+        ((index, check) for index, check in enumerate(all_checks) if isinstance(check, dict)),
+        key=lambda item: (priorities.get(str(item[1].get("status") or ""), 3), item[0]),
+    )
+    details = []
+    values_truncated = False
+    for _, check in ordered:
+        if len(details) >= MAX_OUTPUT_CHECK_DETAILS:
+            break
+        detail = {}
+        detail_values_truncated = False
+        for field in OUTPUT_CHECK_DETAIL_FIELDS:
+            if field not in check:
+                continue
+            value = check[field]
+            if isinstance(value, str) and len(value) > MAX_OUTPUT_CHECK_DETAIL_VALUE_CHARS:
+                value = value[: MAX_OUTPUT_CHECK_DETAIL_VALUE_CHARS - 1] + "…"
+                detail_values_truncated = True
+            detail[field] = value
+        candidate = details + [detail]
+        if len(json.dumps(candidate, sort_keys=True)) > MAX_OUTPUT_CHECK_DETAILS_JSON_CHARS:
+            break
+        details.append(detail)
+        values_truncated = values_truncated or detail_values_truncated
+    total_count = len(all_checks)
+    emitted_count = len(details)
+    return details, {
+        "total_count": total_count,
+        "emitted_count": emitted_count,
+        "omitted_count": total_count - emitted_count,
+        "truncated": values_truncated or emitted_count < total_count,
+    }
+
 def check_run_key(check):
     fallback = check.get("url") if check.get("run_id") is None and check.get("job_id") is None else ""
     return "\x1f".join(str(check.get(field) or "") for field in ("id", "run_id", "job_id")) + f"\x1f{fallback or ''}"
@@ -104,7 +156,8 @@ def update_active_checks(state, checks, now, ci_revision=None):
         if status in {"queued", "running"}: statuses[key] = {"status": status, "ci_revision": ci_revision}
         if status == "running":
             prior = statuses_before.get(key); queued_before = isinstance(prior, dict) and prior.get("status") == "queued"
-            entry = previous.get(key) or {"since": int(now), "trainable": queued_before, "ci_revision": prior.get("ci_revision") if queued_before else ci_revision}
+            started_at = parse_github_time(check.get("started_at"))
+            entry = previous.get(key) or {"since": int(started_at if started_at is not None else now), "trainable": queued_before, "ci_revision": prior.get("ci_revision") if queued_before else ci_revision}
             check["active_since"], active[key] = entry["since"], entry
         elif key in previous:
             entry, completed_at = previous[key], parse_github_time(check.get("completed_at")) or now
@@ -208,7 +261,14 @@ def run_wait(args, collect_snapshot, load_state, save_state, print_json):
         allow_finished = bool(int(checks.get("total_count") or 0) > 0 and checks.get("all_terminal") and now - terminal_since >= REGISTRATION_GRACE_SECONDS)
         reason, timeouts = wait_reason(args.wait_for, snapshot, state_path, state, initial_generation, now, allow_finished)
         if reason is not None:
-            result = {"event": "wait_complete", "target": args.wait_for, "reason": reason, "generation": dict(zip(("head_sha", "base_sha", "ci_revision"), generation)), "ci": snapshot.get("ci"), "checks": checks, "failures": [check for check in snapshot.get("check_details") or [] if check.get("status") == "failed"], "failed_runs": snapshot.get("failed_runs") or [], "failed_jobs": snapshot.get("failed_jobs") or [], "new_review_items": snapshot.get("new_review_items") or [], "timeouts": timeouts, "actions": snapshot.get("actions") or [], "pr": snapshot.get("pr"), "state_file": str(state_path)}
+            failures, failures_summary = bounded_check_details(
+                [
+                    check
+                    for check in snapshot.get("check_details") or []
+                    if check.get("status") == "failed"
+                ]
+            )
+            result = {"event": "wait_complete", "target": args.wait_for, "reason": reason, "generation": dict(zip(("head_sha", "base_sha", "ci_revision"), generation)), "ci": snapshot.get("ci"), "checks": checks, "failures": failures, "failures_summary": failures_summary, "failed_runs": snapshot.get("failed_runs") or [], "failed_jobs": snapshot.get("failed_jobs") or [], "new_review_items": snapshot.get("new_review_items") or [], "timeouts": timeouts, "actions": snapshot.get("actions") or [], "pr": snapshot.get("pr"), "state_file": str(state_path)}
             if generation != initial_generation and reason != "generation_changed": result["also_reasons"] = ["generation_changed"]
             print_json(result)
             if reason == "execution_timeout": save_state(state_path, state)
