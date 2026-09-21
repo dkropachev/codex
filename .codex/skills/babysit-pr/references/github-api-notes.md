@@ -4,9 +4,9 @@
 
 ### PR metadata
 
-- `gh pr view --json number,url,state,mergedAt,closedAt,headRefName,headRefOid,headRepository,headRepositoryOwner`
+- `gh pr view --json number,url,state,mergedAt,closedAt,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,headRepositoryOwner`
 
-Used to resolve PR number, URL, branch, head SHA, and closed/merged state.
+Used to resolve PR number, URL, base/head branches and SHAs, and closed/merged state.
 
 ### PR checks summary
 
@@ -56,6 +56,8 @@ whose `state` is `PENDING`, along with their inline comments, until the review i
 - `state`
 - `mergedAt`
 - `closedAt`
+- `baseRefName`
+- `baseRefOid`
 - `headRefName`
 - `headRefOid`
 
