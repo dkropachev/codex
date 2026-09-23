@@ -21,6 +21,7 @@ async fn workflow_command_shows_running_status_in_live_tui() -> Result<()> {
     let workspace = tempdir()?;
     let fake_bin = tempdir()?;
     let workflow_release = workspace.path().join("release-workflow");
+    let workflow_failure = workspace.path().join("fail-workflow");
 
     let workspace_display = workspace.path().display();
     let parent_display = workspace
@@ -73,9 +74,14 @@ userDescription: Run a code review workflow.
         r#"#!/bin/sh
 set -eu
 : "${CODEX_TEST_WORKFLOW_RELEASE:?}"
+: "${CODEX_TEST_WORKFLOW_FAILURE:?}"
 while [ ! -f "$CODEX_TEST_WORKFLOW_RELEASE" ]; do
   sleep 0.05
 done
+if [ -f "$CODEX_TEST_WORKFLOW_FAILURE" ]; then
+  printf '%s\n' 'workflow failed for test' >&2
+  exit 42
+fi
 printf '%s\n' '# Workflow finished' '' 'Visible workflow result.'
 "#,
     )?;
@@ -100,6 +106,10 @@ printf '%s\n' '# Workflow finished' '' 'Visible workflow result.'
         (
             "CODEX_TEST_WORKFLOW_RELEASE".to_string(),
             workflow_release.display().to_string(),
+        ),
+        (
+            "CODEX_TEST_WORKFLOW_FAILURE".to_string(),
+            workflow_failure.display().to_string(),
         ),
         (
             "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT".to_string(),
@@ -132,6 +142,13 @@ printf '%s\n' '# Workflow finished' '' 'Visible workflow result.'
     .await?;
 
     writer.send(b"/code-review".to_vec()).await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "workflow command draft",
+        |contents| contents.contains("/code-review"),
+    )
+    .await?;
     writer.send(b"\r".to_vec()).await?;
     wait_for_screen(
         &mut output_rx,
@@ -147,6 +164,62 @@ printf '%s\n' '# Workflow finished' '' 'Visible workflow result.'
         &mut screen,
         "completed workflow output",
         |contents| contents.contains("Visible workflow result.") && !contents.contains("Working ("),
+    )
+    .await?;
+
+    std::fs::remove_file(&workflow_release)?;
+    std::fs::write(&workflow_failure, "fail\n")?;
+    writer.send(b"/code-review".to_vec()).await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "failing workflow command draft",
+        |contents| contents.contains("/code-review"),
+    )
+    .await?;
+    writer.send(b"\r".to_vec()).await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "running workflow status before failure",
+        |contents| contents.contains("Working (") && contents.contains("esc to interrupt"),
+    )
+    .await?;
+
+    std::fs::write(&workflow_release, "release\n")?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "failed workflow output",
+        |contents| contents.contains("workflow failed for test") && !contents.contains("Working ("),
+    )
+    .await?;
+
+    std::fs::remove_file(&workflow_release)?;
+    std::fs::remove_file(&workflow_failure)?;
+    writer.send(b"/code-review".to_vec()).await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "cancelable workflow command draft",
+        |contents| contents.contains("/code-review"),
+    )
+    .await?;
+    writer.send(b"\r".to_vec()).await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "running workflow status before cancellation",
+        |contents| contents.contains("Working (") && contents.contains("esc to interrupt"),
+    )
+    .await?;
+
+    writer.send(vec![0x1b]).await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "canceled workflow output",
+        |contents| contents.contains("Conversation interrupted") && !contents.contains("Working ("),
     )
     .await?;
 
