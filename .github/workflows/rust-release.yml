@@ -61,6 +61,9 @@ jobs:
 
   build:
     needs: tag-check
+    # Fork releases are source-only because the artifact pipeline depends on
+    # OpenAI-only runners, signing environments, and publishing credentials.
+    if: ${{ github.repository == 'openai/codex' }}
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     # Release builds can take a long time, so leave some headroom to avoid
@@ -1107,6 +1110,7 @@ jobs:
 
   build-windows:
     needs: tag-check
+    if: ${{ github.repository == 'openai/codex' }}
     permissions:
       contents: read
       id-token: write
@@ -1118,6 +1122,7 @@ jobs:
   argument-comment-lint-release-assets:
     name: argument-comment-lint release assets
     needs: tag-check
+    if: ${{ github.repository == 'openai/codex' }}
     uses: ./.github/workflows/rust-release-argument-comment-lint.yml
     with:
       release_tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -1126,6 +1131,10 @@ jobs:
   zsh-release-assets:
     name: zsh release assets
     needs: tag-check
+    if: ${{ github.repository == 'openai/codex' }}
+    permissions:
+      actions: read
+      contents: write
     uses: ./.github/workflows/rust-release-zsh.yml
     with:
       release_tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
