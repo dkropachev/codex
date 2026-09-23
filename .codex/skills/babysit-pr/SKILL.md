@@ -23,9 +23,9 @@ Accept any of the following:
 
 ## Core Workflow
 
-1. When the user asks to "monitor"/"watch"/"babysit" a PR, start with the watcher's continuous mode (`--watch`) unless you are intentionally doing a one-shot diagnostic snapshot.
-2. Run the watcher script to snapshot PR/review/CI state (or consume each streamed snapshot from `--watch`).
-3. Inspect the `actions` list in the JSON response.
+1. When CI is running, start `--wait-for first-failure`; use `--wait-for finished` when the whole round must complete. Use `--watch` for open-ended post-CI monitoring.
+2. Consume the wait's single JSON result (or each streamed snapshot from `--watch`); unchanged wait polls are silent.
+3. Inspect `reason` and `actions` in the JSON response.
 4. If `diagnose_ci_failure` is present, inspect failed run logs and classify the failure.
 5. If the failure is likely caused by the current branch, patch code locally, commit, and push. Do not patch random flaky tests, CI infrastructure, dependency outages, runner issues, or other failures that are unrelated to the branch.
 6. If `process_review_comment` is present, inspect surfaced published review items and decide whether to address them.
@@ -35,7 +35,7 @@ Accept any of the following:
 10. If both actionable review feedback and `retry_failed_checks` are present, prioritize review feedback first; a new commit will retrigger CI, so avoid rerunning flaky checks on the old SHA unless you intentionally defer the review change.
 11. On every loop, look for newly surfaced review feedback before acting on CI failures or mergeability state, then verify mergeability / merge-conflict status (for example via `gh pr view`) alongside CI.
 12. After any push or rerun action, immediately return to step 1 and continue polling on the updated SHA/state.
-13. If you had been using `--watch` before pausing to patch/commit/push, relaunch `--watch` yourself in the same turn immediately after the push (do not wait for the user to re-invoke the skill).
+13. After a push, start a fresh wait in the same turn; restart on `generation_changed`, surface `ci_config_changed`, and investigate `execution_timeout` without blaming queued jobs.
 14. Repeat polling until `stop_pr_closed` appears or a user-help-required blocker is reached. A green + review-clean + mergeable PR is a progress milestone, not a reason to stop the watcher while the PR is still open.
 15. Maintain terminal/session ownership: while babysitting is active, keep consuming watcher output in the same turn; do not leave a detached `--watch` process running and then end the turn as if monitoring were complete.
 
@@ -47,7 +47,14 @@ Accept any of the following:
 python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --once
 ```
 
-### Continuous watch (JSONL)
+### Blocking CI waits
+
+```bash
+python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --wait-for first-failure
+python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --wait-for finished
+```
+
+### Compatibility watch (changed snapshots only, JSONL)
 
 ```bash
 python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --watch
@@ -62,8 +69,10 @@ python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --retry-failed
 ### Explicit PR target
 
 ```bash
-python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr <number-or-url> --once
+python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr <number-or-url> --wait-for first-failure
 ```
+
+State and completed-check timings persist below `${CODEX_HOME:-~/.codex}/state/babysit-pr/`; CI changes start a new timing cohort.
 
 ## CI Failure Classification
 Use `gh` commands to inspect failed runs before deciding to rerun.
@@ -99,6 +108,9 @@ be eligible to surface after the reviewer submits the review.
 It intentionally surfaces Codex reviewer bot feedback (for example comments/reviews from `chatgpt-codex-connector[bot]`) in addition to human reviewer feedback. Most unrelated bot noise should still be ignored.
 For safety, the watcher only auto-surfaces trusted human review authors (for example repo OWNER/MEMBER/COLLABORATOR, plus the authenticated operator) and approved review bots such as Codex.
 On a fresh watcher state file, existing unaddressed published review feedback may be surfaced immediately (not only comments that arrive after monitoring starts). This is intentional so already-open review comments are not missed.
+Watcher output bounds long review fields. When `new_review_items_summary.truncated` is true, use the
+surfaced item kind and ID or URL to fetch its full body from the matching GitHub API endpoint before
+deciding whether or how to act.
 
 When you agree with a comment and it is actionable:
 
@@ -107,7 +119,7 @@ When you agree with a comment and it is actionable:
 3. Push to the PR head branch.
 4. After the push succeeds, resolve the associated GitHub review thread only when allowed by the GitHub state mutation policy below.
 5. Resume watching on the new SHA immediately (do not stop after reporting the push).
-6. If monitoring was running in `--watch` mode, restart `--watch` immediately after the push in the same turn; do not wait for the user to ask again.
+6. Start a fresh `--wait-for first-failure` command immediately after the push; use `--wait-for finished` instead only when full-round completion is intentionally required.
 
 Do not post replies to human-authored GitHub review comments/threads automatically. If you disagree with a human comment, believe it is non-actionable/already addressed, or need to answer a question, report the item to the user with a suggested response and wait for explicit confirmation before posting anything on GitHub. If the user approves a response, prefix it with `[codex]` so it is clear the response is automated and not from the human user.
 If the watcher later surfaces your own approved reply because the authenticated operator is treated as a trusted review author, treat that self-authored item as already handled and do not reply again.
@@ -145,8 +157,8 @@ something visible to other humans. When in doubt, ask the user for clarification
 - Do not switch branches unless necessary to recover context.
 - Before editing, check for unrelated uncommitted changes. If present, stop and ask the user.
 - After each successful fix, commit and `git push`, then re-run the watcher.
-- If you interrupted a live `--watch` session to make the fix, restart `--watch` immediately after the push in the same turn.
-- Do not run multiple concurrent `--watch` processes for the same PR/state file; keep one watcher session active and reuse it until it stops or you intentionally restart it.
+- If you interrupted a live wait to make the fix, start a fresh wait immediately after the push in the same turn.
+- Do not run multiple concurrent waits or compatibility watches for the same PR/state file.
 - A push is not a terminal outcome; continue the monitoring loop unless a strict stop condition is met.
 
 Commit message defaults:
@@ -157,8 +169,8 @@ Commit message defaults:
 ## Monitoring Loop Pattern
 Use this loop in a live Codex session:
 
-1. Run `--once`.
-2. Read `actions`.
+1. Run `--wait-for first-failure` while CI runs, or `--wait-for finished` when the whole round is required.
+2. Read `reason` and `actions`.
 3. First check whether the PR is now merged or otherwise closed; if so, report that terminal state and stop polling immediately.
 4. Check CI summary, new review items, and mergeability/conflict status.
 5. Diagnose CI failures and classify branch-related vs flaky/unrelated. If the overall run is still pending but `failed_jobs` already includes a failed job, fetch that job's logs and diagnose immediately instead of waiting for the whole workflow run to finish. Patch only when the failure is branch-related.
@@ -166,15 +178,15 @@ Use this loop in a live Codex session:
 7. Process actionable review comments before flaky reruns when both are present; if a review fix requires a commit, push it and skip rerunning failed checks on the old SHA.
 8. Retry failed checks only when `retry_failed_checks` is present and you are not about to replace the current SHA with a review/CI fix commit. Do not make code changes for unrelated flakes or infrastructure failures just to get CI green.
 9. If you pushed a commit, resolved an eligible review thread, or triggered a rerun, report the action briefly and continue polling (do not stop). If a human review comment needs a written GitHub response, stop and ask for confirmation before posting.
-10. After a review-fix push, proactively restart continuous monitoring (`--watch`) in the same turn unless a strict stop condition has already been reached.
+10. After a review-fix push, proactively restart monitoring in the same turn unless a strict stop condition has already been reached.
 11. If everything is passing, mergeable, not blocked on required review approval, and there are no unaddressed review items, report that the PR is currently ready to merge but keep the watcher running so new review comments are surfaced quickly while the PR remains open.
 12. If blocked on a user-help-required issue (infra outage, exhausted flaky retries, unclear reviewer request, permissions), report the blocker and stop.
 13. Otherwise sleep according to the polling cadence below and repeat.
 
-When the user explicitly asks to monitor/watch/babysit a PR, prefer `--watch` so polling continues autonomously in one command. Use repeated `--once` snapshots only for debugging, local testing, or when the user explicitly asks for a one-shot check.
+Prefer blocking `--wait-for` calls for CI phases. Use `--once` only for debugging, local testing, or an explicitly requested one-shot check, and `--watch` for open-ended post-CI monitoring.
 Do not stop to ask the user whether to continue polling; continue autonomously until a strict stop condition is met or the user explicitly interrupts.
-Do not hand control back to the user after a review-fix push just because a new SHA was created; restarting the watcher and re-entering the poll loop is part of the same babysitting task.
-If a `--watch` process is still running and no strict stop condition has been reached, the babysitting task is still in progress; keep streaming/consuming watcher output instead of ending the turn.
+Do not hand control back after a review-fix push just because a new SHA was created; restarting monitoring is part of the same task.
+If a watcher is still running and no strict stop condition has been reached, keep consuming its output instead of ending the turn.
 
 ## Polling Cadence
 Keep review polling aggressive and continue monitoring even after CI turns green:
@@ -203,12 +215,12 @@ Keep polling when:
 ## Output Expectations
 Provide concise progress updates while monitoring and a final summary that includes:
 
-- During long unchanged monitoring periods, avoid emitting a full update on every poll; summarize only status changes plus occasional heartbeat updates.
+- During unchanged wait periods, send no model-facing poll updates; report only wake events and meaningful state changes.
 - Treat push confirmations, intermediate CI snapshots, ready-to-merge snapshots, and review-action updates as progress updates only; do not emit the final summary or end the babysitting session unless a strict stop condition is met.
 - A user request to "monitor" is not satisfied by a couple of sample polls; remain in the loop until a strict stop condition or an explicit user interruption.
-- A review-fix commit + push is not a completion event; immediately resume live monitoring (`--watch`) in the same turn and continue reporting progress updates.
+- A review-fix commit + push is not a completion event; immediately start the next wait in the same turn and continue reporting progress updates.
 - When CI first transitions to all green for the current SHA, emit a one-time celebratory progress update (do not repeat it on every green poll). Preferred style: `🚀 CI is all green! 33/33 passed. Still on watch for review approval.`
-- Do not send the final summary while a watcher terminal is still running unless the watcher has emitted/confirmed a strict stop condition; otherwise continue with progress updates.
+- Do not send the final summary while a wait or compatibility watch is still running unless it has confirmed a strict stop condition; otherwise continue with progress updates.
 
 - Final PR SHA
 - CI status summary

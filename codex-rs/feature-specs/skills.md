@@ -20,6 +20,13 @@ conversation history. Disabled skills must not be injected as active instruction
 Skill lists and toggles let clients expose available skills without starting a model turn. TUI skill
 controls should reflect availability and selection state consistently with app-server responses.
 
+The bundled PR babysitting skill monitors review feedback, CI checks, and mergeability until the PR
+is merged or closed, or until safe progress requires user help. Its blocking wait modes poll
+silently and emit one bounded result when the requested CI condition or a higher-priority event is
+observed. Head, base, CI configuration, and rerun generations prevent stale check rollups from
+completing waits or authorizing retries. Execution timeouts count active runtime rather than queue
+time and use bounded history from matching repository, base branch, and CI configuration cohorts.
+
 ## Entry Points
 
 - [codex-rs/core-skills/src/service.rs](../core-skills/src/service.rs)
@@ -82,6 +89,26 @@ controls should reflect availability and selection state consistently with app-s
 - Skill toggles update client-visible state without losing the current composer input.
 - Skill popups render long lists without dropping selectable skills.
 
+### PR Babysitting
+
+#### Entry Points
+
+- [.codex/skills/babysit-pr/SKILL.md](../../.codex/skills/babysit-pr/SKILL.md)
+- [.codex/skills/babysit-pr/scripts/gh_pr_watch.py](../../.codex/skills/babysit-pr/scripts/gh_pr_watch.py)
+- [.codex/skills/babysit-pr/scripts/ci_wait.py](../../.codex/skills/babysit-pr/scripts/ci_wait.py)
+
+#### Invariants
+
+- Blocking waits remain silent between polls and emit one bounded result when they wake.
+- Review feedback, PR closure, generation changes, CI configuration changes, and execution
+  timeouts preempt the requested wait target.
+- Checks observed before a head, base, CI configuration, or rerun generation change cannot finish
+  the new generation or authorize another retry.
+- Queue and pre-registration time do not consume execution-timeout budgets.
+- Retry mutation is locked, bounded per head and base generation, and durable across partial rerun
+  failures.
+- A green, mergeable PR remains monitored until it is merged, closed, or requires user help.
+
 ## Invariants
 
 - Skills alter model-visible behavior only through explicit skill injection paths.
@@ -103,6 +130,9 @@ skill exclusion, and bounded model-context injection during agent turns.
 
 - Skill model-context behavior is covered: codex-rs/core/tests/suite/skills.rs:user_turn_includes_skill_instructions
 - Skill script sandbox behavior is covered: codex-rs/core/tests/suite/skill_approval.rs:shell_zsh_fork_skill_scripts_ignore_declared_permissions,shell_zsh_fork_still_enforces_workspace_write_sandbox
+- PR babysitting wait targets and wake priorities are covered: codex-rs/core/tests/suite/skills.rs:pr_babysitting_skill_drives_monitoring_lifecycle
+- PR babysitting resumes after generation and watcher wake events: codex-rs/core/tests/suite/skills.rs:pr_babysitting_skill_drives_monitoring_lifecycle
+- PR babysitting keeps watching an open green PR: codex-rs/core/tests/suite/skills.rs:pr_babysitting_skill_drives_monitoring_lifecycle
 
 ### app-server-api (app-server API behavior)
 
@@ -223,3 +253,7 @@ Not covered
 
 Generate tests for discovery from each supported source, invalid skill definitions, list APIs,
 disabled skills, bounded instruction injection, explicit invocation, and TUI skill selection state.
+For PR babysitting, generate cases for first-failure and finished waits, urgent-event preemption,
+terminal registration grace, empty check sets, head/base/configuration/rerun generation changes,
+queued versus active timeout accounting, history fallback and caps, partial or concurrent reruns,
+bounded failure-first output, and change-only compatibility watch output.
