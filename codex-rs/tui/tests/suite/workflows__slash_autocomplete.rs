@@ -34,7 +34,7 @@ async fn workflow_command_shows_running_status_in_live_tui() -> Result<()> {
     std::fs::write(
         codex_home.path().join("config.toml"),
         format!(
-            r#"model = "gpt-5.4"
+            r#"model = "gpt-5.6-terra"
 model_provider = "openai"
 suppress_unstable_features_warning = true
 
@@ -134,6 +134,7 @@ printf '%s\n' '# Workflow finished' '' 'Visible workflow result.'
         &env,
         &None,
         TerminalSize { rows: 24, cols: 80 },
+        /*inherited_fds*/ &[],
     )
     .await?;
     let writer = spawned.session.writer_sender();
@@ -253,7 +254,7 @@ async fn workflow_command_autocompletes_in_live_tui() -> Result<()> {
     std::fs::write(
         codex_home.path().join("config.toml"),
         format!(
-            r#"model = "gpt-5.4"
+            r#"model = "gpt-5.6-terra"
 model_provider = "openai"
 suppress_unstable_features_warning = true
 
@@ -324,6 +325,7 @@ usage:
         &env,
         &None,
         TerminalSize { rows: 24, cols: 80 },
+        /*inherited_fds*/ &[],
     )
     .await?;
     let writer = spawned.session.writer_sender();
@@ -331,7 +333,7 @@ usage:
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("gpt-5.4 default")
+        contents.contains("gpt-5.6-terra default")
     })
     .await?;
 

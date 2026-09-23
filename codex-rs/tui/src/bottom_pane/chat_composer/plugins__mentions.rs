@@ -1,7 +1,7 @@
 use super::*;
 use crate::test_support::PathBufExt;
 use crate::test_support::test_path_buf;
-use codex_core_skills::model::SkillInterface;
+use codex_app_server_protocol::SkillInterface;
 use codex_plugin::AppConnectorId;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc::unbounded_channel;
@@ -66,10 +66,9 @@ fn mention_items_show_plugin_owned_skill_and_app_duplicates() {
             default_prompt: None,
         }),
         dependencies: None,
-        policy: None,
-        path_to_skills_md: skill_path.clone(),
+        path: skill_path.clone(),
         scope: crate::test_support::skill_scope_repo(),
-        plugin_id: None,
+        enabled: true,
     }]));
     composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
         config_name: "google-calendar@debug".to_string(),

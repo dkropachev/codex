@@ -205,7 +205,7 @@ impl McpServerElicitationFormRequest {
     pub(crate) fn from_app_server_request(
         thread_id: ThreadId,
         request_id: AppServerRequestId,
-        request: McpServerElicitationRequestParams,
+        request: &McpServerElicitationRequestParams,
     ) -> Option<Self> {
         let McpServerElicitationRequestParams {
             server_name,
@@ -224,10 +224,10 @@ impl McpServerElicitationFormRequest {
         let requested_schema = serde_json::to_value(requested_schema).ok()?;
         Self::from_parts(
             thread_id,
-            server_name,
+            server_name.clone(),
             request_id,
-            meta,
-            message,
+            meta.as_ref(),
+            message.clone(),
             requested_schema,
         )
     }
@@ -236,13 +236,12 @@ impl McpServerElicitationFormRequest {
         thread_id: ThreadId,
         server_name: String,
         request_id: AppServerRequestId,
-        meta: Option<Value>,
+        meta: Option<&Value>,
         message: String,
         requested_schema: Value,
     ) -> Option<Self> {
-        let tool_suggestion = parse_tool_suggestion_request(meta.as_ref());
+        let tool_suggestion = parse_tool_suggestion_request(meta);
         let is_tool_approval = meta
-            .as_ref()
             .and_then(Value::as_object)
             .and_then(|meta| meta.get(APPROVAL_META_KIND_KEY))
             .and_then(Value::as_str)
@@ -257,7 +256,7 @@ impl McpServerElicitationFormRequest {
         let is_message_only_schema = requested_schema.is_null() || is_empty_object_schema;
         let is_tool_approval_action = is_tool_approval && is_message_only_schema;
         let approval_display_params = if is_tool_approval_action {
-            parse_tool_approval_display_params(meta.as_ref())
+            parse_tool_approval_display_params(meta)
         } else {
             Vec::new()
         };
@@ -275,7 +274,7 @@ impl McpServerElicitationFormRequest {
                 description: Some(allow_description.to_string()),
                 value: Value::String(APPROVAL_ACCEPT_ONCE_VALUE.to_string()),
             }];
-            if approval_supports_persist_mode(meta.as_ref(), APPROVAL_PERSIST_SESSION_VALUE) {
+            if approval_supports_persist_mode(meta, APPROVAL_PERSIST_SESSION_VALUE) {
                 let description = if is_tool_approval_action {
                     "Run the tool and remember this choice for this session."
                 } else {
@@ -287,7 +286,7 @@ impl McpServerElicitationFormRequest {
                     value: Value::String(APPROVAL_ACCEPT_SESSION_VALUE.to_string()),
                 });
             }
-            if approval_supports_persist_mode(meta.as_ref(), APPROVAL_PERSIST_ALWAYS_VALUE) {
+            if approval_supports_persist_mode(meta, APPROVAL_PERSIST_ALWAYS_VALUE) {
                 let description = if is_tool_approval_action {
                     "Run the tool and remember this choice for future tool calls."
                 } else {

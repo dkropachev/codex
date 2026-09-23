@@ -168,7 +168,7 @@ async fn mcp_startup_warning_interaction_works_in_live_tui() -> Result<()> {
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("gpt-5.4 default")
+        contents.contains("gpt-5.6-terra default")
     })
     .await?;
     wait_for_screen(
@@ -215,7 +215,7 @@ async fn mcp_elicitation_form_submission_works_in_live_tui() -> Result<()> {
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("gpt-5.4 default")
+        contents.contains("gpt-5.6-terra default")
     })
     .await?;
     wait_for_screen(
@@ -347,6 +347,7 @@ async fn spawn_tui(
         &env,
         &None,
         TerminalSize { rows: 24, cols: 80 },
+        /*inherited_fds*/ &[],
     )
     .await
 }
@@ -364,7 +365,7 @@ fn write_config(
         .display()
         .to_string();
     let mut config = format!(
-        r#"model = "gpt-5.4"
+        r#"model = "gpt-5.6-terra"
 model_provider = "mock_provider"
 suppress_unstable_features_warning = true
 approval_policy = "on-request"

@@ -48,7 +48,7 @@ async fn plugin_popup_lists_installed_plugin_and_toggles_enabled_state() -> Resu
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("gpt-5.4 default")
+        contents.contains("gpt-5.6-terra default")
     })
     .await?;
 
@@ -125,7 +125,7 @@ async fn plugin_mention_selection_submits_plugin_guidance() -> Result<()> {
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("gpt-5.4 default")
+        contents.contains("gpt-5.6-terra default")
     })
     .await?;
 
@@ -229,6 +229,7 @@ async fn spawn_tui(
         &env,
         &None,
         TerminalSize { rows: 24, cols: 80 },
+        /*inherited_fds*/ &[],
     )
     .await
 }
@@ -246,7 +247,7 @@ fn write_config(
         .display()
         .to_string();
     let mut config = format!(
-        r#"model = "gpt-5.4"
+        r#"model = "gpt-5.6-terra"
 model_provider = "mock_provider"
 suppress_unstable_features_warning = true
 approval_policy = "never"

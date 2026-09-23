@@ -53,7 +53,7 @@ async fn account_pool_status_renders_in_live_tui() -> Result<()> {
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 100, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("gpt-5.4 default")
+        contents.contains("gpt-5.6-terra default")
     })
     .await?;
 
@@ -134,6 +134,7 @@ async fn spawn_tui(
             rows: 24,
             cols: 100,
         },
+        /*inherited_fds*/ &[],
     )
     .await
 }
@@ -148,7 +149,7 @@ fn write_config(codex_home: &Path, workspace: &Path, server_uri: &str) -> Result
     std::fs::write(
         codex_home.join("config.toml"),
         format!(
-            r#"model = "gpt-5.4"
+            r#"model = "gpt-5.6-terra"
 model_provider = "mock_provider"
 chatgpt_base_url = "{server_uri}"
 suppress_unstable_features_warning = true

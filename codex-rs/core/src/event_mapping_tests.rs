@@ -5,6 +5,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::CyberPolicyAutoRecovery;
 use crate::context::InternalContextSource;
 use crate::context::InternalModelContextFragment;
+use codex_protocol::ResponseItemId;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::HookPromptFragment;
 use codex_protocol::items::TurnItem;
@@ -172,6 +173,50 @@ fn skips_local_image_label_text() {
                 },
             ];
             assert_eq!(user.content, expected_content);
+        }
+        other => panic!("expected TurnItem::UserMessage, got {other:?}"),
+    }
+}
+
+#[test]
+fn skips_local_audio_label_text() {
+    let audio_url = "data:audio/wav;base64,abc".to_string();
+    let label = r#"<audio name=[Audio #1] path="/tmp/local.wav">"#.to_string();
+    let user_text = "Please transcribe this audio.".to_string();
+
+    let item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputText { text: label },
+            ContentItem::InputAudio {
+                audio_url: audio_url.clone(),
+            },
+            ContentItem::InputText {
+                text: "</audio>".to_string(),
+            },
+            ContentItem::InputText {
+                text: user_text.clone(),
+            },
+        ],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    let turn_item = parse_turn_item(&item).expect("expected user message turn item");
+
+    match turn_item {
+        TurnItem::UserMessage(user) => {
+            assert_eq!(
+                user.content,
+                vec![
+                    UserInput::Audio { audio_url },
+                    UserInput::Text {
+                        text: user_text,
+                        text_elements: Vec::new(),
+                    },
+                ]
+            );
         }
         other => panic!("expected TurnItem::UserMessage, got {other:?}"),
     }
@@ -355,7 +400,7 @@ fn parses_hook_prompt_message_as_distinct_turn_item() {
 #[test]
 fn parses_hook_prompt_and_hides_other_contextual_fragments() {
     let item = ResponseItem::Message {
-        id: Some("msg-1".to_string()),
+        id: Some(ResponseItemId::with_suffix("msg", "1")),
         role: "user".to_string(),
         content: vec![
             ContentItem::InputText {
@@ -374,7 +419,7 @@ fn parses_hook_prompt_and_hides_other_contextual_fragments() {
 
     match turn_item {
         TurnItem::HookPrompt(hook_prompt) => {
-            assert_eq!(hook_prompt.id, "msg-1");
+            assert_eq!(hook_prompt.id, "msg_1");
             assert_eq!(
                 hook_prompt.fragments,
                 vec![HookPromptFragment {
@@ -390,7 +435,7 @@ fn parses_hook_prompt_and_hides_other_contextual_fragments() {
 #[test]
 fn internal_model_context_does_not_parse_as_visible_turn_item() {
     let item = ResponseItem::Message {
-        id: Some("msg-1".to_string()),
+        id: Some(ResponseItemId::with_suffix("msg", "1")),
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: InternalModelContextFragment::new(
@@ -409,7 +454,7 @@ fn internal_model_context_does_not_parse_as_visible_turn_item() {
 #[test]
 fn parses_agent_message() {
     let item = ResponseItem::Message {
-        id: Some("msg-1".to_string()),
+        id: Some(ResponseItemId::with_suffix("msg", "1")),
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
             text: "Hello from Codex".to_string(),
@@ -434,7 +479,7 @@ fn parses_agent_message() {
 #[test]
 fn parses_reasoning_summary_and_raw_content() {
     let item = ResponseItem::Reasoning {
-        id: Some("reasoning_1".to_string()),
+        id: Some(ResponseItemId::with_suffix("rs", "1")),
         summary: vec![
             ReasoningItemReasoningSummary::SummaryText {
                 text: "Step 1".to_string(),
@@ -467,7 +512,7 @@ fn parses_reasoning_summary_and_raw_content() {
 #[test]
 fn parses_reasoning_including_raw_content() {
     let item = ResponseItem::Reasoning {
-        id: Some("reasoning_2".to_string()),
+        id: Some(ResponseItemId::with_suffix("rs", "2")),
         summary: vec![ReasoningItemReasoningSummary::SummaryText {
             text: "Summarized step".to_string(),
         }],
@@ -500,7 +545,7 @@ fn parses_reasoning_including_raw_content() {
 #[test]
 fn parses_web_search_call() {
     let item = ResponseItem::WebSearchCall {
-        id: Some("ws_1".to_string()),
+        id: Some(ResponseItemId::with_suffix("ws", "1")),
         status: Some("completed".to_string()),
         action: Some(WebSearchAction::Search {
             query: Some("weather".to_string()),
@@ -521,6 +566,7 @@ fn parses_web_search_call() {
                     query: Some("weather".to_string()),
                     queries: None,
                 },
+                results: None,
             }
         ),
         other => panic!("expected TurnItem::WebSearch, got {other:?}"),
@@ -530,7 +576,7 @@ fn parses_web_search_call() {
 #[test]
 fn parses_web_search_open_page_call() {
     let item = ResponseItem::WebSearchCall {
-        id: Some("ws_open".to_string()),
+        id: Some(ResponseItemId::with_suffix("ws", "open")),
         status: Some("completed".to_string()),
         action: Some(WebSearchAction::OpenPage {
             url: Some("https://example.com".to_string()),
@@ -549,6 +595,7 @@ fn parses_web_search_open_page_call() {
                 action: WebSearchAction::OpenPage {
                     url: Some("https://example.com".to_string()),
                 },
+                results: None,
             }
         ),
         other => panic!("expected TurnItem::WebSearch, got {other:?}"),
@@ -558,7 +605,7 @@ fn parses_web_search_open_page_call() {
 #[test]
 fn parses_web_search_find_in_page_call() {
     let item = ResponseItem::WebSearchCall {
-        id: Some("ws_find".to_string()),
+        id: Some(ResponseItemId::with_suffix("ws", "find")),
         status: Some("completed".to_string()),
         action: Some(WebSearchAction::FindInPage {
             url: Some("https://example.com".to_string()),
@@ -579,6 +626,7 @@ fn parses_web_search_find_in_page_call() {
                     url: Some("https://example.com".to_string()),
                     pattern: Some("needle".to_string()),
                 },
+                results: None,
             }
         ),
         other => panic!("expected TurnItem::WebSearch, got {other:?}"),
@@ -588,7 +636,7 @@ fn parses_web_search_find_in_page_call() {
 #[test]
 fn parses_partial_web_search_call_without_action_as_other() {
     let item = ResponseItem::WebSearchCall {
-        id: Some("ws_partial".to_string()),
+        id: Some(ResponseItemId::with_suffix("ws", "partial")),
         status: Some("in_progress".to_string()),
         action: None,
         internal_chat_message_metadata_passthrough: None,
@@ -602,6 +650,7 @@ fn parses_partial_web_search_call_without_action_as_other() {
                 id: "ws_partial".to_string(),
                 query: String::new(),
                 action: WebSearchAction::Other,
+                results: None,
             }
         ),
         other => panic!("expected TurnItem::WebSearch, got {other:?}"),

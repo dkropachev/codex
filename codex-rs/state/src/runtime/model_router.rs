@@ -230,6 +230,7 @@ impl StateRuntime {
                 account_id,
                 input_tokens,
                 cached_input_tokens,
+                cache_write_input_tokens,
                 output_tokens,
                 reasoning_output_tokens,
                 total_tokens,
@@ -238,7 +239,7 @@ impl StateRuntime {
                 price_confidence,
                 outcome
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(now_ms)
@@ -249,6 +250,7 @@ impl StateRuntime {
         .bind(entry.account_id)
         .bind(entry.token_usage.input_tokens)
         .bind(entry.token_usage.cached_input_tokens)
+        .bind(entry.token_usage.cache_write_input_tokens)
         .bind(entry.token_usage.output_tokens)
         .bind(entry.token_usage.reasoning_output_tokens)
         .bind(entry.token_usage.total_tokens)
@@ -342,6 +344,7 @@ impl StateRuntime {
                 COALESCE(SUM(CASE WHEN request_kind != 'production' THEN 1 ELSE 0 END), 0) AS overhead_request_count,
                 COALESCE(SUM(input_tokens), 0) AS input_tokens,
                 COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
+                COALESCE(SUM(cache_write_input_tokens), 0) AS cache_write_input_tokens,
                 COALESCE(SUM(output_tokens), 0) AS output_tokens,
                 COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
                 COALESCE(SUM(total_tokens), 0) AS total_tokens,
@@ -1066,6 +1069,7 @@ fn model_router_usage_totals_from_row(
         token_usage: TokenUsage {
             input_tokens: row.try_get("input_tokens")?,
             cached_input_tokens: row.try_get("cached_input_tokens")?,
+            cache_write_input_tokens: row.try_get("cache_write_input_tokens")?,
             output_tokens: row.try_get("output_tokens")?,
             reasoning_output_tokens: row.try_get("reasoning_output_tokens")?,
             total_tokens: row.try_get("total_tokens")?,
@@ -1187,6 +1191,7 @@ mod tests {
                 token_usage: TokenUsage {
                     input_tokens: 100,
                     cached_input_tokens: 20,
+                    cache_write_input_tokens: 7,
                     output_tokens: 30,
                     reasoning_output_tokens: 0,
                     total_tokens: 130,
@@ -1255,6 +1260,7 @@ mod tests {
                     token_usage: TokenUsage {
                         input_tokens: total_tokens,
                         cached_input_tokens: 0,
+                        cache_write_input_tokens: 0,
                         output_tokens: 0,
                         reasoning_output_tokens: 0,
                         total_tokens,
@@ -1301,6 +1307,7 @@ mod tests {
                 token_usage: TokenUsage {
                     input_tokens: 100,
                     cached_input_tokens: 20,
+                    cache_write_input_tokens: 7,
                     output_tokens: 30,
                     reasoning_output_tokens: 0,
                     total_tokens: 130,
@@ -1322,6 +1329,7 @@ mod tests {
                 token_usage: TokenUsage {
                     input_tokens: 8,
                     cached_input_tokens: 0,
+                    cache_write_input_tokens: 0,
                     output_tokens: 2,
                     reasoning_output_tokens: 0,
                     total_tokens: 10,
@@ -1371,6 +1379,7 @@ mod tests {
                 token_usage: TokenUsage {
                     input_tokens: 108,
                     cached_input_tokens: 20,
+                    cache_write_input_tokens: 7,
                     output_tokens: 32,
                     reasoning_output_tokens: 0,
                     total_tokens: 140,
@@ -1412,6 +1421,7 @@ mod tests {
                 token_usage: TokenUsage {
                     input_tokens: 100,
                     cached_input_tokens: 20,
+                    cache_write_input_tokens: 7,
                     output_tokens: 30,
                     reasoning_output_tokens: 0,
                     total_tokens: 130,
@@ -1448,6 +1458,7 @@ mod tests {
                 token_usage: TokenUsage {
                     input_tokens: 10,
                     cached_input_tokens: 0,
+                    cache_write_input_tokens: 0,
                     output_tokens: 5,
                     reasoning_output_tokens: 0,
                     total_tokens: 15,

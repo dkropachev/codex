@@ -2,9 +2,9 @@
 //!
 //! Roles are selected at spawn time and are loaded with the same config machinery as
 //! `config.toml`. This module resolves built-in and user-defined role files, inserts the role as a
-//! high-precedence layer, and preserves the caller's current runtime model, provider, and service
-//! tier unless the role layer sets them. It does not decide when to spawn a sub-agent or which role
-//! to use; the multi-agent tool handler owns that orchestration.
+//! high-precedence layer, and preserves the caller's current model, reasoning effort, provider,
+//! and service tier unless the role layer sets them. It does not decide when to spawn a sub-agent
+//! or which role to use; the multi-agent tool handler owns that orchestration.
 
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
@@ -152,6 +152,9 @@ mod reload {
         preserve_current_provider: bool,
         preserve_current_service_tier: bool,
     ) -> anyhow::Result<Config> {
+        let preserve_current_model = role_layer_toml.get("model").is_none();
+        let preserve_current_reasoning_effort =
+            role_layer_toml.get("model_reasoning_effort").is_none();
         let config_layer_stack = build_config_layer_stack(config, &role_layer_toml)?;
         let merged_config = deserialize_effective_config(config, &config_layer_stack)?;
 
@@ -160,6 +163,7 @@ mod reload {
             merged_config,
             reload_overrides(
                 config,
+                preserve_current_model,
                 preserve_current_provider,
                 preserve_current_service_tier,
             ),
@@ -171,6 +175,11 @@ mod reload {
             next_config.model_provider_id = config.model_provider_id.clone();
             next_config.model_provider = config.model_provider.clone();
             next_config.chatgpt_base_url = config.chatgpt_base_url.clone();
+        }
+        if preserve_current_reasoning_effort {
+            next_config
+                .model_reasoning_effort
+                .clone_from(&config.model_reasoning_effort);
         }
         Ok(next_config)
     }
@@ -222,11 +231,15 @@ mod reload {
 
     fn reload_overrides(
         config: &Config,
+        preserve_current_model: bool,
         preserve_current_provider: bool,
         preserve_current_service_tier: bool,
     ) -> ConfigOverrides {
         ConfigOverrides {
             cwd: Some(config.cwd.to_path_buf()),
+            model: preserve_current_model
+                .then(|| config.model.clone())
+                .flatten(),
             model_provider: preserve_current_provider.then(|| config.model_provider_id.clone()),
             service_tier: preserve_current_service_tier.then(|| config.service_tier.clone()),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
@@ -238,6 +251,16 @@ mod reload {
 
 pub(crate) mod spawn_tool_spec {
     use super::*;
+
+    /// Returns whether the spawn tool should advertise an `agent_type` override.
+    pub(crate) fn should_expose_agent_type(
+        user_defined_agent_roles: &BTreeMap<String, AgentRoleConfig>,
+    ) -> bool {
+        !user_defined_agent_roles.is_empty()
+            || built_in::configs()
+                .keys()
+                .any(|name| name.starts_with("workflow-"))
+    }
 
     /// Builds the spawn-agent tool description text from built-in and configured roles.
     pub(crate) fn build(user_defined_agent_roles: &BTreeMap<String, AgentRoleConfig>) -> String {
@@ -263,10 +286,7 @@ pub(crate) mod spawn_tool_spec {
             }
         }
 
-        format!(
-            "Optional type name for the new agent. If omitted, `{DEFAULT_ROLE_NAME}` is used.\nAvailable roles:\n{}",
-            formatted_roles.join("\n"),
-        )
+        format!("Available roles:\n{}", formatted_roles.join("\n"))
     }
 
     fn format_role(name: &str, declaration: &AgentRoleConfig) -> String {

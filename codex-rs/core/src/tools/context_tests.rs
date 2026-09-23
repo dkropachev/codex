@@ -435,6 +435,7 @@ fn exec_command_tool_output_formats_truncated_response() {
         process_id: None,
         exit_code: Some(0),
         original_token_count: Some(10),
+        output_omitted_bytes: None,
         hook_command: None,
     }
     .to_response_item("call-42", &payload);
@@ -483,6 +484,7 @@ fn exec_command_tool_output_uses_compacted_model_output_and_metadata() {
         process_id: None,
         exit_code: Some(0),
         original_token_count: Some(500),
+        output_omitted_bytes: None,
         hook_command: None,
     };
 
@@ -545,6 +547,7 @@ fn exec_command_tool_output_truncates_compacted_response_output() {
         process_id: None,
         exit_code: Some(0),
         original_token_count: Some(500),
+        output_omitted_bytes: None,
         hook_command: None,
     };
 
@@ -556,4 +559,44 @@ fn exec_command_tool_output_truncates_compacted_response_output() {
 
     assert!(text.contains("tokens truncated"));
     assert!(!text.contains("raw hidden line"));
+}
+
+#[test]
+fn exec_command_tool_output_preserves_omission_metadata_when_truncated() {
+    let payload = ToolPayload::Function {
+        arguments: "{}".to_string(),
+    };
+    let marker = format_output_omission_marker(/*omitted_bytes*/ 123_456);
+    let raw_output = format!(
+        "HEAD-{}\n{marker}\nTAIL-{}",
+        "a".repeat(/*n*/ 100),
+        "z".repeat(/*n*/ 100)
+    )
+    .into_bytes();
+    let response = ExecCommandToolOutput {
+        event_call_id: "call-omitted".to_string(),
+        chunk_id: "abc123".to_string(),
+        wall_time: std::time::Duration::from_millis(/*millis*/ 1250),
+        raw_output,
+        compaction: None,
+        truncation_policy: TruncationPolicy::Tokens(10_000),
+        max_output_tokens: Some(4),
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: Some(42_000),
+        output_omitted_bytes: NonZeroUsize::new(/*n*/ 123_456),
+        hook_command: None,
+    }
+    .to_response_item("call-omitted", &payload);
+
+    let ResponseInputItem::FunctionCallOutput { output, .. } = response else {
+        panic!("expected FunctionCallOutput");
+    };
+    let text = output
+        .body
+        .to_text()
+        .expect("exec output should serialize as text");
+    assert!(text.contains("Original token count: 42000"));
+    assert!(text.contains("Warning: truncated output (original token count: 42000)"));
+    assert_eq!(text.matches(&marker).count(), 1);
 }
