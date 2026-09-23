@@ -9,7 +9,7 @@ mod windows_dangerous_commands;
 pub enum DangerousCommandMatch {
     /// An `rm` invocation includes the force option.
     ForcedRm,
-    /// Another dangerous-command rule matched.
+    /// Another dangerous-command rule matched, or inspection must fail closed.
     Other,
 }
 
@@ -25,7 +25,7 @@ fn dangerous_command_match_with_depth(
     wrapper_depth: usize,
 ) -> Option<DangerousCommandMatch> {
     if wrapper_depth > MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH {
-        return None;
+        return Some(DangerousCommandMatch::Other);
     }
 
     if let Some(dangerous_match) = dangerous_command_match_for_exec(command, wrapper_depth) {
@@ -286,6 +286,24 @@ mod tests {
                 "{command:?}"
             );
         }
+    }
+
+    #[test]
+    fn wrapper_depth_limit_fails_closed() {
+        let nested_forced_rm = |wrapper_count| {
+            let mut command = vec!["env".to_string(); wrapper_count];
+            command.extend(vec_str(&["rm", "-rf", "/tmp/example"]));
+            command
+        };
+
+        assert_eq!(
+            dangerous_command_match(&nested_forced_rm(MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH)),
+            Some(DangerousCommandMatch::ForcedRm)
+        );
+        assert_eq!(
+            dangerous_command_match(&nested_forced_rm(MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH + 1)),
+            Some(DangerousCommandMatch::Other)
+        );
     }
 
     #[test]
