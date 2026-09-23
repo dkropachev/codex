@@ -12,6 +12,11 @@ Users can invoke workflow behavior from CLI commands and TUI slash commands. Wor
 resolve to stable workflow definitions, apply the intended role/model/settings context, and preserve
 normal Codex safety and approval behavior.
 
+An executing workflow command participates in the normal turn lifecycle. Clients receive
+`turn/started` before workflow output, and the TUI keeps the standard working and interrupt status
+visible until the workflow completes, fails, or is canceled. Workflow results continue to render as
+normal assistant messages.
+
 Workflow mode is visible in the TUI so users can tell when a workflow-oriented interaction is
 active. Command autocomplete should surface workflow commands consistently with other slash
 commands. Workflow command compatibility handling should preserve older command spellings where the
@@ -27,6 +32,7 @@ application path.
 - [codex-rs/cli/src/workflow_cmd/compat.rs](../cli/src/workflow_cmd/compat.rs)
 - [codex-rs/tui/src/workflow_commands.rs](../tui/src/workflow_commands.rs)
 - [codex-rs/tui/src/slash_command.rs](../tui/src/slash_command.rs)
+- [codex-rs/core/src/tasks/workflow_command.rs](../core/src/tasks/workflow_command.rs)
 - [codex-rs/core/src/agent/role.rs](../core/src/agent/role.rs)
 - [codex-rs/core/src/agent/builtins/workflow-coder.toml](../core/src/agent/builtins/workflow-coder.toml)
 - [codex-rs/core/src/agent/builtins/workflow-code-reviewer.toml](../core/src/agent/builtins/workflow-code-reviewer.toml)
@@ -69,6 +75,8 @@ application path.
 - Workflow behavior remains opt-in through explicit workflow commands or mode selection.
 - Workflow commands do not bypass normal approval, sandbox, or permission behavior.
 - Workflow UI state reflects the current workflow mode without changing the underlying turn model.
+- Accepted workflow commands emit one start lifecycle event and one terminal lifecycle event;
+  workflow execution must not appear idle while its task is active.
 - Built-in workflow roles are treated as part of the role catalog, not special-cased prompt text.
 
 ## Test Places
@@ -90,8 +98,8 @@ planning-implementation-review workflow execution path.
 
 #### Description
 
-App-server coverage should exercise workflow command RPC execution, persisted workflow output,
-notifications, and next-turn context after workflow output is recorded.
+App-server coverage should exercise workflow command RPC execution, start and completion lifecycle
+notifications, persisted workflow output, and next-turn context after workflow output is recorded.
 
 #### Test cases
 
@@ -115,25 +123,26 @@ for unknown workflows.
 
 #### Description
 
-Full TUI coverage should exercise workflow slash autocomplete, workflow option completion, and
-workflow command insertion in a live terminal session. It should also exercise visible workflow mode
-state during a submitted mocked turn.
+Full TUI coverage should exercise workflow slash autocomplete, workflow option completion, workflow
+command insertion, and the standard running indicator in a live terminal session. It should also
+exercise visible workflow mode state during a submitted mocked turn.
 
 #### Test cases
 
 - Workflow slash autocomplete is covered: codex-rs/tui/tests/suite/workflows__slash_autocomplete.rs:workflow_command_autocompletes_in_live_tui
+- Workflow command running status is covered: codex-rs/tui/tests/suite/workflows__slash_autocomplete.rs:workflow_command_shows_running_status_in_live_tui
 - Workflow mode footer and mocked turn submission are covered: codex-rs/tui/tests/suite/workflows__mode.rs:workflow_slash_enters_mode_and_submits_mocked_ai_turn
 
 ### tui-component (focused TUI component behavior)
 
 #### Description
 
-Focused TUI coverage should exercise workflow mode indicators and workflow command option
-rendering.
+Focused TUI coverage should exercise workflow mode indicators, workflow command option rendering,
+and the standard task status shown while a workflow command is running.
 
 #### Test cases
 
-- Workflow mode indicators and slash-command dispatch are covered: codex-rs/tui/src/chatwidget/tests/workflows__slash_commands.rs:bare_workflow_command_dispatches_structured_workflow_op,bare_workflow_slash_enters_workflow_mode,bare_workflow_slash_reports_disabled_when_feature_off,queued_malformed_workflow_command_reports_error_and_drains_next_input,queued_workflow_command_dispatches_after_active_turn,workflow_command_appears_in_slash_popup_when_enabled,workflow_command_is_hidden_and_rejected_when_feature_disabled,workflow_command_rejects_malformed_args_without_clearing_draft,workflow_command_with_args_dispatches_structured_input_json,workflow_done_slash_exits_to_default_mode,workflow_slash_with_args_dispatches_workflow_cli_command
+- Workflow mode indicators, running status, and slash-command dispatch are covered: codex-rs/tui/src/chatwidget/tests/workflows__slash_commands.rs:bare_workflow_command_dispatches_structured_workflow_op,bare_workflow_slash_enters_workflow_mode,bare_workflow_slash_reports_disabled_when_feature_off,queued_malformed_workflow_command_reports_error_and_drains_next_input,queued_workflow_command_dispatches_after_active_turn,running_workflow_command_uses_standard_task_status_snapshot,workflow_command_appears_in_slash_popup_when_enabled,workflow_command_is_hidden_and_rejected_when_feature_disabled,workflow_command_rejects_malformed_args_without_clearing_draft,workflow_command_with_args_dispatches_structured_input_json,workflow_done_slash_exits_to_default_mode,workflow_slash_with_args_dispatches_workflow_cli_command
 - Workflow command discovery and option handling are covered part 1: codex-rs/tui/src/workflows__commands_tests.rs:builds_shell_command_for_workflow_directory,discovers_home_and_project_workflow_commands,discovers_nested_workflow_ids,discovers_workflow_usage_option_hints,ignores_missing_or_invalid_command_names,merges_input_object_and_flags_without_overriding_working_directory,parses_workflow_args_into_input_json,project_workflow_overrides_home_command_name
 - Workflow command discovery and option handling are covered part 2: codex-rs/tui/src/workflows__commands_tests.rs:rejects_malformed_workflow_args
 

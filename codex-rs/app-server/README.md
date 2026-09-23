@@ -164,6 +164,7 @@ Example with notification opt-out:
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
+- `thread/workflowCommand` — run a locally installed workflow package on an idle thread; returns `{}` immediately, emits the standard `turn/started`, `item/*`, and `turn/completed` lifecycle, and records the formatted workflow result as an assistant message.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/backgroundTerminals/list` — list running background terminals for a loaded thread (experimental; requires `capabilities.experimentalApi`); returns `data` with the running terminal ids.
 - `thread/backgroundTerminals/terminate` — terminate one running background terminal by app-server `processId` (experimental; requires `capabilities.experimentalApi`); returns whether a process was terminated.
@@ -709,6 +710,25 @@ If the thread does not already have an active turn, the server starts a standalo
 ```json
 { "method": "thread/shellCommand", "id": 26, "params": { "threadId": "thr_b", "command": "git status --short" } }
 { "id": 26, "result": {} }
+```
+
+### Example: Run a workflow command
+
+Use `thread/workflowCommand` to run a locally installed workflow package. The thread must be idle,
+and the request returns immediately with `{}`. Clients should keep their normal active-turn UI
+visible for the complete lifecycle:
+
+- `turn/started`
+- `item/started` and `item/completed` for the formatted assistant message
+- `turn/completed`
+
+```json
+{ "method": "thread/workflowCommand", "id": 27, "params": {
+    "threadId": "thr_b",
+    "workflowDir": "/home/user/.codex/workflows/code-review",
+    "input": { "action": "review", "workingDirectory": "/home/user/project" }
+} }
+{ "id": 27, "result": {} }
 ```
 
 ### Example: Start a turn (send user input)

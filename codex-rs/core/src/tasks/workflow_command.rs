@@ -9,6 +9,7 @@ use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::TurnStartedEvent;
 use serde_json::Value;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
@@ -91,6 +92,18 @@ impl SessionTask for WorkflowCommandTask {
             /*inc*/ 1,
             &[],
         );
+
+        let event = EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: turn_context.sub_id.clone(),
+            trace_id: turn_context.trace_id.clone(),
+            started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
+            model_context_window: turn_context.model_context_window(),
+            collaboration_mode_kind: turn_context.collaboration_mode.mode,
+        });
+        session
+            .clone_session()
+            .send_event(turn_context.as_ref(), event)
+            .await;
 
         let markdown = match run_workflow_for_tui(
             &self.workflow_dir,

@@ -25,6 +25,8 @@ use codex_app_server_protocol::ThreadWorkflowCommandResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnStartedNotification;
+use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_protocol::models::MessagePhase;
 use core_test_support::skip_if_remote;
@@ -109,6 +111,19 @@ async fn thread_workflow_command_records_assistant_output_and_next_turn_context(
     let _: ThreadWorkflowCommandResponse =
         to_response::<ThreadWorkflowCommandResponse>(workflow_resp)?;
 
+    let workflow_turn_started: TurnStartedNotification = serde_json::from_value(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("turn/started"),
+        )
+        .await??
+        .params
+        .context("missing workflow turn/started params")?,
+    )?;
+    assert_eq!(workflow_turn_started.thread_id, thread.id);
+    assert_eq!(workflow_turn_started.turn.status, TurnStatus::InProgress);
+    let workflow_turn_id = workflow_turn_started.turn.id;
+
     let started = wait_for_agent_message_started(&mut mcp, WORKFLOW_MARKDOWN).await?;
     assert_agent_message(&started.item, WORKFLOW_MARKDOWN);
     let completed = wait_for_agent_message_completed(&mut mcp, WORKFLOW_MARKDOWN).await?;
@@ -124,6 +139,7 @@ async fn thread_workflow_command_records_assistant_output_and_next_turn_context(
         .context("missing workflow turn/completed params")?,
     )?;
     assert_eq!(workflow_turn_completed.thread_id, thread.id);
+    assert_eq!(workflow_turn_completed.turn.id, workflow_turn_id);
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {

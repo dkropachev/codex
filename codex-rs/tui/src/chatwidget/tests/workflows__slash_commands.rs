@@ -270,6 +270,33 @@ async fn bare_workflow_command_dispatches_structured_workflow_op() {
 }
 
 #[tokio::test]
+async fn running_workflow_command_uses_standard_task_status_snapshot() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    write_workflow_command(&mut chat, "code-review", "Run review.");
+    chat.sync_workflow_commands();
+
+    submit_composer_text(&mut chat, "/code-review");
+    let _ = next_workflow_command(&mut op_rx);
+    handle_turn_started(&mut chat, "workflow-turn");
+
+    let height = chat.desired_height(/*width*/ 80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .expect("create terminal");
+    terminal
+        .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
+        .expect("draw running workflow");
+    assert_chatwidget_snapshot!(
+        "running_workflow_command_uses_standard_task_status",
+        normalized_backend_snapshot(terminal.backend()),
+    );
+
+    handle_turn_completed(&mut chat, "workflow-turn", /*duration_ms*/ None);
+
+    assert!(!chat.bottom_pane.status_indicator_visible());
+}
+
+#[tokio::test]
 async fn workflow_command_with_args_dispatches_structured_input_json() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
