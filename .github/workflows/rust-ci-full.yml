@@ -553,9 +553,10 @@ jobs:
         tests_linux_arm64,
         tests_windows_x64,
         tests_windows_arm64,
-      ]
+    ]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
+    permissions: {}
     steps:
       - name: Summarize
         if: ${{ github.repository == 'openai/codex' }}
