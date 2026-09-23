@@ -554,10 +554,12 @@ jobs:
         tests_windows_x64,
         tests_windows_arm64,
       ]
-    if: ${{ github.repository == 'openai/codex' && always() }}
+    if: ${{ always() }}
     runs-on: ubuntu-24.04
+    permissions: {}
     steps:
       - name: Summarize
+        if: ${{ github.repository == 'openai/codex' }}
         shell: bash
         run: |
           echo "argpkg : ${{ needs.argument_comment_lint_package.result }}"
@@ -581,7 +583,11 @@ jobs:
           [[ '${{ needs.tests_windows_x64.result }}' == 'success' ]] || { echo 'tests_windows_x64 failed'; exit 1; }
           [[ '${{ needs.tests_windows_arm64.result }}' == 'success' ]] || { echo 'tests_windows_arm64 failed'; exit 1; }
 
+      - name: Summarize fork coverage
+        if: ${{ github.repository != 'openai/codex' }}
+        run: echo 'Full CI is upstream-only; fork coverage runs in blocking-ci.'
+
       - name: sccache summary note
-        if: always()
+        if: ${{ github.repository == 'openai/codex' && always() }}
         run: |
           echo "Per-job sccache stats are attached to each matrix job's Step Summary."
