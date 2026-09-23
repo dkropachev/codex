@@ -1,39 +1,41 @@
 diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
-index 95cacb0..d5d814b 100644
+index 35531b3..050bb69 100644
 --- a/builder/cc_builder.rs
 +++ b/builder/cc_builder.rs
-@@ -20,9 +20,10 @@ mod win_x86_64;
+@@ -20,10 +20,11 @@ mod win_x86_64;
  use crate::nasm_builder::NasmBuilder;
  use crate::{
-     cargo_env, disable_jitter_entropy, emit_warning, env_name_for_target, env_var_to_bool,
--    execute_command, get_crate_cc, get_crate_cflags, get_crate_cxx, is_no_asm, out_dir,
--    requested_c_std, set_env_for_target, target, target_arch, target_env, target_os, target_vendor,
--    test_clang_cl_command, CStdRequested, EnvGuard, OutputLibType,
-+    execute_command, get_crate_cc, get_crate_cflags, get_crate_cxx,
-+    is_bazel_windows_msvc_build_script, is_no_asm, out_dir, requested_c_std, set_env_for_target,
-+    target, target_arch, target_env, target_os, target_vendor, test_clang_cl_command,
-+    CStdRequested, EnvGuard, OutputLibType,
+     cargo_env, compiler_is_cl_like, emit_warning, env_var_to_bool, execute_command, find_clang_cl,
+-    get_crate_cc, get_crate_cflags, get_crate_cxx, is_cross_compiling, is_link_whole_archive,
+-    is_no_asm, is_small, out_dir, requested_c_std, set_env_for_target, should_build_jitter_entropy,
+-    target, target_arch, target_env, target_is_msvc, target_os, target_vendor, use_prebuilt_nasm,
+-    CStdRequested, EnvGuard, OutputLibType,
++    get_crate_cc, get_crate_cflags, get_crate_cxx, is_bazel_windows_msvc_build_script,
++    is_cross_compiling, is_link_whole_archive, is_no_asm, is_small, out_dir, requested_c_std,
++    set_env_for_target, should_build_jitter_entropy, target, target_arch, target_env,
++    target_is_msvc, target_os, target_vendor, use_prebuilt_nasm, CStdRequested, EnvGuard,
++    OutputLibType,
  };
  use std::cell::Cell;
  use std::collections::HashMap;
-@@ -769,6 +770,30 @@ impl CcBuilder {
+@@ -1082,6 +1083,37 @@ fn gcc_version_may_have_memcmp_bug(version: &str) -> bool {
      }
  }
  
 +fn configure_windows_msvc_clang_cl() {
 +    let should_use_clang_cl = target_os() == "windows"
-+        && target_env() == "msvc"
++        && target_is_msvc()
 +        && (target_arch() == "aarch64" || is_bazel_windows_msvc_build_script());
 +    if !should_use_clang_cl {
 +        return;
 +    }
 +
-+    let clang_cl = if test_clang_cl_command() {
-+        Some(String::from("clang-cl"))
-+    } else {
++    let clang_cl = find_clang_cl().or_else(|| {
 +        let system_clang_cl = PathBuf::from(r"C:\Program Files\LLVM\bin\clang-cl.exe");
-+        system_clang_cl.is_file().then(|| system_clang_cl.display().to_string())
-+    };
++        system_clang_cl
++            .is_file()
++            .then(|| system_clang_cl.into_os_string())
++    });
 +    if let Some(clang_cl) = clang_cl {
 +        if get_crate_cc().is_none() {
 +            set_env_for_target("CC", &clang_cl);
@@ -41,13 +43,20 @@ index 95cacb0..d5d814b 100644
 +        if get_crate_cxx().is_none() {
 +            set_env_for_target("CXX", &clang_cl);
 +        }
++    } else if target_arch() == "aarch64" {
++        emit_warning(
++            "Windows ARM64 (aarch64-pc-windows-msvc) requires clang-cl. \
++             Install the 'C++ Clang Compiler for Windows' component in \
++             Visual Studio Build Tools, or set CC to a working clang-cl. \
++             See User Guide: https://aws.github.io/aws-lc-rs/index.html",
++        );
 +    }
 +}
 +
  impl crate::Builder for CcBuilder {
      fn check_dependencies(&self) -> Result<(), String> {
          if OutputLibType::Dynamic == self.output_lib_type {
-@@ -784,18 +809,12 @@ impl crate::Builder for CcBuilder {
+@@ -1097,26 +1129,12 @@ impl crate::Builder for CcBuilder {
              return Err("cc_builder for libssl not supported".to_string());
          }
  
@@ -58,23 +67,30 @@ index 95cacb0..d5d814b 100644
      fn build(&self) -> Result<(), String> {
 -        if target_os() == "windows"
 -            && target_arch() == "aarch64"
--            && target_env() == "msvc"
+-            && target_is_msvc()
 -            && get_crate_cc().is_none()
--            && test_clang_cl_command()
 -        {
--            set_env_for_target("CC", "clang-cl");
+-            if let Some(clang_cl) = find_clang_cl() {
+-                set_env_for_target("CC", clang_cl);
+-            } else {
+-                emit_warning(
+-                    "Windows ARM64 (aarch64-pc-windows-msvc) requires clang-cl. \
+-                     Install the 'C++ Clang Compiler for Windows' component in \
+-                     Visual Studio Build Tools, or set CC to a working clang-cl. \
+-                     See User Guide: https://aws.github.io/aws-lc-rs/index.html",
+-                );
+-            }
 -        }
 +        configure_windows_msvc_clang_cl();
  
          println!("cargo:root={}", self.out_dir.display());
          let sources = crate::cc_builder::identify_sources();
-
 diff --git a/builder/main.rs b/builder/main.rs
-index 51a9bc1..e714ba4 100644
+index af51679..3d27365 100644
 --- a/builder/main.rs
 +++ b/builder/main.rs
-@@ -723,14 +723,31 @@ fn get_crate_cflags() -> Option<String> {
-         .or(optional_env_optional_crate_target("CFLAGS"))
+@@ -1183,14 +1183,31 @@ fn get_crate_cflags() -> Option<String> {
+     host_or_target.or(optional_env_optional_crate_target("CFLAGS"))
  }
  
 +pub(crate) fn is_bazel_windows_msvc_build_script() -> bool {
@@ -106,10 +122,10 @@ index 51a9bc1..e714ba4 100644
          && (Some(true) == allow_prebuilt_nasm() || is_prebuilt_nasm())
  }
  
-@@ -817,8 +834,12 @@ fn main() {
-     initialize();
-     prepare_cargo_cfg();
+@@ -1318,8 +1335,12 @@ fn handle_bindgen(_manifest_dir: &Path, _prefix: &Option<String>) -> bool {
+ }
  
+ fn canonicalized_manifest_dir() -> PathBuf {
 -    let manifest_dir = current_dir();
 -    let manifest_dir = dunce::canonicalize(Path::new(&manifest_dir)).unwrap();
 +    let manifest_dir = if is_bazel_windows_msvc_build_script() {
@@ -118,15 +134,14 @@ index 51a9bc1..e714ba4 100644
 +        let manifest_dir = current_dir();
 +        dunce::canonicalize(Path::new(&manifest_dir)).unwrap()
 +    };
-     let prefix_str = prefix_string();
-     let prefix = if is_no_prefix() {
-         None
-
+     #[cfg(windows)]
+     let manifest_dir = to_short_path(&manifest_dir);
+     manifest_dir
 diff --git a/builder/nasm_builder.rs b/builder/nasm_builder.rs
-index cf1f5c8..f683274 100644
+index bb7a2b8..2085bc3 100644
 --- a/builder/nasm_builder.rs
 +++ b/builder/nasm_builder.rs
-@@ -57,7 +57,7 @@ impl NasmBuilder {
+@@ -56,7 +56,7 @@ impl NasmBuilder {
              return vec![];
          }
  

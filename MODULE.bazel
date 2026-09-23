@@ -242,9 +242,7 @@ crate.annotation(
     crate = "aws-lc-sys",
     patch_args = ["-p1"],
     patches = [
-        "//patches:aws-lc-sys_memcmp_check.patch",
         "//patches:aws-lc-sys_windows_msvc_prebuilt_nasm.patch",
-        "//patches:aws-lc-sys_windows_msvc_memcmp_probe.patch",
     ],
 )
 crate.annotation(
