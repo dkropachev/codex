@@ -245,6 +245,7 @@ deny = [
         "codex-app-server-daemon",
         "codex-backend-client",
         "codex-cloud-tasks",
+        "codex-client",
         "codex-core",
         "codex-core-plugins",
         "codex-exec-server",
