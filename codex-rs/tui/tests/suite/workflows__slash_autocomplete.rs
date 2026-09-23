@@ -10,6 +10,150 @@ use codex_utils_pty::spawn_pty_process;
 use tempfile::tempdir;
 use tokio::sync::broadcast;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn workflow_command_shows_running_status_in_live_tui() -> Result<()> {
+    let codex = codex_utils_cargo_bin::cargo_bin("codex-tui")?;
+    let codex_home = tempdir()?;
+    let workspace = tempdir()?;
+    let fake_bin = tempdir()?;
+    let workflow_release = workspace.path().join("release-workflow");
+
+    let workspace_display = workspace.path().display();
+    let parent_display = workspace
+        .path()
+        .parent()
+        .unwrap_or(workspace.path())
+        .display()
+        .to_string();
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"model = "gpt-5.4"
+model_provider = "openai"
+suppress_unstable_features_warning = true
+
+[features]
+workflows = true
+
+[projects."{workspace_display}"]
+trust_level = "trusted"
+
+[projects."{parent_display}"]
+trust_level = "trusted"
+"#
+        ),
+    )?;
+    std::fs::write(
+        codex_home.path().join("auth.json"),
+        r#"{"OPENAI_API_KEY":"dummy","tokens":null,"last_refresh":null}"#,
+    )?;
+
+    let workflow_dir = codex_home.path().join("workflows/code-review");
+    std::fs::create_dir_all(workflow_dir.join("src"))?;
+    std::fs::write(
+        workflow_dir.join("workflow.yaml"),
+        r#"id: code-review
+command: code-review
+title: /code-review
+userDescription: Run a code review workflow.
+"#,
+    )?;
+    std::fs::write(
+        workflow_dir.join("src/workflow.ts"),
+        "export default { run() {}, format() {} };\n",
+    )?;
+
+    let bun_path = fake_bin.path().join("bun");
+    std::fs::write(
+        &bun_path,
+        r#"#!/bin/sh
+set -eu
+: "${CODEX_TEST_WORKFLOW_RELEASE:?}"
+while [ ! -f "$CODEX_TEST_WORKFLOW_RELEASE" ]; do
+  sleep 0.05
+done
+printf '%s\n' '# Workflow finished' '' 'Visible workflow result.'
+"#,
+    )?;
+    let mut permissions = std::fs::metadata(&bun_path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&bun_path, permissions)?;
+
+    let existing_path = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        std::iter::once(fake_bin.path().to_path_buf()).chain(std::env::split_paths(&existing_path)),
+    )?;
+    let env = HashMap::from([
+        (
+            "CODEX_HOME".to_string(),
+            codex_home.path().display().to_string(),
+        ),
+        ("HOME".to_string(), codex_home.path().display().to_string()),
+        ("OPENAI_API_KEY".to_string(), "dummy".to_string()),
+        ("RUST_LOG".to_string(), "trace".to_string()),
+        ("TERM".to_string(), "xterm-256color".to_string()),
+        ("PATH".to_string(), path.to_string_lossy().to_string()),
+        (
+            "CODEX_TEST_WORKFLOW_RELEASE".to_string(),
+            workflow_release.display().to_string(),
+        ),
+        (
+            "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT".to_string(),
+            "1".to_string(),
+        ),
+    ]);
+    let args = vec![
+        "-c".to_string(),
+        "analytics.enabled=false".to_string(),
+        "--no-alt-screen".to_string(),
+        "-C".to_string(),
+        workspace.path().display().to_string(),
+    ];
+    let spawned = spawn_pty_process(
+        &codex.display().to_string(),
+        &args,
+        workspace.path(),
+        &env,
+        &None,
+        TerminalSize { rows: 24, cols: 80 },
+    )
+    .await?;
+    let writer = spawned.session.writer_sender();
+    let mut output_rx = combine_output_receivers(spawned.stdout_rx, spawned.stderr_rx);
+    let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
+
+    wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
+        contents.contains("gpt-5.4 default")
+    })
+    .await?;
+
+    writer.send(b"/code-review".to_vec()).await?;
+    writer.send(b"\r".to_vec()).await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "running workflow status",
+        |contents| contents.contains("Working (") && contents.contains("esc to interrupt"),
+    )
+    .await?;
+
+    std::fs::write(&workflow_release, "release\n")?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "completed workflow output",
+        |contents| contents.contains("Visible workflow result.") && !contents.contains("Working ("),
+    )
+    .await?;
+
+    spawned.session.terminate();
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn workflow_command_autocompletes_in_live_tui() -> Result<()> {
     if cfg!(windows) {
