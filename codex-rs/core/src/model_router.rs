@@ -2085,6 +2085,7 @@ mod tests {
             &TokenUsage {
                 input_tokens: 1_000_000,
                 cached_input_tokens: 0,
+                cache_write_input_tokens: 0,
                 output_tokens: 1_000_000,
                 reasoning_output_tokens: 0,
                 total_tokens: 2_000_000,
@@ -2175,6 +2176,7 @@ mod tests {
             &TokenUsage {
                 input_tokens: 100_000,
                 cached_input_tokens: 0,
+                cache_write_input_tokens: 0,
                 output_tokens: 0,
                 reasoning_output_tokens: 0,
                 total_tokens: 100_000,
@@ -2231,6 +2233,7 @@ mod tests {
             &TokenUsage {
                 input_tokens: 1_000_000,
                 cached_input_tokens: 0,
+                cache_write_input_tokens: 0,
                 output_tokens: 1_000_000,
                 reasoning_output_tokens: 0,
                 total_tokens: 2_000_000,
@@ -2267,6 +2270,7 @@ mod tests {
                 token_usage: TokenUsage {
                     input_tokens: 1_000_000,
                     cached_input_tokens: 0,
+                    cache_write_input_tokens: 0,
                     output_tokens: 1_000_000,
                     reasoning_output_tokens: 0,
                     total_tokens: 2_000_000,
@@ -2338,6 +2342,7 @@ mod tests {
                 &TokenUsage {
                     input_tokens: 100,
                     cached_input_tokens: 0,
+                    cache_write_input_tokens: 0,
                     output_tokens: 20,
                     reasoning_output_tokens: 0,
                     total_tokens: 120,

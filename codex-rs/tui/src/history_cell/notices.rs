@@ -50,7 +50,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
 
         let content = text![
             line![
-                padded_emoji("✨").bold().cyan(),
+                "✨\u{200A}".bold().cyan(),
                 "Update available!".bold().cyan(),
                 " ",
                 format!("{current_version} -> {latest_version}").bold(),

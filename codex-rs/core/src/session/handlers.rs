@@ -127,7 +127,6 @@ async fn thread_settings_update(
 ) -> SessionSettingsUpdate {
     let ThreadSettingsOverrides {
         environments,
-        workspace_roots,
         profile_workspace_roots,
         approval_policy,
         approvals_reviewer,
@@ -156,7 +155,6 @@ async fn thread_settings_update(
     };
     SessionSettingsUpdate {
         environments,
-        workspace_roots,
         profile_workspace_roots,
         approval_policy,
         approvals_reviewer,
@@ -642,12 +640,10 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     if let Err(err) = sess.services.code_mode_service.shutdown().await {
         warn!("failed to shutdown code mode session: {err}");
     }
-    sess.services
-        .latest_mcp_runtime()
-        .manager_arc()
-        .shutdown()
-        .await;
+    sess.services.mcp_runtime.shutdown().await;
     sess.guardian_review_session.shutdown().await;
+
+    crate::hook_runtime::run_session_end_hooks(sess).await;
 }
 
 async fn emit_thread_stop_lifecycle(sess: &Session) {
@@ -783,11 +779,14 @@ pub async fn review(
                 }),
             )
             .await;
+            let terminal_error = turn_context.terminal_error.lock().await.clone();
             sess.send_event(
                 &turn_context,
                 EventMsg::TurnComplete(TurnCompleteEvent {
                     turn_id: sub_id,
                     last_agent_message: None,
+                    error: terminal_error,
+                    started_at: None,
                     completed_at: None,
                     duration_ms: None,
                     time_to_first_token_ms: None,

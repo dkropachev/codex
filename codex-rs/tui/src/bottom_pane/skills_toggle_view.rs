@@ -23,7 +23,6 @@ use crate::render::RectExt as _;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::skills_helpers::match_skill;
-use crate::skills_helpers::truncate_skill_name;
 use crate::style::user_message_style;
 
 use super::CancellationEvent;
@@ -145,7 +144,7 @@ impl SkillsToggleView {
                     let is_selected = self.state.selected_idx == Some(visible_idx);
                     let prefix = if is_selected { '›' } else { ' ' };
                     let marker = if item.enabled { 'x' } else { ' ' };
-                    let item_name = truncate_skill_name(&item.name);
+                    let item_name = &item.name;
                     let name = format!("{prefix} [{marker}] {item_name}");
                     GenericDisplayRow {
                         name,

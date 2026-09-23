@@ -56,7 +56,7 @@ async fn skill_mention_submits_skill_instructions() -> Result<()> {
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("gpt-5.4 default")
+        contents.contains("gpt-5.6-terra default")
     })
     .await?;
 
@@ -160,7 +160,7 @@ async fn skill_toggle_enables_disabled_skill_and_preserves_draft() -> Result<()>
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("gpt-5.4 default")
+        contents.contains("gpt-5.6-terra default")
     })
     .await?;
     writer.send(b"$".to_vec()).await?;
@@ -177,7 +177,7 @@ async fn skill_toggle_enables_disabled_skill_and_preserves_draft() -> Result<()>
         &mut output_rx,
         &mut screen,
         "cleared skill probe",
-        |contents| contents.contains("gpt-5.4 default") && !contents.contains('$'),
+        |contents| contents.contains("gpt-5.6-terra default") && !contents.contains('$'),
     )
     .await?;
 
@@ -330,6 +330,7 @@ async fn spawn_tui(
         &env,
         &None,
         TerminalSize { rows: 24, cols: 80 },
+        /*inherited_fds*/ &[],
     )
     .await
 }
@@ -347,7 +348,7 @@ fn write_config(
         .display()
         .to_string();
     let mut config = format!(
-        r#"model = "gpt-5.4"
+        r#"model = "gpt-5.6-terra"
 model_provider = "mock_provider"
 suppress_unstable_features_warning = true
 approval_policy = "never"

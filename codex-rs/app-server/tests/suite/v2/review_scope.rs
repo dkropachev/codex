@@ -288,6 +288,7 @@ async fn run_selected(mcp: &TestAppServer, argv: &[&str]) -> Result<String> {
             sandbox: None,
             enforce_managed_network: false,
             managed_network: None,
+            network_proxy: None,
         })
         .await?;
     let mut events = started.process.subscribe_events();

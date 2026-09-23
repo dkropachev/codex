@@ -40,7 +40,7 @@ fn from_form_request(
     McpServerElicitationFormRequest::from_app_server_request(
         thread_id,
         request_id("request-1"),
-        request,
+        &request,
     )
 }
 
@@ -759,7 +759,7 @@ fn resolved_request_dismisses_overlay_without_emitting_events() {
         McpServerElicitationFormRequest::from_app_server_request(
             thread_id,
             request_id("request-2"),
-            McpServerElicitationRequestParams {
+            &McpServerElicitationRequestParams {
                 thread_id: "thread-1".to_string(),
                 turn_id: Some("turn-2".to_string()),
                 server_name: "server-1".to_string(),

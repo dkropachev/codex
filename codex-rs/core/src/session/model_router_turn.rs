@@ -52,7 +52,7 @@ impl Session {
         input: &[TurnInput],
     ) -> Arc<TurnContext> {
         let prompt_estimate = self.model_router_prompt_estimate_for_turn(input).await;
-        let mode = turn_context.collaboration_mode.mode;
+        let mode = turn_context.mode;
         self.route_turn_context_for_model_router(
             turn_context,
             ModelRouterSource::Chat(mode),

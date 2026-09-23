@@ -58,6 +58,7 @@ async fn workflow_slash_enters_mode_and_submits_mocked_ai_turn() -> Result<()> {
         &env,
         &None,
         TerminalSize { rows: 24, cols: 80 },
+        /*inherited_fds*/ &[],
     )
     .await?;
     let writer = spawned.session.writer_sender();
@@ -65,7 +66,7 @@ async fn workflow_slash_enters_mode_and_submits_mocked_ai_turn() -> Result<()> {
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("gpt-5.4 default")
+        contents.contains("gpt-5.6-terra default")
     })
     .await?;
 
@@ -125,7 +126,7 @@ fn write_config(
     std::fs::write(
         codex_home.join("config.toml"),
         format!(
-            r#"model = "gpt-5.4"
+            r#"model = "gpt-5.6-terra"
 model_provider = "mock_provider"
 suppress_unstable_features_warning = true
 

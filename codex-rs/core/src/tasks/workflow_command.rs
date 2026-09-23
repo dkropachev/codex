@@ -98,7 +98,7 @@ impl SessionTask for WorkflowCommandTask {
             trace_id: turn_context.trace_id.clone(),
             started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
             model_context_window: turn_context.model_context_window(),
-            collaboration_mode_kind: turn_context.collaboration_mode.mode,
+            collaboration_mode_kind: turn_context.mode,
         });
         session
             .clone_session()

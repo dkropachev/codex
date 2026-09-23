@@ -372,6 +372,7 @@ pub fn estimate_task_usage(prompt_bytes: usize, task_class: RouterTaskClass) -> 
     TokenUsage {
         input_tokens,
         cached_input_tokens: 0,
+        cache_write_input_tokens: 0,
         output_tokens,
         reasoning_output_tokens: 0,
         total_tokens: input_tokens.saturating_add(output_tokens),
@@ -479,6 +480,7 @@ mod tests {
         let usage = TokenUsage {
             input_tokens: 1_500_000,
             cached_input_tokens: 500_000,
+            cache_write_input_tokens: 0,
             output_tokens: 200_000,
             reasoning_output_tokens: 50_000,
             total_tokens: 1_700_000,
