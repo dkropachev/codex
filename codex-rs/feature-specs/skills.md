@@ -178,6 +178,8 @@ disabled state, and toggle view behavior.
 
 - Skill popup rendering and long-list behavior are covered: codex-rs/tui/src/bottom_pane/skills__skill_popup.rs:filtered_mentions_preserve_results_beyond_popup_height,scrolling_mentions_shifts_rendered_window_snapshot,display_name_match_sorting_beats_worse_secondary_search_term_matches,query_match_score_sorts_before_plugin_rank_bias
 - Skill selection, disabled, and toggle states are covered: codex-rs/tui/src/bottom_pane/skills__toggle_view.rs:renders_basic_popup,footer_hint_uses_list_keymap_accept_and_cancel,space_toggles_selected_skill_and_emits_event
+- Long skill display names are preserved in toggle rows and filtered results: codex-rs/tui/src/bottom_pane/skills__toggle_view.rs:build_rows_preserves_full_skill_display_names,filtering_long_skill_names_preserves_the_matching_row
+- Long skill display names render within narrow and available widths: codex-rs/tui/src/bottom_pane/skills__toggle_view.rs:renders_long_names_at_narrow_width,renders_long_names_using_available_width
 
 ### login-auth (auth and login behavior)
 
