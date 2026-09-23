@@ -108,6 +108,9 @@ be eligible to surface after the reviewer submits the review.
 It intentionally surfaces Codex reviewer bot feedback (for example comments/reviews from `chatgpt-codex-connector[bot]`) in addition to human reviewer feedback. Most unrelated bot noise should still be ignored.
 For safety, the watcher only auto-surfaces trusted human review authors (for example repo OWNER/MEMBER/COLLABORATOR, plus the authenticated operator) and approved review bots such as Codex.
 On a fresh watcher state file, existing unaddressed published review feedback may be surfaced immediately (not only comments that arrive after monitoring starts). This is intentional so already-open review comments are not missed.
+Watcher output bounds long review fields. When `new_review_items_summary.truncated` is true, use the
+surfaced item kind and ID or URL to fetch its full body from the matching GitHub API endpoint before
+deciding whether or how to act.
 
 When you agree with a comment and it is actionable:
 

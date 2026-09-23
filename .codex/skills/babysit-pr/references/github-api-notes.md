@@ -16,7 +16,7 @@ Used to compute pending/failed/passed counts and whether the current CI round is
 
 ### Workflow runs for head SHA
 
-- `gh api repos/{owner}/{repo}/actions/runs -X GET -f head_sha=<sha> -f per_page=100`
+- `gh api repos/{owner}/{repo}/actions/runs -X GET -f head_sha=<sha> -f per_page=100 -f page=<page>`
 
 Used to discover failed workflow runs and rerunnable run IDs.
 
@@ -72,6 +72,11 @@ whose `state` is `PENDING`, along with their inline comments, until the review i
 ### Actions runs API (`workflow_runs[]`)
 
 - `id`
+- `workflow_id`
+- `run_number`
+- `run_attempt`
+- `event`
+- `pull_requests`
 - `name`
 - `status`
 - `conclusion`

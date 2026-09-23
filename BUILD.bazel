@@ -70,6 +70,7 @@ alias(
 )
 
 exports_files([
+    ".codex/skills/babysit-pr/SKILL.md",
     "AGENTS.md",
     "workspace_root_test_launcher.bat.tpl",
     "workspace_root_test_launcher.sh.tpl",
