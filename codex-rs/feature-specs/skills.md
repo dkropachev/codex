@@ -29,11 +29,11 @@ time and use bounded history from matching repository, base branch, and CI confi
 
 ## Entry Points
 
-- [codex-rs/core-skills/src/service.rs](../core-skills/src/service.rs)
+- [codex-rs/ext/skills/src/host_service.rs](../ext/skills/src/host_service.rs)
 - [codex-rs/core-skills/src/loader.rs](../core-skills/src/loader.rs)
 - [codex-rs/core-skills/src/injection.rs](../core-skills/src/injection.rs)
 - [codex-rs/core/src/skills.rs](../core/src/skills.rs)
-- [codex-rs/core/src/context/available_skills_instructions.rs](../core/src/context/available_skills_instructions.rs)
+- [codex-rs/ext/skills/src/fragments.rs](../ext/skills/src/fragments.rs)
 - [codex-rs/app-server-protocol/src/protocol/v2/plugin.rs](../app-server-protocol/src/protocol/v2/plugin.rs)
 - [codex-rs/app-server/src/request_processors/catalog_processor.rs](../app-server/src/request_processors/catalog_processor.rs)
 - [codex-rs/app-server/src/skills_watcher.rs](../app-server/src/skills_watcher.rs)
@@ -48,7 +48,7 @@ time and use bounded history from matching repository, base branch, and CI confi
 #### Entry Points
 
 - [codex-rs/core-skills/src/loader.rs](../core-skills/src/loader.rs)
-- [codex-rs/core-skills/src/service.rs](../core-skills/src/service.rs)
+- [codex-rs/ext/skills/src/host_service.rs](../ext/skills/src/host_service.rs)
 - [codex-rs/core-skills/src/config_rules.rs](../core-skills/src/config_rules.rs)
 - [codex-rs/app-server/src/request_processors/catalog_processor.rs](../app-server/src/request_processors/catalog_processor.rs)
 - [codex-rs/app-server/src/skills_watcher.rs](../app-server/src/skills_watcher.rs)
@@ -64,9 +64,9 @@ time and use bounded history from matching repository, base branch, and CI confi
 #### Entry Points
 
 - [codex-rs/core-skills/src/injection.rs](../core-skills/src/injection.rs)
-- [codex-rs/core-skills/src/render.rs](../core-skills/src/render.rs)
+- [codex-rs/ext/skills/src/render.rs](../ext/skills/src/render.rs)
 - [codex-rs/core/src/skills.rs](../core/src/skills.rs)
-- [codex-rs/core/src/context/available_skills_instructions.rs](../core/src/context/available_skills_instructions.rs)
+- [codex-rs/ext/skills/src/fragments.rs](../ext/skills/src/fragments.rs)
 
 #### Invariants
 
