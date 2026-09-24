@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::Result;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -39,7 +41,6 @@ use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::time::Duration;
 use wiremock::MockServer;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

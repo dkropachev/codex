@@ -10,10 +10,12 @@ use codex_config::config_toml::AccountPoolPolicyToml;
 use codex_config::config_toml::AccountPoolToml;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::AuthKeyringBackendKind;
+use codex_http_client::ClientRouteClass;
 use codex_protocol::account::PlanType;
 use serde_json::Value;
 
 use crate::CodexAuth;
+use crate::default_client::create_client_for_route_async;
 use crate::outbound_proxy::AuthRouteConfig;
 
 use super::account_pool_selection::AccountPoolAssignmentKey;
@@ -108,6 +110,7 @@ struct AccountPool {
     definition: AccountPoolDefinitionToml,
     members: Vec<AccountPoolMember>,
     chatgpt_base_url: Option<String>,
+    auth_route_config: AuthRouteConfig,
     assignments: RwLock<HashMap<AccountPoolAssignmentKey, AccountPoolAssignment>>,
     last_assignment_key: RwLock<Option<AccountPoolAssignmentKey>>,
     last_usage_refresh_attempt: RwLock<Option<Instant>>,
@@ -127,7 +130,7 @@ impl AccountPoolManager {
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         keyring_backend_kind: AuthKeyringBackendKind,
         chatgpt_base_url: Option<String>,
-        auth_route_config: Option<AuthRouteConfig>,
+        auth_route_config: AuthRouteConfig,
     ) -> Option<Self> {
         if !config.enabled {
             return None;
@@ -164,6 +167,7 @@ impl AccountPoolManager {
                     definition,
                     members,
                     chatgpt_base_url: chatgpt_base_url.clone(),
+                    auth_route_config: auth_route_config.clone(),
                     assignments: RwLock::new(HashMap::new()),
                     last_assignment_key: RwLock::new(None),
                     last_usage_refresh_attempt: RwLock::new(None),
@@ -511,6 +515,7 @@ impl AccountPool {
                 member.account_id.clone(),
                 Arc::clone(&member.manager),
                 base_url.to_string(),
+                self.auth_route_config.clone(),
             )));
         }
 
@@ -955,6 +960,7 @@ async fn refresh_member_usage(
     account_id: String,
     manager: Arc<AuthManager>,
     base_url: String,
+    auth_route_config: AuthRouteConfig,
 ) -> Result<(MemberRemaining, Option<u64>), MemberRefreshError> {
     let auth = member_auth(&account_id, &manager)
         .await
@@ -970,7 +976,7 @@ async fn refresh_member_usage(
             message: "invalid credentials".to_string(),
         });
     }
-    match fetch_usage_remaining(&base_url, &auth).await {
+    match fetch_usage_remaining(&base_url, &auth, &auth_route_config).await {
         Ok((regular_remaining, spark_remaining)) => Ok((
             MemberRemaining {
                 account_id,
@@ -1014,6 +1020,7 @@ impl UsageRefreshFailure {
 async fn fetch_usage_remaining(
     base_url: &str,
     auth: &CodexAuth,
+    auth_route_config: &AuthRouteConfig,
 ) -> Result<(Option<u64>, Option<u64>), UsageRefreshFailure> {
     if !auth.uses_codex_backend() {
         return Err(UsageRefreshFailure::auth_rejected(
@@ -1037,10 +1044,18 @@ async fn fetch_usage_remaining(
     let token = auth.get_token().map_err(|err| {
         UsageRefreshFailure::auth_rejected(format!("failed to read auth token: {err}"))
     })?;
-    let mut request = reqwest::Client::new()
-        .get(&url)
-        .header(reqwest::header::USER_AGENT, "codex-cli")
-        .bearer_auth(token);
+    let client = create_client_for_route_async(
+        auth_route_config.http_client_factory().clone(),
+        url.clone(),
+        ClientRouteClass::Api,
+    )
+    .await
+    .map_err(|err| {
+        UsageRefreshFailure::with_usable_credentials(format!(
+            "failed to create client for codex usage: {err}"
+        ))
+    })?;
+    let mut request = client.get(&url).bearer_auth(token);
     if let Some(account_id) = auth.get_account_id() {
         request = request.header("ChatGPT-Account-ID", account_id);
     }
@@ -1057,7 +1072,7 @@ async fn fetch_usage_remaining(
         let message = format!("failed to fetch codex usage: {status}; body={body}");
         if matches!(
             status,
-            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+            http::StatusCode::UNAUTHORIZED | http::StatusCode::FORBIDDEN
         ) {
             return Err(UsageRefreshFailure::auth_rejected(message));
         }
@@ -1714,7 +1729,7 @@ mod tests {
             AuthCredentialsStoreMode::File,
             AuthKeyringBackendKind::default(),
             chatgpt_base_url,
-            /*auth_route_config*/ None,
+            crate::test_support::transport_default_auth_route_config(),
         )
         .await
         .expect("account pool should be enabled")

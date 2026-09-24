@@ -3,12 +3,16 @@ mod apps_instructions;
 mod collaboration_mode;
 mod environment;
 mod environments_instructions;
+mod model;
+mod multi_agent_mode;
 mod permissions;
+mod personality;
 mod plugins_instructions;
 mod pull_request_context;
 mod realtime;
 #[cfg(test)]
 mod test_support;
+mod tools;
 
 use crate::context::ContextualUserFragment;
 use codex_extension_api::PreviousWorldStateSection;
@@ -31,10 +35,14 @@ pub(crate) use apps_instructions::AppsInstructionsState;
 pub(crate) use collaboration_mode::CollaborationModeState;
 pub(crate) use environment::EnvironmentsState;
 pub(crate) use environments_instructions::EnvironmentsInstructionsState;
+pub(crate) use model::ModelInstructionsState;
+pub(crate) use multi_agent_mode::MultiAgentModeState;
 pub(crate) use permissions::PermissionsState;
+pub(crate) use personality::PersonalityState;
 pub(crate) use plugins_instructions::PluginsInstructionsState;
 pub(crate) use pull_request_context::PullRequestContextState;
 pub(crate) use realtime::RealtimeState;
+pub(crate) use tools::ToolsState;
 
 trait ErasedWorldStateSection: Send + Sync {
     fn snapshot(&self) -> Option<Value>;
@@ -53,6 +61,9 @@ trait ErasedWorldStateSection: Send + Sync {
 
 impl<S: WorldStateSection> ErasedWorldStateSection for S {
     fn snapshot(&self) -> Option<Value> {
+        if !WorldStateSection::should_persist(self) {
+            return None;
+        }
         let mut snapshot = match serde_json::to_value(WorldStateSection::snapshot(self)) {
             Ok(snapshot) => snapshot,
             Err(err) => {
@@ -196,6 +207,11 @@ pub(crate) trait WorldStateSection: Send + Sync + 'static {
     type Snapshot: DeserializeOwned + Serialize;
 
     fn snapshot(&self) -> Self::Snapshot;
+
+    /// Whether the section contributes comparison state to persisted rollouts.
+    fn should_persist(&self) -> bool {
+        true
+    }
 
     fn matches_legacy_fragment(_role: &str, _text: &str) -> bool {
         false

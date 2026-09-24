@@ -1168,6 +1168,7 @@ fn model_router_usage_totals_from_groups(
 #[cfg(test)]
 mod tests {
     use codex_model_router::RouterSavings;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use sqlx::Row;
     use tempfile::TempDir;
@@ -1177,9 +1178,12 @@ mod tests {
     #[tokio::test]
     async fn savings_summary_subtracts_router_overhead() {
         let codex_home = TempDir::new().expect("temp dir");
-        let runtime = StateRuntime::init(codex_home.path().to_path_buf(), "test".to_string())
-            .await
-            .expect("state runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.path().abs()),
+            "test".to_string(),
+        )
+        .await
+        .expect("state runtime");
 
         runtime
             .record_model_router_ledger_entry(ModelRouterLedgerEntry {
@@ -1240,9 +1244,12 @@ mod tests {
     #[tokio::test]
     async fn route_max_observed_total_tokens_uses_production_and_shadow_only() {
         let codex_home = TempDir::new().expect("temp dir");
-        let runtime = StateRuntime::init(codex_home.path().to_path_buf(), "test".to_string())
-            .await
-            .expect("state runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.path().abs()),
+            "test".to_string(),
+        )
+        .await
+        .expect("state runtime");
 
         for (task_key, request_kind, total_tokens) in [
             ("module.repo_ci.review", RouterRequestKind::Production, 100),
@@ -1293,9 +1300,12 @@ mod tests {
     #[tokio::test]
     async fn usage_summary_groups_costs_tokens_and_coverage_gaps() {
         let codex_home = TempDir::new().expect("temp dir");
-        let runtime = StateRuntime::init(codex_home.path().to_path_buf(), "test".to_string())
-            .await
-            .expect("state runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.path().abs()),
+            "test".to_string(),
+        )
+        .await
+        .expect("state runtime");
 
         runtime
             .record_model_router_ledger_entry(ModelRouterLedgerEntry {
@@ -1407,9 +1417,12 @@ mod tests {
     #[tokio::test]
     async fn usage_summary_aggregates_by_task_model_day_and_request_kind() {
         let codex_home = TempDir::new().expect("temp dir");
-        let runtime = StateRuntime::init(codex_home.path().to_path_buf(), "test".to_string())
-            .await
-            .expect("state runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.path().abs()),
+            "test".to_string(),
+        )
+        .await
+        .expect("state runtime");
 
         runtime
             .record_model_router_ledger_entry(ModelRouterLedgerEntry {
@@ -1556,9 +1569,12 @@ mod tests {
     #[tokio::test]
     async fn persists_tune_runs_results_and_metric_overlays() {
         let codex_home = TempDir::new().expect("temp dir");
-        let runtime = StateRuntime::init(codex_home.path().to_path_buf(), "test".to_string())
-            .await
-            .expect("state runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.path().abs()),
+            "test".to_string(),
+        )
+        .await
+        .expect("state runtime");
 
         runtime
             .record_model_router_tune_run(ModelRouterTuneRunRecord {
@@ -1627,9 +1643,12 @@ mod tests {
     #[tokio::test]
     async fn persists_lifecycle_promotions_and_shadow_summaries() {
         let codex_home = TempDir::new().expect("temp dir");
-        let runtime = StateRuntime::init(codex_home.path().to_path_buf(), "test".to_string())
-            .await
-            .expect("state runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.path().abs()),
+            "test".to_string(),
+        )
+        .await
+        .expect("state runtime");
 
         runtime
             .upsert_model_router_lifecycle_promotion(ModelRouterLifecyclePromotionRecord {
@@ -1752,9 +1771,12 @@ mod tests {
     #[tokio::test]
     async fn lifecycle_events_stats_filters_and_deduplicates_blocked_high_water() {
         let codex_home = TempDir::new().expect("temp dir");
-        let runtime = StateRuntime::init(codex_home.path().to_path_buf(), "test".to_string())
-            .await
-            .expect("state runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.path().abs()),
+            "test".to_string(),
+        )
+        .await
+        .expect("state runtime");
 
         let columns = sqlx::query("PRAGMA table_info(model_router_lifecycle_events)")
             .fetch_all(runtime.pool.as_ref())
@@ -1970,9 +1992,12 @@ mod tests {
     #[tokio::test]
     async fn lifecycle_persists_evaluating_and_rejected_statuses() {
         let codex_home = TempDir::new().expect("temp dir");
-        let runtime = StateRuntime::init(codex_home.path().to_path_buf(), "test".to_string())
-            .await
-            .expect("state runtime");
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.path().abs()),
+            "test".to_string(),
+        )
+        .await
+        .expect("state runtime");
         let task_key = "module.repo_ci.review";
         let candidate_identity = "candidate";
         let base_candidate_identity = "base";

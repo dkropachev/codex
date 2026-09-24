@@ -682,12 +682,12 @@ fn rows_affected_i64(rows: u64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::test_support::unique_temp_dir;
+    use crate::runtime::test_support::unique_temp_sqlite_config;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
     async fn upsert_remembered_tool_increments_request_count_and_keeps_created_at() {
-        let runtime = StateRuntime::init(unique_temp_dir(), "test".to_string())
+        let runtime = StateRuntime::init(unique_temp_sqlite_config(), "test".to_string())
             .await
             .expect("state runtime");
 
@@ -726,7 +726,7 @@ mod tests {
 
     #[tokio::test]
     async fn records_tool_router_ledger_entry_and_summarizes() {
-        let runtime = StateRuntime::init(unique_temp_dir(), "test".to_string())
+        let runtime = StateRuntime::init(unique_temp_sqlite_config(), "test".to_string())
             .await
             .expect("state runtime");
 
@@ -799,7 +799,7 @@ mod tests {
 
     #[tokio::test]
     async fn guidance_upsert_replaces_existing_record_for_same_toolset() {
-        let runtime = StateRuntime::init(unique_temp_dir(), "test".to_string())
+        let runtime = StateRuntime::init(unique_temp_sqlite_config(), "test".to_string())
             .await
             .expect("state runtime");
         let key = ToolRouterGuidanceKey {
@@ -861,7 +861,7 @@ mod tests {
 
     #[tokio::test]
     async fn prune_rules_removes_invalid_and_keeps_valid_routes() {
-        let runtime = StateRuntime::init(unique_temp_dir(), "test".to_string())
+        let runtime = StateRuntime::init(unique_temp_sqlite_config(), "test".to_string())
             .await
             .expect("state runtime");
         runtime

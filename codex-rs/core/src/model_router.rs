@@ -1621,6 +1621,7 @@ mod tests {
     use codex_state::ModelRouterUsageGroupBy;
     use codex_state::ModelRouterUsageQuery;
     use codex_state::StateRuntime;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -2988,6 +2989,7 @@ mod tests {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            supports_standalone_web_search: false,
         }
     }
 
@@ -3003,9 +3005,12 @@ mod tests {
 
     async fn state_runtime() -> (TempDir, std::sync::Arc<StateRuntime>) {
         let codex_home = TempDir::new().expect("temp dir");
-        let runtime = StateRuntime::init(codex_home.path().to_path_buf(), "openai".to_string())
-            .await
-            .expect("state runtime");
+        let runtime = StateRuntime::init(
+            codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+            "openai".to_string(),
+        )
+        .await
+        .expect("state runtime");
         (codex_home, runtime)
     }
 

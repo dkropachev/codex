@@ -1,10 +1,10 @@
 use super::*;
-use crate::runtime::test_support::unique_temp_dir;
+use crate::runtime::test_support::unique_temp_sqlite_config;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
 async fn accepts_high_savings_rg_summary_after_observations() {
-    let runtime = StateRuntime::init(unique_temp_dir(), "test".to_string())
+    let runtime = StateRuntime::init(unique_temp_sqlite_config(), "test".to_string())
         .await
         .expect("state runtime");
     let output = rg_output(/*lines*/ 80);
@@ -49,7 +49,7 @@ async fn accepts_high_savings_rg_summary_after_observations() {
 
 #[tokio::test]
 async fn accepts_high_savings_nextest_filter_after_observations() {
-    let runtime = StateRuntime::init(unique_temp_dir(), "test".to_string())
+    let runtime = StateRuntime::init(unique_temp_sqlite_config(), "test".to_string())
         .await
         .expect("state runtime");
     let output = nextest_output(/*pass_lines*/ 900);
@@ -82,7 +82,7 @@ async fn accepts_high_savings_nextest_filter_after_observations() {
 
 #[tokio::test]
 async fn ignores_builtin_compacted_outputs_for_output_optimization() {
-    let runtime = StateRuntime::init(unique_temp_dir(), "test".to_string())
+    let runtime = StateRuntime::init(unique_temp_sqlite_config(), "test".to_string())
         .await
         .expect("state runtime");
     let mut entry = ledger_entry(
@@ -107,7 +107,7 @@ async fn ignores_builtin_compacted_outputs_for_output_optimization() {
 
 #[tokio::test]
 async fn raw_recovery_for_builtin_compacted_chunk_does_not_decline_learned_candidate() {
-    let runtime = StateRuntime::init(unique_temp_dir(), "test".to_string())
+    let runtime = StateRuntime::init(unique_temp_sqlite_config(), "test".to_string())
         .await
         .expect("state runtime");
     let output = rg_output(/*lines*/ 80);
@@ -161,7 +161,7 @@ async fn raw_recovery_for_builtin_compacted_chunk_does_not_decline_learned_candi
 
 #[tokio::test]
 async fn declines_candidate_after_raw_output_recovery() {
-    let runtime = StateRuntime::init(unique_temp_dir(), "test".to_string())
+    let runtime = StateRuntime::init(unique_temp_sqlite_config(), "test".to_string())
         .await
         .expect("state runtime");
     let output = rg_output(/*lines*/ 80);
@@ -204,7 +204,7 @@ async fn declines_candidate_after_raw_output_recovery() {
 
 #[tokio::test]
 async fn marks_small_output_family_optimized() {
-    let runtime = StateRuntime::init(unique_temp_dir(), "test".to_string())
+    let runtime = StateRuntime::init(unique_temp_sqlite_config(), "test".to_string())
         .await
         .expect("state runtime");
 
@@ -234,7 +234,7 @@ async fn marks_small_output_family_optimized() {
 
 #[tokio::test]
 async fn detects_recent_duplicate_source_read_for_command() {
-    let runtime = StateRuntime::init(unique_temp_dir(), "test".to_string())
+    let runtime = StateRuntime::init(unique_temp_sqlite_config(), "test".to_string())
         .await
         .expect("state runtime");
     runtime

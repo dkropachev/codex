@@ -201,7 +201,7 @@ async fn credential_status(
         config.cli_auth_credentials_store_mode,
         Some(config.chatgpt_base_url.as_str()),
         config.auth_keyring_backend_kind(),
-        auth_route_config.as_ref(),
+        &auth_route_config,
     )
     .await
     {
@@ -316,16 +316,13 @@ async fn render_account_usage(config: &Config, target: &AccountUsageTarget) -> S
         return output;
     }
 
-    let usage = match BackendClient::from_auth(config.chatgpt_base_url.clone(), &auth) {
-        Ok(client) => client.get_rate_limits_many().await,
-        Err(err) => {
-            let _ = writeln!(
-                output,
-                "  limits: error: failed to construct backend client: {err}"
-            );
-            return output;
-        }
-    };
+    let usage = BackendClient::from_auth(
+        config.chatgpt_base_url.clone(),
+        &auth,
+        config.http_client_factory(),
+    )
+    .get_rate_limits_many()
+    .await;
     match usage {
         Ok(snapshots) if snapshots.is_empty() => {
             output.push_str("  limits: unavailable\n");
@@ -387,6 +384,7 @@ fn plan_type_name(plan_type: PlanType) -> String {
         PlanType::Team => "team",
         PlanType::SelfServeBusinessUsageBased => "self_serve_business_usage_based",
         PlanType::Business => "business",
+        PlanType::Ent26 => "ent26",
         PlanType::EnterpriseCbpUsageBased => "enterprise_cbp_usage_based",
         PlanType::Enterprise => "enterprise",
         PlanType::Edu => "edu",

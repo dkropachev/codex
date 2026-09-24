@@ -13,6 +13,8 @@ use codex_protocol::protocol::SandboxPolicy;
 #[cfg(test)]
 use codex_protocol::protocol::ThreadHistoryMode;
 #[cfg(test)]
+use codex_utils_absolute_path::test_support::PathExt;
+#[cfg(test)]
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -35,6 +37,12 @@ pub(crate) fn unique_temp_dir() -> PathBuf {
         "codex-state-runtime-test-{nanos}-{}",
         Uuid::new_v4()
     ))
+}
+
+#[cfg(test)]
+pub(crate) fn unique_temp_sqlite_config() -> crate::SqliteConfig {
+    let sqlite_home = unique_temp_dir();
+    crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs())
 }
 
 #[cfg(test)]
@@ -69,6 +77,7 @@ pub(super) fn test_thread_metadata(
         tokens_used: 0,
         first_user_message: Some("hello".to_string()),
         archived_at: None,
+        is_pinned: false,
         git_sha: None,
         git_branch: None,
         git_origin_url: None,
