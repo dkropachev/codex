@@ -277,7 +277,7 @@ fn exact_workflow_id_takes_precedence_over_another_packages_alias() -> Result<()
     cmd.args(["workflow", "where", "beta"])
         .assert()
         .success()
-        .stdout(format!("{}\n", beta.display()));
+        .stdout(format!("{}\n", existing_path_display(&beta)?));
     assert_ne!(alpha, beta);
 
     let mut cmd = codex_command(codex_home.path(), project.path())?;

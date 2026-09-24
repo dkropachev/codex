@@ -72,6 +72,12 @@ trust_level = "trusted"
 set -eu
 : "${CODEX_TEST_WORKFLOW_RELEASE:?}"
 : "${CODEX_TEST_WORKFLOW_FAILURE:?}"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --config=*|--no-install|--no-env-file) shift ;;
+    *) break ;;
+  esac
+done
 case "${2:-}" in
 inspect)
   printf '%s\n' '{"apiVersion":1,"id":"code-review","title":"Workflow Test","callableName":"code-review","inputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"workingDirectory":{"type":"string"}},"additionalProperties":true},"outputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true},"hasComplete":true}'
@@ -459,6 +465,12 @@ fn write_completion_fake_bun(root: &std::path::Path) -> Result<()> {
         &path,
         r##"#!/bin/sh
 set -eu
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --config=*|--no-install|--no-env-file) shift ;;
+    *) break ;;
+  esac
+done
 case "${2:-}" in
   inspect)
     printf '%s\n' '{"apiVersion":1,"id":"review/fix","title":"/code-review","callableName":"code-review","inputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"workingDirectory":{"type":"string"},"action":{"description":"Run mode.","enum":["review","list-reports"]},"allowedAreas":{"description":"Allowed areas.","enum":["Test","Code"]}},"additionalProperties":false},"outputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true},"hasComplete":true,"sources":[]}'

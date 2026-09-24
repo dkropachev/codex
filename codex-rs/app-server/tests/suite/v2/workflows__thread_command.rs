@@ -991,15 +991,25 @@ fn write_fake_bun(fake_bin: &Path) -> Result<()> {
         format!(
             r##"#!/bin/sh
 set -eu
-if [ ! -f "${{1:-}}" ]; then
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --config=*|--no-install|--no-env-file) shift ;;
+    *) break ;;
+  esac
+done
+runner=${{1:-}}
+operation=${{2:-}}
+payload=${{3:-}}
+expected=${{4:-}}
+if [ ! -f "$runner" ]; then
   echo "missing materialized runner" >&2
   exit 64
 fi
-if ! grep -q '"markdown.v1"' "$1"; then
+if ! grep -q '"markdown.v1"' "$runner"; then
   echo "runner did not request markdown.v1" >&2
   exit 65
 fi
-case "${{2:-}}" in
+case "$operation" in
 inspect)
   printf '%s\n' '{{"apiVersion":1,"id":"workflow","title":"Workflow Test","callableName":"workflow-test","inputSchema":{{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{{"workingDirectory":{{"type":"string"}}}},"additionalProperties":true}},"outputSchema":{{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true}},"hasComplete":true}}'
   exit 0
@@ -1014,8 +1024,8 @@ run) ;;
   exit 66
   ;;
 esac
-test -s "${{4:?}}"
-workflow_input=$(cat "${{3:?}}")
+test -s "$expected"
+workflow_input=$(cat "$payload")
 printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{WORKFLOW_CONTRACT_FRAME}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
 IFS= read -r _contract_ack
 case "$workflow_input" in
