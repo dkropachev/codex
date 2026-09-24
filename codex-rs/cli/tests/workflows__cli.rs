@@ -1095,7 +1095,7 @@ fn workflow_repair_alias_repairs_workflow_without_running_workflow_runtime() -> 
 
 #[cfg(unix)]
 #[test]
-fn workflow_recover_uses_the_same_canonical_input_normalization_as_run() -> Result<()> {
+fn workflow_recover_normalizes_input_and_applies_recovery_fields() -> Result<()> {
     let codex_home = TempDir::new()?;
     let project = TempDir::new()?;
     enable_workflows(codex_home.path())?;
@@ -1116,7 +1116,8 @@ fn workflow_recover_uses_the_same_canonical_input_normalization_as_run() -> Resu
     assert_eq!(
         fake_bun.captured_workflow_input()?,
         json!({
-            "failureId": "abc",
+            "action": "resume",
+            "reviewId": "abc",
             "workingDirectory": existing_path_display(project.path())?,
         })
     );

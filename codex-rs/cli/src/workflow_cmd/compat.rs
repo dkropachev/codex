@@ -59,6 +59,12 @@ enum ParsedWorkflowCommand {
     Done,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum WorkflowAction {
+    Run,
+    Recover,
+}
+
 #[derive(Debug)]
 enum WorkflowConfigCommand {
     Show,
@@ -115,11 +121,11 @@ pub fn run(cli: WorkflowCli, config: &Config) -> anyhow::Result<()> {
         ParsedWorkflowCommand::Mode => show_mode(&commands),
         ParsedWorkflowCommand::List { json } => list_workflows(&commands, json),
         ParsedWorkflowCommand::Run { target, args } => {
-            run_workflow(target, args, config, &commands)
+            run_workflow(target, args, WorkflowAction::Run, config, &commands)
         }
         ParsedWorkflowCommand::Fix { target } => repair_workflow(&target, config, &commands),
         ParsedWorkflowCommand::Recover { target, args } => {
-            run_workflow(target, args, config, &commands)
+            run_workflow(target, args, WorkflowAction::Recover, config, &commands)
         }
         ParsedWorkflowCommand::Validate { target } => validate_workflow(&target, config, &commands),
         ParsedWorkflowCommand::Impact { target } => impact_workflow(&target, &commands),
@@ -444,12 +450,22 @@ fn list_workflows(commands: &[WorkflowCommand], json: bool) -> anyhow::Result<()
 fn run_workflow(
     target: String,
     args: Vec<String>,
+    action: WorkflowAction,
     config: &Config,
     commands: &[WorkflowCommand],
 ) -> anyhow::Result<()> {
     let command = find_workflow_command(commands, &target)?;
-    let input = workflow_invocation_input_from_args(config.cwd.as_path(), &args)
+    let mut input = workflow_invocation_input_from_args(config.cwd.as_path(), &args)
         .map_err(|err| anyhow::anyhow!("{}", err.message()))?;
+    if matches!(action, WorkflowAction::Recover) {
+        let Some(input) = input.as_object_mut() else {
+            bail!("workflow input must be a JSON object");
+        };
+        if let Some(failure_id) = input.remove("failureId") {
+            input.entry("reviewId".to_string()).or_insert(failure_id);
+        }
+        input.insert("action".to_string(), Value::String("resume".to_string()));
+    }
     run_workflow_process(command, input)
 }
 

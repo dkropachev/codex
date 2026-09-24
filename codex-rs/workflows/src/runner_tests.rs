@@ -152,30 +152,28 @@ fn cli_terminates_a_runner_that_stays_alive_after_completion() {
 
 #[test]
 #[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
-fn runner_rejects_input_and_output_schema_violations() {
+fn cli_runner_rejects_input_and_output_schema_violations() {
     let (input_root, manifest) = write_fixture(&canonical_source(
         "return { message: input.message };",
         "return [];",
     ));
-    let inspection = inspect_workflow(input_root.path(), &manifest).expect(BUN_REQUIRED);
-    let contract = crate::schema::contract_from_inspection(&inspection).expect("compile contract");
-    assert!(
-        contract
-            .validate_input(&json!({ "message": 7 }))
-            .expect_err("reject invalid input")
-            .contains("Workflow input failed schema validation")
+    let (status, markdown) = run_output(
+        input_root.path(),
+        &manifest,
+        &json!({ "message": 7 }),
     );
+    assert!(!status.success(), "invalid input must fail the Bun runner");
+    assert_eq!(markdown, Vec::<u8>::new());
 
     let (output_root, manifest) =
         write_fixture(&canonical_source("return { message: 7 };", "return [];"));
-    let inspection = inspect_workflow(output_root.path(), &manifest).expect(BUN_REQUIRED);
-    let contract = crate::schema::contract_from_inspection(&inspection).expect("compile contract");
-    assert!(
-        contract
-            .validate_output(&json!({ "message": 7 }))
-            .expect_err("reject invalid output")
-            .contains("Workflow output failed schema validation")
+    let (status, markdown) = run_output(
+        output_root.path(),
+        &manifest,
+        &json!({ "message": "Ready." }),
     );
+    assert!(!status.success(), "invalid output must fail the Bun runner");
+    assert_eq!(markdown, Vec::<u8>::new());
 }
 
 #[test]

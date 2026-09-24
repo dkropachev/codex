@@ -514,7 +514,11 @@ impl TurnEnvironmentSnapshot {
         match self.environments.first() {
             Some(TurnEnvironmentState::Ready(environment)) => Ok(Some(environment.clone())),
             Some(TurnEnvironmentState::Starting(environment)) => {
-                environment.resolution.clone().await.map(Some)
+                let resolved = environment.resolution.clone().await?;
+                Ok(Some(resolved.into_turn_environment(
+                    environment.selection.clone(),
+                    environment.config.clone(),
+                )))
             }
             None => Ok(None),
         }

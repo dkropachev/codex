@@ -71,15 +71,6 @@ async fn thread_workflow_command_runs_fresh_scaffold_with_real_bun() -> Result<(
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
     let workflow_dir = scaffold_test_workflow(tmp.path())?;
-    let source_path = workflow_dir.join("src/workflow.ts");
-    let source = std::fs::read_to_string(&source_path)?;
-    std::fs::write(
-        &source_path,
-        source.replace(
-            r#"message: input.message ?? "Workflow completed.""#,
-            r#"message: input.workingDirectory ?? "missing workingDirectory""#,
-        ),
-    )?;
     let server = create_mock_responses_server_sequence(Vec::new()).await;
     write_mock_responses_config_toml(
         codex_home.as_path(),
@@ -103,22 +94,43 @@ async fn thread_workflow_command_runs_fresh_scaffold_with_real_bun() -> Result<(
     let ThreadStartResponse { thread, .. } =
         to_response::<ThreadStartResponse>(read_response(&mut mcp, start_id).await?)?;
 
-    let workflow_id = mcp
-        .send_thread_workflow_command_request(ThreadWorkflowCommandParams {
-            thread_id: thread.id,
-            workflow_dir: workflow_dir.to_string_lossy().to_string(),
-            input: json!({}),
-        })
-        .await?;
-    let _: ThreadWorkflowCommandResponse =
-        to_response(read_response(&mut mcp, workflow_id).await?)?;
-    let _: TurnStartedNotification = read_notification(&mut mcp, "turn/started").await?;
-    let markdown = format!("# Workflow Test\n\n{expected_working_directory}\n");
-    let completed = wait_for_agent_message_completed(&mut mcp, &markdown).await?;
-    assert_agent_message(&completed.item, &markdown);
-    let completed: TurnCompletedNotification =
-        read_notification(&mut mcp, "turn/completed").await?;
-    assert_eq!(completed.turn.status, TurnStatus::Completed);
+    run_workflow_expect_markdown(
+        &mut mcp,
+        &thread.id,
+        &workflow_dir,
+        json!({ "message": "Fresh scaffold ran." }),
+        "# Workflow Test\n\nFresh scaffold ran.\n",
+    )
+    .await?;
+
+    let source_path = workflow_dir.join("src/workflow.ts");
+    let source = std::fs::read_to_string(&source_path)?;
+    std::fs::write(
+        &source_path,
+        source.replace(
+            r#"message: input.message ?? "Workflow completed.""#,
+            r#"message: input.workingDirectory ?? "missing workingDirectory""#,
+        ),
+    )?;
+    let injected_markdown = format!("# Workflow Test\n\n{expected_working_directory}\n");
+    run_workflow_expect_markdown(
+        &mut mcp,
+        &thread.id,
+        &workflow_dir,
+        json!({}),
+        &injected_markdown,
+    )
+    .await?;
+    let explicit_working_directory = workspace.to_string_lossy().to_string();
+    let explicit_markdown = format!("# Workflow Test\n\n{explicit_working_directory}\n");
+    run_workflow_expect_markdown(
+        &mut mcp,
+        &thread.id,
+        &workflow_dir,
+        json!({ "workingDirectory": explicit_working_directory }),
+        &explicit_markdown,
+    )
+    .await?;
     Ok(())
 }
 
@@ -827,6 +839,33 @@ async fn run_workflow_expect_failure(
     let completed: TurnCompletedNotification = read_notification(mcp, "turn/completed").await?;
     assert_eq!(completed.turn.id, started.turn.id);
     assert_eq!(completed.turn.status, TurnStatus::Failed);
+    Ok(())
+}
+
+async fn run_workflow_expect_markdown(
+    mcp: &mut TestAppServer,
+    thread_id: &str,
+    workflow_dir: &Path,
+    input: serde_json::Value,
+    expected_markdown: &str,
+) -> Result<()> {
+    let request_id = mcp
+        .send_thread_workflow_command_request(ThreadWorkflowCommandParams {
+            thread_id: thread_id.to_string(),
+            workflow_dir: workflow_dir.to_string_lossy().to_string(),
+            input,
+        })
+        .await?;
+    let _: ThreadWorkflowCommandResponse = to_response(read_response(mcp, request_id).await?)?;
+    let started: TurnStartedNotification = read_notification(mcp, "turn/started").await?;
+    assert_eq!(started.thread_id, thread_id);
+    assert_eq!(started.turn.status, TurnStatus::InProgress);
+    let completed = wait_for_agent_message_completed(mcp, expected_markdown).await?;
+    assert_agent_message(&completed.item, expected_markdown);
+    let completed: TurnCompletedNotification = read_notification(mcp, "turn/completed").await?;
+    assert_eq!(completed.thread_id, thread_id);
+    assert_eq!(completed.turn.id, started.turn.id);
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
     Ok(())
 }
 

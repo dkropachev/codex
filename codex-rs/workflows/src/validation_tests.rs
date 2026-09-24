@@ -107,6 +107,33 @@ fn reports_layout_gitignore_exports_coverage_and_command_failures() {
 }
 
 #[test]
+fn validation_commands_treat_shell_metacharacters_as_literal_arguments() {
+    let (_registry, root) = scaffold();
+    let side_effect = root.join("shell-side-effect");
+    let literal_argument = if cfg!(windows) {
+        format!("& type nul > \"{}\"", side_effect.display())
+    } else {
+        format!("; touch '{}'", side_effect.display())
+    };
+    let mut package = WorkflowPackage::load(&root).expect("load package");
+    package.manifest.validation.commands = vec![crate::ValidationCommand {
+        program: "git".to_string(),
+        args: vec!["not-a-command".to_string(), literal_argument.clone()],
+    }];
+
+    let mut findings = BTreeSet::new();
+    super::checks::validate_commands(&package, &mut findings);
+
+    assert!(!side_effect.exists());
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.message.contains(&literal_argument)),
+        "expected the literal argument in {findings:?}"
+    );
+}
+
+#[test]
 fn syntax_tree_distinguishes_exports_and_nonliteral_dependency_calls() {
     let source = r#"
 // export interface WorkflowInput {}
@@ -384,8 +411,15 @@ fn validation_accepts_named_export_lists() {
     )
     .expect("write export-list workflow source");
 
-    let rendered = validate_workflow(&root).render();
-    assert!(!rendered.contains("export:"), "{rendered}");
+    assert_eq!(validate_workflow(&root), ValidationReport::default());
+}
+
+#[test]
+#[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
+fn fresh_scaffold_validates_with_real_bun() {
+    let (_registry, root) = scaffold();
+
+    assert_eq!(validate_workflow(&root), ValidationReport::default());
 }
 
 fn scaffold() -> (TempDir, std::path::PathBuf) {
