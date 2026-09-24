@@ -3,6 +3,7 @@ use anyhow::Result;
 use base64::Engine;
 use chrono::Duration;
 use chrono::Utc;
+use codex_config::ManagedAuthPolicy;
 use codex_config::config_toml::AccountPoolDefinitionToml;
 use codex_config::config_toml::AccountPoolPolicyToml;
 use codex_config::config_toml::AccountPoolToml;
@@ -19,6 +20,7 @@ use codex_login::test_support::transport_default_auth_route_config;
 use codex_login::token_data::IdTokenInfo;
 use codex_login::token_data::TokenData;
 use codex_protocol::auth::AuthMode;
+use codex_protocol::config_types::ForcedLoginMethod;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
@@ -155,8 +157,16 @@ impl AuthManagerConfig for AccountPoolTestConfig {
         AuthKeyringBackendKind::default()
     }
 
+    fn forced_login_method(&self) -> Option<ForcedLoginMethod> {
+        None
+    }
+
     fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {
         None
+    }
+
+    fn managed_auth_policy(&self) -> ManagedAuthPolicy {
+        ManagedAuthPolicy::default()
     }
 
     fn chatgpt_base_url(&self) -> String {

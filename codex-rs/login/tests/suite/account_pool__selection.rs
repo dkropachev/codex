@@ -9,6 +9,7 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use chrono::Utc;
+use codex_config::ManagedAuthPolicy;
 use codex_config::config_toml::AccountPoolDefinitionToml;
 use codex_config::config_toml::AccountPoolPolicyToml;
 use codex_config::config_toml::AccountPoolToml;
@@ -20,6 +21,7 @@ use codex_login::AccountPoolCacheHint;
 use codex_login::AccountPoolOperationKind;
 use codex_login::AccountPoolSelectionContext;
 use codex_login::AccountPoolUsageBucket;
+use codex_login::AuthConfig;
 use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
@@ -31,6 +33,7 @@ use codex_login::test_support::transport_default_auth_route_config;
 use codex_login::token_data::IdTokenInfo;
 use codex_login::token_data::TokenData;
 use codex_protocol::auth::AuthMode;
+use codex_protocol::config_types::ForcedLoginMethod;
 use keyring::Error as KeyringError;
 use keyring::credential::Credential;
 use keyring::credential::CredentialApi;
@@ -368,12 +371,17 @@ async fn assignments_are_separate_by_affinity_key_and_usage_bucket() -> Result<(
 
 async fn load_balance_pool(codex_home: &Path) -> Result<AccountPoolManager> {
     AccountPoolManager::from_config(
-        codex_home,
         load_balance_account_pool_config(),
-        AuthCredentialsStoreMode::File,
-        AuthKeyringBackendKind::default(),
-        /*chatgpt_base_url*/ None,
-        transport_default_auth_route_config(),
+        AuthConfig {
+            codex_home: codex_home.to_path_buf(),
+            auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+            keyring_backend_kind: AuthKeyringBackendKind::default(),
+            forced_login_method: None,
+            chatgpt_base_url: None,
+            forced_chatgpt_workspace_id: None,
+            managed_auth_policy: ManagedAuthPolicy::default(),
+            auth_route_config: transport_default_auth_route_config(),
+        },
     )
     .await
     .context("account pool should be enabled")
@@ -496,8 +504,16 @@ impl AuthManagerConfig for AccountPoolAuthConfig {
         self.keyring_backend_kind
     }
 
+    fn forced_login_method(&self) -> Option<ForcedLoginMethod> {
+        None
+    }
+
     fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {
         None
+    }
+
+    fn managed_auth_policy(&self) -> ManagedAuthPolicy {
+        ManagedAuthPolicy::default()
     }
 
     fn chatgpt_base_url(&self) -> String {

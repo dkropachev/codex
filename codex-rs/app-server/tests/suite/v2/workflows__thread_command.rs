@@ -628,6 +628,7 @@ fn expected_workflow_user_input_params(
         "turnId": turn_id,
         "itemId": format!("workflow-user-input-{turn_id}-{item_id}"),
         "questions": frame["params"]["questions"],
+        "isBlocking": true,
         "autoResolutionMs": null,
     }))
 }

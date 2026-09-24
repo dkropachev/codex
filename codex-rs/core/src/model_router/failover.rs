@@ -137,6 +137,7 @@ pub(crate) fn model_router_failure_scope(err: &CodexErr) -> Option<ModelRouterFa
         | CodexErrorDetails::SessionConfiguredNotFirstEvent
         | CodexErrorDetails::CyberPolicy { .. }
         | CodexErrorDetails::InternalAgentDied
+        | CodexErrorDetails::ToolCollision(_)
         | CodexErrorDetails::Io(_)
         | CodexErrorDetails::Json(_)
         | CodexErrorDetails::TokioJoin(_) => None,
@@ -329,6 +330,12 @@ mod tests {
         assert_eq!(
             model_router_failure_scope(&CodexErr::UsageNotIncluded),
             Some(ModelRouterFailureScope::Account)
+        );
+        assert_eq!(
+            model_router_failure_scope(
+                &CodexErrorDetails::ToolCollision("functions.update_plan".to_string()).into(),
+            ),
+            None
         );
     }
 

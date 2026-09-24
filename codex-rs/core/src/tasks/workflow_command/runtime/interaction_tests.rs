@@ -38,6 +38,7 @@ fn valid_request() -> RequestUserInputArgs {
                 options: None,
             },
         ],
+        is_blocking: true,
         auto_resolution_ms: None,
     }
 }
@@ -238,9 +239,18 @@ fn auto_resolution_is_rejected() {
 }
 
 #[test]
+fn non_blocking_requests_are_rejected() {
+    let mut args = valid_request();
+    args.is_blocking = false;
+
+    rejected(args, "requestUserInput requires isBlocking to be true");
+}
+
+#[test]
 fn question_and_option_bounds_are_enforced() {
     let empty = RequestUserInputArgs {
         questions: Vec::new(),
+        is_blocking: true,
         auto_resolution_ms: None,
     };
     let mut invalid_id = valid_request();

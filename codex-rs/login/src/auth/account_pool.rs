@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -8,8 +7,6 @@ use std::time::Instant;
 use codex_config::config_toml::AccountPoolDefinitionToml;
 use codex_config::config_toml::AccountPoolPolicyToml;
 use codex_config::config_toml::AccountPoolToml;
-use codex_config::types::AuthCredentialsStoreMode;
-use codex_config::types::AuthKeyringBackendKind;
 use codex_http_client::ClientRouteClass;
 use codex_protocol::account::PlanType;
 use serde_json::Value;
@@ -26,6 +23,7 @@ use super::account_pool_selection::AccountPoolOperationKind;
 use super::account_pool_selection::AccountPoolSelectionContext;
 use super::account_pool_selection::AccountPoolUsageBucket;
 use super::account_pool_selection::DEFAULT_ACCOUNT_POOL_AFFINITY_KEY;
+use super::manager::AuthConfig;
 use super::manager::AuthManager;
 use super::manager::RefreshTokenError;
 
@@ -124,14 +122,7 @@ pub struct AccountPoolManager {
 }
 
 impl AccountPoolManager {
-    pub async fn from_config(
-        codex_home: &Path,
-        config: AccountPoolToml,
-        auth_credentials_store_mode: AuthCredentialsStoreMode,
-        keyring_backend_kind: AuthKeyringBackendKind,
-        chatgpt_base_url: Option<String>,
-        auth_route_config: AuthRouteConfig,
-    ) -> Option<Self> {
+    pub async fn from_config(config: AccountPoolToml, auth_config: AuthConfig) -> Option<Self> {
         if !config.enabled {
             return None;
         }
@@ -144,17 +135,15 @@ impl AccountPoolManager {
         for (pool_id, definition) in config.pools {
             let mut members = Vec::new();
             for account_id in &definition.accounts {
+                let mut member_auth_config = auth_config.clone();
+                member_auth_config.codex_home =
+                    auth_config.codex_home.join("accounts").join(account_id);
                 members.push(AccountPoolMember {
                     account_id: account_id.clone(),
                     manager: Arc::new(
-                        AuthManager::new(
-                            codex_home.join("accounts").join(account_id),
+                        AuthManager::new_from_auth_config(
+                            member_auth_config,
                             /*enable_codex_api_key_env*/ false,
-                            auth_credentials_store_mode,
-                            /*forced_chatgpt_workspace_id*/ None,
-                            chatgpt_base_url.clone(),
-                            keyring_backend_kind,
-                            auth_route_config.clone(),
                         )
                         .await,
                     ),
@@ -166,8 +155,8 @@ impl AccountPoolManager {
                     pool_id,
                     definition,
                     members,
-                    chatgpt_base_url: chatgpt_base_url.clone(),
-                    auth_route_config: auth_route_config.clone(),
+                    chatgpt_base_url: auth_config.chatgpt_base_url.clone(),
+                    auth_route_config: auth_config.auth_route_config.clone(),
                     assignments: RwLock::new(HashMap::new()),
                     last_assignment_key: RwLock::new(None),
                     last_usage_refresh_attempt: RwLock::new(None),
@@ -1126,6 +1115,7 @@ fn remaining_from_window(window: Option<&Value>) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::time::Duration;
@@ -1133,7 +1123,10 @@ mod tests {
     use base64::Engine;
     use chrono::Utc;
     use codex_config::config_toml::AccountPoolDefinitionToml;
+    use codex_config::types::AuthCredentialsStoreMode;
+    use codex_config::types::AuthKeyringBackendKind;
     use codex_protocol::auth::AuthMode;
+    use codex_protocol::config_types::ForcedLoginMethod;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use wiremock::Mock;
@@ -1238,6 +1231,45 @@ mod tests {
             Some("work@example.com")
         );
         assert_eq!(pool.status(), Some(active_work_pool_status()));
+    }
+
+    #[tokio::test]
+    async fn managed_policy_filters_disallowed_pool_member_auth() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        write_chatgpt_auth(codex_home.path(), "work-pro", "work@example.com");
+        let managed_auth_policy = codex_config::ManagedAuthPolicy {
+            allowed_login_methods: Some(vec![ForcedLoginMethod::Api]),
+            ..Default::default()
+        };
+        let pool = AccountPoolManager::from_config(
+            AccountPoolToml {
+                enabled: true,
+                default_pool: Some("codex-pro".to_string()),
+                pools: [(
+                    "codex-pro".to_string(),
+                    AccountPoolDefinitionToml {
+                        provider: "openai".to_string(),
+                        policy: AccountPoolPolicyToml::Drain,
+                        accounts: vec!["work-pro".to_string()],
+                    },
+                )]
+                .into(),
+            },
+            AuthConfig {
+                codex_home: codex_home.path().to_path_buf(),
+                auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+                keyring_backend_kind: AuthKeyringBackendKind::default(),
+                forced_login_method: None,
+                chatgpt_base_url: None,
+                forced_chatgpt_workspace_id: None,
+                managed_auth_policy,
+                auth_route_config: crate::test_support::transport_default_auth_route_config(),
+            },
+        )
+        .await
+        .expect("account pool should be enabled");
+
+        assert_eq!(pool.auth().await, None);
     }
 
     #[tokio::test]
@@ -1712,7 +1744,6 @@ mod tests {
         chatgpt_base_url: Option<String>,
     ) -> AccountPoolManager {
         AccountPoolManager::from_config(
-            codex_home,
             AccountPoolToml {
                 enabled: true,
                 default_pool: Some("codex-pro".to_string()),
@@ -1726,10 +1757,16 @@ mod tests {
                 )]
                 .into(),
             },
-            AuthCredentialsStoreMode::File,
-            AuthKeyringBackendKind::default(),
-            chatgpt_base_url,
-            crate::test_support::transport_default_auth_route_config(),
+            AuthConfig {
+                codex_home: codex_home.to_path_buf(),
+                auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+                keyring_backend_kind: AuthKeyringBackendKind::default(),
+                forced_login_method: None,
+                chatgpt_base_url,
+                forced_chatgpt_workspace_id: None,
+                managed_auth_policy: Default::default(),
+                auth_route_config: crate::test_support::transport_default_auth_route_config(),
+            },
         )
         .await
         .expect("account pool should be enabled")
