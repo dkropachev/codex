@@ -79,7 +79,6 @@ impl ModelRouterSource {
                     ModeKind::Plan => "plan",
                     ModeKind::Workflow => "workflow",
                     ModeKind::Default => "codex",
-                    ModeKind::PairProgramming | ModeKind::Execute => "default",
                 };
                 format!("chat.{suffix}")
             }
@@ -1648,14 +1647,6 @@ mod tests {
             ModelRouterSource::Chat(ModeKind::Workflow).task_key(),
             "chat.workflow"
         );
-        assert_eq!(
-            ModelRouterSource::Chat(ModeKind::PairProgramming).task_key(),
-            "chat.default"
-        );
-        assert_eq!(
-            ModelRouterSource::Chat(ModeKind::Execute).task_key(),
-            "chat.default"
-        );
     }
 
     #[tokio::test]
@@ -2090,6 +2081,7 @@ mod tests {
                 output_tokens: 1_000_000,
                 reasoning_output_tokens: 0,
                 total_tokens: 2_000_000,
+                codex_rollout_budget_units: None,
             },
             "completed",
         )
@@ -2181,6 +2173,7 @@ mod tests {
                 output_tokens: 0,
                 reasoning_output_tokens: 0,
                 total_tokens: 100_000,
+                codex_rollout_budget_units: None,
             },
             "completed",
         )
@@ -2238,6 +2231,7 @@ mod tests {
                 output_tokens: 1_000_000,
                 reasoning_output_tokens: 0,
                 total_tokens: 2_000_000,
+                codex_rollout_budget_units: None,
             },
             "completed",
         )
@@ -2275,6 +2269,7 @@ mod tests {
                     output_tokens: 1_000_000,
                     reasoning_output_tokens: 0,
                     total_tokens: 2_000_000,
+                    codex_rollout_budget_units: None,
                 },
                 savings: RouterSavings {
                     actual_production_cost_usd_micros: 3_000_000,
@@ -2347,6 +2342,7 @@ mod tests {
                     output_tokens: 20,
                     reasoning_output_tokens: 0,
                     total_tokens: 120,
+                    codex_rollout_budget_units: None,
                 },
                 "completed",
             )

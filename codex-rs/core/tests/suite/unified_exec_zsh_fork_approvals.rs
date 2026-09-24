@@ -329,8 +329,8 @@ fn permission_profile_from_toml(profile: &str) -> Result<PermissionProfile> {
                 ":project_roots" => FileSystemPath::Special {
                     value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
-                _ if *access == FileSystemAccessMode::Deny => FileSystemPath::GlobPattern {
-                    pattern: path.clone(),
+                _ if *access == FileSystemAccessMode::Deny => FileSystemPath::Path {
+                    path: path.as_str().try_into()?,
                 },
                 _ => anyhow::bail!("unexpected filesystem entry in test profile: {path}"),
             };

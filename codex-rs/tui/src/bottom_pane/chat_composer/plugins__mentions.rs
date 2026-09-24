@@ -23,6 +23,7 @@ fn set_plugin_mentions_refreshes_open_mention_popup() {
     composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
         config_name: "sample@test".to_string(),
         display_name: "Sample Plugin".to_string(),
+        plugin_namespace: None,
         description: None,
         has_skills: true,
         mcp_server_names: vec!["sample".to_string()],
@@ -75,6 +76,7 @@ fn mention_items_show_plugin_owned_skill_and_app_duplicates() {
     composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
         config_name: "google-calendar@debug".to_string(),
         display_name: "Google Calendar".to_string(),
+        plugin_namespace: None,
         description: Some(
             "Connect Google Calendar for scheduling, availability, and event management."
                 .to_string(),
@@ -135,6 +137,7 @@ fn restored_bound_at_mentions_do_not_open_mention_popup() {
         composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
             display_name: "sample".to_string(),
+            plugin_namespace: None,
             description: None,
             has_skills: true,
             mcp_server_names: vec!["sample".to_string()],

@@ -4,6 +4,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::model_router::config_account_pool_default;
 use crate::session::TurnInput;
+use crate::session::session::Session;
 use crate::session::turn::run_hooks_and_record_inputs;
 use crate::session::turn::run_turn;
 use crate::session::turn_context::TurnContext;
@@ -18,7 +19,6 @@ use tracing::Instrument;
 use tracing::trace_span;
 
 use super::SessionTask;
-use super::SessionTaskContext;
 use super::SessionTaskResult;
 
 #[derive(Default)]
@@ -41,13 +41,11 @@ impl SessionTask for RegularTask {
 
     async fn run(
         self: Arc<Self>,
-        session: Arc<SessionTaskContext>,
+        sess: Arc<Session>,
         ctx: Arc<TurnContext>,
         input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
-        let sess = session.clone_session();
-        let turn_extension_data = session.turn_extension_data();
         let previous_model = ctx.model_info.slug.clone();
         let previous_provider_id = ctx.config.model_provider_id.clone();
         let previous_account_pool = config_account_pool_default(&ctx.config);
@@ -171,7 +169,6 @@ impl SessionTask for RegularTask {
             let last_agent_message = run_turn(
                 Arc::clone(&sess),
                 Arc::clone(&ctx),
-                Arc::clone(&turn_extension_data),
                 next_input,
                 prewarmed_client_session.take(),
                 cancellation_token.child_token(),

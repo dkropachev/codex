@@ -9,6 +9,10 @@ use std::borrow::Cow;
 use super::STATE_MIGRATOR;
 use super::THREAD_HISTORY_MIGRATOR;
 use super::repair_legacy_recency_migration_version;
+use crate::PINNED_THREAD_SECTION_ID;
+use crate::PINNED_THREAD_SECTION_NAME;
+
+const CUSTOM_THREAD_SECTION_ID: &str = "01984de2-8f74-7c91-a3b2-5c5e937cf317";
 
 fn migrator_through(version: i64) -> Migrator {
     Migrator {
@@ -43,12 +47,12 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
         .await
         .expect("sqlite database should open");
 
-    migrator_through(/*version*/ 47)
+    migrator_through(/*version*/ 52)
         .run(&pool)
         .await
         .expect("released fork migrations should apply");
     let released_history = sqlx::query(
-        "SELECT version, description, checksum FROM _sqlx_migrations WHERE version IN (41, 42) ORDER BY version",
+        "SELECT version, description, checksum FROM _sqlx_migrations WHERE version <= 52 ORDER BY version",
     )
     .fetch_all(&pool)
     .await
@@ -65,12 +69,9 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
     assert_eq!(
         released_history
             .iter()
-            .map(|(version, description, _)| (*version, description.as_str()))
+            .map(|(version, _, _)| *version)
             .collect::<Vec<_>>(),
-        vec![
-            (41, "tool router output optimizations"),
-            (42, "tool router ledger compaction filter"),
-        ]
+        (1_i64..=52).collect::<Vec<_>>()
     );
 
     STATE_MIGRATOR
@@ -79,7 +80,7 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
         .expect("current migrations should upgrade the released fork database");
 
     let preserved_history = sqlx::query(
-        "SELECT version, description, checksum FROM _sqlx_migrations WHERE version IN (41, 42) ORDER BY version",
+        "SELECT version, description, checksum FROM _sqlx_migrations WHERE version <= 52 ORDER BY version",
     )
     .fetch_all(&pool)
     .await
@@ -96,7 +97,7 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
     assert_eq!(preserved_history, released_history);
 
     let added_migrations = sqlx::query(
-        "SELECT version, description FROM _sqlx_migrations WHERE version >= 48 ORDER BY version",
+        "SELECT version, description FROM _sqlx_migrations WHERE version >= 53 ORDER BY version",
     )
     .fetch_all(&pool)
     .await
@@ -112,11 +113,8 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
     assert_eq!(
         added_migrations,
         vec![
-            (48, "threads name".to_string()),
-            (49, "drop agent jobs".to_string()),
-            (50, "model router cache write input tokens".to_string()),
-            (51, "threads is pinned".to_string()),
-            (52, "external agent config imports provider id".to_string(),),
+            (53, "threads section".to_string()),
+            (54, "threads section order".to_string()),
         ]
     );
 
@@ -147,6 +145,18 @@ SELECT
         SELECT 1 FROM pragma_table_info('external_agent_config_imports')
         WHERE name = 'provider_id'
     ) AS has_provider_id,
+    EXISTS(
+        SELECT 1 FROM sqlite_master
+        WHERE type = 'table' AND name = 'thread_sections'
+    ) AS has_thread_sections,
+    EXISTS(
+        SELECT 1 FROM pragma_table_info('threads')
+        WHERE name = 'thread_section_id'
+    ) AS has_thread_section_id,
+    EXISTS(
+        SELECT 1 FROM pragma_table_info('threads')
+        WHERE name = 'section_position'
+    ) AS has_section_position,
     (
         SELECT COUNT(*) FROM sqlite_master
         WHERE type = 'table' AND name IN ('agent_jobs', 'agent_job_items')
@@ -164,9 +174,12 @@ SELECT
             schema.get::<i64, _>("has_cache_write_tokens"),
             schema.get::<i64, _>("has_is_pinned"),
             schema.get::<i64, _>("has_provider_id"),
+            schema.get::<i64, _>("has_thread_sections"),
+            schema.get::<i64, _>("has_thread_section_id"),
+            schema.get::<i64, _>("has_section_position"),
             schema.get::<i64, _>("agent_job_table_count"),
         ),
-        (1, 1, 1, 1, 1, 1, 0)
+        (1, 1, 1, 1, 1, 1, 1, 1, 1, 0)
     );
 
     pool.close().await;
@@ -197,7 +210,7 @@ async fn pinned_threads_migration_defaults_existing_and_legacy_rows_to_unpinned(
         "00000000-0000-0000-0000-000000000044",
     ] {
         if thread_id.ends_with("44") {
-            STATE_MIGRATOR
+            migrator_through(/*version*/ 51)
                 .run(&pool)
                 .await
                 .expect("pin migration should apply");
@@ -242,6 +255,278 @@ INSERT INTO threads (
         .await
         .expect("pin states should load");
     assert_eq!(pinned_values, vec![false, false]);
+
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn thread_section_migration_preserves_legacy_pin_compatibility() {
+    let sqlite_home = crate::runtime::test_support::unique_temp_dir();
+    tokio::fs::create_dir_all(&sqlite_home)
+        .await
+        .expect("sqlite home should be created");
+    let _cleanup = scopeguard::guard(sqlite_home.clone(), |sqlite_home| {
+        let _ = std::fs::remove_dir_all(sqlite_home);
+    });
+    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+    let state_path = sqlite.state_db_path();
+    let pool = sqlite
+        .open_read_write_pool(&state_path)
+        .await
+        .expect("sqlite database should open");
+    migrator_through(/*version*/ 52)
+        .run(&pool)
+        .await
+        .expect("released thread migrations should apply");
+
+    for thread_id in [
+        "00000000-0000-0000-0000-000000000043",
+        "00000000-0000-0000-0000-000000000044",
+    ] {
+        if thread_id.ends_with("44") {
+            sqlx::query("UPDATE threads SET is_pinned = 1 WHERE id = ?")
+                .bind("00000000-0000-0000-0000-000000000043")
+                .execute(&pool)
+                .await
+                .expect("legacy pin should remain writable before section migration");
+            STATE_MIGRATOR
+                .run(&pool)
+                .await
+                .expect("section migration should apply");
+        }
+        sqlx::query(
+            r#"
+INSERT INTO threads (
+    id,
+    rollout_path,
+    created_at,
+    updated_at,
+    created_at_ms,
+    updated_at_ms,
+    source,
+    model_provider,
+    cwd,
+    title,
+    sandbox_policy,
+    approval_mode
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(thread_id)
+        .bind("/tmp/legacy.jsonl")
+        .bind(1_700_000_000_i64)
+        .bind(1_700_000_000_i64)
+        .bind(1_700_000_000_000_i64)
+        .bind(1_700_000_000_000_i64)
+        .bind("cli")
+        .bind("openai")
+        .bind("/tmp")
+        .bind("")
+        .bind("read-only")
+        .bind("on-request")
+        .execute(&pool)
+        .await
+        .expect("legacy thread insert should succeed");
+    }
+
+    let registered_sections =
+        sqlx::query_as::<_, (String, String)>("SELECT id, name FROM thread_sections ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("independent thread sections should load");
+    assert_eq!(
+        registered_sections,
+        vec![(
+            PINNED_THREAD_SECTION_ID.to_string(),
+            PINNED_THREAD_SECTION_NAME.to_string(),
+        )]
+    );
+
+    let threads = sqlx::query_as::<_, (i64, Option<String>)>(
+        "SELECT is_pinned, thread_section_id FROM threads ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("legacy and section-aware thread metadata should load");
+    assert_eq!(threads, vec![(1, None), (0, None)]);
+
+    sqlx::query("INSERT INTO thread_sections (id, name) VALUES (?, ?)")
+        .bind(CUSTOM_THREAD_SECTION_ID)
+        .bind("Custom section")
+        .execute(&pool)
+        .await
+        .expect("custom sections should have independent persisted identities");
+
+    let thread_id = "00000000-0000-0000-0000-000000000043";
+    sqlx::query("UPDATE threads SET thread_section_id = ? WHERE id = ?")
+        .bind(CUSTOM_THREAD_SECTION_ID)
+        .bind(thread_id)
+        .execute(&pool)
+        .await
+        .expect("threads should reference independently persisted sections");
+    sqlx::query("UPDATE threads SET is_pinned = 0 WHERE id = ?")
+        .bind(thread_id)
+        .execute(&pool)
+        .await
+        .expect("released binaries should still update the legacy pin column");
+    let thread = sqlx::query_as::<_, (i64, Option<String>)>(
+        "SELECT is_pinned, thread_section_id FROM threads WHERE id = ?",
+    )
+    .bind(thread_id)
+    .fetch_one(&pool)
+    .await
+    .expect("legacy pin updates should not overwrite the authoritative section");
+    assert_eq!(thread, (0, Some(CUSTOM_THREAD_SECTION_ID.to_string())));
+
+    sqlx::query("UPDATE threads SET thread_section_id = NULL WHERE id = ?")
+        .bind(thread_id)
+        .execute(&pool)
+        .await
+        .expect("threads should be removable from sections");
+
+    let registered_sections =
+        sqlx::query_as::<_, (String, String)>("SELECT id, name FROM thread_sections ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("empty sections should remain independently discoverable");
+    assert_eq!(
+        registered_sections,
+        vec![
+            (
+                CUSTOM_THREAD_SECTION_ID.to_string(),
+                "Custom section".to_string(),
+            ),
+            (
+                PINNED_THREAD_SECTION_ID.to_string(),
+                PINNED_THREAD_SECTION_NAME.to_string(),
+            ),
+        ]
+    );
+
+    let mut released_pin_migrator = migrator_through(/*version*/ 52);
+    released_pin_migrator.ignore_missing = true;
+    released_pin_migrator
+        .run(&pool)
+        .await
+        .expect("released pin-capable binaries should tolerate newer migrations");
+
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn thread_section_order_migration_backfills_stably() {
+    let sqlite_home = crate::runtime::test_support::unique_temp_dir();
+    tokio::fs::create_dir_all(&sqlite_home)
+        .await
+        .expect("sqlite home should be created");
+    let _cleanup = scopeguard::guard(sqlite_home.clone(), |sqlite_home| {
+        let _ = std::fs::remove_dir_all(sqlite_home);
+    });
+    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+    let pool = sqlite
+        .open_read_write_pool(&sqlite.state_db_path())
+        .await
+        .expect("sqlite database should open");
+    migrator_through(/*version*/ 53)
+        .run(&pool)
+        .await
+        .expect("pre-ordering migrations should apply");
+
+    sqlx::query("INSERT INTO thread_sections (id, name) VALUES (?, ?)")
+        .bind(CUSTOM_THREAD_SECTION_ID)
+        .bind("Custom section")
+        .execute(&pool)
+        .await
+        .expect("custom section should exist before threads reference it");
+
+    let older = "00000000-0000-0000-0000-000000000071";
+    let newer = "00000000-0000-0000-0000-000000000072";
+    let pinned = "00000000-0000-0000-0000-000000000073";
+    let unsectioned = "00000000-0000-0000-0000-000000000074";
+    for (thread_id, recency_at_ms, section) in [
+        (older, 1_700_000_001_000_i64, Some(CUSTOM_THREAD_SECTION_ID)),
+        (newer, 1_700_000_002_000, Some(CUSTOM_THREAD_SECTION_ID)),
+        (pinned, 1_700_000_003_000, Some(PINNED_THREAD_SECTION_ID)),
+        (unsectioned, 1_700_000_004_000, None),
+    ] {
+        sqlx::query(
+            r#"
+INSERT INTO threads (
+    id, rollout_path, created_at, updated_at, recency_at,
+    created_at_ms, updated_at_ms, recency_at_ms, source,
+    model_provider, cwd, title, preview, sandbox_policy, approval_mode, thread_section_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(thread_id)
+        .bind("/tmp/legacy.jsonl")
+        .bind(recency_at_ms / 1000)
+        .bind(recency_at_ms / 1000)
+        .bind(recency_at_ms / 1000)
+        .bind(recency_at_ms)
+        .bind(recency_at_ms)
+        .bind(recency_at_ms)
+        .bind("cli")
+        .bind("openai")
+        .bind("/tmp")
+        .bind("")
+        .bind("preview")
+        .bind("read-only")
+        .bind("on-request")
+        .bind(section)
+        .execute(&pool)
+        .await
+        .expect("legacy section row should insert");
+    }
+
+    STATE_MIGRATOR
+        .run(&pool)
+        .await
+        .expect("section ordering migration should apply");
+    let custom_order = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM threads WHERE thread_section_id = ? ORDER BY section_position, id",
+    )
+    .bind(CUSTOM_THREAD_SECTION_ID)
+    .fetch_all(&pool)
+    .await
+    .expect("backfilled custom order should load");
+    assert_eq!(custom_order, vec![newer.to_string(), older.to_string()]);
+    let positions =
+        sqlx::query_scalar::<_, Option<i64>>("SELECT section_position FROM threads ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("section positions should load");
+    assert_eq!(
+        positions,
+        vec![Some(2_000_000), Some(1_000_000), Some(1_000_000), None]
+    );
+    let entered = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT section_entered_at_ms FROM threads ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("section entry timestamps should load");
+    assert_eq!(
+        entered,
+        vec![
+            Some(1_700_000_001_000),
+            Some(1_700_000_002_000),
+            Some(1_700_000_003_000),
+            None,
+        ]
+    );
+
+    let section_position_index = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+    )
+    .bind("idx_threads_section_position")
+    .fetch_optional(&pool)
+    .await
+    .expect("section position index should remain inspectable");
+    assert_eq!(
+        section_position_index,
+        Some("idx_threads_section_position".to_string())
+    );
 
     pool.close().await;
 }

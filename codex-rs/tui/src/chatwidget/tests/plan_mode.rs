@@ -669,6 +669,7 @@ async fn request_user_input_notification_overrides_pending_agent_turn_complete_n
                 description: "Update only Plan mode.".to_string(),
             }]),
         }],
+        is_blocking: true,
         auto_resolution_ms: None,
     });
 
@@ -699,6 +700,7 @@ async fn handle_request_user_input_sets_pending_notification() {
                 description: "Update only Plan mode.".to_string(),
             }]),
         }],
+        is_blocking: true,
         auto_resolution_ms: None,
     });
 
@@ -1328,6 +1330,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
         .set_plugin_mentions(Some(vec![codex_plugin::PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
             display_name: "Sample Plugin".to_string(),
+            plugin_namespace: None,
             description: None,
             has_skills: true,
             mcp_server_names: Vec::new(),
