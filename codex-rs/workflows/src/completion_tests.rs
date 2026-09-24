@@ -356,6 +356,32 @@ fn local_ref_cycles_are_bounded_and_keep_direct_properties() {
     );
 }
 
+#[test]
+fn cancelled_completion_stops_before_package_preflight() {
+    let root = tempfile::tempdir().expect("create completion root");
+    let cancelled = Arc::new(AtomicBool::new(true));
+
+    let result = complete_workflow_cancellable(
+        root.path(),
+        &CompletionRequest {
+            input: json!({}),
+            active_field: None,
+            prefix: String::new(),
+            mode: CompletionMode::Field,
+        },
+        cancelled,
+    );
+
+    assert_eq!(
+        result,
+        CompletionResult {
+            items: Vec::new(),
+            error: Some("workflow runner was cancelled".to_string()),
+            insertions: BTreeMap::new(),
+        }
+    );
+}
+
 fn items(candidates: Vec<CompletionCandidate>) -> Vec<CompletionItem> {
     candidates
         .into_iter()

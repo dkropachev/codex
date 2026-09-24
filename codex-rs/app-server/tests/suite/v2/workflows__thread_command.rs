@@ -203,6 +203,19 @@ async fn thread_workflow_command_reports_canonical_and_legacy_contract_failures(
     .await?;
 
     std::fs::write(
+        &source_path,
+        format!("setInterval(() => {{}}, 1000);\n{canonical_source}"),
+    )?;
+    run_workflow_expect_failure(
+        &mut mcp,
+        &thread.id,
+        &workflow_dir,
+        json!({}),
+        "workflow runner did not exit within 2000 ms after completion",
+    )
+    .await?;
+
+    std::fs::write(
         workflow_dir.join("workflow.yaml"),
         "id: workflow\ncommand: workflow-test\ntitle: Workflow Test\nuserDescription: Legacy workflow\n",
     )?;

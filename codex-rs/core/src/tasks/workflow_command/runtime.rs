@@ -5,7 +5,6 @@ use std::path::Path;
 use std::process::ExitStatus;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
 
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_workflows::MAX_WORKFLOW_USER_INPUT_REQUESTS;
@@ -20,6 +19,7 @@ use codex_workflows::runner::MAX_WORKFLOW_COMPLETION_FRAME_BYTES;
 use codex_workflows::runner::MAX_WORKFLOW_CONTROL_FRAME_BYTES;
 use codex_workflows::runner::MAX_WORKFLOW_RUN_FRAME_BYTES;
 use codex_workflows::runner::PreparedRunner;
+use codex_workflows::runner::RUNNER_EXIT_TIMEOUT;
 use codex_workflows::runner::RunnerOperation;
 use codex_workflows::runner::WORKFLOW_CONTROL_PREFIX;
 use codex_workflows::runner::WORKFLOW_CONTROL_VERSION;
@@ -47,8 +47,6 @@ use host::WorkflowControlReader;
 use host::WorkflowProcessGroupGuard;
 use host::resume_windows_process;
 use host::suspend_windows_process;
-
-const WORKFLOW_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 
 enum WorkflowControlEvent<'a> {
     Completion(String),
@@ -213,12 +211,15 @@ pub(super) async fn run_workflow_for_tui(
                 let status = tokio::select! {
                     () = cancellation_token.cancelled() => return Ok(None),
                     status = &mut child_wait => Some(status),
-                    () = tokio::time::sleep(WORKFLOW_EXIT_TIMEOUT) => None,
+                    () = tokio::time::sleep(RUNNER_EXIT_TIMEOUT) => None,
                 };
                 let Some(status) = status else {
                     process_guard.terminate();
-                    let _ = tokio::time::timeout(WORKFLOW_EXIT_TIMEOUT, &mut child_wait).await;
-                    return Ok(Some(markdown));
+                    let _ = tokio::time::timeout(RUNNER_EXIT_TIMEOUT, &mut child_wait).await;
+                    return Err(format!(
+                        "workflow runner did not exit within {} ms after completion",
+                        RUNNER_EXIT_TIMEOUT.as_millis()
+                    ));
                 };
                 match status {
                     Ok(status) if status.success() => {}

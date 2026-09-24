@@ -26,6 +26,8 @@ const SOURCE_SCAN_MAX_BYTES = 1024 * 1024;
 const SOURCE_SCAN_MAX_FILES = 256;
 const SOURCE_SCAN_MAX_ENTRIES = 1024;
 const SOURCE_SCAN_MAX_DEPTH = 32;
+const SCHEMA_TRAVERSAL_MAX_DEPTH = 32;
+const SCHEMA_TRAVERSAL_MAX_NODES = 2048;
 const CONTROL_PATH = process.env.CODEX_WORKFLOW_CONTROL_PATH;
 const CLI_MODE = process.env.CODEX_WORKFLOW_CLI === "1";
 const BUILTIN_MODULES = new Set(builtinModules);
@@ -111,6 +113,76 @@ function assertJsonSerializable(value, label) {
   }
 }
 
+function enterSchemaNode(budget, depth) {
+  if (depth >= SCHEMA_TRAVERSAL_MAX_DEPTH || budget.remainingNodes === 0) {
+    throw new Error("Workflow inputSchema exceeded the supported schema traversal limits.");
+  }
+  budget.remainingNodes -= 1;
+}
+
+function findSchemaAnchor(schema, anchor, budget, depth) {
+  enterSchemaNode(budget, depth);
+  if (isObject(schema)
+      && (schema.$anchor === anchor || schema.$dynamicAnchor === anchor)) {
+    return schema;
+  }
+  if (!isObject(schema) && !Array.isArray(schema)) return undefined;
+  for (const child of Object.values(schema)) {
+    if (child === null || typeof child !== "object") continue;
+    const found = findSchemaAnchor(child, anchor, budget, depth + 1);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+function resolveLocalSchemaRef(root, reference, budget, depth) {
+  if (reference === "#") return root;
+  if (!reference.startsWith("#")) return undefined;
+  const fragment = reference.slice(1);
+  if (!fragment.startsWith("/")) {
+    return findSchemaAnchor(root, fragment, budget, depth);
+  }
+  let resolved = root;
+  for (const encodedToken of fragment.slice(1).split("/")) {
+    const token = encodedToken.replaceAll("~1", "/").replaceAll("~0", "~");
+    if (resolved === null
+        || typeof resolved !== "object"
+        || !Object.prototype.hasOwnProperty.call(resolved, token)) {
+      return undefined;
+    }
+    resolved = resolved[token];
+  }
+  return resolved;
+}
+
+function topLevelInputPropertyNames(root) {
+  const properties = new Set();
+  const activeRefs = new Set();
+  const budget = { remainingNodes: SCHEMA_TRAVERSAL_MAX_NODES };
+
+  function visit(schema, depth) {
+    enterSchemaNode(budget, depth);
+    if (!isObject(schema)) return;
+    for (const property of Object.keys(schema.properties ?? {})) properties.add(property);
+    for (const keyword of ["$ref", "$dynamicRef"]) {
+      const reference = schema[keyword];
+      const activeReference = `${keyword}:${reference}`;
+      if (typeof reference !== "string" || activeRefs.has(activeReference)) continue;
+      activeRefs.add(activeReference);
+      const referenced = resolveLocalSchemaRef(root, reference, budget, depth + 1);
+      if (referenced !== undefined) visit(referenced, depth + 1);
+      activeRefs.delete(activeReference);
+    }
+    for (const keyword of ["allOf", "anyOf", "oneOf"]) {
+      if (!Array.isArray(schema[keyword])) continue;
+      for (const branch of schema[keyword]) visit(branch, depth + 1);
+    }
+  }
+
+  visit(root, 0);
+  return [...properties].sort();
+}
+
 async function loadWorkflow() {
   const moduleUrl = pathToFileURL(path.join(process.cwd(), "src", "workflow.ts")).href;
   const workflowModule = await import(moduleUrl);
@@ -166,11 +238,12 @@ async function loadWorkflow() {
   if (!inputTypes.includes("object")) {
     throw new Error("Workflow inputSchema must describe a JSON object.");
   }
+  const inputProperties = topLevelInputPropertyNames(inputSchema);
   if (inputSchema.additionalProperties === false
-      && !Object.prototype.hasOwnProperty.call(inputSchema.properties ?? {}, "workingDirectory")) {
+      && !inputProperties.includes("workingDirectory")) {
     throw new Error("Workflow inputSchema must accept the injected workingDirectory field.");
   }
-  for (const property of Object.keys(inputSchema.properties ?? {})) {
+  for (const property of inputProperties) {
     if (!/^[a-z][A-Za-z0-9]*$/.test(property)) {
       throw new Error(`Workflow inputSchema property ${JSON.stringify(property)} must be lower camelCase.`);
     }

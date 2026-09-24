@@ -16,6 +16,8 @@ const MAX_COVERAGE_TEST_ENTRIES: usize = 1_024;
 const MAX_COVERAGE_TEST_BYTES: usize = 1024 * 1024;
 const MAX_COVERAGE_TEST_DEPTH: usize = 32;
 pub(super) const MAX_GITIGNORE_BYTES: u64 = 64 * 1024;
+const MAX_GIT_LAYOUT_OUTPUT_BYTES: usize = 64 * 1024;
+const GIT_LAYOUT_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(super) fn validate_coverage(
     package: &WorkflowPackage,
@@ -220,35 +222,75 @@ pub(super) fn validate_gitignore(root: &Path, findings: &mut BTreeSet<Validation
 }
 
 pub(super) fn validate_git_layout(root: &Path, findings: &mut BTreeSet<ValidationFinding>) {
+    validate_git_layout_until(
+        root,
+        findings,
+        crate::runner::CommandDeadline::after(GIT_LAYOUT_TIMEOUT),
+        /*cancelled*/ None,
+    );
+}
+
+pub(super) fn validate_git_layout_until(
+    root: &Path,
+    findings: &mut BTreeSet<ValidationFinding>,
+    deadline: crate::runner::CommandDeadline,
+    cancelled: Option<&AtomicBool>,
+) {
     if !root.join(".git").is_dir() {
         return;
     }
-    let output = match Command::new("git")
+    let mut command = Command::new("git");
+    command
         .arg("-C")
         .arg(root)
-        .args(["ls-files", "--", "node_modules", "artifacts", "state"])
-        .output()
-    {
+        .args(["ls-files", "--", "node_modules", "artifacts", "state"]);
+    let (status, stdout, _, stdout_oversized) = match crate::runner::run_bounded_command_until(
+        command,
+        deadline,
+        MAX_GIT_LAYOUT_OUTPUT_BYTES,
+        cancelled,
+    ) {
         Ok(output) => output,
         Err(err) => {
+            let outcome = if format!("{err:#}").contains("timed out") {
+                format!(
+                    "git ls-files timed out after {} ms",
+                    GIT_LAYOUT_TIMEOUT.as_millis()
+                )
+            } else if format!("{err:#}").contains("cancelled") {
+                "git ls-files was cancelled".to_string()
+            } else {
+                "git ls-files could not start or complete".to_string()
+            };
             findings.insert(ValidationFinding::new(
                 "layout",
-                format!("failed to inspect workflow git repository: {err}"),
+                format!("failed to inspect workflow git repository: {outcome}"),
             ));
             return;
         }
     };
-    if !output.status.success() {
+    if !status.success() {
+        let status = status
+            .code()
+            .map_or_else(|| "terminated".to_string(), |code| code.to_string());
         findings.insert(ValidationFinding::new(
             "layout",
             format!(
-                "failed to inspect workflow git repository: git ls-files exited with {}",
-                output.status
+                "failed to inspect workflow git repository: git ls-files failed with exit status {status}"
             ),
         ));
         return;
     }
-    for path in String::from_utf8_lossy(&output.stdout).lines() {
+    if stdout_oversized {
+        findings.insert(ValidationFinding::new(
+            "layout",
+            format!(
+                "failed to inspect workflow git repository: git ls-files output exceeded {MAX_GIT_LAYOUT_OUTPUT_BYTES} bytes"
+            ),
+        ));
+        return;
+    }
+    for path in String::from_utf8_lossy(&stdout).lines() {
         if path != "state/.gitkeep" {
             findings.insert(ValidationFinding::new(
                 "layout",

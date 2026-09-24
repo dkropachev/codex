@@ -19,6 +19,32 @@ use crate::scaffold_workflow;
 const BUN_REQUIRED: &str = "requires Bun; run explicitly in workflow-runtime validation";
 
 #[test]
+fn prepared_runner_disables_ambient_bun_configuration() {
+    let prepared = PreparedRunner::new(
+        RunnerOperation::Scan,
+        /*payload*/ None,
+        /*expected*/ None,
+    )
+    .expect("prepare runner");
+    let root = prepared._temp_dir.path();
+    let mut bunfig_argument = OsString::from("--config=");
+    bunfig_argument.push(root.join("bunfig.toml"));
+
+    assert_eq!(
+        prepared.arguments,
+        vec![
+            bunfig_argument,
+            "--no-install".into(),
+            "--no-env-file".into(),
+            root.join("runner.mjs").into_os_string(),
+            "scan".into(),
+            "-".into(),
+            "-".into(),
+        ]
+    );
+}
+
+#[test]
 #[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
 fn scaffold_runs_unchanged_with_shared_runner() {
     let registry = tempfile::tempdir().expect("create workflow registry");
@@ -45,6 +71,43 @@ fn scaffold_runs_unchanged_with_shared_runner() {
         String::from_utf8(output).expect("markdown is UTF-8"),
         "# Runner Test\n\nReady.\n"
     );
+}
+
+#[test]
+#[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
+fn package_bunfig_and_dotenv_cannot_run_code_before_module_rejection() {
+    let source = r#"import { writeFileSync } from "node:fs";
+if (process.env.CODEX_WORKFLOW_DOTENV_PRELOAD_REGRESSION_181 === "from-package-dotenv-181") {
+  writeFileSync("dotenv-loaded", "yes");
+}
+export default async function workflow() { return {}; }
+"#;
+    let (root, manifest) = write_fixture(source);
+    fs::write(
+        root.path().join("preload.ts"),
+        "import { writeFileSync } from 'node:fs';\nwriteFileSync('bunfig-preloaded', 'yes');\n",
+    )
+    .expect("write malicious preload");
+    fs::write(
+        root.path().join("bunfig.toml"),
+        "preload = [\"./preload.ts\"]\n",
+    )
+    .expect("write package bunfig");
+    fs::write(
+        root.path().join(".env"),
+        "CODEX_WORKFLOW_DOTENV_PRELOAD_REGRESSION_181=from-package-dotenv-181\n",
+    )
+    .expect("write package dotenv");
+
+    let error = inspect_workflow(root.path(), &manifest)
+        .expect_err("malformed workflow export must be rejected");
+
+    assert!(
+        format!("{error:#}").contains("Workflow must have a default object export"),
+        "unexpected error: {error:#}"
+    );
+    assert!(!root.path().join("bunfig-preloaded").exists());
+    assert!(!root.path().join("dotenv-loaded").exists());
 }
 
 #[cfg(unix)]
@@ -144,6 +207,25 @@ fn bounded_command_terminates_descendants_on_timeout() {
 
     assert!(error.to_string().contains("timed out"));
     assert_process_terminated(descendant);
+}
+
+#[cfg(unix)]
+#[test]
+fn bounded_command_honors_an_existing_deadline() {
+    let started = Instant::now();
+    let deadline = CommandDeadline::after(Duration::from_millis(/*millis*/ 150));
+    std::thread::sleep(Duration::from_millis(/*millis*/ 100));
+    let command = std::process::Command::new("sh");
+    let mut command = command;
+    command.args(["-c", "sleep 60"]);
+
+    let error = run_bounded_command_until(
+        command, deadline, /*maximum_stdout_bytes*/ 1024, /*cancelled*/ None,
+    )
+    .expect_err("command must use the remaining shared deadline");
+
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(error.to_string(), "workflow runner timed out after 150 ms");
 }
 
 #[cfg(unix)]
@@ -309,6 +391,33 @@ export default async function workflow() { return {}; }
         inspect_workflow(root.path(), &manifest).expect_err("function export must be rejected");
     assert!(
         format!("{error:#}").contains("Workflow must have a default object export"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
+#[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
+fn inspect_rejects_non_lower_camel_properties_behind_composition_and_ref() {
+    let source = canonical_source("return { message: input.message };", "return [];").replacen(
+        "  additionalProperties: false,\n} as const;",
+        r##"  $defs: {
+    indirectFields: {
+      properties: { "snake_case": { type: "string" } },
+    },
+  },
+  allOf: [{ $ref: "#/$defs/indirectFields" }],
+  additionalProperties: false,
+} as const;"##,
+        /*count*/ 1,
+    );
+    let (root, manifest) = write_fixture(&source);
+
+    let error = inspect_workflow(root.path(), &manifest)
+        .expect_err("effective input properties must be lower camelCase");
+
+    assert!(
+        format!("{error:#}")
+            .contains("Workflow inputSchema property \"snake_case\" must be lower camelCase"),
         "unexpected error: {error:#}"
     );
 }

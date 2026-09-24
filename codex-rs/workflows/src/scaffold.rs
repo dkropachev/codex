@@ -68,17 +68,17 @@ pub fn scaffold_workflow(root: &Path, request: &ScaffoldRequest) -> anyhow::Resu
     }
     #[cfg(windows)]
     {
-        let staging = tempfile::Builder::new()
-            .prefix(".codex-workflow-")
-            .tempdir()
-            .context("failed to stage workflow package")?;
+        let locked_parent = SecureWindowsPath::open_or_create(parent)?;
+        let mut staging = SecureWindowsStagingDirectory::create(parent)?;
         write_package(staging.path(), request, &id)?;
         initialize_git_repository(staging.path())?;
-        let _locked_parent = SecureWindowsPath::open_or_create(parent)?;
         reject_existing_or_symlink_path(root, &target)?;
-        let staging_path = staging.keep();
-        if let Err(err) = install_staged_package(&staging_path, &target) {
-            let _ = fs::remove_dir_all(&staging_path);
+        if let Err(err) = staging.install_into(
+            &locked_parent,
+            id_components
+                .last()
+                .context("workflow id should have a final component")?,
+        ) {
             return Err(err).with_context(|| {
                 format!(
                     "failed to install workflow package at {}; the target may have been created concurrently",
@@ -117,27 +117,14 @@ pub fn scaffold_workflow(root: &Path, request: &ScaffoldRequest) -> anyhow::Resu
 /// installed, preventing a concurrent reparse-point swap from redirecting the final rename.
 #[cfg(windows)]
 struct SecureWindowsPath {
-    _handles: Vec<std::os::windows::io::OwnedHandle>,
+    handles: Vec<std::os::windows::io::OwnedHandle>,
 }
 
 #[cfg(windows)]
 impl SecureWindowsPath {
     fn open_or_create(path: &Path) -> anyhow::Result<Self> {
-        use std::os::windows::ffi::OsStrExt;
-        use std::os::windows::io::FromRawHandle;
-
-        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-        use windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION;
-        use windows_sys::Win32::Storage::FileSystem::CreateFileW;
-        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
-        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
-        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
         use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
-        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
-        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
-        use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle;
-        use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
+        use windows_sys::Win32::Storage::FileSystem::FILE_TRAVERSE;
 
         let absolute = if path.is_absolute() {
             path.to_path_buf()
@@ -170,47 +157,198 @@ impl SecureWindowsPath {
                     });
                 }
             }
-            let wide = current
-                .as_os_str()
-                .encode_wide()
-                .chain(std::iter::once(0))
-                .collect::<Vec<_>>();
-            let raw = unsafe {
-                CreateFileW(
-                    wide.as_ptr(),
-                    FILE_READ_ATTRIBUTES,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    std::ptr::null(),
-                    OPEN_EXISTING,
-                    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-                    0,
-                )
-            };
-            if raw == INVALID_HANDLE_VALUE {
-                return Err(std::io::Error::last_os_error()).with_context(|| {
-                    format!("failed to lock workflow directory {}", current.display())
-                });
-            }
-            let handle = unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(raw as _) };
-            let mut information = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
-            if unsafe { GetFileInformationByHandle(raw, information.as_mut_ptr()) } == 0 {
-                return Err(std::io::Error::last_os_error()).with_context(|| {
-                    format!("failed to inspect workflow directory {}", current.display())
-                });
-            }
-            let attributes = unsafe { information.assume_init() }.dwFileAttributes;
-            if attributes & FILE_ATTRIBUTE_DIRECTORY == 0
-                || attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
-            {
-                bail!(
-                    "workflow path component {} must be a directory and not a reparse point",
-                    current.display()
-                );
-            }
-            handles.push(handle);
+            handles.push(open_secure_windows_directory(
+                &current,
+                /*desired_access*/ FILE_READ_ATTRIBUTES | FILE_TRAVERSE,
+            )?);
         }
-        Ok(Self { _handles: handles })
+        if handles.is_empty() {
+            handles.push(open_secure_windows_directory(
+                &absolute,
+                /*desired_access*/ FILE_READ_ATTRIBUTES | FILE_TRAVERSE,
+            )?);
+        }
+        Ok(Self { handles })
     }
+
+    fn directory_handle(&self) -> windows_sys::Win32::Foundation::HANDLE {
+        use std::os::windows::io::AsRawHandle;
+
+        self.handles
+            .last()
+            .expect("a secure Windows path always retains its final directory handle")
+            .as_raw_handle() as windows_sys::Win32::Foundation::HANDLE
+    }
+}
+
+/// Keeps the newly created staging directory locked while it is populated and renamed.
+#[cfg(windows)]
+struct SecureWindowsStagingDirectory {
+    path: PathBuf,
+    handle: Option<std::os::windows::io::OwnedHandle>,
+    installed: bool,
+}
+
+#[cfg(windows)]
+impl SecureWindowsStagingDirectory {
+    fn create(parent: &Path) -> anyhow::Result<Self> {
+        use windows_sys::Win32::Storage::FileSystem::DELETE;
+        use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
+
+        let staging = tempfile::Builder::new()
+            .prefix(".codex-workflow-")
+            .tempdir_in(parent)
+            .with_context(|| format!("failed to stage workflow under {}", parent.display()))?;
+        let path = staging.keep();
+        let handle = match open_secure_windows_directory(
+            &path,
+            /*desired_access*/ DELETE | FILE_READ_ATTRIBUTES,
+        ) {
+            Ok(handle) => handle,
+            Err(err) => {
+                let _ = fs::remove_dir_all(&path);
+                return Err(err);
+            }
+        };
+        Ok(Self {
+            path,
+            handle: Some(handle),
+            installed: false,
+        })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn install_into(
+        &mut self,
+        target_parent: &SecureWindowsPath,
+        target_name: &str,
+    ) -> std::io::Result<()> {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        use std::os::windows::io::AsRawHandle;
+
+        use windows_sys::Win32::Storage::FileSystem::FILE_RENAME_INFO;
+        use windows_sys::Win32::Storage::FileSystem::FILE_RENAME_INFO_0;
+        use windows_sys::Win32::Storage::FileSystem::FileRenameInfo;
+        use windows_sys::Win32::Storage::FileSystem::SetFileInformationByHandle;
+
+        let target_name = OsStr::new(target_name).encode_wide().collect::<Vec<_>>();
+        let filename_bytes = target_name
+            .len()
+            .checked_mul(std::mem::size_of::<u16>())
+            .ok_or(std::io::ErrorKind::InvalidInput)?;
+        let filename_size = u32::try_from(filename_bytes)
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        let header_bytes = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+        let information_bytes = header_bytes
+            .checked_add(filename_bytes)
+            .and_then(|size| size.checked_add(std::mem::size_of::<u16>()))
+            .ok_or(std::io::ErrorKind::InvalidInput)?;
+        let information_size = u32::try_from(information_bytes)
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        let words = information_bytes.div_ceil(std::mem::size_of::<usize>());
+        let mut storage = vec![0_usize; words];
+        let information = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+        unsafe {
+            std::ptr::addr_of_mut!((*information).Anonymous)
+                .write(FILE_RENAME_INFO_0 { ReplaceIfExists: 0 });
+            std::ptr::addr_of_mut!((*information).RootDirectory)
+                .write(target_parent.directory_handle());
+            std::ptr::addr_of_mut!((*information).FileNameLength).write(filename_size);
+            target_name.as_ptr().copy_to_nonoverlapping(
+                std::ptr::addr_of_mut!((*information).FileName).cast::<u16>(),
+                target_name.len(),
+            );
+        }
+        let staging_handle = self
+            .handle
+            .as_ref()
+            .expect("a staging handle remains open until the staging directory is dropped")
+            .as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
+        if unsafe {
+            SetFileInformationByHandle(
+                staging_handle,
+                FileRenameInfo,
+                information.cast(),
+                information_size,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        self.installed = true;
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+impl Drop for SecureWindowsStagingDirectory {
+    fn drop(&mut self) {
+        drop(self.handle.take());
+        if !self.installed {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn open_secure_windows_directory(
+    path: &Path,
+    desired_access: windows_sys::Win32::Storage::FileSystem::FILE_ACCESS_RIGHTS,
+) -> anyhow::Result<std::os::windows::io::OwnedHandle> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::FromRawHandle;
+
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION;
+    use windows_sys::Win32::Storage::FileSystem::CreateFileW;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
+    use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle;
+    use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
+
+    let wide = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let raw = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            desired_access,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            0,
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("failed to lock workflow directory {}", path.display()));
+    }
+    let handle = unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(raw as _) };
+    let mut information = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+    if unsafe { GetFileInformationByHandle(raw, information.as_mut_ptr()) } == 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("failed to inspect workflow directory {}", path.display()));
+    }
+    let attributes = unsafe { information.assume_init() }.dwFileAttributes;
+    if attributes & FILE_ATTRIBUTE_DIRECTORY == 0 || attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        bail!(
+            "workflow path component {} must be a directory and not a reparse point",
+            path.display()
+        );
+    }
+    Ok(handle)
 }
 
 #[cfg(all(unix, not(target_os = "redox")))]
@@ -452,8 +590,8 @@ fn write_file_at(
             let file = openat(
                 &directory,
                 component,
-                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW, // codespell:ignore WRONLY
-                Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::WGRP | Mode::ROTH | Mode::WOTH, // codespell:ignore WOTH
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW,
+                Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::WGRP | Mode::ROTH | Mode::WOTH,
             )?;
             let mut file = fs::File::from(file);
             file.write_all(contents)?;
@@ -496,11 +634,6 @@ fn install_staged_package(staging: &Path, target: &Path) -> std::io::Result<()> 
     use rustix::fs::renameat_with;
 
     renameat_with(CWD, staging, CWD, target, RenameFlags::NOREPLACE).map_err(Into::into)
-}
-
-#[cfg(windows)]
-fn install_staged_package(staging: &Path, target: &Path) -> std::io::Result<()> {
-    fs::rename(staging, target)
 }
 
 #[cfg(not(any(unix, windows)))]

@@ -1,3 +1,4 @@
+use pretty_assertions::assert_eq;
 use serde_json::json;
 
 use super::*;
@@ -48,6 +49,65 @@ fn draft_2020_12_validator_handles_unevaluated_properties_and_dynamic_refs() {
             .validate_input(&json!({ "value": "ok", "extra": true }))
             .is_err()
     );
+}
+
+#[test]
+fn contract_rejects_non_lower_camel_effective_input_properties() {
+    for indirect_shape in [
+        json!({
+            "$defs": {
+                "fields": {
+                    "properties": { "snake_case": { "type": "string" } }
+                }
+            },
+            "$ref": "#/$defs/fields"
+        }),
+        json!({
+            "allOf": [{
+                "properties": { "snake_case": { "type": "string" } }
+            }]
+        }),
+        json!({
+            "anyOf": [{
+                "properties": { "snake_case": { "type": "string" } }
+            }]
+        }),
+        json!({
+            "oneOf": [{
+                "properties": { "snake_case": { "type": "string" } }
+            }]
+        }),
+    ] {
+        let mut input_schema = json!({
+            "$schema": DRAFT_2020_12,
+            "type": "object",
+            "properties": { "workingDirectory": { "type": "string" } },
+            "additionalProperties": true
+        });
+        input_schema
+            .as_object_mut()
+            .expect("input schema object")
+            .extend(
+                indirect_shape
+                    .as_object()
+                    .expect("indirect schema shape")
+                    .clone(),
+            );
+
+        let error = WorkflowContract::from_schemas(
+            input_schema,
+            json!({
+                "$schema": DRAFT_2020_12,
+                "type": "object"
+            }),
+        )
+        .expect_err("effective properties must be lower camelCase");
+
+        assert_eq!(
+            error.to_string(),
+            "workflow inputSchema property \"snake_case\" must be lower camelCase"
+        );
+    }
 }
 
 #[test]

@@ -114,7 +114,7 @@ fn rejects_unsafe_ids() {
 }
 
 #[test]
-#[cfg(not(all(unix, not(target_os = "redox"))))]
+#[cfg(not(any(all(unix, not(target_os = "redox")), windows)))]
 fn final_install_never_replaces_a_concurrently_created_empty_target() {
     let temp = TempDir::new().expect("tempdir");
     let staging = temp.path().join("staging");
@@ -129,6 +129,54 @@ fn final_install_never_replaces_a_concurrently_created_empty_target() {
     assert_eq!(fs::read_dir(&target).expect("read target").count(), 0);
     assert_eq!(
         fs::read_to_string(staging.join("marker")).expect("staging remains recoverable"),
+        "staged"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_staging_is_local_and_never_replaces_a_concurrent_target() {
+    let temp = TempDir::new().expect("tempdir");
+    let parent = temp.path().join("workflows");
+    let locked_parent = SecureWindowsPath::open_or_create(&parent).expect("lock parent");
+    let mut staging = SecureWindowsStagingDirectory::create(&parent).expect("create staging");
+    fs::write(staging.path().join("marker"), "staged").expect("write marker");
+    fs::create_dir(parent.join("target")).expect("create concurrent target");
+
+    assert_eq!(staging.path().parent(), Some(parent.as_path()));
+    staging
+        .install_into(&locked_parent, "target")
+        .expect_err("existing target must win");
+
+    assert_eq!(
+        fs::read_dir(parent.join("target"))
+            .expect("read target")
+            .count(),
+        0
+    );
+    assert_eq!(
+        fs::read_to_string(staging.path().join("marker")).expect("staging remains recoverable"),
+        "staged"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_staging_installs_by_handle() {
+    let temp = TempDir::new().expect("tempdir");
+    let parent = temp.path().join("workflows");
+    let locked_parent = SecureWindowsPath::open_or_create(&parent).expect("lock parent");
+    let mut staging = SecureWindowsStagingDirectory::create(&parent).expect("create staging");
+    fs::write(staging.path().join("marker"), "staged").expect("write marker");
+
+    fs::rename(staging.path(), parent.join("path-renamed"))
+        .expect_err("staging path must remain locked");
+    staging
+        .install_into(&locked_parent, "target")
+        .expect("install staging");
+
+    assert_eq!(
+        fs::read_to_string(parent.join("target/marker")).expect("read installed marker"),
         "staged"
     );
 }

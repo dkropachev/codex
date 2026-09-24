@@ -176,6 +176,9 @@ fn validate_working_directory_injection(
         &mut properties,
         &mut required,
     );
+    if let Some(name) = properties.keys().find(|name| !is_lower_camel_case(name)) {
+        bail!("workflow inputSchema property {name:?} must be lower camelCase");
+    }
     if properties.len() > MAX_TOP_LEVEL_INPUT_PROPERTIES {
         bail!(
             "workflow inputSchema exposes more than {MAX_TOP_LEVEL_INPUT_PROPERTIES} top-level properties"
@@ -226,6 +229,16 @@ fn validate_working_directory_injection(
         }
     }
     Ok(())
+}
+
+fn is_lower_camel_case(value: &str) -> bool {
+    value
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_lowercase())
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric())
 }
 
 fn collect_top_level_object_shape<'a>(

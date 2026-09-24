@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
 use serde_json::Value;
 use tree_sitter::Node;
@@ -21,6 +22,7 @@ mod checks;
 use checks::validate_commands;
 use checks::validate_coverage;
 use checks::validate_git_layout;
+use checks::validate_git_layout_until;
 use checks::validate_gitignore;
 
 const REQUIRED_FILES: &[&str] = &[
@@ -105,21 +107,89 @@ pub fn validate_workflow(root: &Path) -> ValidationReport {
 }
 
 pub(crate) fn validate_executable_package(package: &WorkflowPackage) -> anyhow::Result<()> {
+    validate_executable_package_with_limit(package, ExecutableValidation::Standard)
+}
+
+pub(crate) fn validate_executable_package_cancellable(
+    package: &WorkflowPackage,
+    deadline: crate::runner::CommandDeadline,
+    cancelled: &AtomicBool,
+) -> anyhow::Result<()> {
+    validate_executable_package_with_limit(
+        package,
+        ExecutableValidation::Completion {
+            deadline,
+            cancelled,
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+enum ExecutableValidation<'a> {
+    Standard,
+    Completion {
+        deadline: crate::runner::CommandDeadline,
+        cancelled: &'a AtomicBool,
+    },
+}
+
+impl ExecutableValidation<'_> {
+    fn check(self) -> anyhow::Result<()> {
+        match self {
+            Self::Standard => Ok(()),
+            Self::Completion {
+                deadline,
+                cancelled,
+            } => deadline.check(Some(cancelled)),
+        }
+    }
+
+    fn scan(self, root: &Path) -> anyhow::Result<Vec<crate::runner::SourceInspection>> {
+        match self {
+            Self::Standard => crate::runner::scan_workflow_sources(root),
+            Self::Completion {
+                deadline,
+                cancelled,
+            } => crate::runner::scan_workflow_sources_cancellable(root, deadline, cancelled),
+        }
+    }
+
+    fn validate_git_layout(self, root: &Path, findings: &mut BTreeSet<ValidationFinding>) {
+        match self {
+            Self::Standard => validate_git_layout(root, findings),
+            Self::Completion {
+                deadline,
+                cancelled,
+            } => validate_git_layout_until(root, findings, deadline, Some(cancelled)),
+        }
+    }
+}
+
+fn validate_executable_package_with_limit(
+    package: &WorkflowPackage,
+    validation: ExecutableValidation<'_>,
+) -> anyhow::Result<()> {
+    validation.check()?;
     let mut findings = BTreeSet::new();
     validate_required_layout(&package.root, &mut findings);
     validate_package_json(package, &mut findings);
-    match crate::runner::scan_workflow_sources(&package.root) {
+    validation.check()?;
+    match validation.scan(&package.root) {
         Ok(sources) => validate_source_contract(package, &sources, &mut findings),
         Err(err) => {
+            validation.check()?;
             findings.insert(ValidationFinding::new(
                 "load",
                 format!("workflow source scan failed: {err:#}"),
             ));
         }
     }
+    validation.check()?;
     validate_coverage(package, &mut findings);
     validate_gitignore(&package.root, &mut findings);
-    validate_git_layout(&package.root, &mut findings);
+    validation.check()?;
+    validation.validate_git_layout(&package.root, &mut findings);
+    validation.check()?;
     if findings.is_empty() {
         Ok(())
     } else {

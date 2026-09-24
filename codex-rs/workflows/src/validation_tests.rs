@@ -340,6 +340,30 @@ fn tracked_artifacts_are_rejected() {
 }
 
 #[test]
+fn oversized_tracked_file_listing_is_rejected_deterministically() {
+    let (_registry, root) = scaffold();
+    for index in 0..400 {
+        let name = format!("generated-{index:03}-{}", "x".repeat(180));
+        fs::write(root.join("state").join(name), "").expect("write tracked state fixture");
+    }
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["add", "-f", "state"])
+        .status()
+        .expect("run git add");
+    assert!(status.success());
+    let mut findings = BTreeSet::new();
+
+    super::checks::validate_git_layout(&root, &mut findings);
+
+    assert!(findings.iter().any(|finding| {
+        finding.message
+            == "failed to inspect workflow git repository: git ls-files output exceeded 65536 bytes"
+    }));
+}
+
+#[test]
 fn invalid_git_layout_and_unreadable_gitignore_are_rejected() {
     let (_registry, root) = scaffold();
     fs::remove_dir_all(root.join(".git")).expect("remove git repository");

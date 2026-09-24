@@ -53,7 +53,36 @@ pub const MAX_COMPLETION_OPERATION_OUTPUT_BYTES: usize =
 pub const MAX_RUNNER_ERROR_BYTES: usize = 4 * 1024;
 pub const COMPLETION_TIMEOUT: Duration = Duration::from_secs(2);
 pub const INSPECTION_TIMEOUT: Duration = Duration::from_secs(5);
-const RUNNER_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
+pub const RUNNER_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
+const TRUSTED_BUNFIG: &str = "";
+
+#[derive(Clone, Copy)]
+pub(crate) struct CommandDeadline {
+    expires_at: Instant,
+    timeout: Duration,
+}
+
+impl CommandDeadline {
+    pub(crate) fn after(timeout: Duration) -> Self {
+        Self {
+            expires_at: Instant::now() + timeout,
+            timeout,
+        }
+    }
+
+    pub(crate) fn check(self, cancelled: Option<&AtomicBool>) -> anyhow::Result<()> {
+        if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Relaxed)) {
+            bail!("workflow runner was cancelled");
+        }
+        if Instant::now() >= self.expires_at {
+            bail!(
+                "workflow runner timed out after {} ms",
+                self.timeout.as_millis()
+            );
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunnerOperation {
@@ -195,6 +224,11 @@ impl PreparedRunner {
         let runner_path = temp_dir.path().join("runner.mjs");
         fs::write(&runner_path, RUNNER_SOURCE)
             .context("failed to materialize embedded workflow runner")?;
+        let bunfig_path = temp_dir.path().join("bunfig.toml");
+        fs::write(&bunfig_path, TRUSTED_BUNFIG)
+            .context("failed to materialize trusted workflow Bun configuration")?;
+        let mut bunfig_argument = OsString::from("--config=");
+        bunfig_argument.push(&bunfig_path);
         let payload_path = write_runner_value(temp_dir.path(), "payload.json", payload)?;
         let expected = expected
             .map(serde_json::to_string)
@@ -208,6 +242,9 @@ impl PreparedRunner {
         Ok(Self {
             _temp_dir: temp_dir,
             arguments: vec![
+                bunfig_argument,
+                OsString::from("--no-install"),
+                OsString::from("--no-env-file"),
                 runner_path.into_os_string(),
                 OsString::from(operation.as_str()),
                 payload_path.into_os_string(),
@@ -546,8 +583,23 @@ pub(crate) fn scan_workflow_sources(workflow_dir: &Path) -> anyhow::Result<Vec<S
         RunnerOperation::Scan,
         /*payload*/ None,
         /*expected*/ None,
-        MAX_INSPECTION_OUTPUT_BYTES,
         /*cancelled*/ None,
+    )
+}
+
+pub(crate) fn scan_workflow_sources_cancellable(
+    workflow_dir: &Path,
+    deadline: CommandDeadline,
+    cancelled: &AtomicBool,
+) -> anyhow::Result<Vec<SourceInspection>> {
+    run_json_operation_until(
+        Path::new("bun"),
+        workflow_dir,
+        RunnerOperation::Scan,
+        /*payload*/ None,
+        /*expected*/ None,
+        Some(cancelled),
+        deadline,
     )
 }
 
@@ -563,7 +615,6 @@ fn inspect_workflow_with_bun(
         RunnerOperation::Inspect,
         /*payload*/ None,
         Some(expected),
-        MAX_INSPECTION_OUTPUT_BYTES,
         cancelled,
     )?;
     validate_inspection(&inspection, expected)?;
@@ -586,6 +637,7 @@ pub(crate) fn run_completion_hook(
     .items)
 }
 
+#[cfg(test)]
 pub(crate) fn run_completion_operation_cancellable(
     workflow_dir: &Path,
     expected: &WorkflowManifest,
@@ -601,6 +653,24 @@ pub(crate) fn run_completion_operation_cancellable(
     )
 }
 
+pub(crate) fn run_completion_operation_cancellable_until(
+    workflow_dir: &Path,
+    expected: &WorkflowManifest,
+    request: &CompletionRequest,
+    cancelled: &AtomicBool,
+    deadline: CommandDeadline,
+) -> anyhow::Result<CompletionOperationOutput> {
+    run_completion_operation_with_bun_until(
+        Path::new("bun"),
+        workflow_dir,
+        expected,
+        request,
+        Some(cancelled),
+        deadline,
+    )
+}
+
+#[cfg(test)]
 fn run_completion_operation_with_bun(
     bun: &Path,
     workflow_dir: &Path,
@@ -608,6 +678,25 @@ fn run_completion_operation_with_bun(
     request: &CompletionRequest,
     cancelled: Option<&AtomicBool>,
 ) -> anyhow::Result<CompletionOperationOutput> {
+    run_completion_operation_with_bun_until(
+        bun,
+        workflow_dir,
+        expected,
+        request,
+        cancelled,
+        CommandDeadline::after(COMPLETION_TIMEOUT),
+    )
+}
+
+fn run_completion_operation_with_bun_until(
+    bun: &Path,
+    workflow_dir: &Path,
+    expected: &WorkflowManifest,
+    request: &CompletionRequest,
+    cancelled: Option<&AtomicBool>,
+    deadline: CommandDeadline,
+) -> anyhow::Result<CompletionOperationOutput> {
+    deadline.check(cancelled)?;
     let payload = serde_json::to_string(request)
         .context("failed to serialize workflow completion request")?;
     if payload.len() > MAX_COMPLETION_REQUEST_BYTES {
@@ -615,13 +704,15 @@ fn run_completion_operation_with_bun(
     }
     let prepared = PreparedRunner::new(RunnerOperation::Complete, Some(&payload), Some(expected))?;
     let command = bun_command(bun, workflow_dir, &prepared);
-    let output: CompletionOperationOutput = run_json_command(
+    let output: CompletionOperationOutput = run_json_command_until(
         command,
         RunnerOperation::Complete,
         MAX_COMPLETION_OPERATION_OUTPUT_BYTES,
         cancelled,
+        deadline,
     )?;
     validate_inspection(&output.inspection, expected)?;
+    deadline.check(cancelled)?;
     Ok(output)
 }
 
@@ -692,32 +783,57 @@ fn run_json_operation<T: serde::de::DeserializeOwned>(
     operation: RunnerOperation,
     payload: Option<&str>,
     expected: Option<&WorkflowManifest>,
-    maximum_stdout_bytes: usize,
     cancelled: Option<&AtomicBool>,
 ) -> anyhow::Result<T> {
-    let prepared = PreparedRunner::new(operation, payload, expected)?;
-    run_json_command(
-        bun_command(bun, workflow_dir, &prepared),
+    run_json_operation_until(
+        bun,
+        workflow_dir,
         operation,
-        maximum_stdout_bytes,
+        payload,
+        expected,
         cancelled,
+        CommandDeadline::after(operation_timeout(operation)),
     )
 }
 
-fn run_json_command<T: serde::de::DeserializeOwned>(
-    command: Command,
+fn run_json_operation_until<T: serde::de::DeserializeOwned>(
+    bun: &Path,
+    workflow_dir: &Path,
     operation: RunnerOperation,
-    maximum_stdout_bytes: usize,
+    payload: Option<&str>,
+    expected: Option<&WorkflowManifest>,
     cancelled: Option<&AtomicBool>,
+    deadline: CommandDeadline,
 ) -> anyhow::Result<T> {
-    let timeout = match operation {
+    deadline.check(cancelled)?;
+    let prepared = PreparedRunner::new(operation, payload, expected)?;
+    run_json_command_until(
+        bun_command(bun, workflow_dir, &prepared),
+        operation,
+        MAX_INSPECTION_OUTPUT_BYTES,
+        cancelled,
+        deadline,
+    )
+}
+
+const fn operation_timeout(operation: RunnerOperation) -> Duration {
+    match operation {
         RunnerOperation::Complete => COMPLETION_TIMEOUT,
         RunnerOperation::Inspect => INSPECTION_TIMEOUT,
         RunnerOperation::Run => INSPECTION_TIMEOUT,
         RunnerOperation::Scan => INSPECTION_TIMEOUT,
-    };
+    }
+}
+
+fn run_json_command_until<T: serde::de::DeserializeOwned>(
+    command: Command,
+    operation: RunnerOperation,
+    maximum_stdout_bytes: usize,
+    cancelled: Option<&AtomicBool>,
+    deadline: CommandDeadline,
+) -> anyhow::Result<T> {
     let (status, stdout, stderr, stdout_oversized) =
-        run_bounded_command(command, timeout, maximum_stdout_bytes, cancelled)?;
+        run_bounded_command_until(command, deadline, maximum_stdout_bytes, cancelled)?;
     if !status.success() {
         let details = bounded_utf8(&stderr, MAX_RUNNER_ERROR_BYTES);
         if details.trim().is_empty() {
@@ -745,11 +861,26 @@ fn run_json_command<T: serde::de::DeserializeOwned>(
 }
 
 pub(crate) fn run_bounded_command(
-    mut command: Command,
+    command: Command,
     timeout: Duration,
     maximum_stdout_bytes: usize,
     cancelled: Option<&AtomicBool>,
 ) -> anyhow::Result<(ExitStatus, Vec<u8>, Vec<u8>, bool)> {
+    run_bounded_command_until(
+        command,
+        CommandDeadline::after(timeout),
+        maximum_stdout_bytes,
+        cancelled,
+    )
+}
+
+pub(crate) fn run_bounded_command_until(
+    mut command: Command,
+    deadline: CommandDeadline,
+    maximum_stdout_bytes: usize,
+    cancelled: Option<&AtomicBool>,
+) -> anyhow::Result<(ExitStatus, Vec<u8>, Vec<u8>, bool)> {
+    deadline.check(cancelled)?;
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -768,21 +899,16 @@ pub(crate) fn run_bounded_command(
         .context("Bun workflow runner stderr was not piped")?;
     let stdout = capture_bounded(stdout, maximum_stdout_bytes);
     let stderr = capture_bounded(stderr, MAX_RUNNER_ERROR_BYTES);
-    let deadline = Instant::now() + timeout;
     let status = loop {
-        if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Relaxed)) {
+        if let Err(err) = deadline.check(cancelled) {
             child.terminate();
-            bail!("workflow runner was cancelled");
+            return Err(err);
         }
         if let Some(status) = child
             .try_wait()
             .context("failed to wait for Bun workflow runner")?
         {
             break status;
-        }
-        if Instant::now() >= deadline {
-            child.terminate();
-            bail!("workflow runner timed out after {} ms", timeout.as_millis());
         }
         thread::sleep(Duration::from_millis(10));
     };

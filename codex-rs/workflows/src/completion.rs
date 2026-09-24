@@ -77,7 +77,16 @@ pub fn complete_workflow_cancellable(
     request: &CompletionRequest,
     cancelled: Arc<AtomicBool>,
 ) -> CompletionResult {
-    let package = match WorkflowPackage::load_executable(root) {
+    let deadline = crate::runner::CommandDeadline::after(crate::runner::COMPLETION_TIMEOUT);
+    let package = match deadline
+        .check(Some(&cancelled))
+        .and_then(|()| WorkflowPackage::load(root))
+        .and_then(|package| {
+            crate::validation::validate_executable_package_cancellable(
+                &package, deadline, &cancelled,
+            )?;
+            Ok(package)
+        }) {
         Ok(package) => package,
         Err(err) => {
             return CompletionResult {
@@ -87,11 +96,12 @@ pub fn complete_workflow_cancellable(
             };
         }
     };
-    let operation = match crate::runner::run_completion_operation_cancellable(
+    let operation = match crate::runner::run_completion_operation_cancellable_until(
         root,
         &package.manifest,
         request,
         &cancelled,
+        deadline,
     ) {
         Ok(operation) => operation,
         Err(err) => {
@@ -114,6 +124,13 @@ pub fn complete_workflow_cancellable(
     };
     let static_items = static_completions(contract.input_schema(), request);
     let items = merge_completions(static_items, operation.items);
+    if let Err(err) = deadline.check(Some(&cancelled)) {
+        return CompletionResult {
+            items: Vec::new(),
+            error: Some(format!("{err:#}")),
+            insertions: BTreeMap::new(),
+        };
+    }
     completion_result(items, operation.error)
 }
 
