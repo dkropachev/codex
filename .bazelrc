@@ -203,6 +203,9 @@ common:ci-windows-cross --extra_toolchains=//:windows_gnullvm_tests_on_msvc_host
 common:ci-v8 --config=ci
 common:ci-v8 --build_metadata=TAG_workflow=v8
 common:ci-v8 --build_metadata=TAG_os=linux
+# Keep the larger V8 build graph from exhausting Bazel's JVM heap while it
+# uploads remote-action inputs on GitHub's ARM runners.
+common:ci-v8 --jobs=200
 
 # Source-built Bazel V8 artifacts use the in-process sandbox by default. This
 # does not affect Cargo's default prebuilt rusty_v8 path.
