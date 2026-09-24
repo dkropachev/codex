@@ -370,6 +370,7 @@ impl SecureWorkflowParent {
         use rustix::fs::open;
         use rustix::fs::openat;
 
+        let root = platform_scaffold_root(root);
         let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW;
         let (anchor, components): (&Path, Box<dyn Iterator<Item = std::path::Component<'_>>>) =
             if root.is_absolute() {
@@ -727,6 +728,11 @@ fn validate_callable_name(name: &str) -> anyhow::Result<()> {
 }
 
 fn reject_existing_or_symlink_path(root: &Path, target: &Path) -> anyhow::Result<()> {
+    let relative = target
+        .strip_prefix(root)
+        .context("workflow target escaped its configured root")?;
+    let root = platform_scaffold_root(root);
+    let target = root.join(relative);
     let mut root_prefix = PathBuf::new();
     for component in root.components() {
         root_prefix.push(component.as_os_str());
@@ -739,9 +745,6 @@ fn reject_existing_or_symlink_path(root: &Path, target: &Path) -> anyhow::Result
             );
         }
     }
-    let relative = target
-        .strip_prefix(root)
-        .context("workflow target escaped its configured root")?;
     let mut candidate = root.to_path_buf();
     for component in relative.components() {
         candidate.push(component);
@@ -764,6 +767,25 @@ fn reject_existing_or_symlink_path(root: &Path, target: &Path) -> anyhow::Result
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn platform_scaffold_root(root: &Path) -> std::borrow::Cow<'_, Path> {
+    for (alias, canonical) in [
+        (Path::new("/var"), Path::new("/private/var")),
+        (Path::new("/tmp"), Path::new("/private/tmp")),
+        (Path::new("/etc"), Path::new("/private/etc")),
+    ] {
+        if let Ok(relative) = root.strip_prefix(alias) {
+            return std::borrow::Cow::Owned(canonical.join(relative));
+        }
+    }
+    std::borrow::Cow::Borrowed(root)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_scaffold_root(root: &Path) -> std::borrow::Cow<'_, Path> {
+    std::borrow::Cow::Borrowed(root)
 }
 
 #[cfg(not(all(unix, not(target_os = "redox"))))]
