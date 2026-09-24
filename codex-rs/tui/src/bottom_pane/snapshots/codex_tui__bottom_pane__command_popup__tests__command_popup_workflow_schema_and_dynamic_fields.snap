@@ -1,0 +1,21 @@
+---
+source: tui/src/bottom_pane/command_popup.rs
+expression: render_popup(&popup)
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 72, height: 3 },
+    content: [
+        "  /code-review  Run a code review workflow.                             ",
+        "    --action    Run mode from inputSchema.                              ",
+        "    --report    Report supplied by complete().                          ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 43, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 42, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 46, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

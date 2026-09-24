@@ -164,7 +164,7 @@ impl<'a> SlashInput<'a> {
             && self
                 .workflow_commands
                 .iter()
-                .any(|command| command.command == name && !command.option_hints.is_empty())
+                .any(|command| command.command == name)
         {
             return true;
         }
@@ -574,12 +574,15 @@ impl ChatComposer {
                     .then(|| (idx + ch.len_utf8(), &rest_after_name[idx + ch.len_utf8()..]))
             })
             .unwrap_or((0, rest_after_name));
-        if current_token.is_empty() || !option_name.starts_with(current_token) {
+        if current_token.is_empty() {
             return false;
         }
 
         let token_start = rest_offset + token_start_in_rest;
-        let inserted = format!("{option_name} ");
+        let inserted = current_token.split_once('=').map_or_else(
+            || format!("{option_name} "),
+            |(flag, _)| format!("{flag}={option_name} "),
+        );
         self.draft
             .textarea
             .replace_range(token_start..first_line_end, &inserted);
@@ -769,24 +772,6 @@ mod tests {
         }
     }
 
-    fn code_review_workflow_with_option_hints() -> WorkflowCommand {
-        use crate::workflow_commands::WorkflowCommandOptionHint;
-
-        WorkflowCommand {
-            option_hints: vec![
-                WorkflowCommandOptionHint {
-                    display: "--action <review|list-reports>".to_string(),
-                    description: Some("Run mode.".to_string()),
-                },
-                WorkflowCommandOptionHint {
-                    display: "--allowed-areas <Test|Code>".to_string(),
-                    description: Some("Allowed areas.".to_string()),
-                },
-            ],
-            ..code_review_workflow()
-        }
-    }
-
     #[test]
     fn exact_workflow_command_completion_adds_argument_boundary() {
         use crate::bottom_pane::command_popup::CommandItem;
@@ -819,29 +804,10 @@ mod tests {
     }
 
     #[test]
-    fn tab_on_exact_workflow_command_hides_popup() {
+    fn tab_on_exact_workflow_command_keeps_argument_popup_open() {
         let mut composer = test_composer();
         composer.set_workflow_commands_enabled(/*enabled*/ true);
         composer.set_workflow_commands(vec![code_review_workflow()]);
-        composer
-            .draft
-            .textarea
-            .set_text_clearing_elements("/code-review");
-        composer.draft.textarea.set_cursor("/code-review".len());
-        composer.sync_popups();
-        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
-
-        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
-
-        assert_eq!(composer.draft.textarea.text(), "/code-review ");
-        assert!(matches!(composer.popups.active, ActivePopup::None));
-    }
-
-    #[test]
-    fn tab_on_exact_workflow_command_with_option_hints_adds_argument_boundary() {
-        let mut composer = test_composer();
-        composer.set_workflow_commands_enabled(/*enabled*/ true);
-        composer.set_workflow_commands(vec![code_review_workflow_with_option_hints()]);
         composer
             .draft
             .textarea
@@ -878,103 +844,10 @@ mod tests {
     }
 
     #[test]
-    fn workflow_argument_popup_completes_unique_option_name_prefix() {
-        let mut composer = test_composer();
-        composer.set_workflow_commands_enabled(/*enabled*/ true);
-        composer.set_workflow_commands(vec![code_review_workflow_with_option_hints()]);
-        composer
-            .draft
-            .textarea
-            .set_text_clearing_elements("/code-review --acti");
-        composer
-            .draft
-            .textarea
-            .set_cursor("/code-review --acti".len());
-        composer.sync_popups();
-        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
-
-        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
-
-        assert_eq!(composer.draft.textarea.text(), "/code-review --action ");
-    }
-
-    #[test]
-    fn workflow_argument_popup_completes_unique_option_value_prefix() {
-        let mut composer = test_composer();
-        composer.set_workflow_commands_enabled(/*enabled*/ true);
-        composer.set_workflow_commands(vec![code_review_workflow_with_option_hints()]);
-        composer
-            .draft
-            .textarea
-            .set_text_clearing_elements("/code-review --action li");
-        composer
-            .draft
-            .textarea
-            .set_cursor("/code-review --action li".len());
-        composer.sync_popups();
-        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
-
-        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
-
-        assert_eq!(
-            composer.draft.textarea.text(),
-            "/code-review --action list-reports "
-        );
-    }
-
-    #[test]
-    fn workflow_argument_popup_completes_second_option_name_prefix() {
-        let mut composer = test_composer();
-        composer.set_workflow_commands_enabled(/*enabled*/ true);
-        composer.set_workflow_commands(vec![code_review_workflow_with_option_hints()]);
-        composer
-            .draft
-            .textarea
-            .set_text_clearing_elements("/code-review --action list-reports --allo");
-        composer
-            .draft
-            .textarea
-            .set_cursor("/code-review --action list-reports --allo".len());
-        composer.sync_popups();
-        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
-
-        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
-
-        assert_eq!(
-            composer.draft.textarea.text(),
-            "/code-review --action list-reports --allowed-areas "
-        );
-    }
-
-    #[test]
-    fn workflow_argument_popup_completes_second_option_value_prefix() {
-        let mut composer = test_composer();
-        composer.set_workflow_commands_enabled(/*enabled*/ true);
-        composer.set_workflow_commands(vec![code_review_workflow_with_option_hints()]);
-        composer
-            .draft
-            .textarea
-            .set_text_clearing_elements("/code-review --action list-reports --allowed-areas T");
-        composer
-            .draft
-            .textarea
-            .set_cursor("/code-review --action list-reports --allowed-areas T".len());
-        composer.sync_popups();
-        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
-
-        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
-
-        assert_eq!(
-            composer.draft.textarea.text(),
-            "/code-review --action list-reports --allowed-areas Test "
-        );
-    }
-
-    #[test]
     fn workflow_argument_enter_dispatches_with_args_while_popup_is_open() {
         let mut composer = test_composer();
         composer.set_workflow_commands_enabled(/*enabled*/ true);
-        composer.set_workflow_commands(vec![code_review_workflow_with_option_hints()]);
+        composer.set_workflow_commands(vec![code_review_workflow()]);
         composer
             .draft
             .textarea
@@ -989,7 +862,7 @@ mod tests {
         assert_eq!(
             press(&mut composer, KeyCode::Enter),
             InputResult::WorkflowCommandWithArgs(
-                code_review_workflow_with_option_hints(),
+                code_review_workflow(),
                 "--action list-reports".to_string(),
                 Vec::new(),
             )
@@ -997,7 +870,7 @@ mod tests {
     }
 
     #[test]
-    fn literal_tab_on_exact_workflow_command_hides_popup() {
+    fn literal_tab_on_exact_workflow_command_keeps_argument_popup_open() {
         let mut composer = test_composer();
         composer.set_workflow_commands_enabled(/*enabled*/ true);
         composer.set_workflow_commands(vec![code_review_workflow()]);
@@ -1014,7 +887,7 @@ mod tests {
 
         assert_eq!(result, InputResult::None);
         assert_eq!(composer.draft.textarea.text(), "/code-review ");
-        assert!(matches!(composer.popups.active, ActivePopup::None));
+        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
     }
 
     #[test]

@@ -530,6 +530,7 @@ pub(crate) struct App {
     runtime_permission_profile_override: Option<RuntimePermissionProfileOverride>,
 
     pub(crate) file_search: FileSearchManager,
+    workflow_completion_cancel: Option<Arc<AtomicBool>>,
 
     pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
 
@@ -1060,6 +1061,7 @@ See the Codex keymap documentation for supported actions and examples."
             runtime_approval_policy_override: None,
             runtime_permission_profile_override: None,
             file_search,
+            workflow_completion_cancel: None,
             enhanced_keys_supported,
             keymap: runtime_keymap,
             key_chord_matcher: KeyChordMatcher::default(),

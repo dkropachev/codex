@@ -5,9 +5,31 @@ use std::path::Path;
 use std::process::ExitStatus;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_workflows::MAX_WORKFLOW_USER_INPUT_REQUESTS;
+use codex_workflows::WorkflowContract;
+use codex_workflows::WorkflowPackage;
+use codex_workflows::decode_user_input_request;
+use codex_workflows::normalize_workflow_input_with_working_directory;
+use codex_workflows::parse_completion;
+use codex_workflows::parse_control_request;
+use codex_workflows::runner::MAX_RUNNER_INPUT_BYTES;
+use codex_workflows::runner::MAX_WORKFLOW_COMPLETION_FRAME_BYTES;
+use codex_workflows::runner::MAX_WORKFLOW_CONTROL_FRAME_BYTES;
+use codex_workflows::runner::MAX_WORKFLOW_RUN_FRAME_BYTES;
+use codex_workflows::runner::PreparedRunner;
+use codex_workflows::runner::RUNNER_EXIT_TIMEOUT;
+use codex_workflows::runner::RunnerOperation;
+use codex_workflows::runner::WORKFLOW_CONTROL_PREFIX;
+use codex_workflows::runner::WORKFLOW_CONTROL_VERSION;
+use codex_workflows::runner::WorkflowControlResponse;
+use codex_workflows::runner::WorkflowProgressParams;
+use codex_workflows::runner::decode_control_frame;
+use codex_workflows::runner::encode_control_response;
+use codex_workflows::validate_user_input_response;
 use serde_json::Value;
 use serde_json::json;
 use tokio::io::AsyncWriteExt;
@@ -15,179 +37,33 @@ use tokio::process::ChildStdin;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
-use super::WORKFLOW_OUTPUT_MAX_BYTES;
 use super::truncate_error_output;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 
 mod host;
-mod interaction;
 
 use host::BoundedDiagnostics;
+use host::BoundedLine;
 use host::WorkflowControlReader;
 use host::WorkflowProcessGroupGuard;
 use host::resume_windows_process;
 use host::suspend_windows_process;
-use interaction::MAX_WORKFLOW_CONTROL_FRAME_BYTES;
-use interaction::decode_user_input_request;
-use interaction::is_completion;
-use interaction::parse_completion;
-use interaction::parse_control_request;
-use interaction::validate_user_input_response;
 
-const WORKFLOW_CONTROL_PREFIX: &str = "\u{1e}CODEX_WORKFLOW_CONTROL ";
-const WORKFLOW_CONTROL_VERSION: u8 = 1;
-const MAX_WORKFLOW_CONTROL_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
-const MAX_WORKFLOW_COMPLETION_FRAME_BYTES: usize = WORKFLOW_OUTPUT_MAX_BYTES * 6 + 1_024;
-const WORKFLOW_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
-
-const WORKFLOW_TUI_RUNNER: &str = r#"
-const path = await import("node:path");
-const fs = await import("node:fs");
-const { createInterface } = await import("node:readline");
-const { pathToFileURL } = await import("node:url");
-
-const CONTROL_PREFIX = "\u001eCODEX_WORKFLOW_CONTROL ";
-const CONTROL_VERSION = 1;
-const INPUT_REQUEST_MAX_BYTES = 16 * 1024;
-const INPUT_REQUEST_MAX_COUNT = 64;
-const OUTPUT_MAX_BYTES = 40 * 1024;
-const OUTPUT_TRUNCATION_NOTICE = "\n\n[Workflow output truncated to 40960 bytes.]";
-const CONTROL_PATH = process.env.CODEX_WORKFLOW_CONTROL_PATH;
-if (!CONTROL_PATH) throw new Error("Workflow control path is unavailable.");
-const responseReader = createInterface({ input: process.stdin, crlfDelay: Infinity });
-let pendingInputRequest;
-let inputClosed = false;
-let nextInputRequestId = 1;
-let inputRequestQueue = Promise.resolve();
-
-function emitEvent(event) {
-  fs.appendFileSync(CONTROL_PATH, `${CONTROL_PREFIX}${JSON.stringify(event)}\n`);
+enum WorkflowControlEvent<'a> {
+    Completion(String),
+    Contract {
+        id: u64,
+        input_schema: Value,
+        output_schema: Value,
+    },
+    OutputValidation {
+        id: u64,
+        output: Value,
+    },
+    Progress,
+    Request(&'a str),
 }
-
-function truncateWorkflowOutput(markdown) {
-  if (!markdown.endsWith("\n")) markdown += "\n";
-  const bytes = Buffer.from(markdown);
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  if (bytes.length <= OUTPUT_MAX_BYTES) return decoder.decode(bytes);
-  const maxPrefixBytes = OUTPUT_MAX_BYTES - Buffer.byteLength(OUTPUT_TRUNCATION_NOTICE);
-  for (let end = maxPrefixBytes; end >= 0; end -= 1) {
-    try {
-      return decoder.decode(bytes.subarray(0, end)) + OUTPUT_TRUNCATION_NOTICE;
-    } catch {}
-  }
-  return OUTPUT_TRUNCATION_NOTICE;
-}
-
-function rejectPendingInputRequest(message) {
-  if (pendingInputRequest) {
-    pendingInputRequest.reject(new Error(message));
-    pendingInputRequest = undefined;
-  }
-}
-
-responseReader.on("line", (line) => {
-  let message;
-  try {
-    message = JSON.parse(line);
-  } catch (error) {
-    rejectPendingInputRequest(`Workflow input channel returned invalid JSON: ${error}`);
-    return;
-  }
-  if (!pendingInputRequest || message?.v !== CONTROL_VERSION || message.id !== pendingInputRequest.id) {
-    rejectPendingInputRequest("Workflow input channel returned an invalid response frame.");
-    return;
-  }
-  const pending = pendingInputRequest;
-  pendingInputRequest = undefined;
-  if (typeof message.error === "string") {
-    pending.reject(new Error(message.error));
-  } else if (Object.prototype.hasOwnProperty.call(message, "result")) {
-    pending.resolve(message.result);
-  } else {
-    pending.reject(new Error("Workflow input response contained neither result nor error."));
-  }
-});
-responseReader.on("close", () => {
-  inputClosed = true;
-  rejectPendingInputRequest("Workflow input channel closed before a response was received.");
-});
-
-function issueUserInputRequest(event) {
-  if (inputClosed) return Promise.reject(new Error("Workflow input channel is closed."));
-  return new Promise((resolve, reject) => {
-    pendingInputRequest = { id: event.id, resolve, reject };
-    emitEvent(event);
-  });
-}
-
-function requestUserInput(params) {
-  let paramsSnapshot;
-  try {
-    const serialized = JSON.stringify(params);
-    paramsSnapshot = JSON.parse(serialized);
-    const id = nextInputRequestId;
-    if (id > INPUT_REQUEST_MAX_COUNT) {
-      return Promise.reject(new Error(
-        `Workflow exceeded ${INPUT_REQUEST_MAX_COUNT} user input requests.`,
-      ));
-    }
-    const event = {
-      v: CONTROL_VERSION,
-      id,
-      method: "requestUserInput",
-      params: paramsSnapshot,
-    };
-    if (Buffer.byteLength(JSON.stringify(event)) > INPUT_REQUEST_MAX_BYTES) {
-      return Promise.reject(new Error(
-        `Workflow input request exceeded ${INPUT_REQUEST_MAX_BYTES} bytes.`,
-      ));
-    }
-    nextInputRequestId += 1;
-    const request = inputRequestQueue.then(() => issueUserInputRequest(event));
-    inputRequestQueue = request.then(() => undefined, () => undefined);
-    return request;
-  } catch (error) {
-    return Promise.reject(new Error(`Workflow input request must be JSON-serializable: ${error}`));
-  }
-}
-
-const rawInput = process.argv[1] ?? "{}";
-const input = JSON.parse(rawInput);
-const workflowModule = await import(pathToFileURL(path.join(process.cwd(), "src/workflow.ts")).href);
-const workflow = workflowModule.default ?? workflowModule;
-if (!workflow || typeof workflow.run !== "function" || typeof workflow.format !== "function") {
-  throw new Error("Workflow must export run() and format().");
-}
-
-const context = { progress: () => {}, requestUserInput };
-if (input && typeof input === "object" && typeof input.workingDirectory === "string") {
-  context.workingDirectory = input.workingDirectory;
-  context.cwd = input.workingDirectory;
-  context.currentWorkingDirectory = input.workingDirectory;
-  context.repoRoot = input.workingDirectory;
-}
-
-try {
-  const result = await workflow.run(context, input);
-  await inputRequestQueue;
-  const formatted = await workflow.format(result, { format: "tui.markdown.v1" });
-  if (!formatted || typeof formatted.markdown !== "string") {
-    throw new Error("Workflow formatter did not return markdown for tui.markdown.v1.");
-  }
-  await new Promise((resolve, reject) => {
-    pendingInputRequest = { id: 0, resolve, reject };
-    emitEvent({
-      v: CONTROL_VERSION,
-      id: 0,
-      method: "complete",
-      params: { markdown: truncateWorkflowOutput(formatted.markdown) },
-    });
-  });
-} finally {
-  responseReader.close();
-}
-"#;
 
 pub(super) async fn run_workflow_for_tui(
     workflow_dir: &Path,
@@ -196,8 +72,68 @@ pub(super) async fn run_workflow_for_tui(
     turn_context: Arc<TurnContext>,
     cancellation_token: &CancellationToken,
 ) -> Result<Option<String>, String> {
-    let input_json = serde_json::to_string(input)
+    let package_path = workflow_dir.to_path_buf();
+    let validation_cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = Arc::clone(&validation_cancelled);
+    let mut package_task = tokio::task::spawn_blocking(move || {
+        WorkflowPackage::load_executable_cancellable(&package_path, worker_cancelled.as_ref())
+    });
+    let package = tokio::select! {
+        biased;
+        () = cancellation_token.cancelled() => {
+            validation_cancelled.store(true, Ordering::Release);
+            let _ = package_task.await;
+            return Ok(None);
+        }
+        result = &mut package_task => result
+            .map_err(|err| format!("workflow package validation task failed: {err}"))?
+            .map_err(|err| {
+                format!(
+                    "failed to load workflow package at {}: {err:#}",
+                    workflow_dir.display()
+                )
+            })?,
+    };
+    if cancellation_token.is_cancelled() {
+        return Ok(None);
+    }
+    let input_has_working_directory = input
+        .as_object()
+        .is_some_and(|input| input.contains_key("workingDirectory"));
+    let working_directory = if input_has_working_directory {
+        String::new()
+    } else {
+        let primary_environment = turn_context.environments.resolve_primary();
+        tokio::pin!(primary_environment);
+        let workflow_environment = tokio::select! {
+            biased;
+            () = cancellation_token.cancelled() => return Ok(None),
+            result = &mut primary_environment => result,
+        }
+        .map_err(|err| format!("workflow primary environment failed to start: {err}"))?
+        .ok_or_else(|| "workflow command requires a ready primary environment".to_string())?;
+        workflow_environment.cwd().inferred_native_path_string()
+    };
+    let input = normalize_workflow_input_with_working_directory(
+        &working_directory,
+        input.clone(),
+        /*flags*/ serde_json::Map::new(),
+    )
+    .map_err(|err| err.message().to_string())?;
+    let input_json = serde_json::to_string(&input)
         .map_err(|err| format!("failed to serialize workflow input: {err}"))?;
+    if input_json.len() > MAX_RUNNER_INPUT_BYTES {
+        return Err(format!(
+            "workflow input exceeded {MAX_RUNNER_INPUT_BYTES} bytes"
+        ));
+    }
+    let prepared_runner = PreparedRunner::new(
+        RunnerOperation::Run,
+        Some(&input_json),
+        Some(&package.manifest),
+    )
+    .map_err(|err| format!("failed to prepare workflow runner: {err:#}"))?;
+
     let control_dir = tempfile::tempdir()
         .map_err(|err| format!("failed to create workflow control directory: {err}"))?;
     let control_path = control_dir.path().join("control.jsonl");
@@ -213,10 +149,7 @@ pub(super) async fn run_workflow_for_tui(
     let mut command = Command::new("bun");
     command
         .current_dir(workflow_dir)
-        .arg("--eval")
-        .arg(WORKFLOW_TUI_RUNNER)
-        .arg("--")
-        .arg(input_json)
+        .args(prepared_runner.arguments())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -257,12 +190,15 @@ pub(super) async fn run_workflow_for_tui(
     let stderr_diagnostics = BoundedDiagnostics::new(child_stderr);
     let stdout_diagnostics = BoundedDiagnostics::new(child_stdout);
     let mut expected_request_id = 1_u64;
+    let mut user_input_request_count = 0_u64;
+    let mut contract = None::<WorkflowContract>;
+    let mut output_validated = false;
 
     loop {
         let line = tokio::select! {
             () = cancellation_token.cancelled() => return Ok(None),
             line = control_reader.next_line(
-                MAX_WORKFLOW_COMPLETION_FRAME_BYTES + WORKFLOW_CONTROL_PREFIX.len(),
+                MAX_WORKFLOW_RUN_FRAME_BYTES + WORKFLOW_CONTROL_PREFIX.len(),
             ) => line.map_err(|err| format!("failed to read workflow control channel: {err}"))?,
             status = &mut child_wait => {
                 process_guard.terminate();
@@ -271,37 +207,38 @@ pub(super) async fn run_workflow_for_tui(
                 return Err(workflow_exit_error(status, &stderr, &stdout));
             }
         };
-        if line.bytes.starts_with(WORKFLOW_CONTROL_PREFIX.as_bytes()) {
-            let payload = std::str::from_utf8(&line.bytes[WORKFLOW_CONTROL_PREFIX.len()..])
-                .map_err(|err| format!("workflow control frame was not valid UTF-8: {err}"))?;
-            if is_completion(payload)? {
-                if line.oversized {
-                    return Err(format!(
-                        "workflow completion frame exceeded {MAX_WORKFLOW_COMPLETION_FRAME_BYTES} bytes"
-                    ));
+        match decode_workflow_control_event(&line)? {
+            WorkflowControlEvent::Completion(markdown) => {
+                if contract.is_none() || !output_validated {
+                    return Err(
+                        "workflow completed before contract and output validation".to_string()
+                    );
                 }
-                let markdown = parse_completion(payload)?;
                 if cancellation_token.is_cancelled() {
                     return Ok(None);
                 }
-                write_control_message(
+                write_control_response(
                     &mut child_stdin,
-                    &json!({
-                        "v": WORKFLOW_CONTROL_VERSION,
-                        "id": 0,
-                        "result": null,
-                    }),
+                    &WorkflowControlResponse {
+                        v: WORKFLOW_CONTROL_VERSION,
+                        id: 0,
+                        result: Some(Value::Null),
+                        error: None,
+                    },
                 )
                 .await?;
                 let status = tokio::select! {
                     () = cancellation_token.cancelled() => return Ok(None),
                     status = &mut child_wait => Some(status),
-                    () = tokio::time::sleep(WORKFLOW_EXIT_TIMEOUT) => None,
+                    () = tokio::time::sleep(RUNNER_EXIT_TIMEOUT) => None,
                 };
                 let Some(status) = status else {
                     process_guard.terminate();
-                    let _ = tokio::time::timeout(WORKFLOW_EXIT_TIMEOUT, &mut child_wait).await;
-                    return Ok(Some(markdown));
+                    let _ = tokio::time::timeout(RUNNER_EXIT_TIMEOUT, &mut child_wait).await;
+                    return Err(format!(
+                        "workflow runner did not exit within {} ms after completion",
+                        RUNNER_EXIT_TIMEOUT.as_millis()
+                    ));
                 };
                 match status {
                     Ok(status) if status.success() => {}
@@ -314,79 +251,250 @@ pub(super) async fn run_workflow_for_tui(
                 }
                 return Ok(Some(markdown));
             }
-            if line.oversized || payload.len() > MAX_WORKFLOW_CONTROL_FRAME_BYTES {
+            WorkflowControlEvent::Contract {
+                id,
+                input_schema,
+                output_schema,
+            } => {
+                if id != expected_request_id {
+                    return Err(format!(
+                        "workflow control request id {id} was out of order; expected {expected_request_id}"
+                    ));
+                }
+                expected_request_id = expected_request_id.saturating_add(1);
+                let built = WorkflowContract::from_schemas(input_schema, output_schema)
+                    .map_err(|err| format!("{err:#}"))
+                    .and_then(|candidate| {
+                        candidate.validate_input(&input)?;
+                        Ok(candidate)
+                    });
+                let response = match built {
+                    Ok(candidate) if contract.is_none() => {
+                        contract = Some(candidate);
+                        WorkflowControlResponse {
+                            v: WORKFLOW_CONTROL_VERSION,
+                            id,
+                            result: Some(Value::Null),
+                            error: None,
+                        }
+                    }
+                    Ok(_) => WorkflowControlResponse {
+                        v: WORKFLOW_CONTROL_VERSION,
+                        id,
+                        result: None,
+                        error: Some("workflow contract was already initialized".to_string()),
+                    },
+                    Err(error) => WorkflowControlResponse {
+                        v: WORKFLOW_CONTROL_VERSION,
+                        id,
+                        result: None,
+                        error: Some(error),
+                    },
+                };
+                write_control_response(&mut child_stdin, &response).await?;
+            }
+            WorkflowControlEvent::OutputValidation { id, output } => {
+                if id != expected_request_id {
+                    return Err(format!(
+                        "workflow control request id {id} was out of order; expected {expected_request_id}"
+                    ));
+                }
+                expected_request_id = expected_request_id.saturating_add(1);
+                let response = match contract.as_ref() {
+                    Some(contract) => match contract.validate_output(&output) {
+                        Ok(()) => {
+                            output_validated = true;
+                            WorkflowControlResponse {
+                                v: WORKFLOW_CONTROL_VERSION,
+                                id,
+                                result: Some(Value::Null),
+                                error: None,
+                            }
+                        }
+                        Err(error) => WorkflowControlResponse {
+                            v: WORKFLOW_CONTROL_VERSION,
+                            id,
+                            result: None,
+                            error: Some(error),
+                        },
+                    },
+                    None => WorkflowControlResponse {
+                        v: WORKFLOW_CONTROL_VERSION,
+                        id,
+                        result: None,
+                        error: Some("workflow output arrived before its contract".to_string()),
+                    },
+                };
+                write_control_response(&mut child_stdin, &response).await?;
+            }
+            WorkflowControlEvent::Progress => continue,
+            WorkflowControlEvent::Request(payload) => {
+                if contract.is_none() {
+                    return Err("workflow requested user input before its contract".to_string());
+                }
+                if user_input_request_count >= MAX_WORKFLOW_USER_INPUT_REQUESTS {
+                    return Err(format!(
+                        "workflow exceeded the limit of {MAX_WORKFLOW_USER_INPUT_REQUESTS} user input requests"
+                    ));
+                }
+                let request = parse_control_request(payload, expected_request_id)?;
+                expected_request_id = expected_request_id.saturating_add(1);
+                user_input_request_count = user_input_request_count.saturating_add(1);
+
+                let args = decode_user_input_request(request.params);
+                let args = match args {
+                    Ok(args) => args,
+                    Err(error) => {
+                        write_control_response(
+                            &mut child_stdin,
+                            &WorkflowControlResponse {
+                                v: WORKFLOW_CONTROL_VERSION,
+                                id: request.id,
+                                result: None,
+                                error: Some(error),
+                            },
+                        )
+                        .await?;
+                        continue;
+                    }
+                };
+
+                let call_id = workflow_user_input_call_id(&turn_context.sub_id, request.id);
+                let response_contract = args.clone();
+                let response = session.request_user_input(turn_context.as_ref(), call_id, args);
+                tokio::pin!(response);
+                let response = loop {
+                    tokio::select! {
+                        response = &mut response => break response,
+                        status = &mut child_wait => {
+                            process_guard.terminate();
+                            let stderr = stderr_diagnostics.finish().await;
+                            let stdout = stdout_diagnostics.finish().await;
+                            return Err(workflow_exited_while_waiting(status, &stderr, &stdout));
+                        }
+                        line = control_reader.next_line(
+                            MAX_WORKFLOW_RUN_FRAME_BYTES + WORKFLOW_CONTROL_PREFIX.len(),
+                        ) => {
+                            let line = line.map_err(|err| {
+                                format!("failed to read workflow control channel: {err}")
+                            })?;
+                            if matches!(
+                                decode_workflow_control_event(&line)?,
+                                WorkflowControlEvent::Progress
+                            ) {
+                                continue;
+                            }
+                            return Err(
+                                "workflow emitted a concurrent user input control request"
+                                    .to_string(),
+                            );
+                        }
+                        () = cancellation_token.cancelled() => return Ok(None),
+                    }
+                };
+                let Some(response) = response else {
+                    return Ok(None);
+                };
+                match validate_user_input_response(&response_contract, response) {
+                    Ok(response) => {
+                        write_user_input_response(&mut child_stdin, request.id, &response).await?;
+                    }
+                    Err(error) => {
+                        write_control_response(
+                            &mut child_stdin,
+                            &WorkflowControlResponse {
+                                v: WORKFLOW_CONTROL_VERSION,
+                                id: request.id,
+                                result: None,
+                                error: Some(error),
+                            },
+                        )
+                        .await?;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn decode_workflow_control_event(line: &BoundedLine) -> Result<WorkflowControlEvent<'_>, String> {
+    if line.oversized {
+        return Err(format!(
+            "workflow control frame exceeded {MAX_WORKFLOW_RUN_FRAME_BYTES} bytes"
+        ));
+    }
+    let encoded = std::str::from_utf8(&line.bytes)
+        .map_err(|err| format!("workflow control frame was not valid UTF-8: {err}"))?;
+    let frame = decode_control_frame(encoded).map_err(|err| format!("{err:#}"))?;
+    let payload = encoded
+        .strip_prefix(WORKFLOW_CONTROL_PREFIX)
+        .ok_or_else(|| "workflow control frame did not have the expected prefix".to_string())?;
+    match frame.method.as_str() {
+        "complete" => {
+            if payload.len() > MAX_WORKFLOW_COMPLETION_FRAME_BYTES {
+                return Err(format!(
+                    "workflow completion frame exceeded {MAX_WORKFLOW_COMPLETION_FRAME_BYTES} bytes"
+                ));
+            }
+            parse_completion(payload).map(WorkflowControlEvent::Completion)
+        }
+        "contract" => {
+            if frame.id == 0 {
+                return Err("invalid workflow contract frame header".to_string());
+            }
+            let input_schema = frame
+                .params
+                .get("inputSchema")
+                .cloned()
+                .ok_or_else(|| "workflow contract frame omitted inputSchema".to_string())?;
+            let output_schema = frame
+                .params
+                .get("outputSchema")
+                .cloned()
+                .ok_or_else(|| "workflow contract frame omitted outputSchema".to_string())?;
+            Ok(WorkflowControlEvent::Contract {
+                id: frame.id,
+                input_schema,
+                output_schema,
+            })
+        }
+        "validateOutput" => {
+            if frame.id == 0 {
+                return Err("invalid workflow output validation frame header".to_string());
+            }
+            let output = frame
+                .params
+                .get("output")
+                .cloned()
+                .ok_or_else(|| "workflow output validation frame omitted output".to_string())?;
+            Ok(WorkflowControlEvent::OutputValidation {
+                id: frame.id,
+                output,
+            })
+        }
+        "progress" => {
+            if payload.len() > MAX_WORKFLOW_CONTROL_FRAME_BYTES {
                 return Err(format!(
                     "workflow control frame exceeded {MAX_WORKFLOW_CONTROL_FRAME_BYTES} bytes"
                 ));
             }
-            let request = parse_control_request(payload, expected_request_id)?;
-            expected_request_id = expected_request_id.saturating_add(1);
-
-            let args = decode_user_input_request(request.params);
-            let args = match args {
-                Ok(args) => args,
-                Err(error) => {
-                    write_control_message(
-                        &mut child_stdin,
-                        &json!({
-                            "v": WORKFLOW_CONTROL_VERSION,
-                            "id": request.id,
-                            "error": error,
-                        }),
-                    )
-                    .await?;
-                    continue;
-                }
-            };
-
-            let call_id = workflow_user_input_call_id(&turn_context.sub_id, request.id);
-            let response_contract = args.clone();
-            let response = session.request_user_input(turn_context.as_ref(), call_id, args);
-            tokio::pin!(response);
-            let response = tokio::select! {
-                response = &mut response => response,
-                status = &mut child_wait => {
-                    process_guard.terminate();
-                    let stderr = stderr_diagnostics.finish().await;
-                    let stdout = stdout_diagnostics.finish().await;
-                    return Err(workflow_exited_while_waiting(status, &stderr, &stdout));
-                }
-                line = control_reader.next_line(
-                    MAX_WORKFLOW_COMPLETION_FRAME_BYTES + WORKFLOW_CONTROL_PREFIX.len(),
-                ) => {
-                    let line = line.map_err(|err| {
-                        format!("failed to read workflow control channel: {err}")
-                    })?;
-                    if line.bytes.starts_with(WORKFLOW_CONTROL_PREFIX.as_bytes()) {
-                        return Err(
-                            "workflow emitted a concurrent user input control request".to_string(),
-                        );
-                    }
-                    return Err("workflow control channel contained an invalid frame".to_string());
-                }
-                () = cancellation_token.cancelled() => return Ok(None),
-            };
-            let Some(response) = response else {
-                return Ok(None);
-            };
-            match validate_user_input_response(&response_contract, response) {
-                Ok(response) => {
-                    write_user_input_response(&mut child_stdin, request.id, &response).await?;
-                }
-                Err(error) => {
-                    write_control_message(
-                        &mut child_stdin,
-                        &json!({
-                            "v": WORKFLOW_CONTROL_VERSION,
-                            "id": request.id,
-                            "error": error,
-                        }),
-                    )
-                    .await?;
-                }
+            if frame.id != 0 {
+                return Err("invalid workflow progress frame header".to_string());
             }
-        } else {
-            return Err("workflow control channel contained an invalid frame".to_string());
+            let progress = serde_json::from_value::<WorkflowProgressParams>(frame.params)
+                .map_err(|err| format!("invalid workflow progress frame: {err}"))?;
+            if progress.message.trim().is_empty() {
+                return Err("workflow progress message must not be empty".to_string());
+            }
+            Ok(WorkflowControlEvent::Progress)
+        }
+        _ => {
+            if payload.len() > MAX_WORKFLOW_CONTROL_FRAME_BYTES {
+                return Err(format!(
+                    "workflow control frame exceeded {MAX_WORKFLOW_CONTROL_FRAME_BYTES} bytes"
+                ));
+            }
+            Ok(WorkflowControlEvent::Request(payload))
         }
     }
 }
@@ -401,22 +509,23 @@ async fn write_user_input_response(
     response: &RequestUserInputResponse,
 ) -> Result<(), String> {
     let answers = response.answers.iter().collect::<BTreeMap<_, _>>();
-    write_control_message(
+    write_control_response(
         child_stdin,
-        &json!({
-            "v": WORKFLOW_CONTROL_VERSION,
-            "id": request_id,
-            "result": { "answers": answers },
-        }),
+        &WorkflowControlResponse {
+            v: WORKFLOW_CONTROL_VERSION,
+            id: request_id,
+            result: Some(json!({ "answers": answers })),
+            error: None,
+        },
     )
     .await
 }
 
-async fn write_control_message(
+async fn write_control_response(
     child_stdin: &mut ChildStdin,
-    message: &Value,
+    response: &WorkflowControlResponse,
 ) -> Result<(), String> {
-    let encoded = encode_control_message(message)?;
+    let encoded = encode_control_response(response).map_err(|err| format!("{err:#}"))?;
     child_stdin
         .write_all(&encoded)
         .await
@@ -425,18 +534,6 @@ async fn write_control_message(
         .flush()
         .await
         .map_err(|err| format!("failed to flush workflow control response: {err}"))
-}
-
-fn encode_control_message(message: &Value) -> Result<Vec<u8>, String> {
-    let mut encoded = serde_json::to_vec(message)
-        .map_err(|err| format!("failed to serialize workflow control response: {err}"))?;
-    if encoded.len() > MAX_WORKFLOW_CONTROL_RESPONSE_BYTES {
-        return Err(format!(
-            "workflow control response exceeded {MAX_WORKFLOW_CONTROL_RESPONSE_BYTES} bytes"
-        ));
-    }
-    encoded.push(b'\n');
-    Ok(encoded)
 }
 
 fn workflow_exited_while_waiting(

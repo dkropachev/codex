@@ -2,6 +2,17 @@ use std::fs::OpenOptions;
 use std::process::Stdio;
 use std::time::Duration;
 
+use codex_utils_path_uri::PathUri;
+use codex_workflows::normalize_workflow_input_with_working_directory;
+use codex_workflows::runner::MAX_WORKFLOW_COMPLETION_FRAME_BYTES;
+use codex_workflows::runner::MAX_WORKFLOW_CONTROL_RESPONSE_BYTES;
+use codex_workflows::runner::PreparedRunner;
+use codex_workflows::runner::RunnerOperation;
+use codex_workflows::runner::WORKFLOW_CONTROL_PREFIX;
+use codex_workflows::runner::WORKFLOW_CONTROL_VERSION;
+use codex_workflows::runner::WORKFLOW_OUTPUT_MAX_BYTES;
+use codex_workflows::runner::WorkflowControlResponse;
+use codex_workflows::runner::encode_control_response;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -9,13 +20,12 @@ use tokio::fs::File as TokioFile;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-use super::MAX_WORKFLOW_CONTROL_RESPONSE_BYTES;
-use super::WORKFLOW_CONTROL_PREFIX;
-use super::WORKFLOW_TUI_RUNNER;
+use super::BoundedLine;
+use super::WorkflowControlEvent;
 use super::WorkflowControlReader;
 #[cfg(windows)]
 use super::WorkflowProcessGroupGuard;
-use super::encode_control_message;
+use super::decode_workflow_control_event;
 #[cfg(windows)]
 use super::resume_windows_process;
 #[cfg(windows)]
@@ -35,7 +45,25 @@ async fn bun_runner_serializes_concurrent_user_input_requests() {
     std::fs::create_dir(&source_dir).expect("create workflow source directory");
     std::fs::write(
         source_dir.join("workflow.ts"),
-        r#"export default {
+        r#"export interface WorkflowInput { [key: string]: unknown }
+export interface WorkflowOutput { [key: string]: unknown }
+export const inputSchema = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  additionalProperties: true,
+};
+export const outputSchema = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  additionalProperties: true,
+};
+export default {
+  apiVersion: 1,
+  id: "runtime-test",
+  title: "Runtime Test",
+  callableName: "runtime-test",
+  inputSchema,
+  outputSchema,
   async run(ctx) {
     const firstRequest = { questions: [{ id: "first", header: "First", question: "First?", options: [{ label: "A", description: "A." }, { label: "B", description: "B." }] }] };
     const firstRequestPromise = ctx.requestUserInput(firstRequest);
@@ -62,7 +90,10 @@ async fn bun_runner_serializes_concurrent_user_input_requests() {
     }
     return { first, second, oversizedError, third, requestLimitError };
   },
-  format(result) { return { markdown: JSON.stringify(result) + "\ud800" + "é".repeat(30_000) }; },
+  format(result, options) {
+    if (options.format !== "markdown.v1") throw new Error("unexpected format");
+    return { markdown: JSON.stringify(result) + "\ud800" + "é".repeat(30_000) };
+  },
 };
 "#,
     )
@@ -78,12 +109,12 @@ async fn bun_runner_serializes_concurrent_user_input_requests() {
         .expect("create control file");
     let control_reader = control_file.try_clone().expect("clone control file");
 
+    let prepared_runner =
+        PreparedRunner::new(RunnerOperation::Run, Some("{}"), /*expected*/ None)
+            .expect("prepare workflow runner");
     let mut child = Command::new(&bun)
         .current_dir(temp_dir.path())
-        .arg("--eval")
-        .arg(WORKFLOW_TUI_RUNNER)
-        .arg("--")
-        .arg("{}")
+        .args(prepared_runner.arguments())
         .env("CODEX_WORKFLOW_CONTROL_PATH", &control_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -93,13 +124,14 @@ async fn bun_runner_serializes_concurrent_user_input_requests() {
         .expect("start Bun workflow runner");
     let mut stdin = child.stdin.take().expect("piped stdin");
     let mut control_reader = WorkflowControlReader::new(TokioFile::from_std(control_reader));
+    acknowledge_contract(&mut control_reader, &mut stdin).await;
 
     let first = read_control_frame(&mut control_reader).await;
     assert_eq!(
         first,
         json!({
             "v": 1,
-            "id": 1,
+            "id": 2,
             "method": "requestUserInput",
             "params": {
                 "questions": [{
@@ -123,14 +155,14 @@ async fn bun_runner_serializes_concurrent_user_input_requests() {
         .is_err(),
         "second request must wait for the first response"
     );
-    write_response(&mut stdin, /*id*/ 1, "first", "A").await;
+    write_response(&mut stdin, /*id*/ 2, "first", "A").await;
 
     let second = read_control_frame(&mut control_reader).await;
     assert_eq!(
         second,
         json!({
             "v": 1,
-            "id": 2,
+            "id": 3,
             "method": "requestUserInput",
             "params": {
                 "questions": [{
@@ -141,14 +173,14 @@ async fn bun_runner_serializes_concurrent_user_input_requests() {
             },
         })
     );
-    write_response(&mut stdin, /*id*/ 2, "second", "user_note: details").await;
+    write_response(&mut stdin, /*id*/ 3, "second", "user_note: details").await;
 
     let third = read_control_frame(&mut control_reader).await;
     assert_eq!(
         third,
         json!({
             "v": 1,
-            "id": 3,
+            "id": 4,
             "method": "requestUserInput",
             "params": {
                 "questions": [{
@@ -159,15 +191,16 @@ async fn bun_runner_serializes_concurrent_user_input_requests() {
             },
         })
     );
-    write_response(&mut stdin, /*id*/ 3, "third", "user_note: more").await;
+    write_response(&mut stdin, /*id*/ 4, "third", "user_note: more").await;
 
     for id in 4..=64 {
+        let request_id = id + 1;
         let request = read_control_frame(&mut control_reader).await;
         assert_eq!(
             request,
             json!({
                 "v": 1,
-                "id": id,
+                "id": request_id,
                 "method": "requestUserInput",
                 "params": {
                     "questions": [{
@@ -178,16 +211,29 @@ async fn bun_runner_serializes_concurrent_user_input_requests() {
                 },
             })
         );
-        write_response(&mut stdin, id, &format!("q_{id}"), "user_note: boundary").await;
+        write_response(
+            &mut stdin,
+            request_id,
+            &format!("q_{id}"),
+            "user_note: boundary",
+        )
+        .await;
     }
+
+    let output_validation = read_control_frame(&mut control_reader).await;
+    assert_eq!(output_validation["method"], "validateOutput");
+    assert_eq!(output_validation["id"], 66);
+    write_null_response(&mut stdin, /*id*/ 66).await;
 
     let completion = read_control_frame(&mut control_reader).await;
     assert_eq!(completion["method"], "complete");
     let markdown = completion["params"]["markdown"]
         .as_str()
         .expect("completion markdown");
-    assert!(markdown.len() <= 40 * 1024);
-    assert!(markdown.ends_with("[Workflow output truncated to 40960 bytes.]"));
+    assert!(markdown.len() <= WORKFLOW_OUTPUT_MAX_BYTES);
+    assert!(markdown.ends_with(&format!(
+        "[Workflow output truncated to {WORKFLOW_OUTPUT_MAX_BYTES} bytes.]"
+    )));
     let (json, _) = markdown
         .split_once('\u{fffd}')
         .expect("lone surrogate should normalize to the replacement character");
@@ -216,9 +262,32 @@ async fn bun_runner_serializes_concurrent_user_input_requests() {
 
     std::fs::write(
         source_dir.join("workflow.ts"),
-        r#"export default {
-  async run() { return null; },
-  format() { return { markdown: "output without a trailing newline" }; },
+        r#"export interface WorkflowInput { [key: string]: unknown }
+export interface WorkflowOutput { ok: boolean }
+export const inputSchema = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  additionalProperties: true,
+};
+export const outputSchema = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  properties: { ok: { type: "boolean" } },
+  required: ["ok"],
+  additionalProperties: false,
+};
+export default {
+  apiVersion: 1,
+  id: "runtime-test",
+  title: "Runtime Test",
+  callableName: "runtime-test",
+  inputSchema,
+  outputSchema,
+  async run() { return { ok: true }; },
+  format(_output, options) {
+    if (options.format !== "markdown.v1") throw new Error("unexpected format");
+    return { markdown: "output without a trailing newline" };
+  },
 };
 "#,
     )
@@ -232,12 +301,12 @@ async fn bun_runner_serializes_concurrent_user_input_requests() {
         .open(&control_path)
         .expect("create control file");
     let control_reader = control_file.try_clone().expect("clone control file");
+    let prepared_runner =
+        PreparedRunner::new(RunnerOperation::Run, Some("{}"), /*expected*/ None)
+            .expect("prepare workflow runner");
     let mut child = Command::new(&bun)
         .current_dir(temp_dir.path())
-        .arg("--eval")
-        .arg(WORKFLOW_TUI_RUNNER)
-        .arg("--")
-        .arg("{}")
+        .args(prepared_runner.arguments())
         .env("CODEX_WORKFLOW_CONTROL_PATH", &control_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -247,6 +316,12 @@ async fn bun_runner_serializes_concurrent_user_input_requests() {
         .expect("start Bun workflow runner");
     let mut stdin = child.stdin.take().expect("piped stdin");
     let mut control_reader = WorkflowControlReader::new(TokioFile::from_std(control_reader));
+    acknowledge_contract(&mut control_reader, &mut stdin).await;
+    let output_validation = read_control_frame(&mut control_reader).await;
+    assert_eq!(output_validation["method"], "validateOutput");
+    assert_eq!(output_validation["params"]["output"], json!({ "ok": true }));
+    assert_eq!(output_validation["id"], 2);
+    write_null_response(&mut stdin, /*id*/ 2).await;
     let completion = read_control_frame(&mut control_reader).await;
     assert_eq!(
         completion["params"]["markdown"],
@@ -279,18 +354,129 @@ fn workflow_user_input_call_ids_are_unique_across_turns() {
 }
 
 #[test]
+fn workflow_input_uses_the_selected_environment_path_convention() {
+    let (cwd, expected) = if cfg!(windows) {
+        (
+            PathUri::parse("file:///srv/remote%20project").expect("POSIX cwd URI"),
+            "/srv/remote project",
+        )
+    } else {
+        (
+            PathUri::parse("file:///C:/remote%20project").expect("Windows cwd URI"),
+            r"C:\remote project",
+        )
+    };
+    let input = normalize_workflow_input_with_working_directory(
+        &cwd.inferred_native_path_string(),
+        json!({}),
+        /*flags*/ serde_json::Map::new(),
+    )
+    .expect("normalize workflow input");
+
+    assert_eq!(input, json!({ "workingDirectory": expected }));
+}
+
+#[test]
 fn workflow_control_response_is_byte_bounded_and_preserves_unicode() {
     let unicode = json!({ "answer": "é".repeat(1_024) });
-    let encoded = encode_control_message(&unicode).expect("unicode response should encode");
+    let response = WorkflowControlResponse {
+        v: WORKFLOW_CONTROL_VERSION,
+        id: 1,
+        result: Some(unicode),
+        error: None,
+    };
+    let encoded = encode_control_response(&response).expect("unicode response should encode");
     assert_eq!(
-        serde_json::from_slice::<Value>(&encoded).expect("encoded response should be JSON"),
-        unicode
+        serde_json::from_slice::<WorkflowControlResponse>(&encoded)
+            .expect("encoded response should be JSON"),
+        response
     );
 
-    let oversized = json!({ "answer": "x".repeat(MAX_WORKFLOW_CONTROL_RESPONSE_BYTES) });
+    let oversized = WorkflowControlResponse {
+        v: WORKFLOW_CONTROL_VERSION,
+        id: 1,
+        result: Some(json!({
+            "answer": "x".repeat(MAX_WORKFLOW_CONTROL_RESPONSE_BYTES),
+        })),
+        error: None,
+    };
     assert_eq!(
-        encode_control_message(&oversized).expect_err("oversized response should be rejected"),
+        encode_control_response(&oversized)
+            .expect_err("oversized response should be rejected")
+            .to_string(),
         format!("workflow control response exceeded {MAX_WORKFLOW_CONTROL_RESPONSE_BYTES} bytes")
+    );
+}
+
+#[test]
+fn hosted_progress_frames_are_accepted_without_becoming_input_requests() {
+    let line = BoundedLine {
+        bytes: format!(
+            "{WORKFLOW_CONTROL_PREFIX}{}",
+            json!({
+                "v": WORKFLOW_CONTROL_VERSION,
+                "id": 0,
+                "method": "progress",
+                "params": {
+                    "message": "Loading repository",
+                    "data": { "step": 1 },
+                },
+            })
+        )
+        .into_bytes(),
+        oversized: false,
+    };
+
+    assert!(matches!(
+        decode_workflow_control_event(&line),
+        Ok(WorkflowControlEvent::Progress)
+    ));
+}
+
+#[test]
+fn hosted_completion_frames_enforce_frame_and_markdown_bounds() {
+    let oversized_markdown = BoundedLine {
+        bytes: format!(
+            "{WORKFLOW_CONTROL_PREFIX}{}",
+            json!({
+                "v": WORKFLOW_CONTROL_VERSION,
+                "id": 0,
+                "method": "complete",
+                "params": { "markdown": "x".repeat(WORKFLOW_OUTPUT_MAX_BYTES + 1) },
+            })
+        )
+        .into_bytes(),
+        oversized: false,
+    };
+    let Err(error) = decode_workflow_control_event(&oversized_markdown) else {
+        panic!("oversized markdown must be rejected");
+    };
+    assert_eq!(
+        error,
+        format!("workflow markdown exceeded {WORKFLOW_OUTPUT_MAX_BYTES} bytes")
+    );
+
+    let oversized_frame = BoundedLine {
+        bytes: format!(
+            "{WORKFLOW_CONTROL_PREFIX}{}",
+            json!({
+                "v": WORKFLOW_CONTROL_VERSION,
+                "id": 0,
+                "method": "complete",
+                "params": {
+                    "markdown": "x".repeat(MAX_WORKFLOW_COMPLETION_FRAME_BYTES),
+                },
+            })
+        )
+        .into_bytes(),
+        oversized: false,
+    };
+    let Err(error) = decode_workflow_control_event(&oversized_frame) else {
+        panic!("oversized completion frame must be rejected");
+    };
+    assert_eq!(
+        error,
+        format!("workflow completion frame exceeded {MAX_WORKFLOW_COMPLETION_FRAME_BYTES} bytes")
     );
 }
 
@@ -398,6 +584,18 @@ async fn read_control_frame(reader: &mut WorkflowControlReader) -> Value {
     .expect("valid control frame")
 }
 
+async fn acknowledge_contract(
+    reader: &mut WorkflowControlReader,
+    stdin: &mut tokio::process::ChildStdin,
+) {
+    let contract = read_control_frame(reader).await;
+    assert_eq!(contract["method"], "contract");
+    assert_eq!(contract["id"], 1);
+    assert!(contract["params"]["inputSchema"].is_object());
+    assert!(contract["params"]["outputSchema"].is_object());
+    write_null_response(stdin, /*id*/ 1).await;
+}
+
 async fn write_response(
     stdin: &mut tokio::process::ChildStdin,
     id: u64,
@@ -411,6 +609,13 @@ async fn write_response(
     });
     stdin
         .write_all(format!("{response}\n").as_bytes())
+        .await
+        .expect("write control response");
+}
+
+async fn write_null_response(stdin: &mut tokio::process::ChildStdin, id: u64) {
+    stdin
+        .write_all(format!("{{\"v\":1,\"id\":{id},\"result\":null}}\n").as_bytes())
         .await
         .expect("write control response");
 }

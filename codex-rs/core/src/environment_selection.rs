@@ -507,6 +507,23 @@ impl TurnEnvironmentSnapshot {
         self.turn_environments().next()
     }
 
+    /// Resolves the first captured selection without falling through to a ready secondary.
+    pub(crate) async fn resolve_primary(
+        &self,
+    ) -> Result<Option<TurnEnvironment>, Arc<ExecServerError>> {
+        match self.environments.first() {
+            Some(TurnEnvironmentState::Ready(environment)) => Ok(Some(environment.clone())),
+            Some(TurnEnvironmentState::Starting(environment)) => {
+                let resolved = environment.resolution.clone().await?;
+                Ok(Some(resolved.into_turn_environment(
+                    environment.selection.clone(),
+                    environment.config.clone(),
+                )))
+            }
+            None => Ok(None),
+        }
+    }
+
     pub(crate) fn local(&self) -> Option<&TurnEnvironment> {
         self.turn_environments()
             .find(|environment| !environment.environment.is_remote())
@@ -1094,10 +1111,15 @@ url = "ws://127.0.0.1:8765"
         .await
         .expect("local secondary should become ready");
 
-        let primary_task = tokio::spawn({
-            let environments = Arc::clone(&environments);
-            async move { environments.resolve_primary_environment().await }
-        });
+        let snapshot = environments.snapshot().await;
+        assert_eq!(
+            snapshot
+                .primary()
+                .expect("ready secondary environment")
+                .environment_id,
+            LOCAL_ENVIRONMENT_ID
+        );
+        let primary_task = tokio::spawn(async move { snapshot.resolve_primary().await });
         tokio::task::yield_now().await;
         assert!(!primary_task.is_finished());
 

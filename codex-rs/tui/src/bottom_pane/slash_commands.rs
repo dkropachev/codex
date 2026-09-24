@@ -161,9 +161,7 @@ pub(crate) fn find_slash_command(
     if let Some(command) = flags
         .workflow_commands_enabled
         .then(|| {
-            workflow_commands
-                .iter()
-                .find(|command| command.command == name)
+            find_unique_workflow_command(workflow_commands, name)
                 .cloned()
                 .map(SlashCommandItem::Workflow)
         })
@@ -181,6 +179,17 @@ pub(crate) fn find_slash_command(
                 .map(SlashCommandItem::ServiceTier)
         })
         .flatten()
+}
+
+pub(crate) fn find_unique_workflow_command<'a>(
+    workflow_commands: &'a [WorkflowCommand],
+    name: &str,
+) -> Option<&'a WorkflowCommand> {
+    let mut matches = workflow_commands
+        .iter()
+        .filter(|command| command.command == name);
+    let command = matches.next()?;
+    matches.next().is_none().then_some(command)
 }
 
 pub(crate) fn has_slash_command_prefix(
@@ -417,6 +426,31 @@ mod tests {
 
         assert_eq!(item, Some(SlashCommandItem::Workflow(command)));
         assert!(item.as_ref().expect("workflow").supports_inline_args());
+    }
+
+    #[test]
+    fn ambiguous_workflow_aliases_do_not_resolve() {
+        let commands = [
+            WorkflowCommand {
+                id: "alpha".to_string(),
+                command: "dupe-review".to_string(),
+                description: "Alpha review".to_string(),
+                option_hints: Vec::new(),
+                workflow_dir: PathBuf::from("/tmp/alpha"),
+            },
+            WorkflowCommand {
+                id: "beta".to_string(),
+                command: "dupe-review".to_string(),
+                description: "Beta review".to_string(),
+                option_hints: Vec::new(),
+                workflow_dir: PathBuf::from("/tmp/beta"),
+            },
+        ];
+
+        assert_eq!(
+            find_slash_command("dupe-review", all_enabled_flags(), &[], &commands),
+            None
+        );
     }
 
     #[test]

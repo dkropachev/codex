@@ -9,6 +9,7 @@ use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
@@ -34,6 +35,8 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_protocol::models::MessagePhase;
+use codex_workflows::ScaffoldRequest;
+use codex_workflows::scaffold_workflow;
 use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
 use serde::de::DeserializeOwned;
@@ -49,9 +52,200 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const WORKFLOW_MARKDOWN: &str = "# Workflow E2E\n\nmarker=workflow-e2e\n";
 const WORKFLOW_COMPLETE_FRAME: &str = r##"{"v":1,"id":0,"method":"complete","params":{"markdown":"# Workflow E2E\n\nmarker=workflow-e2e\n"}}"##;
+const WORKFLOW_CONTRACT_FRAME: &str = r#"{"v":1,"id":1,"method":"contract","params":{"inputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true},"outputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true}}}"#;
 const WORKFLOW_USER_INPUT_MARKDOWN_PREFIX: &str = "# Workflow User Input E2E\n\nresponse=";
-const WORKFLOW_USER_INPUT_FRAME: &str = r#"{"v":1,"id":1,"method":"requestUserInput","params":{"questions":[{"id":"deploy_target","header":"Target","question":"Where should the workflow deploy?","isOther":false,"isSecret":false,"options":[{"label":"Staging","description":"Deploy to the staging environment."},{"label":"Production","description":"Deploy to the production environment."}]},{"id":"release_note","header":"Note","question":"What should the release note say?","isOther":false,"isSecret":false,"options":null}]}}"#;
-const WORKFLOW_USER_INPUT_FRAME_2: &str = r#"{"v":1,"id":2,"method":"requestUserInput","params":{"questions":[{"id":"confirm","header":"Confirm","question":"Continue with this deployment?","isOther":false,"isSecret":false,"options":[{"label":"Yes","description":"Continue."},{"label":"No","description":"Stop."}]}]}}"#;
+const WORKFLOW_USER_INPUT_FRAME: &str = r#"{"v":1,"id":2,"method":"requestUserInput","params":{"questions":[{"id":"deploy_target","header":"Target","question":"Where should the workflow deploy?","isOther":false,"isSecret":false,"options":[{"label":"Staging","description":"Deploy to the staging environment."},{"label":"Production","description":"Deploy to the production environment."}]},{"id":"release_note","header":"Note","question":"What should the release note say?","isOther":false,"isSecret":false,"options":null}]}}"#;
+const WORKFLOW_USER_INPUT_FRAME_2: &str = r#"{"v":1,"id":3,"method":"requestUserInput","params":{"questions":[{"id":"confirm","header":"Confirm","question":"Continue with this deployment?","isOther":false,"isSecret":false,"options":[{"label":"Yes","description":"Continue."},{"label":"No","description":"Stop."}]}]}}"#;
+
+#[tokio::test]
+#[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
+async fn thread_workflow_command_runs_fresh_scaffold_with_real_bun() -> Result<()> {
+    skip_if_remote!(
+        Ok(()),
+        "`thread/workflowCommand` runs on the app-server local environment"
+    );
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+    let workflow_dir = scaffold_test_workflow(tmp.path())?;
+    let server = create_mock_responses_server_sequence(Vec::new()).await;
+    write_mock_responses_config_toml(
+        codex_home.as_path(),
+        &server.uri(),
+        &BTreeMap::default(),
+        i64::MAX,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "Summarize the conversation.",
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.as_path())
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let expected_working_directory = mcp.auto_env_params()?.cwd.as_str().to_string();
+    let start_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let ThreadStartResponse { thread, .. } =
+        to_response::<ThreadStartResponse>(read_response(&mut mcp, start_id).await?)?;
+
+    run_workflow_expect_markdown(
+        &mut mcp,
+        &thread.id,
+        &workflow_dir,
+        json!({ "message": "Fresh scaffold ran." }),
+        "# Workflow Test\n\nFresh scaffold ran.\n",
+    )
+    .await?;
+
+    let source_path = workflow_dir.join("src/workflow.ts");
+    let source = std::fs::read_to_string(&source_path)?;
+    std::fs::write(
+        &source_path,
+        source.replace(
+            r#"message: input.message ?? "Workflow completed.""#,
+            r#"message: input.workingDirectory ?? "missing workingDirectory""#,
+        ),
+    )?;
+    let injected_markdown = format!("# Workflow Test\n\n{expected_working_directory}\n");
+    run_workflow_expect_markdown(
+        &mut mcp,
+        &thread.id,
+        &workflow_dir,
+        json!({}),
+        &injected_markdown,
+    )
+    .await?;
+    let explicit_working_directory = workspace.to_string_lossy().to_string();
+    let explicit_markdown = format!("# Workflow Test\n\n{explicit_working_directory}\n");
+    run_workflow_expect_markdown(
+        &mut mcp,
+        &thread.id,
+        &workflow_dir,
+        json!({ "workingDirectory": explicit_working_directory }),
+        &explicit_markdown,
+    )
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
+async fn thread_workflow_command_reports_canonical_and_legacy_contract_failures() -> Result<()> {
+    skip_if_remote!(
+        Ok(()),
+        "`thread/workflowCommand` runs on the app-server local environment"
+    );
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let workflow_dir = scaffold_test_workflow(tmp.path())?;
+    let source_path = workflow_dir.join("src/workflow.ts");
+    let canonical_source = std::fs::read_to_string(&source_path)?;
+    let server = create_mock_responses_server_sequence(Vec::new()).await;
+    write_mock_responses_config_toml(
+        codex_home.as_path(),
+        &server.uri(),
+        &BTreeMap::default(),
+        i64::MAX,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "Summarize the conversation.",
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.as_path())
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let start_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let ThreadStartResponse { thread, .. } =
+        to_response::<ThreadStartResponse>(read_response(&mut mcp, start_id).await?)?;
+
+    std::fs::write(
+        &source_path,
+        canonical_source.replacen(
+            r#"message: { type: "string" },"#,
+            r#"message: { type: "number" },"#,
+            /*count*/ 1,
+        ),
+    )?;
+    run_workflow_expect_failure(
+        &mut mcp,
+        &thread.id,
+        &workflow_dir,
+        json!({ "message": "not a number" }),
+        "Workflow output failed schema validation",
+    )
+    .await?;
+
+    std::fs::write(
+        &source_path,
+        canonical_source.replace(
+            "export default defineWorkflow({",
+            "const malformedWorkflow = defineWorkflow({",
+        ),
+    )?;
+    run_workflow_expect_failure(
+        &mut mcp,
+        &thread.id,
+        &workflow_dir,
+        json!({}),
+        "`default defineWorkflow` export",
+    )
+    .await?;
+
+    std::fs::write(
+        &source_path,
+        format!("setInterval(() => {{}}, 1000);\n{canonical_source}"),
+    )?;
+    run_workflow_expect_failure(
+        &mut mcp,
+        &thread.id,
+        &workflow_dir,
+        json!({}),
+        "workflow runner did not exit within 2000 ms after completion",
+    )
+    .await?;
+
+    std::fs::write(
+        workflow_dir.join("workflow.yaml"),
+        "id: workflow\ncommand: workflow-test\ntitle: Workflow Test\nuserDescription: Legacy workflow\n",
+    )?;
+    run_workflow_expect_failure(
+        &mut mcp,
+        &thread.id,
+        &workflow_dir,
+        json!({}),
+        "legacy workflow metadata field",
+    )
+    .await?;
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread.id,
+            include_turns: true,
+        })
+        .await?;
+    let ThreadReadResponse { thread, .. } =
+        to_response::<ThreadReadResponse>(read_response(&mut mcp, read_id).await?)?;
+    assert!(
+        thread
+            .turns
+            .iter()
+            .flat_map(|turn| &turn.items)
+            .all(|item| !matches!(item, ThreadItem::AgentMessage { .. })),
+        "contract failures must not persist formatted workflow output"
+    );
+    Ok(())
+}
 
 #[tokio::test]
 async fn thread_workflow_command_records_assistant_output_and_next_turn_context() -> Result<()> {
@@ -65,8 +259,7 @@ async fn thread_workflow_command_records_assistant_output_and_next_turn_context(
     std::fs::create_dir(&codex_home)?;
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
-    let workflow_dir = tmp.path().join("workflow");
-    std::fs::create_dir(&workflow_dir)?;
+    let workflow_dir = scaffold_test_workflow(tmp.path())?;
 
     let fake_bin = tmp.path().join("fake_bin");
     std::fs::create_dir(&fake_bin)?;
@@ -232,7 +425,7 @@ async fn thread_workflow_command_round_trips_choice_and_freeform_user_input() ->
         expected_workflow_user_input_params(
             &fixture.thread_id,
             &fixture.turn_id,
-            /*item_id*/ 1,
+            /*item_id*/ 2,
             WORKFLOW_USER_INPUT_FRAME,
         )?
     );
@@ -291,7 +484,7 @@ async fn thread_workflow_command_round_trips_choice_and_freeform_user_input() ->
         expected_workflow_user_input_params(
             &fixture.thread_id,
             &fixture.turn_id,
-            /*item_id*/ 2,
+            /*item_id*/ 3,
             WORKFLOW_USER_INPUT_FRAME_2,
         )?
     );
@@ -336,8 +529,8 @@ async fn thread_workflow_command_round_trips_choice_and_freeform_user_input() ->
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(response_frame)?,
         json!([
-            { "v": 1, "id": 1, "result": response_value },
-            { "v": 1, "id": 2, "result": second_response },
+            { "v": 1, "id": 2, "result": response_value },
+            { "v": 1, "id": 3, "result": second_response },
         ])
     );
 
@@ -387,7 +580,7 @@ async fn thread_workflow_command_interrupt_clears_pending_user_input() -> Result
         expected_workflow_user_input_params(
             &fixture.thread_id,
             &fixture.turn_id,
-            /*item_id*/ 1,
+            /*item_id*/ 2,
             WORKFLOW_USER_INPUT_FRAME,
         )?
     );
@@ -446,8 +639,7 @@ async fn thread_workflow_command_rejects_active_turn() -> Result<()> {
     std::fs::create_dir(&codex_home)?;
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
-    let workflow_dir = tmp.path().join("workflow");
-    std::fs::create_dir(&workflow_dir)?;
+    let workflow_dir = scaffold_test_workflow(tmp.path())?;
 
     let responses = vec![
         create_shell_command_sse_response(
@@ -562,8 +754,7 @@ async fn start_user_input_workflow() -> Result<RunningUserInputWorkflow> {
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;
-    let workflow_dir = tmp.path().join("workflow");
-    std::fs::create_dir(&workflow_dir)?;
+    let workflow_dir = scaffold_test_workflow(tmp.path())?;
     let child_pid_path = workflow_dir.join("child.pid");
     let fake_bin = tmp.path().join("fake_bin");
     std::fs::create_dir(&fake_bin)?;
@@ -631,6 +822,64 @@ fn expected_workflow_user_input_params(
         "isBlocking": true,
         "autoResolutionMs": null,
     }))
+}
+
+async fn run_workflow_expect_failure(
+    mcp: &mut TestAppServer,
+    thread_id: &str,
+    workflow_dir: &Path,
+    input: serde_json::Value,
+    expected_error: &str,
+) -> Result<()> {
+    let request_id = mcp
+        .send_thread_workflow_command_request(ThreadWorkflowCommandParams {
+            thread_id: thread_id.to_string(),
+            workflow_dir: workflow_dir.to_string_lossy().to_string(),
+            input,
+        })
+        .await?;
+    let _: ThreadWorkflowCommandResponse = to_response(read_response(mcp, request_id).await?)?;
+    let started: TurnStartedNotification = read_notification(mcp, "turn/started").await?;
+    let error: ErrorNotification = read_notification(mcp, "error").await?;
+    assert_eq!(error.thread_id, thread_id);
+    assert_eq!(error.turn_id, started.turn.id);
+    assert!(!error.will_retry);
+    assert!(
+        error.error.message.contains(expected_error),
+        "expected {expected_error:?}, got {:?}",
+        error.error.message
+    );
+    let completed: TurnCompletedNotification = read_notification(mcp, "turn/completed").await?;
+    assert_eq!(completed.turn.id, started.turn.id);
+    assert_eq!(completed.turn.status, TurnStatus::Failed);
+    Ok(())
+}
+
+async fn run_workflow_expect_markdown(
+    mcp: &mut TestAppServer,
+    thread_id: &str,
+    workflow_dir: &Path,
+    input: serde_json::Value,
+    expected_markdown: &str,
+) -> Result<()> {
+    let request_id = mcp
+        .send_thread_workflow_command_request(ThreadWorkflowCommandParams {
+            thread_id: thread_id.to_string(),
+            workflow_dir: workflow_dir.to_string_lossy().to_string(),
+            input,
+        })
+        .await?;
+    let _: ThreadWorkflowCommandResponse = to_response(read_response(mcp, request_id).await?)?;
+    let started: TurnStartedNotification = read_notification(mcp, "turn/started").await?;
+    assert_eq!(started.thread_id, thread_id);
+    assert_eq!(started.turn.status, TurnStatus::InProgress);
+    let completed = wait_for_agent_message_completed(mcp, expected_markdown).await?;
+    assert_agent_message(&completed.item, expected_markdown);
+    let completed: TurnCompletedNotification = read_notification(mcp, "turn/completed").await?;
+    assert_eq!(completed.thread_id, thread_id);
+    assert_eq!(completed.turn.id, started.turn.id);
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
+    Ok(())
 }
 
 async fn read_response(mcp: &mut TestAppServer, id: i64) -> Result<JSONRPCResponse> {
@@ -742,23 +991,47 @@ fn write_fake_bun(fake_bin: &Path) -> Result<()> {
         format!(
             r##"#!/bin/sh
 set -eu
-if [ "${{1:-}}" != "--eval" ]; then
-  echo "missing --eval" >&2
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --config=*|--no-install|--no-env-file) shift ;;
+    *) break ;;
+  esac
+done
+runner=${{1:-}}
+operation=${{2:-}}
+payload=${{3:-}}
+expected=${{4:-}}
+if [ ! -f "$runner" ]; then
+  echo "missing materialized runner" >&2
   exit 64
 fi
-case "${{2:-}}" in
-  *"tui.markdown.v1"*) ;;
-  *)
-    echo "runner did not request tui.markdown.v1" >&2
-    exit 65
-    ;;
-esac
-if [ "${{3:-}}" != "--" ]; then
-  echo "missing argument separator" >&2
-  exit 66
+if ! grep -q '"markdown.v1"' "$runner"; then
+  echo "runner did not request markdown.v1" >&2
+  exit 65
 fi
-case "${{4:-}}" in
+case "$operation" in
+inspect)
+  printf '%s\n' '{{"apiVersion":1,"id":"workflow","title":"Workflow Test","callableName":"workflow-test","inputSchema":{{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{{"workingDirectory":{{"type":"string"}}}},"additionalProperties":true}},"outputSchema":{{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true}},"hasComplete":true}}'
+  exit 0
+  ;;
+scan)
+  printf '%s\n' '[{{"path":"src/workflow.ts","exports":["inputSchema","outputSchema"],"imports":[]}}]'
+  exit 0
+  ;;
+run) ;;
+*)
+  echo "missing run operation" >&2
+  exit 66
+  ;;
+esac
+test -s "$expected"
+workflow_input=$(cat "$payload")
+printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{WORKFLOW_CONTRACT_FRAME}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
+IFS= read -r _contract_ack
+case "$workflow_input" in
   *'"marker":"workflow-e2e"'*)
+    printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{{"v":1,"id":2,"method":"validateOutput","params":{{"output":{{}}}}}}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
+    IFS= read -r _output_ack
     printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{WORKFLOW_COMPLETE_FRAME}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
     IFS= read -r _completion_ack
     ;;
@@ -769,6 +1042,8 @@ case "${{4:-}}" in
     IFS= read -r first_response
     printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{WORKFLOW_USER_INPUT_FRAME_2}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
     IFS= read -r second_response
+    printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{{"v":1,"id":4,"method":"validateOutput","params":{{"output":{{}}}}}}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
+    IFS= read -r _output_ack
     responses=$(printf '[%s,%s]' "$first_response" "$second_response" | sed 's/\\/\\\\/g; s/"/\\"/g')
     printf '\036CODEX_WORKFLOW_CONTROL {{"v":1,"id":0,"method":"complete","params":{{"markdown":"# Workflow User Input E2E\\n\\nresponse=%s\\n"}}}}\n' "$responses" >> "$CODEX_WORKFLOW_CONTROL_PATH"
     IFS= read -r _completion_ack
@@ -785,6 +1060,18 @@ esac
     permissions.set_mode(0o755);
     std::fs::set_permissions(&bun_path, permissions)?;
     Ok(())
+}
+
+fn scaffold_test_workflow(root: &Path) -> Result<PathBuf> {
+    scaffold_workflow(
+        root,
+        &ScaffoldRequest {
+            id: "workflow".to_string(),
+            title: "Workflow Test".to_string(),
+            callable_name: "workflow-test".to_string(),
+            description: "Exercise hosted workflow execution.".to_string(),
+        },
+    )
 }
 
 fn path_with_prepended_dir(dir: &Path) -> Result<String> {

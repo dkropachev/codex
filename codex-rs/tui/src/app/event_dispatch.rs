@@ -910,6 +910,65 @@ impl App {
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
+            AppEvent::StartWorkflowCompletion {
+                generation,
+                workflow_dir,
+                request,
+            } => {
+                if let Some(cancelled) = self.workflow_completion_cancel.take() {
+                    cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                let cancelled = Arc::new(AtomicBool::new(false));
+                self.workflow_completion_cancel = Some(Arc::clone(&cancelled));
+                let tx = self.app_event_tx.clone();
+                std::mem::drop(tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(/*millis*/ 75)).await;
+                    if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
+                    let task_cancelled = Arc::clone(&cancelled);
+                    let task_workflow_dir = workflow_dir.clone();
+                    let task_request = request.clone();
+                    let Ok(result) = tokio::task::spawn_blocking(move || {
+                        codex_workflows::complete_workflow_cancellable(
+                            &task_workflow_dir,
+                            &task_request,
+                            task_cancelled,
+                        )
+                    })
+                    .await
+                    else {
+                        return;
+                    };
+                    if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
+                    tx.send(AppEvent::WorkflowCompletionResult {
+                        generation,
+                        workflow_dir,
+                        request,
+                        result,
+                    });
+                }));
+            }
+            AppEvent::CancelWorkflowCompletion => {
+                if let Some(cancelled) = self.workflow_completion_cancel.take() {
+                    cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            AppEvent::WorkflowCompletionResult {
+                generation,
+                workflow_dir,
+                request,
+                result,
+            } => {
+                self.chat_widget.apply_workflow_completion_result(
+                    generation,
+                    workflow_dir,
+                    request,
+                    result,
+                );
+            }
             AppEvent::RefreshRateLimits { origin } => {
                 self.refresh_rate_limits(app_server, origin);
             }

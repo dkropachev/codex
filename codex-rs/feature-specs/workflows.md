@@ -12,6 +12,21 @@ Users can invoke workflow behavior from CLI commands and TUI slash commands. Wor
 resolve to stable workflow definitions, apply the intended role/model/settings context, and preserve
 normal Codex safety and approval behavior.
 
+Workflow packages use one canonical TypeScript contract across CLI and hosted execution. A package
+is a standalone git repository with v1 metadata, documentation, package metadata, source and tests,
+and an ignored state directory. The shared workflow library owns discovery, input normalization,
+scaffolding, validation, completion, and the Bun runner. Legacy packages remain discoverable so
+users can locate them, but validation and execution return migration guidance instead of adapting
+their older runtime contract.
+
+Every invocation starts from an object supplied by `--input <JSON>` or bounded `--input @file`,
+then applies explicit kebab-case flags (with repeats represented as arrays) and injects
+`workingDirectory` only if it is absent. Positional `{argv,text}` input is not supported. Both
+runtimes validate the input and output against explicit Draft 2020-12 schemas and invoke the same
+`markdown.v1` formatter. The v1 top-level input object does not permit `maxProperties`, because
+normalization may add `workingDirectory`. CLI progress is written to stderr; hosted execution additionally provides
+the existing `requestUserInput` capability.
+
 An executing workflow command participates in the normal turn lifecycle. Clients receive
 `turn/started` before workflow output, and the TUI keeps the standard working and interrupt status
 visible until the workflow completes, fails, or is canceled. Workflow results continue to render as
@@ -43,6 +58,7 @@ application path.
 
 - [codex-rs/cli/src/workflow_cmd.rs](../cli/src/workflow_cmd.rs)
 - [codex-rs/cli/src/workflow_cmd/compat.rs](../cli/src/workflow_cmd/compat.rs)
+- [codex-rs/workflows/src/lib.rs](../workflows/src/lib.rs)
 - [codex-rs/tui/src/workflow_commands.rs](../tui/src/workflow_commands.rs)
 - [codex-rs/tui/src/slash_command.rs](../tui/src/slash_command.rs)
 - [codex-rs/core/src/tasks/workflow_command.rs](../core/src/tasks/workflow_command.rs)
@@ -65,6 +81,10 @@ application path.
 
 - CLI workflow commands keep their documented compatibility aliases.
 - TUI slash command autocomplete lists workflow commands when workflow support is available.
+- Static completion comes from top-level input-schema properties and enum/const values; an optional
+  bounded dynamic hook augments those values only for the active workflow.
+- Validation findings are deterministic, and successful validation prints exactly `valid`.
+- Existing-ID and symlink collisions never overwrite or partially replace a workflow package.
 - Workflow command dispatch should fail closed for unknown workflow names.
 
 ### Workflow Roles
@@ -91,7 +111,7 @@ application path.
 - [codex-rs/core/src/tasks/workflow_command.rs](../core/src/tasks/workflow_command.rs)
 - [codex-rs/core/src/tasks/workflow_command/runtime.rs](../core/src/tasks/workflow_command/runtime.rs)
 - [codex-rs/core/src/tasks/workflow_command/runtime/host.rs](../core/src/tasks/workflow_command/runtime/host.rs)
-- [codex-rs/core/src/tasks/workflow_command/runtime/interaction.rs](../core/src/tasks/workflow_command/runtime/interaction.rs)
+- [codex-rs/workflows/src/interaction.rs](../workflows/src/interaction.rs)
 - [sdk/typescript/src/workflowContext.ts](../../sdk/typescript/src/workflowContext.ts)
 - [codex-rs/protocol/src/request_user_input.rs](../protocol/src/request_user_input.rs)
 - [codex-rs/app-server/src/bespoke_event_handling.rs](../app-server/src/bespoke_event_handling.rs)
@@ -110,8 +130,8 @@ application path.
   prompts 1,024 characters, and each question has at most 10 options whose labels are at most 80
   characters and descriptions at most 512 characters. An input-request control frame is at most 16
   KiB, a run may issue at most 64 requests, and a response frame is at most 4 MiB. Non-truncated
-  final markdown is newline-terminated; all final markdown keeps the existing 40 KiB
-  persisted-output truncation behavior.
+  final markdown is newline-terminated; all final markdown uses an 8 KiB persisted-output
+  truncation limit.
 - The runtime method accepts the existing `RequestUserInputArgs` JSON shape and resolves to the
   existing `RequestUserInputResponse` shape. The response maps every question ID to an `answers`
   array: a selected label comes first, followed by optional `user_note: <text>` input; a free-text
@@ -191,6 +211,8 @@ request and terminates the workflow without partial output.
 #### Test cases
 
 - Workflow command RPC records assistant output and next-turn context: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_records_assistant_output_and_next_turn_context
+- A fresh canonical scaffold runs through the real hosted Bun path unchanged: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_runs_fresh_scaffold_with_real_bun
+- Hosted schema, malformed-export, and legacy migration failures produce failed turns without formatted output: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_reports_canonical_and_legacy_contract_failures
 - Workflow command RPC rejects execution during an active turn: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_rejects_active_turn
 - Hosted workflow commands receive correlated single-choice and free-text answers across sequential requests, replay pending input on live resume, and do not replay resolved input: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_round_trips_choice_and_freeform_user_input
 - Interrupting a workflow clears its pending input request and produces no partial result: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_interrupt_clears_pending_user_input
@@ -204,9 +226,10 @@ for unknown workflows.
 
 #### Test cases
 
-- Workflow CLI behavior is covered part 1: codex-rs/cli/tests/workflows__cli.rs:workflow_alias_invokes_bun_like_old_cli_surface,workflow_alias_positional_args_use_legacy_payload,workflow_develop_scaffolds_project_workflow,workflow_editing_commands_match_old_surface,workflow_fix_keeps_valid_code_review_workflow_without_usage_options,workflow_fix_rejects_runtime_arguments,workflow_fix_repairs_workflow_without_running_unsupported_fix_action,workflow_fix_scaffolds_missing_workflow_source_for_discovery_fallback,workflow_fix_tolerates_broken_metadata_and_source_without_running_workflow
-- Workflow CLI behavior is covered part 2: codex-rs/cli/tests/workflows__cli.rs:workflow_list_outputs_discovered_commands_as_json,workflow_list_requires_workflows_feature,workflow_management_commands_match_old_surface,workflow_recover_invokes_bun_with_resume_action,workflow_repair_alias_repairs_workflow_without_running_workflow_runtime,workflow_run_by_nested_id_merges_json_input_and_flags,workflow_run_invokes_bun_with_structured_input,workflow_run_unknown_command_reports_available_commands
-- Workflow CLI behavior is covered part 3: codex-rs/cli/tests/workflows__cli.rs:workflow_show_json_and_root_status_cover_management_outputs,workflow_validate_reports_invalid_workflow_at_cli_boundary
+- Canonical execution and migration diagnostics are covered: codex-rs/cli/tests/workflows__cli.rs:workflow_alias_positional_args_report_migration_guidance,workflow_run_executes_fresh_scaffold_and_formats_markdown,workflow_run_legacy_package_reports_migration_guidance,workflow_run_rejects_an_incomplete_canonical_package,workflow_run_by_nested_id_merges_json_input_and_flags,workflow_run_invokes_bun_with_structured_input
+- Safe scaffolding and exact validation output are covered: codex-rs/cli/tests/workflows__cli.rs:workflow_develop_refuses_to_overwrite_an_existing_target,workflow_develop_refuses_to_traverse_a_symlink,workflow_develop_scaffolds_project_workflow,workflow_validate_prints_exact_success_marker_for_fresh_scaffold,workflow_validate_reports_an_ambiguous_alias,workflow_validate_reports_an_undiscoverable_package_by_safe_id_path,workflow_validate_reports_invalid_workflow_at_cli_boundary
+- Discovery and compatibility management behavior remains covered: codex-rs/cli/tests/workflows__cli.rs:exact_workflow_id_takes_precedence_over_another_packages_alias,workflow_list_outputs_discovered_commands_as_json,workflow_list_requires_workflows_feature,workflow_management_commands_match_old_surface,workflow_recover_normalizes_input_and_applies_recovery_fields,workflow_run_unknown_command_reports_available_commands,workflow_show_json_and_root_status_cover_management_outputs
+- Compatibility editing and repair behavior remains covered: codex-rs/cli/tests/workflows__cli.rs:workflow_alias_invokes_bun_like_old_cli_surface,workflow_editing_commands_match_old_surface,workflow_fix_keeps_valid_code_review_workflow_without_usage_options,workflow_fix_prefers_an_exact_id_over_another_packages_alias,workflow_fix_rejects_runtime_arguments,workflow_fix_repairs_workflow_without_running_unsupported_fix_action,workflow_fix_scaffolds_missing_workflow_source_for_discovery_fallback,workflow_fix_tolerates_broken_metadata_and_source_without_running_workflow,workflow_repair_alias_repairs_workflow_without_running_workflow_runtime
 
 ### tui-e2e (full terminal TUI behavior)
 
@@ -233,9 +256,9 @@ switches and disappear after they are answered or resolved.
 
 #### Test cases
 
-- Workflow mode indicators, running status, and slash-command dispatch are covered: codex-rs/tui/src/chatwidget/tests/workflows__slash_commands.rs:bare_workflow_command_dispatches_structured_workflow_op,bare_workflow_slash_enters_workflow_mode,bare_workflow_slash_reports_disabled_when_feature_off,queued_malformed_workflow_command_reports_error_and_drains_next_input,queued_workflow_command_dispatches_after_active_turn,running_workflow_command_uses_standard_task_status_snapshot,workflow_command_appears_in_slash_popup_when_enabled,workflow_command_is_hidden_and_rejected_when_feature_disabled,workflow_command_rejects_malformed_args_without_clearing_draft,workflow_command_with_args_dispatches_structured_input_json,workflow_done_slash_exits_to_default_mode,workflow_slash_with_args_dispatches_workflow_cli_command
-- Workflow command discovery and option handling are covered part 1: codex-rs/tui/src/workflows__commands_tests.rs:builds_shell_command_for_workflow_directory,discovers_home_and_project_workflow_commands,discovers_nested_workflow_ids,discovers_workflow_usage_option_hints,ignores_missing_or_invalid_command_names,merges_input_object_and_flags_without_overriding_working_directory,parses_workflow_args_into_input_json,project_workflow_overrides_home_command_name
-- Workflow command discovery and option handling are covered part 2: codex-rs/tui/src/workflows__commands_tests.rs:rejects_malformed_workflow_args
+- Workflow mode indicators, running status, and slash-command dispatch are covered: codex-rs/tui/src/chatwidget/tests/workflows__slash_commands.rs:bare_workflow_command_dispatches_structured_workflow_op,bare_workflow_slash_enters_workflow_mode,bare_workflow_slash_reports_disabled_when_feature_off,queued_malformed_workflow_command_reports_error_and_drains_next_input,queued_workflow_command_dispatches_after_active_turn,running_workflow_command_uses_standard_task_status_snapshot,workflow_command_appears_in_slash_popup_when_enabled,workflow_command_is_hidden_and_rejected_when_feature_disabled,workflow_command_preserves_explicit_executor_working_directory,workflow_command_rejects_malformed_args_without_clearing_draft,workflow_command_with_args_dispatches_structured_input_json,workflow_done_slash_exits_to_default_mode,workflow_slash_with_args_dispatches_workflow_cli_command
+- TUI schema/hook request shaping is covered: codex-rs/tui/src/bottom_pane/chat_composer/workflow_completion_tests.rs:completion_request_tracks_partial_input_and_active_value,field_and_value_results_become_popup_hints
+- Workflow completion popup rendering is covered: codex-rs/tui/src/bottom_pane/command_popup.rs:workflow_exact_command_shows_schema_field_hints,workflow_option_value_completion_uses_value_hint_enums
 - Pending user-input prompts replay while unresolved and are removed after an answer: codex-rs/tui/src/app/pending_interactive_replay.rs:thread_event_snapshot_keeps_pending_request_user_input,thread_event_snapshot_drops_resolved_request_user_input_after_user_answer,thread_event_snapshot_keeps_newer_request_user_input_pending_when_same_turn_has_queue
 
 ### login-auth (auth and login behavior)
@@ -312,9 +335,14 @@ Not covered
 
 ## Test Generation Notes
 
-Generate tests that cover workflow command parsing, compatibility aliases, slash autocomplete,
-unknown workflow handling, workflow mode indicators, and each built-in workflow role being
-discoverable and applied through the normal agent-role path.
+Generate tests that cover canonical package loading, bounded input normalization, safe scaffolding,
+deterministic validation, schema-plus-hook completion, compatibility aliases and migration errors,
+slash autocomplete, unknown workflow handling, workflow mode indicators, and each built-in
+workflow role being discoverable and applied through the normal agent-role path.
+
+The shared `codex-workflows` crate keeps focused unit and real-Bun runtime coverage next to its
+discovery, input, scaffold, validation, completion, and runner modules; those library tests do not
+map to a client-facing test place above.
 
 Runtime unit coverage for `WorkflowCommandTask` should exercise framed request parsing separately
 from workflow stdout, valid single-choice and free-text requests, response canonicalization, and
@@ -322,7 +350,8 @@ exact question/answer correlation. Negative cases should cover duplicate IDs and
 question and option bounds, the reserved Other label, `autoResolutionMs`, multi-select requests,
 unknown protocol versions or methods, malformed frames, and oversized frames. App-server coverage
 should exercise the complete response round trip and cancellation while input is pending.
-Run `just workflow-runtime-test` to exercise the embedded JavaScript queue, input-request size gate,
+Run `just workflow-runtime-test` to exercise the canonical module/schema checks, shared
+`markdown.v1` formatter, completion bounds, embedded JavaScript queue, input-request size gate,
 private control channel, completion handshake, Unicode truncation, and trailing-newline behavior
 directly. The Rust CI workflow installs a pinned Bun release and runs this test. Windows unit-test
 coverage additionally verifies that closing the workflow Job Object terminates descendants.

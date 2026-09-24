@@ -87,7 +87,11 @@ test *args:
 
 # Exercise the embedded TypeScript workflow runner. Requires `bun` on PATH.
 workflow-runtime-test:
+    just test -p codex-workflows --lib --run-ignored all
+    just test -p codex-cli workflow_run_executes_fresh_scaffold_and_formats_markdown --run-ignored all
     just test -p codex-core --lib bun_runner_serializes_concurrent_user_input_requests --run-ignored all
+    just test -p codex-app-server thread_workflow_command_runs_fresh_scaffold_with_real_bun --run-ignored all
+    just test -p codex-app-server thread_workflow_command_reports_canonical_and_legacy_contract_failures --run-ignored all
 
 # Run from the repository root so scripts that resolve paths from `cwd` see
 # the same layout they use in GitHub Actions.

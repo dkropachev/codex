@@ -465,13 +465,14 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub fn set_workflow_commands_enabled(&mut self, enabled: bool) {
-        self.composer.set_workflow_commands_enabled(enabled);
-        self.request_redraw();
-    }
-
-    pub fn set_workflow_commands(&mut self, commands: Vec<WorkflowCommand>) {
-        self.composer.set_workflow_commands(commands);
+    pub fn set_workflow_commands_context(
+        &mut self,
+        enabled: bool,
+        cwd: PathBuf,
+        commands: Vec<WorkflowCommand>,
+    ) {
+        self.composer
+            .set_workflow_commands_context(enabled, cwd, commands);
         self.request_redraw();
     }
 
@@ -1730,6 +1731,18 @@ impl BottomPane {
 
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.composer.on_file_search_result(query, matches);
+        self.request_redraw();
+    }
+
+    pub(crate) fn on_workflow_completion_result(
+        &mut self,
+        generation: u64,
+        workflow_dir: PathBuf,
+        request: codex_workflows::CompletionRequest,
+        result: codex_workflows::CompletionResult,
+    ) {
+        self.composer
+            .on_workflow_completion_result(generation, workflow_dir, request, result);
         self.request_redraw();
     }
 

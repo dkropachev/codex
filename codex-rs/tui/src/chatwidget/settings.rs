@@ -534,6 +534,7 @@ impl ChatWidget {
         self.sync_service_tier_commands();
         self.sync_personality_command_enabled();
         if cwd_changed {
+            self.sync_workflow_commands();
             self.refresh_skills_for_current_cwd(/*force_reload*/ true);
         }
         self.refresh_plugin_mentions();

@@ -1,0 +1,53 @@
+//! Canonical TypeScript workflow packages shared by the CLI, TUI, and hosted runtime.
+
+mod completion;
+mod completion_schema;
+mod discovery;
+mod input;
+mod interaction;
+mod manifest;
+pub mod runner;
+mod scaffold;
+mod schema;
+mod validation;
+
+pub use completion::CompletionItem;
+pub use completion::CompletionMode;
+pub use completion::CompletionRequest;
+pub use completion::CompletionResult;
+pub use completion::complete_workflow;
+pub use completion::complete_workflow_cancellable;
+pub use discovery::WorkflowCommand;
+pub use discovery::WorkflowCommandOptionHint;
+pub use discovery::discover_workflow_commands;
+pub use input::WorkflowInvocation;
+pub use input::WorkflowInvocationError;
+pub use input::build_hosted_workflow_invocation;
+pub use input::build_workflow_invocation;
+#[allow(deprecated)]
+pub use input::build_workflow_shell_command;
+pub use input::hosted_workflow_invocation_input;
+pub use input::normalize_workflow_input;
+pub use input::normalize_workflow_input_with_working_directory;
+pub use input::workflow_invocation_input;
+pub use input::workflow_invocation_input_from_args;
+pub use interaction::MAX_WORKFLOW_USER_INPUT_REQUESTS;
+pub use interaction::WorkflowControlRequest;
+pub use interaction::decode_user_input_request;
+pub use interaction::parse_completion;
+pub use interaction::parse_control_request;
+pub use interaction::validate_user_input_response;
+pub use manifest::ValidationCommand;
+pub use manifest::ValidationCoverage;
+pub use manifest::ValidationPolicy;
+pub use manifest::WorkflowManifest;
+pub use manifest::WorkflowPackage;
+pub use scaffold::ScaffoldRequest;
+pub use scaffold::normalize_workflow_id;
+pub use scaffold::scaffold_workflow;
+pub use scaffold::workflow_path;
+pub use schema::WorkflowContract;
+pub use schema::load_workflow_contract;
+pub use validation::ValidationFinding;
+pub use validation::ValidationReport;
+pub use validation::validate_workflow;

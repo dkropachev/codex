@@ -7,6 +7,8 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_workflows::runner::MAX_RUNNER_ERROR_BYTES;
+use codex_workflows::runner::WORKFLOW_OUTPUT_MAX_BYTES;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
@@ -21,8 +23,7 @@ mod runtime;
 
 use runtime::run_workflow_for_tui;
 
-const WORKFLOW_OUTPUT_MAX_BYTES: usize = 40 * 1024;
-const WORKFLOW_ERROR_MAX_BYTES: usize = 4 * 1024;
+const WORKFLOW_ERROR_MAX_BYTES: usize = MAX_RUNNER_ERROR_BYTES;
 
 #[derive(Clone)]
 pub(crate) struct WorkflowCommandTask {

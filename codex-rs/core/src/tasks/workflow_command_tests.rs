@@ -7,7 +7,9 @@ fn truncates_workflow_output_at_byte_cap() {
     let truncated = truncate_workflow_output(text);
 
     assert_eq!(truncated.len(), WORKFLOW_OUTPUT_MAX_BYTES);
-    assert!(truncated.ends_with("[Workflow output truncated to 40960 bytes.]"));
+    assert!(truncated.ends_with(&format!(
+        "[Workflow output truncated to {WORKFLOW_OUTPUT_MAX_BYTES} bytes.]"
+    )));
 }
 
 #[test]
@@ -19,5 +21,7 @@ fn truncates_workflow_output_on_char_boundary() {
 
     assert_eq!(truncated.len(), WORKFLOW_OUTPUT_MAX_BYTES);
     assert!(truncated.is_char_boundary(truncated.len()));
-    assert!(truncated.ends_with("[Workflow output truncated to 40960 bytes.]"));
+    assert!(truncated.ends_with(&format!(
+        "[Workflow output truncated to {WORKFLOW_OUTPUT_MAX_BYTES} bytes.]"
+    )));
 }
