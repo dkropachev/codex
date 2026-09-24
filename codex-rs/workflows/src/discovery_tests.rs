@@ -153,3 +153,32 @@ fn rejects_unsafe_manifest_ids_without_hiding_safe_legacy_ids() {
     assert_eq!(commands.len(), 1);
     assert_eq!(commands[0].id, "Legacy/Review");
 }
+
+#[test]
+fn ignores_windows_reserved_canonical_ids_without_hiding_legacy_packages() {
+    let temp = TempDir::new().expect("tempdir");
+    let home = temp.path().join("home");
+    let cwd = temp.path().join("project");
+    let root = home.join("workflows");
+    write_manifest(
+        &root,
+        "canonical-reserved",
+        "apiVersion: 1\nid: reports/con\ntitle: Invalid\ncallableName: invalid\ndescription: invalid\nvalidation:\n  commands: []\n  coverage:\n    positive: true\n    load: true\n    autocomplete: true\n    negative: true\n",
+    );
+    let legacy = write_manifest(
+        &root,
+        "legacy-reserved",
+        "id: con\ncommand: legacy-con\nuserDescription: legacy\n",
+    );
+
+    assert_eq!(
+        discover_workflow_commands(&home, &cwd),
+        vec![WorkflowCommand {
+            id: "con".to_string(),
+            command: "legacy-con".to_string(),
+            description: "legacy".to_string(),
+            option_hints: Vec::new(),
+            workflow_dir: legacy,
+        }]
+    );
+}

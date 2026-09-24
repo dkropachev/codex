@@ -106,10 +106,6 @@ pub fn validate_workflow(root: &Path) -> ValidationReport {
     }
 }
 
-pub(crate) fn validate_executable_package(package: &WorkflowPackage) -> anyhow::Result<()> {
-    validate_executable_package_with_limit(package, ExecutableValidation::Standard)
-}
-
 pub(crate) fn validate_executable_package_cancellable(
     package: &WorkflowPackage,
     deadline: crate::runner::CommandDeadline,
@@ -117,7 +113,7 @@ pub(crate) fn validate_executable_package_cancellable(
 ) -> anyhow::Result<()> {
     validate_executable_package_with_limit(
         package,
-        ExecutableValidation::Completion {
+        ExecutableValidation {
             deadline,
             cancelled,
         },
@@ -125,43 +121,22 @@ pub(crate) fn validate_executable_package_cancellable(
 }
 
 #[derive(Clone, Copy)]
-enum ExecutableValidation<'a> {
-    Standard,
-    Completion {
-        deadline: crate::runner::CommandDeadline,
-        cancelled: &'a AtomicBool,
-    },
+struct ExecutableValidation<'a> {
+    deadline: crate::runner::CommandDeadline,
+    cancelled: &'a AtomicBool,
 }
 
 impl ExecutableValidation<'_> {
     fn check(self) -> anyhow::Result<()> {
-        match self {
-            Self::Standard => Ok(()),
-            Self::Completion {
-                deadline,
-                cancelled,
-            } => deadline.check(Some(cancelled)),
-        }
+        self.deadline.check(Some(self.cancelled))
     }
 
     fn scan(self, root: &Path) -> anyhow::Result<Vec<crate::runner::SourceInspection>> {
-        match self {
-            Self::Standard => crate::runner::scan_workflow_sources(root),
-            Self::Completion {
-                deadline,
-                cancelled,
-            } => crate::runner::scan_workflow_sources_cancellable(root, deadline, cancelled),
-        }
+        crate::runner::scan_workflow_sources_cancellable(root, self.deadline, self.cancelled)
     }
 
     fn validate_git_layout(self, root: &Path, findings: &mut BTreeSet<ValidationFinding>) {
-        match self {
-            Self::Standard => validate_git_layout(root, findings),
-            Self::Completion {
-                deadline,
-                cancelled,
-            } => validate_git_layout_until(root, findings, deadline, Some(cancelled)),
-        }
+        validate_git_layout_until(root, findings, self.deadline, Some(self.cancelled));
     }
 }
 

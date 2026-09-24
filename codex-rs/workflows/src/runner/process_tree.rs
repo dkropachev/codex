@@ -77,6 +77,27 @@ fn configure_command(command: &mut Command) {
     use std::os::unix::process::CommandExt;
 
     command.process_group(/*pgroup*/ 0);
+    #[cfg(target_os = "linux")]
+    {
+        let parent_pid = rustix::process::getpid();
+        // SAFETY: the hook only invokes async-signal-safe process syscalls before exec.
+        unsafe {
+            command.pre_exec(move || {
+                rustix::process::set_parent_process_death_signal(Some(
+                    rustix::process::Signal::TERM,
+                ))
+                .map_err(io::Error::from)?;
+                if rustix::process::getppid() != Some(parent_pid) {
+                    rustix::process::kill_process(
+                        rustix::process::getpid(),
+                        rustix::process::Signal::TERM,
+                    )
+                    .map_err(io::Error::from)?;
+                }
+                Ok(())
+            });
+        }
+    }
 }
 
 #[cfg(windows)]

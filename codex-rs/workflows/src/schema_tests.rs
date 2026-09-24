@@ -281,6 +281,32 @@ fn contract_rejects_schemas_that_do_not_accept_injected_working_directory() {
         error.to_string(),
         "workflow inputSchema must accept workingDirectory as a string"
     );
+
+    let error = WorkflowContract::from_schemas(
+        json!({
+            "$schema": DRAFT_2020_12,
+            "type": "object",
+            "properties": {
+                "trigger": { "type": "boolean" },
+                "workingDirectory": { "type": "string" }
+            },
+            "if": {
+                "properties": { "trigger": { "const": true } },
+                "required": ["trigger"]
+            },
+            "then": { "not": { "required": ["workingDirectory"] } },
+            "additionalProperties": false
+        }),
+        json!({
+            "$schema": DRAFT_2020_12,
+            "type": "object"
+        }),
+    )
+    .expect_err("a value-triggered conditional must remain valid after cwd injection");
+    assert_eq!(
+        error.to_string(),
+        "workflow inputSchema must accept workingDirectory as a string"
+    );
 }
 
 #[test]
@@ -319,4 +345,34 @@ fn contract_allows_other_required_fields_alongside_working_directory() {
         )
         .expect("unrelated required fields should not make injection incompatible");
     }
+}
+
+#[test]
+fn contract_allows_working_directory_declared_through_composition() {
+    WorkflowContract::from_schemas(
+        json!({
+            "$schema": DRAFT_2020_12,
+            "$defs": {
+                "injected": {
+                    "properties": {
+                        "workingDirectory": { "type": "string" }
+                    }
+                }
+            },
+            "type": "object",
+            "allOf": [
+                { "$ref": "#/$defs/injected" },
+                {
+                    "properties": { "message": { "type": "string" } },
+                    "required": ["message"]
+                }
+            ],
+            "unevaluatedProperties": false
+        }),
+        json!({
+            "$schema": DRAFT_2020_12,
+            "type": "object"
+        }),
+    )
+    .expect("composed schemas may safely declare and evaluate workingDirectory");
 }

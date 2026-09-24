@@ -2,6 +2,7 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 
 use anyhow::Context;
 use anyhow::bail;
@@ -148,8 +149,19 @@ impl WorkflowPackage {
     }
 
     pub fn load_executable(root: &Path) -> anyhow::Result<Self> {
+        Self::load_executable_cancellable(root, &AtomicBool::new(false))
+    }
+
+    pub fn load_executable_cancellable(
+        root: &Path,
+        cancelled: &AtomicBool,
+    ) -> anyhow::Result<Self> {
         let package = Self::load(root)?;
-        crate::validation::validate_executable_package(&package)?;
+        crate::validation::validate_executable_package_cancellable(
+            &package,
+            crate::runner::CommandDeadline::after(crate::runner::EXECUTABLE_VALIDATION_TIMEOUT),
+            cancelled,
+        )?;
         Ok(package)
     }
 }

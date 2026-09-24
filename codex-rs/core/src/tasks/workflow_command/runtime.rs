@@ -5,6 +5,8 @@ use std::path::Path;
 use std::process::ExitStatus;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_workflows::MAX_WORKFLOW_USER_INPUT_REQUESTS;
@@ -71,28 +73,45 @@ pub(super) async fn run_workflow_for_tui(
     cancellation_token: &CancellationToken,
 ) -> Result<Option<String>, String> {
     let package_path = workflow_dir.to_path_buf();
-    let package =
-        tokio::task::spawn_blocking(move || WorkflowPackage::load_executable(&package_path))
-            .await
+    let validation_cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = Arc::clone(&validation_cancelled);
+    let mut package_task = tokio::task::spawn_blocking(move || {
+        WorkflowPackage::load_executable_cancellable(&package_path, worker_cancelled.as_ref())
+    });
+    let package = tokio::select! {
+        biased;
+        () = cancellation_token.cancelled() => {
+            validation_cancelled.store(true, Ordering::Release);
+            let _ = package_task.await;
+            return Ok(None);
+        }
+        result = &mut package_task => result
             .map_err(|err| format!("workflow package validation task failed: {err}"))?
             .map_err(|err| {
                 format!(
                     "failed to load workflow package at {}: {err:#}",
                     workflow_dir.display()
                 )
-            })?;
+            })?,
+    };
+    if cancellation_token.is_cancelled() {
+        return Ok(None);
+    }
     let input_has_working_directory = input
         .as_object()
         .is_some_and(|input| input.contains_key("workingDirectory"));
     let working_directory = if input_has_working_directory {
         String::new()
     } else {
-        let workflow_environment = turn_context
-            .environments
-            .resolve_primary()
-            .await
-            .map_err(|err| format!("workflow primary environment failed to start: {err}"))?
-            .ok_or_else(|| "workflow command requires a ready primary environment".to_string())?;
+        let primary_environment = turn_context.environments.resolve_primary();
+        tokio::pin!(primary_environment);
+        let workflow_environment = tokio::select! {
+            biased;
+            () = cancellation_token.cancelled() => return Ok(None),
+            result = &mut primary_environment => result,
+        }
+        .map_err(|err| format!("workflow primary environment failed to start: {err}"))?
+        .ok_or_else(|| "workflow command requires a ready primary environment".to_string())?;
         workflow_environment.cwd().inferred_native_path_string()
     };
     let input = normalize_workflow_input_with_working_directory(

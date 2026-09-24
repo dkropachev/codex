@@ -19,6 +19,11 @@ use crate::manifest::MAX_WORKFLOW_SOURCE_BYTES;
 use crate::manifest::MAX_WORKFLOW_YAML_BYTES;
 use crate::manifest::WORKFLOW_API_VERSION;
 
+const WINDOWS_RESERVED_DEVICE_NAMES: [&str; 22] = [
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScaffoldRequest {
     pub id: String,
@@ -674,6 +679,16 @@ pub fn normalize_workflow_id(raw: &str) -> anyhow::Result<String> {
         match component {
             Component::Normal(component) => {
                 let component = component.to_str().context("workflow id must be UTF-8")?;
+                let portable_component = component.trim_end_matches(&['.', ' '][..]);
+                let portable_stem = portable_component
+                    .split_once('.')
+                    .map_or(portable_component, |(stem, _)| stem);
+                if WINDOWS_RESERVED_DEVICE_NAMES
+                    .iter()
+                    .any(|reserved| portable_stem.eq_ignore_ascii_case(reserved))
+                {
+                    bail!("workflow id component `{component}` is reserved on Windows");
+                }
                 if component.is_empty()
                     || !component.chars().all(|ch| {
                         ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_')

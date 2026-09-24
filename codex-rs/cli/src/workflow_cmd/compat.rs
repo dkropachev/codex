@@ -2,6 +2,9 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use anyhow::Context;
 use anyhow::bail;
@@ -13,7 +16,7 @@ use codex_workflows::WorkflowCommand;
 use codex_workflows::WorkflowPackage;
 use codex_workflows::discover_workflow_commands;
 use codex_workflows::normalize_workflow_id;
-use codex_workflows::runner::run_cli_workflow;
+use codex_workflows::runner::run_cli_workflow_cancellable;
 use codex_workflows::scaffold_workflow;
 use codex_workflows::validate_workflow as validate_workflow_package;
 use codex_workflows::workflow_invocation_input_from_args;
@@ -122,7 +125,7 @@ impl From<&WorkflowCommand> for JsonWorkflowCommand {
     }
 }
 
-pub fn run(cli: WorkflowCli, config: &Config) -> anyhow::Result<()> {
+pub async fn run(cli: WorkflowCli, config: &Config) -> anyhow::Result<()> {
     ensure_workflows_enabled(config)?;
     let commands = discover_workflow_commands(config.codex_home.as_path(), config.cwd.as_path());
     let command = parse_workflow_command(&cli.args, &commands)?;
@@ -130,11 +133,11 @@ pub fn run(cli: WorkflowCli, config: &Config) -> anyhow::Result<()> {
         ParsedWorkflowCommand::Mode => show_mode(&commands),
         ParsedWorkflowCommand::List { json } => list_workflows(&commands, json),
         ParsedWorkflowCommand::Run { target, args } => {
-            run_workflow(target, args, WorkflowAction::Run, config, &commands)
+            run_workflow(target, args, WorkflowAction::Run, config, &commands).await
         }
         ParsedWorkflowCommand::Fix { target } => repair_workflow(&target, config, &commands),
         ParsedWorkflowCommand::Recover { target, args } => {
-            run_workflow(target, args, WorkflowAction::Recover, config, &commands)
+            run_workflow(target, args, WorkflowAction::Recover, config, &commands).await
         }
         ParsedWorkflowCommand::Validate { target } => validate_workflow(&target, config, &commands),
         ParsedWorkflowCommand::Impact { target } => impact_workflow(&target, &commands),
@@ -456,7 +459,7 @@ fn list_workflows(commands: &[WorkflowCommand], json: bool) -> anyhow::Result<()
     Ok(())
 }
 
-fn run_workflow(
+async fn run_workflow(
     target: String,
     args: Vec<String>,
     action: WorkflowAction,
@@ -475,23 +478,66 @@ fn run_workflow(
         }
         input.insert("action".to_string(), Value::String("resume".to_string()));
     }
-    run_workflow_process(command, input)
+    run_workflow_process(command, input).await
 }
 
-fn run_workflow_process(command: &WorkflowCommand, input: Value) -> anyhow::Result<()> {
-    let package = WorkflowPackage::load_executable(&command.workflow_dir).with_context(|| {
-        format!(
-            "workflow command `{}` is not a canonical package",
-            command.command
+async fn run_workflow_process(command: &WorkflowCommand, input: Value) -> anyhow::Result<()> {
+    let workflow_dir = command.workflow_dir.clone();
+    let command_name = command.command.clone();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = Arc::clone(&cancelled);
+    let mut worker = tokio::task::spawn_blocking(move || {
+        let package =
+            WorkflowPackage::load_executable_cancellable(&workflow_dir, worker_cancelled.as_ref())
+                .with_context(|| {
+                    format!("workflow command `{command_name}` is not a canonical package")
+                })?;
+        run_cli_workflow_cancellable(
+            &workflow_dir,
+            &package.manifest,
+            &input,
+            worker_cancelled.as_ref(),
         )
-    })?;
-    let status = run_cli_workflow(&command.workflow_dir, &package.manifest, &input)?;
+    });
+    let status = tokio::select! {
+        result = &mut worker => result.context("workflow execution task failed")??,
+        exit_code = wait_for_workflow_shutdown_signal() => {
+            cancelled.store(true, Ordering::Release);
+            let _ = worker.await;
+            std::process::exit(exit_code?);
+        }
+    };
 
     if status.success() {
         return Ok(());
     }
 
     std::process::exit(status.code().unwrap_or(1));
+}
+
+#[cfg(unix)]
+async fn wait_for_workflow_shutdown_signal() -> anyhow::Result<i32> {
+    use tokio::signal::unix::SignalKind;
+    use tokio::signal::unix::signal;
+
+    let mut hangup = signal(SignalKind::hangup()).context("failed to listen for SIGHUP")?;
+    let mut interrupt = signal(SignalKind::interrupt()).context("failed to listen for SIGINT")?;
+    let mut quit = signal(SignalKind::quit()).context("failed to listen for SIGQUIT")?;
+    let mut terminate = signal(SignalKind::terminate()).context("failed to listen for SIGTERM")?;
+    tokio::select! {
+        _ = hangup.recv() => Ok(129),
+        _ = interrupt.recv() => Ok(130),
+        _ = quit.recv() => Ok(131),
+        _ = terminate.recv() => Ok(143),
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_workflow_shutdown_signal() -> anyhow::Result<i32> {
+    tokio::signal::ctrl_c()
+        .await
+        .context("failed to listen for Ctrl-C")?;
+    Ok(130)
 }
 
 fn validate_workflow(

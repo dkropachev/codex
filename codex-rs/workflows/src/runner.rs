@@ -54,6 +54,7 @@ pub const MAX_RUNNER_ERROR_BYTES: usize = 4 * 1024;
 pub const COMPLETION_TIMEOUT: Duration = Duration::from_secs(2);
 pub const INSPECTION_TIMEOUT: Duration = Duration::from_secs(5);
 pub const RUNNER_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
+pub const EXECUTABLE_VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
 const TRUSTED_BUNFIG: &str = "";
 
 #[derive(Clone, Copy)]
@@ -292,8 +293,24 @@ pub fn run_cli_workflow(
     expected: &WorkflowManifest,
     input: &Value,
 ) -> anyhow::Result<ExitStatus> {
+    run_cli_workflow_cancellable(workflow_dir, expected, input, &AtomicBool::new(false))
+}
+
+pub fn run_cli_workflow_cancellable(
+    workflow_dir: &Path,
+    expected: &WorkflowManifest,
+    input: &Value,
+    cancelled: &AtomicBool,
+) -> anyhow::Result<ExitStatus> {
     let mut stdout = std::io::stdout().lock();
-    run_cli_workflow_with_bun(Path::new("bun"), workflow_dir, expected, input, &mut stdout)
+    run_cli_workflow_with_bun(
+        Path::new("bun"),
+        workflow_dir,
+        expected,
+        input,
+        &mut stdout,
+        Some(cancelled),
+    )
 }
 
 fn run_cli_workflow_with_bun(
@@ -302,7 +319,11 @@ fn run_cli_workflow_with_bun(
     expected: &WorkflowManifest,
     input: &Value,
     markdown_writer: &mut impl Write,
+    cancelled: Option<&AtomicBool>,
 ) -> anyhow::Result<ExitStatus> {
+    if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Relaxed)) {
+        bail!("workflow runner was cancelled");
+    }
     if !input.is_object() {
         bail!("workflow input must be a JSON object");
     }
@@ -343,6 +364,10 @@ fn run_cli_workflow_with_bun(
     let mut expected_request_id = 1_u64;
     let mut output_validated = false;
     loop {
+        if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Relaxed)) {
+            child.terminate();
+            bail!("workflow runner was cancelled");
+        }
         if let Some(line) = control_reader
             .next_line(MAX_WORKFLOW_RUN_FRAME_BYTES + WORKFLOW_CONTROL_PREFIX.len())
             .context("failed to read workflow control channel")?

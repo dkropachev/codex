@@ -11,6 +11,27 @@ use crate::WorkflowPackage;
 use crate::scaffold_workflow;
 
 #[test]
+fn executable_package_preflight_observes_cancellation_before_spawning_tools() {
+    let registry = tempfile::tempdir().expect("create workflow registry");
+    let root = scaffold_workflow(
+        registry.path(),
+        &crate::ScaffoldRequest {
+            id: "cancelled-preflight".to_string(),
+            title: "Cancelled Preflight".to_string(),
+            callable_name: "cancelled-preflight".to_string(),
+            description: "Exercise cancellation.".to_string(),
+        },
+    )
+    .expect("scaffold workflow");
+    let cancelled = std::sync::atomic::AtomicBool::new(true);
+
+    let error = WorkflowPackage::load_executable_cancellable(&root, &cancelled)
+        .expect_err("pre-cancelled validation must stop");
+
+    assert_eq!(error.to_string(), "workflow runner was cancelled");
+}
+
+#[test]
 fn findings_are_deterministic_for_missing_and_legacy_packages() {
     let temp = TempDir::new().expect("tempdir");
     fs::write(

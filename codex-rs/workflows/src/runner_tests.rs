@@ -135,6 +135,7 @@ fn cli_rejects_a_clean_runner_exit_before_completion() {
         &manifest,
         &json!({ "message": "ignored" }),
         &mut markdown,
+        /*cancelled*/ None,
     )
     .expect_err("clean early exit must not be success");
 
@@ -272,6 +273,54 @@ fn workflow_child_guard_terminates_descendants_on_drop() {
     assert_process_terminated(descendant);
 }
 
+#[cfg(unix)]
+#[test]
+fn cli_cancellation_terminates_the_isolated_process_tree() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+
+    let (root, manifest) = write_fixture(&canonical_source(
+        "return { message: input.message };",
+        "return [];",
+    ));
+    let fake_bun = root.path().join("fake-bun");
+    fs::write(
+        &fake_bun,
+        "#!/bin/sh\nsleep 60 &\necho $! > descendant.pid\nwait\n",
+    )
+    .expect("write fake Bun");
+    let mut permissions = fs::metadata(&fake_bun)
+        .expect("read fake Bun metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_bun, permissions).expect("make fake Bun executable");
+    let pid_path = root.path().join("descendant.pid");
+    let cancelled = AtomicBool::new(false);
+    let mut markdown = Vec::new();
+
+    let error = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let _ = read_descendant_pid(&pid_path);
+            cancelled.store(true, Ordering::Release);
+        });
+        run_cli_workflow_with_bun(
+            &fake_bun,
+            root.path(),
+            &manifest,
+            &json!({ "message": "ignored" }),
+            &mut markdown,
+            Some(&cancelled),
+        )
+        .expect_err("CLI workflow must observe cancellation")
+    });
+    let descendant = read_descendant_pid(&pid_path);
+
+    assert_eq!(error.to_string(), "workflow runner was cancelled");
+    assert_eq!(markdown, Vec::<u8>::new());
+    assert_process_terminated(descendant);
+}
+
 #[test]
 #[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
 fn cli_run_imports_the_module_once_and_omits_optional_interaction() {
@@ -309,6 +358,7 @@ fn cli_terminates_a_runner_that_stays_alive_after_completion() {
         &manifest,
         &json!({ "message": "Ready." }),
         &mut markdown,
+        /*cancelled*/ None,
     )
     .expect_err("runner with an open handle must be terminated");
 
@@ -667,8 +717,15 @@ fn source_scan_bounds_entries_depth_and_file_size() {
 
 fn run_output(root: &Path, manifest: &WorkflowManifest, input: &Value) -> (ExitStatus, Vec<u8>) {
     let mut markdown = Vec::new();
-    let status = run_cli_workflow_with_bun(Path::new("bun"), root, manifest, input, &mut markdown)
-        .expect(BUN_REQUIRED);
+    let status = run_cli_workflow_with_bun(
+        Path::new("bun"),
+        root,
+        manifest,
+        input,
+        &mut markdown,
+        /*cancelled*/ None,
+    )
+    .expect(BUN_REQUIRED);
     (status, markdown)
 }
 

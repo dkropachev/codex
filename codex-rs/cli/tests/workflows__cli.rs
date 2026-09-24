@@ -29,6 +29,9 @@ impl FakeBun {
             &fake_bun,
             r#"#!/bin/sh
 printf '%s\n' "$PWD" > "$CODEX_TEST_WORKFLOW_CWD"
+while [ "${1#--}" != "$1" ]; do
+  shift
+done
 if [ "${2:-}" = "inspect" ]; then
   workflow_id=$(sed -n 's/^id: //p' workflow.yaml)
   workflow_title=$(sed -n 's/^title: //p' workflow.yaml)

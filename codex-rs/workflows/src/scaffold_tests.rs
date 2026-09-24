@@ -114,6 +114,55 @@ fn rejects_unsafe_ids() {
 }
 
 #[test]
+fn rejects_windows_reserved_device_names_on_every_platform() {
+    for id in [
+        "con",
+        "prn",
+        "aux",
+        "nul",
+        "com1",
+        "com9",
+        "lpt1",
+        "lpt9",
+        "com1/reports",
+        "reports/con",
+        "reports/prn.txt",
+        "reports/aux.",
+        "reports/nul ",
+    ] {
+        let error = normalize_workflow_id(id).expect_err("reject Windows device name");
+        assert!(
+            format!("{error:#}").contains("reserved on Windows"),
+            "unexpected error for {id}: {error:#}"
+        );
+    }
+
+    for id in [
+        "com0",
+        "com10",
+        "lpt0",
+        "lpt10",
+        "console",
+        "reports/prn-job",
+    ] {
+        assert!(normalize_workflow_id(id).is_ok(), "rejected {id}");
+    }
+}
+
+#[test]
+fn scaffold_rejects_windows_reserved_device_names_before_creating_the_root() {
+    let temp = TempDir::new().expect("tempdir");
+    let root = temp.path().join("workflows");
+    let mut reserved = request();
+    reserved.id = "reports/com1".to_string();
+
+    let error = scaffold_workflow(&root, &reserved).expect_err("reject Windows device name");
+
+    assert!(format!("{error:#}").contains("reserved on Windows"));
+    assert!(!root.exists());
+}
+
+#[test]
 #[cfg(not(any(all(unix, not(target_os = "redox")), windows)))]
 fn final_install_never_replaces_a_concurrently_created_empty_target() {
     let temp = TempDir::new().expect("tempdir");

@@ -1199,7 +1199,7 @@ async fn cli_main(
                 root_strict_config,
             )
             .await?;
-            workflow_cmd::run(workflow_cli, &config)?;
+            workflow_cmd::run(workflow_cli, &config).await?;
         }
         Some(Subcommand::AppServer(app_server_cli)) => {
             let AppServerCommand {
